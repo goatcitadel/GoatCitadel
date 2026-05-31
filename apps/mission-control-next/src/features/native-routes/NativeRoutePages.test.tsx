@@ -160,6 +160,44 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
+  fetchPromptPackSecurityGates: vi.fn(async () => ({
+    generatedAt: "2026-05-02T20:00:00.000Z",
+    warnings: ["Security quality gates are read-only projections from stored prompt-pack reports."],
+    items: [
+      {
+        gateId: "prompt-pack:security-red-team-v6:security-quality",
+        packKey: "security-red-team-v6",
+        title: "Defensive Security Evaluation gate",
+        status: "needs_score",
+        releaseGate: true,
+        readOnly: true,
+        packId: "pack-1",
+        reportEndpoint: "/api/v1/prompt-packs/pack-1/report",
+        generatedAt: "2026-05-02T20:00:00.000Z",
+        evidence: {
+          definitionStatus: "imported",
+          testCount: 18,
+          completedRuns: 12,
+          failedRuns: 2,
+          needsScoreCount: 3,
+          passCount: 8,
+          failCount: 2,
+          reviewCount: 2,
+          effectivePassRate: 0.67,
+          passThreshold: 75,
+          failingCodes: ["SEC-003", "SEC-007"],
+        },
+        blockers: ["Score all completed defensive security runs before treating this gate as release evidence."],
+        nextActions: ["Auto-score or human-review every completed defensive security run."],
+        posture: {
+          callsProviders: false,
+          mutationPerformed: false,
+          source: "stored_prompt_pack_report",
+          note: "stored evidence",
+        },
+      },
+    ],
+  })),
   importBuiltinPromptPack: vi.fn(async () => ({
     pack: {
       packId: "security-red-team-v6",
@@ -386,6 +424,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchPromptPackExport: mocks.fetchPromptPackExport,
     fetchPromptPackReport: mocks.fetchPromptPackReport,
     fetchPromptPackBuiltins: mocks.fetchPromptPackBuiltins,
+    fetchPromptPackSecurityGates: mocks.fetchPromptPackSecurityGates,
     importBuiltinPromptPack: mocks.importBuiltinPromptPack,
     fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
     fetchAgenticRuns: mocks.fetchAgenticRuns,
@@ -560,6 +599,7 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(mocks.fetchPromptPackExport).toHaveBeenCalledWith("pack-1");
     expect(mocks.fetchLlmEvalProofRuns).toHaveBeenCalledWith(25);
     expect(mocks.fetchPromptPackBuiltins).toHaveBeenCalledWith();
+    expect(mocks.fetchPromptPackSecurityGates).toHaveBeenCalledWith();
     expect(text).toContain("Quality Dashboard");
     expect(text).toContain("Prompt-pack gate evidence");
     expect(text).toContain("Pass rate");
@@ -570,6 +610,12 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain("Security Red Team");
     expect(text).toContain("Defensive Security Evaluation");
     expect(text).toContain("Security eval packs");
+    expect(text).toContain("Security quality gates");
+    expect(text).toContain("Defensive Security Evaluation gate");
+    expect(text).toContain("Needs score · 12/18 runs · 67% pass");
+    expect(text).toContain(
+      "Score all completed defensive security runs before treating this gate as release evidence.",
+    );
     expect(text).toContain("Red-team tests");
     expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
     expect(text).toContain("Import defensive security pack");

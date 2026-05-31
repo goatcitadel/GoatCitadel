@@ -10,6 +10,7 @@ import type {
   PromptPackReportRecord,
   PromptPackRunRecord,
   PromptPackSecurityEvalPacksResponse,
+  PromptPackSecurityQualityGatesResponse,
   PromptPackTestRecord,
   ReplayRegressionResult,
   ReplayRegressionRun,
@@ -37,6 +38,10 @@ export async function fetchPromptPacks(limit = 200): Promise<{ items: PromptPack
 
 export async function fetchPromptPackBuiltins(): Promise<PromptPackSecurityEvalPacksResponse> {
   return request<PromptPackSecurityEvalPacksResponse>("/api/v1/prompt-packs/builtins");
+}
+
+export async function fetchPromptPackSecurityGates(): Promise<PromptPackSecurityQualityGatesResponse> {
+  return request<PromptPackSecurityQualityGatesResponse>("/api/v1/prompt-packs/security-gates");
 }
 
 export async function importBuiltinPromptPack(packKey: string): Promise<{

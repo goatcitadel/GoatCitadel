@@ -139,6 +139,10 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(promptPacks.listSecurityEvalPacks());
   });
 
+  fastify.get("/api/v1/prompt-packs/security-gates", async (_request, reply) => {
+    return reply.send(promptPacks.listSecurityQualityGates());
+  });
+
   fastify.post("/api/v1/prompt-packs/builtins/:packKey/import", async (request, reply) => {
     const params = promptPackBuiltinParamsSchema.safeParse(request.params);
     if (!params.success) {

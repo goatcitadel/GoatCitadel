@@ -589,21 +589,35 @@ describe("prompt-pack parser, import, export, and reports", () => {
   });
 
   it("projects bundled security red-team eval packs without running providers", () => {
+    const importedPack = {
+      packId: "pack-security",
+      name: "Security Red Team",
+      sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+      testCount: 18,
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    };
+    const securityTests = parsePromptPackTests(
+      fs.readFileSync(
+        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
+        "utf8",
+      ),
+    ).map((test) => ({
+      ...test,
+      packId: importedPack.packId,
+    }));
     const service = new PromptPackService(
       {
         storage: {
           promptPacks: {
-            listPacks: () => [
-              {
-                packId: "pack-security",
-                name: "Security Red Team",
-                sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
-                testCount: 18,
-                createdAt: "2026-05-30T00:00:00.000Z",
-                updatedAt: "2026-05-30T00:00:00.000Z",
-              },
-            ],
+            listPacks: () => [importedPack],
+            getPack: () => importedPack,
+            listTests: () => securityTests,
           },
+          promptPackRuns: { listByPack: () => [] },
+          promptPackScores: { listByPack: () => [] },
+          promptPackAutoScoresV2: { listByPack: () => [] },
+          promptPackHumanReviewsV2: { listByPack: () => [] },
         },
         config: {
           rootDir: process.cwd(),
@@ -646,6 +660,28 @@ describe("prompt-pack parser, import, export, and reports", () => {
     });
     expect(projection.items[0]?.capabilityTargets.length).toBeGreaterThan(0);
     expect(projection.items[0]?.likelyFailureClasses.length).toBeGreaterThan(0);
+
+    const gates = service.listSecurityQualityGates();
+    expect(gates.items[0]).toMatchObject({
+      gateId: "prompt-pack:security-red-team-v6:security-quality",
+      packKey: "security-red-team-v6",
+      packId: "pack-security",
+      status: "not_run",
+      releaseGate: true,
+      readOnly: true,
+      evidence: {
+        definitionStatus: "imported",
+        testCount: 18,
+        completedRuns: 0,
+        needsScoreCount: 0,
+      },
+      posture: {
+        callsProviders: false,
+        mutationPerformed: false,
+        source: "stored_prompt_pack_report",
+      },
+    });
+    expect(gates.items[0]?.blockers.join(" ")).toContain("Run the imported defensive security prompt-pack tests");
   });
 
   it("parses dotted manual test codes so they survive import refreshes", () => {

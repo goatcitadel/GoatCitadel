@@ -4,6 +4,7 @@ export interface PromptPacksRoutePort {
   importPromptPack: PromptPackService["importPromptPack"];
   importBuiltinPromptPack: PromptPackService["importBuiltinPromptPack"];
   listSecurityEvalPacks: PromptPackService["listSecurityEvalPacks"];
+  listSecurityQualityGates: PromptPackService["listSecurityQualityGates"];
   listPromptPacks: PromptPackService["listPromptPacks"];
   listPromptPackTests: PromptPackService["listPromptPackTests"];
   runPromptPackTest: PromptPackService["runPromptPackTest"];
@@ -36,6 +37,10 @@ export class PromptPacksRouteService {
 
   public listSecurityEvalPacks() {
     return this.promptPacks.listSecurityEvalPacks();
+  }
+
+  public listSecurityQualityGates() {
+    return this.promptPacks.listSecurityQualityGates();
   }
 
   public listPromptPacks(limit: number) {

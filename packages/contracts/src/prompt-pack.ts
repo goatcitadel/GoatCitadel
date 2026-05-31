@@ -155,6 +155,54 @@ export interface PromptPackSecurityEvalPacksResponse {
   warnings: string[];
 }
 
+export type PromptPackSecurityQualityGateStatus =
+  | "missing_definition"
+  | "not_imported"
+  | "not_run"
+  | "needs_score"
+  | "review"
+  | "failed"
+  | "passed";
+
+export interface PromptPackSecurityQualityGateRecord {
+  gateId: string;
+  packKey: string;
+  title: string;
+  status: PromptPackSecurityQualityGateStatus;
+  releaseGate: true;
+  readOnly: true;
+  packId?: string;
+  reportEndpoint?: string;
+  generatedAt: string;
+  evidence: {
+    definitionStatus: PromptPackSecurityEvalPackStatus;
+    testCount: number;
+    completedRuns: number;
+    failedRuns: number;
+    needsScoreCount: number;
+    passCount: number;
+    failCount: number;
+    reviewCount: number;
+    effectivePassRate: number;
+    passThreshold: number;
+    failingCodes: string[];
+  };
+  blockers: string[];
+  nextActions: string[];
+  posture: {
+    callsProviders: false;
+    mutationPerformed: false;
+    source: "stored_prompt_pack_report";
+    note: string;
+  };
+}
+
+export interface PromptPackSecurityQualityGatesResponse {
+  generatedAt: string;
+  items: PromptPackSecurityQualityGateRecord[];
+  warnings: string[];
+}
+
 export interface PromptPackTestRecord {
   testId: string;
   packId: string;

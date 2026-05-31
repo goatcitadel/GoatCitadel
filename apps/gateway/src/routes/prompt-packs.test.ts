@@ -29,6 +29,42 @@ describe("prompt-pack routes", () => {
       ],
       warnings: ["This projection does not call providers or run tests."],
     }));
+    const listSecurityQualityGates = vi.fn(() => ({
+      generatedAt: "2026-05-30T00:00:00.000Z",
+      items: [
+        {
+          gateId: "prompt-pack:security-red-team-v6:security-quality",
+          packKey: "security-red-team-v6",
+          title: "Defensive Security Evaluation gate",
+          status: "not_imported",
+          releaseGate: true,
+          readOnly: true,
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          evidence: {
+            definitionStatus: "available",
+            testCount: 18,
+            completedRuns: 0,
+            failedRuns: 0,
+            needsScoreCount: 18,
+            passCount: 0,
+            failCount: 0,
+            reviewCount: 0,
+            effectivePassRate: 0,
+            passThreshold: 75,
+            failingCodes: [],
+          },
+          blockers: ["Import the defensive security prompt pack before running the gate."],
+          nextActions: ["Import the defensive security prompt pack from Ops Quality or Library Prompt Packs."],
+          posture: {
+            callsProviders: false,
+            mutationPerformed: false,
+            source: "stored_prompt_pack_report",
+            note: "stored evidence only",
+          },
+        },
+      ],
+      warnings: ["Security quality gates are read-only projections from stored prompt-pack reports."],
+    }));
     const importBuiltinPromptPack = vi.fn((packKey: string) => ({
       pack: {
         packId: packKey,
@@ -43,12 +79,14 @@ describe("prompt-pack routes", () => {
     app.decorate("services", {
       promptPacks: {
         listSecurityEvalPacks,
+        listSecurityQualityGates,
         importBuiltinPromptPack,
       },
     } as never);
     await app.register(promptPackRoutes);
 
     const builtins = await app.inject({ method: "GET", url: "/api/v1/prompt-packs/builtins" });
+    const gates = await app.inject({ method: "GET", url: "/api/v1/prompt-packs/security-gates" });
     const imported = await app.inject({
       method: "POST",
       url: "/api/v1/prompt-packs/builtins/security-red-team-v6/import",
@@ -64,6 +102,18 @@ describe("prompt-pack routes", () => {
       ],
     });
     expect(listSecurityEvalPacks).toHaveBeenCalledTimes(1);
+    expect(gates.statusCode).toBe(200);
+    expect(gates.json()).toMatchObject({
+      items: [
+        {
+          gateId: "prompt-pack:security-red-team-v6:security-quality",
+          status: "not_imported",
+          readOnly: true,
+          posture: { callsProviders: false, mutationPerformed: false },
+        },
+      ],
+    });
+    expect(listSecurityQualityGates).toHaveBeenCalledTimes(1);
     expect(imported.statusCode).toBe(200);
     expect(importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
   });

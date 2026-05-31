@@ -344,6 +344,7 @@ describe("shared API wrappers", () => {
     });
     await expectCall(promptPacks.fetchPromptPacks(5000), "/api/v1/prompt-packs?limit=2000");
     await expectCall(promptPacks.fetchPromptPackBuiltins(), "/api/v1/prompt-packs/builtins");
+    await expectCall(promptPacks.fetchPromptPackSecurityGates(), "/api/v1/prompt-packs/security-gates");
     await expectCall(
       promptPacks.importBuiltinPromptPack("security/red team"),
       "/api/v1/prompt-packs/builtins/security%2Fred%20team/import",

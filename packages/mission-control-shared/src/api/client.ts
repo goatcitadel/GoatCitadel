@@ -511,6 +511,7 @@ export {
   fetchPromptPackExport,
   fetchPromptPackReplayRegressionStatus,
   fetchPromptPackReport,
+  fetchPromptPackSecurityGates,
   fetchPromptPacks,
   fetchPromptPackTests,
   fetchPromptPackTrends,

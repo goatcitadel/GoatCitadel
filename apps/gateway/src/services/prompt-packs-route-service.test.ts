@@ -6,6 +6,7 @@ function createPromptPacksPort() {
     importPromptPack: vi.fn((input: unknown) => ({ op: "import", input })),
     importBuiltinPromptPack: vi.fn((packKey: string) => ({ op: "builtin-import", packKey })),
     listSecurityEvalPacks: vi.fn(() => ({ op: "security-eval-packs" })),
+    listSecurityQualityGates: vi.fn(() => ({ op: "security-quality-gates" })),
     listPromptPacks: vi.fn((limit: number) => [{ op: "list", limit }]),
     listPromptPackTests: vi.fn((packId: string, limit: number) => [{ op: "tests", packId, limit }]),
     runPromptPackTest: vi.fn(async (packId: string, testId: string, input: unknown) => ({
@@ -53,6 +54,7 @@ describe("PromptPacksRouteService", () => {
       packKey: "security-red-team-v6",
     });
     expect(service.listSecurityEvalPacks()).toEqual({ op: "security-eval-packs" });
+    expect(service.listSecurityQualityGates()).toEqual({ op: "security-quality-gates" });
     expect(service.listPromptPacks(25)).toEqual([{ op: "list", limit: 25 }]);
     expect(service.listPromptPackTests("pack-1", 50)).toEqual([{ op: "tests", packId: "pack-1", limit: 50 }]);
     await expect(service.runPromptPackTest("pack-1", "test-1", { mode: "agentic" } as never)).resolves.toEqual({

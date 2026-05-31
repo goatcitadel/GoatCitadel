@@ -6,6 +6,7 @@ import type {
   PromptPackRecord,
   PromptPackReportRecord,
   PromptPackSecurityEvalPackRecord,
+  PromptPackSecurityQualityGateRecord,
 } from "@goatcitadel/contracts";
 import {
   exportLlmEvalProofRuns,
@@ -13,6 +14,7 @@ import {
   fetchPromptPackBuiltins,
   fetchPromptPackExport,
   fetchPromptPackReport,
+  fetchPromptPackSecurityGates,
   fetchPromptPacks,
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -29,7 +31,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [packs, evalRuns, securityEvalPacks] = await Promise.all([
+    const [packs, evalRuns, securityEvalPacks, securityGates] = await Promise.all([
       nativeLoad("Prompt packs", fetchPromptPacks(200), { items: [] as PromptPackRecord[] }),
       nativeLoad("Eval proof runs", fetchLlmEvalProofRuns(25), {
         generatedAt: new Date(0).toISOString(),
@@ -40,19 +42,27 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         items: [] as PromptPackSecurityEvalPackRecord[],
         warnings: [],
       }),
+      nativeLoad("Security quality gates", fetchPromptPackSecurityGates(), {
+        generatedAt: new Date(0).toISOString(),
+        items: [] as PromptPackSecurityQualityGateRecord[],
+        warnings: [],
+      }),
     ]);
     return {
-      issues: nativeLoadIssues([packs, evalRuns, securityEvalPacks]),
+      issues: nativeLoadIssues([packs, evalRuns, securityEvalPacks, securityGates]),
       packs: packs.data.items,
       evalRuns: evalRuns.data.items,
       securityEvalPacks: securityEvalPacks.data.items,
       securityEvalWarnings: securityEvalPacks.data.warnings,
+      securityGates: securityGates.data.items,
+      securityGateWarnings: securityGates.data.warnings,
     };
   }, []);
 
   const packs = data?.packs ?? [];
   const evalRuns = data?.evalRuns ?? [];
   const securityEvalPacks = data?.securityEvalPacks ?? [];
+  const securityGates = data?.securityGates ?? [];
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? packs[0] ?? null;
   const totalTests = packs.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0);
   const securityEvalTests = securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0);
@@ -377,6 +387,44 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         </NativeCard>
 
         <NativeCard
+          title="Security quality gates"
+          subtitle="Named defensive-security gates summarize stored prompt-pack run and score evidence."
+          stats={[
+            { label: "Gates", value: String(securityGates.length) },
+            {
+              label: "Passing",
+              value: String(securityGates.filter((gate) => gate.status === "passed").length),
+            },
+          ]}
+        >
+          {data?.securityGateWarnings?.[0] ? (
+            <div className="mc-next-runtime-notice tone-info">{data.securityGateWarnings[0]}</div>
+          ) : null}
+          <NativeList
+            density="compact"
+            items={securityGates.map((gate) => ({
+              title: gate.title,
+              meta: [
+                formatSecurityGateStatus(gate.status),
+                `${gate.evidence.completedRuns}/${gate.evidence.testCount} runs`,
+                `${formatScore(gate.evidence.effectivePassRate)} pass`,
+              ].join(" · "),
+              body:
+                gate.blockers[0] ??
+                gate.nextActions[0] ??
+                "Stored defensive-security prompt-pack evidence is available.",
+            }))}
+            emptyLabel="No security quality gates are available."
+            maxHeight="min(30vh, 18rem)"
+          />
+          <div className="mc-next-approvals-chip-row">
+            <StatusChip tone="muted">Read-only</StatusChip>
+            <StatusChip tone="muted">Stored evidence</StatusChip>
+            <StatusChip tone="muted">No provider calls</StatusChip>
+          </div>
+        </NativeCard>
+
+        <NativeCard
           title="Eval proof"
           subtitle="Provider/model quality evidence only appears when proof runs have been recorded."
           stats={[
@@ -548,4 +596,14 @@ function formatSecurityEvalStatus(status: PromptPackSecurityEvalPackRecord["stat
   if (status === "imported") return "Imported";
   if (status === "available") return "Available";
   return "Unavailable";
+}
+
+function formatSecurityGateStatus(status: PromptPackSecurityQualityGateRecord["status"]): string {
+  if (status === "missing_definition") return "Missing definition";
+  if (status === "not_imported") return "Not imported";
+  if (status === "not_run") return "Not run";
+  if (status === "needs_score") return "Needs score";
+  if (status === "review") return "Review";
+  if (status === "failed") return "Failed";
+  return "Passed";
 }

@@ -60,6 +60,8 @@ import type {
   PromptPackScoreState,
   PromptPackSecurityEvalPackRecord,
   PromptPackSecurityEvalPacksResponse,
+  PromptPackSecurityQualityGateRecord,
+  PromptPackSecurityQualityGatesResponse,
   PromptPackTestRecord,
   PromptPackToolTier,
   PromptPackVerdict,
@@ -408,6 +410,19 @@ export class PromptPackService {
       generatedAt,
       items: [buildSecurityRedTeamEvalPack(this.ctx.config.rootDir, importedPacks, warnings)],
       warnings,
+    };
+  }
+
+  listSecurityQualityGates(): PromptPackSecurityQualityGatesResponse {
+    const generatedAt = new Date().toISOString();
+    const securityPacks = this.listSecurityEvalPacks();
+    return {
+      generatedAt,
+      items: securityPacks.items.map((pack) => this.buildSecurityQualityGate(pack, generatedAt)),
+      warnings: [
+        ...securityPacks.warnings,
+        "Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims.",
+      ],
     };
   }
 
@@ -1022,6 +1037,73 @@ export class PromptPackService {
         generation,
       ),
     };
+  }
+
+  private buildSecurityQualityGate(
+    pack: PromptPackSecurityEvalPackRecord,
+    generatedAt: string,
+  ): PromptPackSecurityQualityGateRecord {
+    const baseEvidence = {
+      definitionStatus: pack.status,
+      testCount: pack.testCount,
+      completedRuns: 0,
+      failedRuns: 0,
+      needsScoreCount: pack.testCount,
+      passCount: 0,
+      failCount: 0,
+      reviewCount: 0,
+      effectivePassRate: 0,
+      passThreshold: 75,
+      failingCodes: [] as string[],
+    };
+    if (pack.status === "unavailable") {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "missing_definition", baseEvidence, [
+        ...pack.blockers,
+        "Restore the bundled security red-team prompt-pack markdown before this gate can produce evidence.",
+      ]);
+    }
+    if (pack.status !== "imported" || !pack.importedPackId) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "not_imported", baseEvidence, [
+        ...pack.blockers,
+        "Import the defensive security prompt pack before running the gate.",
+      ]);
+    }
+
+    const report = this.getPromptPackReport(pack.importedPackId);
+    const evidence = {
+      definitionStatus: pack.status,
+      testCount: report.summary.totalTests,
+      completedRuns: report.summary.completedRuns,
+      failedRuns: report.summary.failedRuns,
+      needsScoreCount: report.summary.needsScoreCount,
+      passCount: report.summary.passCount,
+      failCount: report.summary.failCount,
+      reviewCount: report.summary.reviewCount,
+      effectivePassRate: report.summary.effectivePassRate,
+      passThreshold: report.summary.passThreshold,
+      failingCodes: report.summary.failingCodes,
+    };
+    if (report.summary.completedRuns === 0) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "not_run", evidence, [
+        "Run the imported defensive security prompt-pack tests to create gate evidence.",
+      ]);
+    }
+    if (report.summary.needsScoreCount > 0) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "needs_score", evidence, [
+        "Score all completed defensive security runs before treating this gate as release evidence.",
+      ]);
+    }
+    if (report.summary.reviewCount > 0) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "review", evidence, [
+        "Resolve defensive security review verdicts before treating this gate as passing.",
+      ]);
+    }
+    if (report.summary.failedRuns > 0 || report.summary.failCount > 0 || report.summary.effectivePassRate < 1) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "failed", evidence, [
+        "Fix failing defensive security tests and rerun the prompt-pack gate.",
+      ]);
+    }
+    return buildSecurityQualityGateRecord(pack, generatedAt, "passed", evidence, []);
   }
 
   listPromptPackTestReviews(packId: string, testId: string): PromptPackHumanReviewRecordV2[] {
@@ -3203,6 +3285,56 @@ function buildSecurityRedTeamEvalPack(
     safetyPosture: buildSecurityEvalSafetyPosture(),
     blockers: imported ? [] : ["Import this prompt pack before it can produce run, score, or benchmark evidence."],
   };
+}
+
+function buildSecurityQualityGateRecord(
+  pack: PromptPackSecurityEvalPackRecord,
+  generatedAt: string,
+  status: PromptPackSecurityQualityGateRecord["status"],
+  evidence: PromptPackSecurityQualityGateRecord["evidence"],
+  blockers: string[],
+): PromptPackSecurityQualityGateRecord {
+  return {
+    gateId: `prompt-pack:${pack.packKey}:security-quality`,
+    packKey: pack.packKey,
+    title: `${pack.title} gate`,
+    status,
+    releaseGate: true,
+    readOnly: true,
+    ...(pack.importedPackId ? { packId: pack.importedPackId } : {}),
+    ...(pack.importedPackId
+      ? { reportEndpoint: `/api/v1/prompt-packs/${encodeURIComponent(pack.importedPackId)}/report` }
+      : {}),
+    generatedAt,
+    evidence,
+    blockers,
+    nextActions: buildSecurityQualityGateNextActions(status),
+    posture: {
+      callsProviders: false,
+      mutationPerformed: false,
+      source: "stored_prompt_pack_report",
+      note: "This quality gate summarizes stored defensive-security prompt-pack evidence. It does not run providers, mutate packs, or certify security by itself.",
+    },
+  };
+}
+
+function buildSecurityQualityGateNextActions(status: PromptPackSecurityQualityGateRecord["status"]): string[] {
+  switch (status) {
+    case "missing_definition":
+      return ["Restore the bundled prompt-pack markdown and rerun docs/runtime verification."];
+    case "not_imported":
+      return ["Import the defensive security prompt pack from Ops Quality or Library Prompt Packs."];
+    case "not_run":
+      return ["Run the imported defensive security tests through the prompt-pack workflow."];
+    case "needs_score":
+      return ["Auto-score or human-review every completed defensive security run."];
+    case "review":
+      return ["Resolve review verdicts and rerun focused failing tests if needed."];
+    case "failed":
+      return ["Fix the failing behavior, rerun the security pack, and regenerate stored report evidence."];
+    case "passed":
+      return ["Keep this stored gate evidence alongside the named release verification lanes."];
+  }
 }
 
 function buildSecurityEvalSafetyPosture(): PromptPackSecurityEvalPackRecord["safetyPosture"] {
