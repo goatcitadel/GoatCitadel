@@ -67,6 +67,7 @@ Use for gateway, orchestration, approvals, memory, integrations, or route work.
 - `MEM-*`
 - `SEC-*`
 - `BK-*`
+- focused named verifiers such as `pnpm verify:security:evals` when touching defensive prompt-pack or red-team eval posture
 
 ### Lane C: Release / High-Risk
 

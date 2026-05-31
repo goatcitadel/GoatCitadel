@@ -153,6 +153,51 @@ export async function runSkillsCatalogLane(context) {
   );
 }
 
+export async function runSecurityEvalsLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "security-evals.defensive-red-team-pack",
+      lane: "security-evals",
+      title: "Defensive security prompt-pack route and gate evidence",
+      subsystem: "security",
+    },
+    async () => {
+      const result = await runCommand(
+        pnpmCommand(),
+        [
+          "--dir",
+          "apps/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "src/routes/prompt-packs.test.ts",
+          "src/services/prompt-pack-service.parser-report.test.ts",
+        ],
+        {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: "security-evals.defensive-red-team-pack",
+        },
+      );
+      return {
+        status: result.code === 0 ? "passed" : "failed",
+        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+        notes: [
+          "Covers built-in defensive security prompt-pack listing, explicit import, read-only gates, parser balance, and non-execution posture.",
+        ],
+        metrics: {
+          exitCode: result.code,
+          durationMs: result.durationMs,
+        },
+        artifacts: emptyArtifacts({
+          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+        }),
+      };
+    },
+  );
+}
+
 function resolveVerificationTargetContext() {
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
@@ -4429,16 +4474,14 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
             ) {
               return false;
             }
-            const catalogEntry = Array.from(
-              document.querySelectorAll(".chat-model-picker-metadata > div"),
-            ).find((entry) => entry.querySelector("dt")?.textContent?.trim() === "Catalog");
+            const catalogEntry = Array.from(document.querySelectorAll(".chat-model-picker-metadata > div")).find(
+              (entry) => entry.querySelector("dt")?.textContent?.trim() === "Catalog",
+            );
             if (catalogEntry?.querySelector("dd")?.textContent?.trim() === "not_checked") {
               return false;
             }
-            const routeLoadingBanner = Array.from(
-              document.querySelectorAll(".mc-next-composer-banner.info"),
-            ).some((banner) =>
-              banner.textContent?.includes("Checking the selected provider/model route"),
+            const routeLoadingBanner = Array.from(document.querySelectorAll(".mc-next-composer-banner.info")).some(
+              (banner) => banner.textContent?.includes("Checking the selected provider/model route"),
             );
             if (routeLoadingBanner) {
               return false;
@@ -4750,7 +4793,7 @@ function emptyArtifacts(overrides = {}) {
 }
 
 async function waitForCodeModeRunCompletion(gatewayUrl, runId, options = {}) {
-  const attempts = typeof options === "number" ? options : options.attempts ?? 40;
+  const attempts = typeof options === "number" ? options : (options.attempts ?? 40);
   const query = new URLSearchParams();
   if (typeof options !== "number") {
     if (typeof options.workspaceId === "string" && options.workspaceId.length > 0) {
@@ -4956,9 +4999,8 @@ async function captureRouteReadyFailure(context, input) {
         const thread = await threadRes.json();
         const queue = await queueRes.json();
         const selectedTurn =
-          thread?.turns?.find?.(
-            (turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId),
-          ) ?? thread?.turns?.at?.(-1);
+          thread?.turns?.find?.((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId)) ??
+          thread?.turns?.at?.(-1);
         return {
           sessionId,
           thread: {
