@@ -139,6 +139,43 @@ export type IntegrationExternalWritebackResumeState =
   | "in_progress"
   | "payload_mismatch"
   | "idempotency_unavailable";
+export type ExternalSideEffectRunStatus =
+  | "claimed_not_sent"
+  | "external_call_started"
+  | "completed"
+  | "failed_before_boundary"
+  | "unknown_external_outcome"
+  | "blocked_duplicate"
+  | "payload_mismatch"
+  | "idempotency_unavailable";
+
+export interface ExternalSideEffectRunRecord {
+  runId: string;
+  workspaceId: string;
+  boundary: string;
+  routePath: string;
+  catalogId?: string;
+  connectionId?: string;
+  actionId?: string;
+  actorScope: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  status: ExternalSideEffectRunStatus;
+  replayPolicy: IntegrationExternalWritebackReplayPolicy;
+  replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+  replayAttempt?: "new" | "retry_after_failure" | "blocked" | "unavailable";
+  resumeState: IntegrationExternalWritebackResumeState;
+  requestPayload?: Record<string, unknown>;
+  responsePayload?: Record<string, unknown>;
+  externalReferenceId?: string;
+  envelopeId?: string;
+  errorText?: string;
+  attemptCount: number;
+  externalCallStartedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface IntegrationExternalWritebackEnvelope {
   status: IntegrationExternalWritebackEnvelopeStatus;

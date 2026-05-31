@@ -39,6 +39,11 @@ describe("Postgres runtime schema generation", () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique ON prompt_pack_benchmark_items\(benchmark_run_id, provider_id, model, test_id\);/,
     );
     assert.match(sql, /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS external_side_effect_runs \(/);
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_external_side_effect_runs_idempotency ON external_side_effect_runs\(route_path, idempotency_key, actor_scope\);/,
+    );
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
 

@@ -1047,6 +1047,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_backend_json", "TEXT");
     },
   },
+  {
+    version: 104,
+    name: "external_side_effect_run_ledger",
+    up: createExternalSideEffectRunSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1246,6 +1251,43 @@ function createBaseSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_updated
       ON mutation_idempotency(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS external_side_effect_runs (
+      run_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      boundary TEXT NOT NULL,
+      route_path TEXT NOT NULL,
+      catalog_id TEXT,
+      connection_id TEXT,
+      action_id TEXT,
+      actor_scope TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      replay_policy TEXT NOT NULL,
+      replay_outcome TEXT,
+      replay_attempt TEXT,
+      resume_state TEXT NOT NULL,
+      request_payload_json TEXT,
+      response_payload_json TEXT,
+      external_reference_id TEXT,
+      envelope_id TEXT,
+      error_text TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      external_call_started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_external_side_effect_runs_idempotency
+      ON external_side_effect_runs(route_path, idempotency_key, actor_scope);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_workspace_created
+      ON external_side_effect_runs(workspace_id, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_status_updated
+      ON external_side_effect_runs(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_connection_created
+      ON external_side_effect_runs(connection_id, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS approvals (
       approval_id TEXT PRIMARY KEY,
@@ -2300,6 +2342,47 @@ function migrateCommsDeliveryRuntimeMetadata(db: DatabaseSync): void {
         ON comms_deliveries(status, next_attempt_at, created_at);
     `);
   }
+}
+
+function createExternalSideEffectRunSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS external_side_effect_runs (
+      run_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      boundary TEXT NOT NULL,
+      route_path TEXT NOT NULL,
+      catalog_id TEXT,
+      connection_id TEXT,
+      action_id TEXT,
+      actor_scope TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      replay_policy TEXT NOT NULL,
+      replay_outcome TEXT,
+      replay_attempt TEXT,
+      resume_state TEXT NOT NULL,
+      request_payload_json TEXT,
+      response_payload_json TEXT,
+      external_reference_id TEXT,
+      envelope_id TEXT,
+      error_text TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      external_call_started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_external_side_effect_runs_idempotency
+      ON external_side_effect_runs(route_path, idempotency_key, actor_scope);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_workspace_created
+      ON external_side_effect_runs(workspace_id, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_status_updated
+      ON external_side_effect_runs(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_connection_created
+      ON external_side_effect_runs(connection_id, created_at DESC);
+  `);
 }
 
 function createChatWorkspaceSchema(db: DatabaseSync): void {

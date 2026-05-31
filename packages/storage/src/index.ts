@@ -90,6 +90,7 @@ import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
 import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
+import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
 
 export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;
@@ -194,6 +195,7 @@ export class Storage {
   public readonly durableRunEvents: DurableRunEventRepository;
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
+  public readonly externalSideEffectRuns: ExternalSideEffectRunRepository;
   public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
@@ -298,6 +300,7 @@ export class Storage {
     this.durableRunEvents = new DurableRunEventRepository(this.db);
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
+    this.externalSideEffectRuns = new ExternalSideEffectRunRepository(this.db);
   }
 
   public close(): void {
@@ -604,6 +607,7 @@ export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
+export * from "./external-side-effect-run-repo.js";
 export * from "./skill-evaluation-run-repo.js";
 export { loadAndSanitize } from "./load-and-sanitize.js";
 export type { QuarantineEntry, SafeParse, SafeParseResult } from "./load-and-sanitize.js";

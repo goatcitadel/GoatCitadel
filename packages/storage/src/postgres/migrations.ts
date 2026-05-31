@@ -1554,4 +1554,46 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS execution_backend_json TEXT;
     `,
   },
+  {
+    version: 57,
+    name: "external_side_effect_run_ledger",
+    sql: `
+      CREATE TABLE IF NOT EXISTS external_side_effect_runs (
+        run_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        boundary TEXT NOT NULL,
+        route_path TEXT NOT NULL,
+        catalog_id TEXT,
+        connection_id TEXT,
+        action_id TEXT,
+        actor_scope TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        replay_policy TEXT NOT NULL,
+        replay_outcome TEXT,
+        replay_attempt TEXT,
+        resume_state TEXT NOT NULL,
+        request_payload_json TEXT,
+        response_payload_json TEXT,
+        external_reference_id TEXT,
+        envelope_id TEXT,
+        error_text TEXT,
+        attempt_count BIGINT NOT NULL DEFAULT 0,
+        external_call_started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_external_side_effect_runs_idempotency
+        ON external_side_effect_runs(route_path, idempotency_key, actor_scope);
+      CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_workspace_created
+        ON external_side_effect_runs(workspace_id, created_at DESC, run_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_status_updated
+        ON external_side_effect_runs(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_connection_created
+        ON external_side_effect_runs(connection_id, created_at DESC);
+    `,
+  },
 ];
