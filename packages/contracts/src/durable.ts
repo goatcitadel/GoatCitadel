@@ -31,6 +31,7 @@ export type DurableSupportedWorkflowKey =
   | "hook.delivery"
   | "memory.maintenance"
   | "orchestration.plan.execute"
+  | "external_side_effect.replay"
   | "curator.tick";
 
 export interface ProactiveTickWorkflowPayload {
@@ -90,6 +91,17 @@ export interface CuratorTickWorkflowPayload {
   triggerMode: "scheduled" | "manual";
   cycleDays: number;
   requestedAt: string;
+}
+
+export interface ExternalSideEffectReplayWorkflowPayload {
+  version: "external_side_effect.replay.v1";
+  workspaceId: string;
+  requestedBy: string;
+  requestedAt: string;
+  runIds?: string[];
+  connectionId?: string;
+  limit?: number;
+  staleClaimedNotSentAfterMs?: number;
 }
 
 export interface DurableRunCreateRequest {

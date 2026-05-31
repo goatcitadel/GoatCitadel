@@ -27,6 +27,8 @@ import {
   type CuratorTickWorkflowPayload,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
+  type ExternalSideEffectReplayWorkflowPayload,
+  type ExternalSideEffectRunRecord,
   type HookTrigger,
   type OrchestrationPlanWorkflowPayload,
   type ProactiveTickWorkflowPayload,
@@ -45,9 +47,13 @@ import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflo
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import {
+  type IdempotentExternalSideEffectRunInput,
+  runReplaySafeExternalSideEffectWorker,
+} from "./external-side-effect-runner-service.js";
 
 type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
-  Pick<Storage, "approvals" | "audit" | "chatMessages">;
+  Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns">;
 
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
@@ -171,6 +177,14 @@ type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
 type DurableOrchestrationWorkflowHost = DurableWorkflowCompletionHost &
   Pick<DurableExecutionHost, "executeDurableOrchestrationRun" | "durableRunService">;
 
+type DurableExternalSideEffectReplayWorkflowHost = DurableWorkflowCompletionHost & {
+  storage: Pick<Storage, "durableRuns" | "externalSideEffectRuns">;
+  buildExternalSideEffectReplayJob?(
+    run: ExternalSideEffectRunRecord,
+    payload: ExternalSideEffectReplayWorkflowPayload,
+  ): IdempotentExternalSideEffectRunInput<Record<string, unknown>> | undefined;
+};
+
 type DurableCuratorTickWorkflowHost = {
   curatorService: Pick<CuratorService, "executeDurableCuratorTickRun">;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
@@ -184,6 +198,7 @@ export interface DurableWorkflowExecutorHosts {
   connectorDelivery: DurableConnectorDeliveryWorkflowHost;
   hookDelivery: DurableHookDeliveryWorkflowHost;
   orchestration: DurableOrchestrationWorkflowHost;
+  externalSideEffectReplay: DurableExternalSideEffectReplayWorkflowHost;
   curatorTick: DurableCuratorTickWorkflowHost;
 }
 
@@ -223,6 +238,10 @@ function buildConnectorDeliveryRealtimeLinks(input: {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim().length > 0);
 }
 
 function buildDurableRealtimeOptions(input: {
@@ -373,6 +392,38 @@ export function parseOrchestrationWorkflowPayload(run: DurableRunRecord): Orches
   return parseOrchestrationLifecycleWorkflowPayload(run);
 }
 
+export function parseExternalSideEffectReplayWorkflowPayload(
+  run: DurableRunRecord,
+): ExternalSideEffectReplayWorkflowPayload | undefined {
+  const payload = run.payload as Partial<ExternalSideEffectReplayWorkflowPayload> | undefined;
+  if (!payload || payload.version !== "external_side_effect.replay.v1") {
+    return undefined;
+  }
+  if (
+    typeof payload.workspaceId !== "string" ||
+    typeof payload.requestedBy !== "string" ||
+    typeof payload.requestedAt !== "string"
+  ) {
+    return undefined;
+  }
+  if (payload.runIds !== undefined && !isStringArray(payload.runIds)) {
+    return undefined;
+  }
+  if (payload.connectionId !== undefined && typeof payload.connectionId !== "string") {
+    return undefined;
+  }
+  if (payload.limit !== undefined && (!Number.isInteger(payload.limit) || payload.limit <= 0)) {
+    return undefined;
+  }
+  if (
+    payload.staleClaimedNotSentAfterMs !== undefined &&
+    (!Number.isInteger(payload.staleClaimedNotSentAfterMs) || payload.staleClaimedNotSentAfterMs < 0)
+  ) {
+    return undefined;
+  }
+  return payload as ExternalSideEffectReplayWorkflowPayload;
+}
+
 export function createDurableWorkflowExecutorRegistry(
   executors: Record<string, DurableWorkflowExecutor>,
 ): DurableWorkflowExecutorRegistry {
@@ -519,6 +570,29 @@ export function buildDurableWorkflowExecutors(
           : { recoverable: false, reason: "Durable hook delivery payload is invalid or incomplete." },
       markUnrecoverable: (run, reason) => markDurableHookDeliveryUnrecoverable(hosts.hookDelivery, run, reason),
     },
+    "external_side_effect.replay": {
+      execute: (run, context) =>
+        executeDurableExternalSideEffectReplayRun(hosts.externalSideEffectReplay, run, context),
+      isRecoverable: (run) =>
+        parseExternalSideEffectReplayWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable external side-effect replay payload is invalid or incomplete." },
+      markUnrecoverable: async (run, reason) => {
+        hosts.externalSideEffectReplay.publishRealtime(
+          "system",
+          "durable",
+          {
+            type: "durable_workflow_unrecoverable",
+            runId: run.runId,
+            workflowKey: run.workflowKey,
+            reason,
+          },
+          buildDurableRealtimeOptions({
+            runId: run.runId,
+          }),
+        );
+      },
+    },
     "orchestration.plan.execute": {
       execute: async (run, context) => {
         const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
@@ -565,6 +639,7 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
     connectorDelivery: host,
     hookDelivery: host,
     orchestration: host,
+    externalSideEffectReplay: host,
     curatorTick: {
       curatorService: {
         executeDurableCuratorTickRun: async () => {
@@ -664,6 +739,91 @@ function failDurableWorkflowRun(
 
 function canCompleteCurrentDurableRunStatus(status: DurableRunRecord["status"]): boolean {
   return status === "queued" || status === "running";
+}
+
+export async function executeDurableExternalSideEffectReplayRun(
+  host: DurableExternalSideEffectReplayWorkflowHost,
+  run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
+): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
+  const payload = parseExternalSideEffectReplayWorkflowPayload(run);
+  if (!payload) {
+    throw new Error("Durable external side-effect replay payload is invalid or incomplete.");
+  }
+  const checkedAt = new Date().toISOString();
+  const candidateRuns = collectExternalSideEffectReplayRuns(host, payload);
+  const results = await runReplaySafeExternalSideEffectWorker<Record<string, unknown>>({
+    runs: candidateRuns,
+    checkedAt,
+    limit: payload.limit,
+    staleClaimedNotSentAfterMs: payload.staleClaimedNotSentAfterMs,
+    buildJob: (candidate) => host.buildExternalSideEffectReplayJob?.(candidate, payload),
+  });
+  const checkpointState = {
+    workflow: "external_side_effect.replay",
+    version: payload.version,
+    workspaceId: payload.workspaceId,
+    requestedBy: payload.requestedBy,
+    checkedAt,
+    candidates: candidateRuns.length,
+    executed: results.filter((item) => item.status === "executed").length,
+    blocked: results.filter((item) => item.status === "blocked").length,
+    failed: results.filter((item) => item.status === "failed").length,
+    skipped: results.filter((item) => item.status === "skipped").length,
+    results: results.map((item) => ({
+      runId: item.run.runId,
+      status: item.status,
+      ...(item.status === "skipped" ? { reason: item.reason, message: item.message } : {}),
+      ...(item.status !== "skipped"
+        ? {
+            replayOutcome: item.result.claim.replayOutcome,
+            replayAttempt: item.result.claim.replayAttempt,
+            resumeState: item.result.claim.resumeState,
+          }
+        : {}),
+    })),
+  };
+  completeDurableWorkflowRun(host, run.runId, checkpointState);
+}
+
+function collectExternalSideEffectReplayRuns(
+  host: DurableExternalSideEffectReplayWorkflowHost,
+  payload: ExternalSideEffectReplayWorkflowPayload,
+): ExternalSideEffectRunRecord[] {
+  const limit = clampExternalSideEffectReplayLimit(payload.limit);
+  const runs = payload.runIds?.length
+    ? payload.runIds
+        .map((runId) => readExternalSideEffectRunMaybe(host, runId))
+        .filter((item): item is ExternalSideEffectRunRecord => Boolean(item))
+    : payload.connectionId
+      ? host.storage.externalSideEffectRuns.listByConnection(payload.connectionId, {
+          workspaceId: payload.workspaceId,
+          limit,
+        })
+      : host.storage.externalSideEffectRuns.listByWorkspace(payload.workspaceId, limit);
+  return runs
+    .filter((item) => item.workspaceId === payload.workspaceId)
+    .filter((item) => !payload.connectionId || item.connectionId === payload.connectionId)
+    .slice(0, limit);
+}
+
+function readExternalSideEffectRunMaybe(
+  host: DurableExternalSideEffectReplayWorkflowHost,
+  runId: string,
+): ExternalSideEffectRunRecord | undefined {
+  try {
+    return host.storage.externalSideEffectRuns.get(runId);
+  } catch {
+    return undefined;
+  }
+}
+
+function clampExternalSideEffectReplayLimit(limit: number | undefined): number {
+  if (!Number.isInteger(limit) || !limit || limit < 1) {
+    return 50;
+  }
+  return Math.min(200, limit);
 }
 
 export async function executeDurableApprovalWaitRun(

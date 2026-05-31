@@ -1457,6 +1457,16 @@ export class GatewayService {
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
+        externalSideEffectReplay: {
+          storage: this.storage,
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+        },
         orchestration: {
           storage: this.storage,
           durableRunService: this.durableRunService,
