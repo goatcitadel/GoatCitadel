@@ -35,6 +35,7 @@ describe("code-mode-execution-backend-runner", () => {
       },
     });
     expect(runner.backend.backendId).toBe("trusted-code-host");
+    expect(runner.mode).toBe("child_harness");
     expect(prepareHostLaunch).toHaveBeenCalledWith(
       sandboxConfig(),
       expect.objectContaining({
@@ -45,7 +46,7 @@ describe("code-mode-execution-backend-runner", () => {
     );
   });
 
-  it("fails closed for preview Docker and Aider backends", () => {
+  it("fails closed for preview Docker and unconfigured Aider backends", () => {
     const sandbox = sandboxMetadata();
     try {
       createCodeModeExecutionBackendRunner({
@@ -80,7 +81,7 @@ describe("code-mode-execution-backend-runner", () => {
           adapterForBackendId: "docker-container",
         },
       }),
-    ).toThrow("Aider Code Mode adapter is preview-only and is not callable yet.");
+    ).toThrow("Aider Code Mode adapter is not callable with the current Docker and adapter configuration.");
   });
 
   it("prepares an explicit Docker launch through the stdio transport seam without making preview registry callable", async () => {
@@ -122,6 +123,7 @@ describe("code-mode-execution-backend-runner", () => {
       },
     });
     expect(runner.backend.backendId).toBe("docker-container");
+    expect(runner.mode).toBe("child_harness");
     expect(prepareDockerLaunch).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
@@ -130,6 +132,77 @@ describe("code-mode-execution-backend-runner", () => {
       expect.objectContaining({
         enabled: true,
         image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      }),
+    );
+  });
+
+  it("returns an Aider audit runner when Docker and adapter config are callable", async () => {
+    const sandbox = sandboxMetadata();
+    const executeAiderAdapter = vi.fn(async (input) => ({
+      failed: false,
+      outcome: "no_changes" as const,
+      result: { aiderAdapter: { envelope: { replay: { policy: "audit_only", replaySafe: false } } } },
+      stdout: "aider ok\n",
+      stderr: "",
+      bundle: {},
+      observedInput: input,
+    }));
+    const runner = createCodeModeExecutionBackendRunner({
+      sandbox,
+      sandboxConfig: sandboxConfig(),
+      executionBackend: {
+        backendId: "aider-cli-adapter",
+        kind: "aider_adapter",
+        label: "Aider CLI adapter",
+        status: "available",
+        runtimeSupport: "active_runner",
+        adapterForBackendId: "docker-container",
+        isolationProfile: "docker/aider-audit/no_operator_workspace",
+      },
+      dockerBackendConfig: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+        command: "aider",
+      },
+      executeAiderAdapter: executeAiderAdapter as never,
+    });
+
+    expect(runner.mode).toBe("aider_audit");
+    await expect(runner.prepareLaunch(launchInput(sandbox))).rejects.toThrow(
+      "Aider Code Mode adapter does not launch the child harness",
+    );
+    await expect(
+      runner.executeAiderAdapter?.({
+        runId: "run-1",
+        runTempRoot: path.join("tmp", "code-mode-run"),
+        language: "typescript",
+        source: "return { ok: true };",
+        requestMarkdown: "Review the temp file.",
+        persister: {
+          persistText: vi.fn(),
+          persistJson: vi.fn(),
+        },
+      }),
+    ).resolves.toMatchObject({
+      failed: false,
+      outcome: "no_changes",
+      stdout: "aider ok\n",
+    });
+    expect(executeAiderAdapter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        requestMarkdown: "Review the temp file.",
+        aiderAdapter: expect.objectContaining({
+          image: "ghcr.io/goatcitadel/aider-adapter:preview",
+        }),
+        dockerBackend: expect.objectContaining({
+          enabled: true,
+          image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        }),
       }),
     );
   });

@@ -52,7 +52,6 @@ import {
   createCodeModeExecutionBackendRunner,
 } from "./code-mode-execution-backend-runner.js";
 import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
-import { executeCodeModeAiderAdapter } from "./code-mode-aider-execution.js";
 import {
   CODE_MODE_AIDER_ADAPTER_ID,
   buildCodeModeExecutionBackends,
@@ -1287,6 +1286,8 @@ export class CapabilitySystemService {
         finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID
           ? await this.executeAiderAdapterRun({
               runId,
+              sandbox,
+              executionBackend: finalRun.executionBackend,
               language: finalRun.language,
               source,
               pendingAiderRequest: pending.request.aider,
@@ -2072,6 +2073,8 @@ export class CapabilitySystemService {
 
   private async executeAiderAdapterRun(input: {
     runId: string;
+    sandbox: CodeModeSandboxMetadata;
+    executionBackend?: CodeModeRunExecutionBackendRef;
     language: CodeModeLanguage;
     source: string;
     pendingAiderRequest: unknown;
@@ -2086,7 +2089,18 @@ export class CapabilitySystemService {
     stderr: BoundedCaptureState;
   }> {
     const aider = readPendingAiderRunRequest(input.pendingAiderRequest);
-    const execution = await executeCodeModeAiderAdapter({
+    const backendRunner = createCodeModeExecutionBackendRunner({
+      sandbox: input.sandbox,
+      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      executionBackend: input.executionBackend,
+      dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
+      dockerBackendConfig: this.options.runtimeConfig.codeModeDockerBackend,
+      aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
+    });
+    if (backendRunner.mode !== "aider_audit" || !backendRunner.executeAiderAdapter) {
+      throw new Error("Selected Code Mode backend does not support Aider adapter execution.");
+    }
+    const execution = await backendRunner.executeAiderAdapter({
       runId: input.runId,
       runTempRoot: path.join(this.tempRoot, input.runId),
       language: input.language,
@@ -2094,8 +2108,6 @@ export class CapabilitySystemService {
       requestMarkdown: aider.requestMarkdown,
       repositoryRootRelPath: aider.repositoryRootRelPath,
       model: aider.model,
-      aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
-      dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
       persister: this.buildAiderArtifactPersister(),
       signal: input.signal,
     });
@@ -2138,6 +2150,9 @@ export class CapabilitySystemService {
       executionBackend: input.executionBackend,
       dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
     });
+    if (backendRunner.mode !== "child_harness") {
+      throw new Error("Selected Code Mode backend does not support child harness execution.");
+    }
     let preparedSandbox: Awaited<ReturnType<typeof backendRunner.prepareLaunch>>;
     try {
       const harnessPath = await this.prepareRunHarnessFile(runTempRoot);
