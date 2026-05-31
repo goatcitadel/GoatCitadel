@@ -46,7 +46,7 @@ export async function invokeIntegrationConnectionAction(
   const checkedAt = new Date().toISOString();
   let result: IntegrationActionInvokeResult;
   if (isLocalBridgeCatalogId(connection.catalogId)) {
-    result = await invokeLocalBridgeAction(host, connection, actionId, request, checkedAt);
+    result = await invokeLocalBridgeAction(host, connection, action, request, checkedAt);
   } else if (connection.catalogId === "productivity.trello") {
     result = await invokeTrelloAction(host, connection, actionId, request, checkedAt);
   } else if (connection.catalogId === "automation.gmail") {
@@ -84,7 +84,7 @@ export async function invokeIntegrationConnectionAction(
 async function invokeLocalBridgeAction(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
-  actionId: string,
+  action: IntegrationOperatorAction,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
 ): Promise<IntegrationActionInvokeResult> {
@@ -94,7 +94,7 @@ async function invokeLocalBridgeAction(
   if (!bridgeUrl) {
     return blocked(
       connection,
-      actionId,
+      action.actionId,
       checkedAt,
       "Configure a local bridge URL before running this action.",
       "bridge_url_missing",
@@ -105,7 +105,97 @@ async function invokeLocalBridgeAction(
     joinUrl(bridgeUrl, "/v1/integrations/actions"),
     joinUrl(bridgeUrl, "/api/v1/integrations/actions"),
   ];
+  const bridgePayload = {
+    integrationKey: connection.key,
+    catalogId: connection.catalogId,
+    connectionId: connection.connectionId,
+    actionId: action.actionId,
+    input: request.input ?? {},
+  };
+  const executeBridge = () =>
+    sendLocalBridgeAction(
+      host,
+      connection,
+      action.actionId,
+      checkedAt,
+      bridgeUrl,
+      candidates,
+      authHeader,
+      bridgePayload,
+    );
 
+  if (action.capability === "write") {
+    const replayRun = await runIdempotentExternalSideEffect({
+      mutationStore: host.mutationStore,
+      boundary: "integration_local_bridge_action",
+      catalogId: connection.catalogId,
+      connectionId: connection.connectionId,
+      actionId: action.actionId,
+      checkedAt,
+      idempotencyKey: request.idempotencyKey,
+      payload: {
+        provider: "local_bridge",
+        catalogId: connection.catalogId,
+        actionId: action.actionId,
+        input: request.input ?? {},
+      },
+      label: `${action.label} local bridge action`,
+      output: {
+        provider: "local_bridge",
+        catalogId: connection.catalogId,
+        actionId: action.actionId,
+      },
+      execute: async () => {
+        const result = await executeBridge();
+        if (result.status === "failed") {
+          throw new Error(result.message);
+        }
+        return result;
+      },
+    });
+    if (replayRun.status === "blocked") {
+      return blocked(
+        connection,
+        action.actionId,
+        checkedAt,
+        replayRun.message,
+        replayRun.blockedReason,
+        replayRun.output,
+      );
+    }
+    if (replayRun.status === "failed") {
+      return failed(connection, action.actionId, checkedAt, replayRun.error.message, replayRun.output);
+    }
+    return {
+      ...replayRun.value,
+      output: buildExternalSideEffectReplayOutput(replayRun.claim, {
+        provider: "local_bridge",
+        catalogId: connection.catalogId,
+        actionId: action.actionId,
+        ...(replayRun.value.output ?? {}),
+      }),
+    };
+  }
+
+  return executeBridge();
+}
+
+async function sendLocalBridgeAction(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  actionId: string,
+  checkedAt: string,
+  bridgeUrl: string,
+  candidates: string[],
+  authHeader: string | undefined,
+  bridgePayload: {
+    integrationKey: string;
+    catalogId: string;
+    connectionId: string;
+    actionId: string;
+    input: Record<string, unknown>;
+  },
+): Promise<IntegrationActionInvokeResult> {
   let lastFailure: string | undefined;
   for (const target of candidates) {
     try {
@@ -115,13 +205,7 @@ async function invokeLocalBridgeAction(
           "content-type": "application/json",
           ...(authHeader ? { authorization: authHeader } : {}),
         },
-        body: JSON.stringify({
-          integrationKey: connection.key,
-          catalogId: connection.catalogId,
-          connectionId: connection.connectionId,
-          actionId,
-          input: request.input ?? {},
-        }),
+        body: JSON.stringify(bridgePayload),
       });
       const parsed = await parseResponse(response);
       if (!response.ok) {
@@ -134,11 +218,7 @@ async function invokeLocalBridgeAction(
         actionId,
         status: "executed",
         message: parsed.message ?? `${actionId} completed through the local bridge.`,
-        output: isRecord(parsed.output)
-          ? parsed.output
-          : parsed.output !== undefined
-            ? { raw: parsed.output }
-            : undefined,
+        output: normalizeLocalBridgeOutput(parsed.output),
         checkedAt,
       };
     } catch (error) {
@@ -698,6 +778,13 @@ function normalizeProviderOutput(
     return output;
   }
   return output === undefined ? {} : { raw: output };
+}
+
+function normalizeLocalBridgeOutput(output: Record<string, unknown> | unknown[] | string | undefined) {
+  if (isRecord(output) && isRecord(output.output)) {
+    return output.output;
+  }
+  return isRecord(output) ? output : output !== undefined ? { raw: output } : undefined;
 }
 
 function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {

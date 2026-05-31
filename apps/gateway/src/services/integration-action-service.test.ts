@@ -109,6 +109,147 @@ describe("integration-action-service", () => {
     expect(host.publishRealtime).toHaveBeenCalled();
   });
 
+  it("runs local bridge write actions through the shared idempotency guard", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const createEnvelope = vi.fn(() => ({
+      envelopeId: "env-local-bridge-write",
+      eventKind: "external_writeback",
+      contentHash: "content-hash",
+      payloadHash: "payload-hash",
+      toolCallHashes: [],
+      memoryLineage: [],
+      signatureStatus: "unsigned_local",
+      metadata: {},
+      createdAt: "2026-04-10T12:00:00.000Z",
+    }));
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              message: "note created",
+              output: {
+                id: "note-1",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ),
+      evidenceEnvelopeService: { createEnvelope } as never,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-key",
+      input: { title: "Governed note", content: "Created once." },
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      output: {
+        provider: "local_bridge",
+        catalogId: "productivity.apple-notes",
+        actionId: "write",
+        id: "note-1",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+        idempotencyKey: "local-bridge-key",
+      },
+      durableWriteback: {
+        status: "recorded",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+        envelopeId: "env-local-bridge-write",
+      },
+    });
+    expect(host.mutationStore?.claim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routePath: expect.stringContaining("integration_local_bridge_action"),
+        idempotencyKey: "local-bridge-key",
+        actorScope: connection.connectionId,
+      }),
+    );
+    expect(host.mutationStore?.markCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "local-bridge-key",
+        actorScope: connection.connectionId,
+      }),
+    );
+  });
+
+  it("does not send duplicate local bridge writes across the bridge boundary", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const fetchMock = vi.fn();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(() => ({
+          envelopeId: "env-local-bridge-duplicate",
+          eventKind: "external_writeback",
+          contentHash: "content-hash",
+          payloadHash: "payload-hash",
+          toolCallHashes: [],
+          memoryLineage: [],
+          signatureStatus: "unsigned_local",
+          metadata: {},
+          createdAt: "2026-04-10T12:00:00.000Z",
+        })),
+      } as never,
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "duplicate" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "local-bridge-key",
+            actorScope: connection.connectionId,
+            payloadHash: "payload-hash",
+            status: "completed" as const,
+            createdAt: "2026-04-10T12:00:00.000Z",
+            updatedAt: "2026-04-10T12:00:01.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-key",
+      input: { title: "Governed note", content: "Created once." },
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_duplicate",
+      output: {
+        provider: "local_bridge",
+        catalogId: "productivity.apple-notes",
+        actionId: "write",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "duplicate",
+        idempotencyKey: "local-bridge-key",
+      },
+      durableWriteback: {
+        status: "recorded",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "duplicate",
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+  });
+
   it("executes Trello read and write actions through the core-native Trello runtime", async () => {
     const connection = createConnection({
       catalogId: "productivity.trello",
