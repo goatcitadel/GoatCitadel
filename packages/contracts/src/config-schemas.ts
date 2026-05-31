@@ -550,6 +550,15 @@ export const AssistantConfigInputSchema = z
           })
           .passthrough()
           .optional(),
+        codeModeDockerBackend: z
+          .object({
+            enabled: z.boolean().optional(),
+            image: z.string().optional(),
+            dockerCommand: z.string().optional(),
+            nodeCommand: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .optional(),

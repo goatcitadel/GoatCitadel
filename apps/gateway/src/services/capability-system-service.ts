@@ -45,7 +45,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import type { CapabilityRuntimeConfig, FeatureFlagsConfig } from "../config.js";
+import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
 import {
   CodeModeExecutionBackendUnavailableError,
@@ -207,6 +207,7 @@ export class CapabilitySystemService {
     return buildCodeModeExecutionBackends({
       codeModeEnabled: this.options.readFeatureFlags().codeModeV1Enabled,
       sandbox: this.resolveCurrentSandboxMetadata(),
+      dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
     });
   }
 
@@ -655,7 +656,9 @@ export class CapabilitySystemService {
     const runInput = request.input ?? {};
     const runInputHash = sha256Text(JSON.stringify(runInput));
     const sandbox = this.resolveCurrentSandboxMetadata();
-    const executionBackend = buildCodeModeRunExecutionBackendRef(sandbox);
+    const executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
+      dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
+    });
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -2044,6 +2047,7 @@ export class CapabilitySystemService {
       sandbox: input.sandbox,
       sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
       executionBackend: input.executionBackend,
+      dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
     });
     let preparedSandbox: Awaited<ReturnType<typeof backendRunner.prepareLaunch>>;
     try {
@@ -3429,6 +3433,26 @@ function createMinimalSyntheticEnv(): NodeJS.ProcessEnv {
     }
   }
   return env;
+}
+
+function buildCodeModeDockerLaunchOptions(config: CodeModeDockerBackendConfig):
+  | {
+      enabled: true;
+      image: string;
+      dockerCommand?: string;
+      nodeCommand?: string;
+    }
+  | undefined {
+  const image = config.image?.trim();
+  if (!config.enabled || !image) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    image,
+    dockerCommand: config.dockerCommand,
+    nodeCommand: config.nodeCommand,
+  };
 }
 
 function createBoundedCapture(): {

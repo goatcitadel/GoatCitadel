@@ -77,12 +77,20 @@ export interface CapabilityRuntimeConfig {
   codeModeArtifactRoot: string;
   tempRoot: string;
   codeModeSandbox: CodeModeSandboxConfig;
+  codeModeDockerBackend: CodeModeDockerBackendConfig;
 }
 
 export interface CodeModeSandboxConfig {
   mode: "best_effort_host";
   required: boolean;
   bestEffortHostEnabled: boolean;
+}
+
+export interface CodeModeDockerBackendConfig {
+  enabled: boolean;
+  image?: string;
+  dockerCommand?: string;
+  nodeCommand?: string;
 }
 
 export interface MemoryConfig {
@@ -782,6 +790,22 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (bestEffortSandboxEnabled !== undefined) {
     assistant.capabilities.codeModeSandbox.bestEffortHostEnabled = bestEffortSandboxEnabled;
   }
+  const codeModeDockerBackendEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED);
+  if (codeModeDockerBackendEnabled !== undefined) {
+    assistant.capabilities.codeModeDockerBackend.enabled = codeModeDockerBackendEnabled;
+  }
+  const codeModeDockerImage = process.env.GOATCITADEL_CODE_MODE_DOCKER_IMAGE?.trim();
+  if (codeModeDockerImage) {
+    assistant.capabilities.codeModeDockerBackend.image = codeModeDockerImage;
+  }
+  const codeModeDockerCommand = process.env.GOATCITADEL_CODE_MODE_DOCKER_COMMAND?.trim();
+  if (codeModeDockerCommand) {
+    assistant.capabilities.codeModeDockerBackend.dockerCommand = codeModeDockerCommand;
+  }
+  const codeModeDockerNodeCommand = process.env.GOATCITADEL_CODE_MODE_DOCKER_NODE_COMMAND?.trim();
+  if (codeModeDockerNodeCommand) {
+    assistant.capabilities.codeModeDockerBackend.nodeCommand = codeModeDockerNodeCommand;
+  }
 }
 
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
@@ -857,6 +881,12 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         mode: "best_effort_host",
         required: capabilitiesInput.codeModeSandbox?.required ?? true,
         bestEffortHostEnabled: capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? false,
+      },
+      codeModeDockerBackend: {
+        enabled: capabilitiesInput.codeModeDockerBackend?.enabled ?? false,
+        image: capabilitiesInput.codeModeDockerBackend?.image,
+        dockerCommand: capabilitiesInput.codeModeDockerBackend?.dockerCommand,
+        nodeCommand: capabilitiesInput.codeModeDockerBackend?.nodeCommand,
       },
     },
     workspaceDir: input.workspaceDir ?? "./workspace",

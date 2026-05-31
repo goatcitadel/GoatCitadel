@@ -82,6 +82,57 @@ describe("code-mode-execution-backend-runner", () => {
       }),
     ).toThrow("Aider Code Mode adapter is preview-only and is not callable yet.");
   });
+
+  it("prepares an explicit Docker launch through the stdio transport seam without making preview registry callable", async () => {
+    const sandbox = sandboxMetadata();
+    const prepareDockerLaunch = vi.fn(async (launchInput, options) => ({
+      transport: "stdio_jsonrpc" as const,
+      executable: options.dockerCommand ?? "docker",
+      args: ["run", "--rm", "--network", "none", options.image, "node", launchInput.harnessPath],
+      cwd: launchInput.runTempRoot,
+      env: {},
+      shell: false as const,
+      enforcedWorkspaceRoot: launchInput.runTempRoot,
+      generatedArtifacts: [],
+      advisoryUnsandboxed: false,
+    }));
+    const runner = createCodeModeExecutionBackendRunner({
+      sandbox,
+      sandboxConfig: sandboxConfig(),
+      executionBackend: {
+        backendId: "docker-container",
+        kind: "docker",
+        label: "Docker execution backend",
+        status: "preview",
+        runtimeSupport: "preview_only",
+      },
+      dockerLaunch: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      prepareDockerLaunch,
+    });
+
+    await expect(runner.prepareLaunch(launchInput(sandbox))).resolves.toMatchObject({
+      metadata: sandbox,
+      launch: {
+        transport: "stdio_jsonrpc",
+        executable: "docker",
+        cwd: path.join("tmp", "code-mode-run"),
+      },
+    });
+    expect(runner.backend.backendId).toBe("docker-container");
+    expect(prepareDockerLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        harnessPath: path.join("tmp", "harness.mjs"),
+      }),
+      expect.objectContaining({
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      }),
+    );
+  });
 });
 
 function sandboxMetadata(): CodeModeSandboxMetadata {

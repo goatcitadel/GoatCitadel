@@ -6,6 +6,7 @@ import {
   CODE_MODE_HOST_BACKEND_ID,
   buildCodeModeRunExecutionBackendRef,
 } from "./code-mode-execution-backends.js";
+import { prepareCodeModeDockerLaunch, type CodeModeDockerLaunchOptions } from "./code-mode-docker-launch.js";
 import {
   prepareCodeModeSandboxLaunch,
   type CodeModeSandboxLaunchInput,
@@ -22,6 +23,7 @@ export interface CodeModeExecutionBackendRunner {
 }
 
 export type PrepareHostCodeModeLaunch = typeof prepareCodeModeSandboxLaunch;
+export type PrepareDockerCodeModeLaunch = typeof prepareCodeModeDockerLaunch;
 
 export class CodeModeExecutionBackendUnavailableError extends Error {
   public readonly code = "CODE_MODE_EXECUTION_BACKEND_UNAVAILABLE";
@@ -37,8 +39,23 @@ export function createCodeModeExecutionBackendRunner(input: {
   sandboxConfig: CodeModeSandboxConfig;
   executionBackend?: CodeModeRunExecutionBackendRef;
   prepareHostLaunch?: PrepareHostCodeModeLaunch;
+  dockerLaunch?: CodeModeDockerLaunchOptions & { enabled: boolean };
+  prepareDockerLaunch?: PrepareDockerCodeModeLaunch;
 }): CodeModeExecutionBackendRunner {
   const executionBackend = input.executionBackend ?? buildCodeModeRunExecutionBackendRef(input.sandbox);
+  if (executionBackend.backendId === CODE_MODE_DOCKER_BACKEND_ID) {
+    const dockerLaunch = input.dockerLaunch;
+    if (!dockerLaunch?.enabled) {
+      throw new CodeModeExecutionBackendUnavailableError(buildUnavailableBackendMessage(executionBackend));
+    }
+    return {
+      backend: executionBackend,
+      prepareLaunch: async (launchInput) => ({
+        metadata: launchInput.sandbox,
+        launch: await (input.prepareDockerLaunch ?? prepareCodeModeDockerLaunch)(launchInput, dockerLaunch),
+      }),
+    };
+  }
   if (executionBackend.backendId !== CODE_MODE_HOST_BACKEND_ID) {
     throw new CodeModeExecutionBackendUnavailableError(buildUnavailableBackendMessage(executionBackend));
   }

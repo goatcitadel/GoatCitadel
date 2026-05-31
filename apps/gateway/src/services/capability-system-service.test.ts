@@ -279,6 +279,79 @@ describe("CapabilitySystemService", () => {
     });
   });
 
+  it("lists configured Docker as the active Code Mode backend while leaving host as default", async () => {
+    const harness = await createHarness({
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        dockerCommand: "docker",
+      },
+    });
+
+    const response = harness.service.listCodeModeExecutionBackends();
+
+    expect(response).toMatchObject({
+      defaultBackendId: "trusted-code-host",
+      activeBackendId: "docker-container",
+      items: [
+        expect.objectContaining({
+          backendId: "trusted-code-host",
+          callable: false,
+        }),
+        expect.objectContaining({
+          backendId: "docker-container",
+          kind: "docker",
+          callable: true,
+          status: "available",
+          runtimeSupport: "active_runner",
+          blockers: [],
+          evidence: expect.objectContaining({
+            detectedCommand: "docker",
+          }),
+        }),
+        expect.objectContaining({
+          backendId: "aider-cli-adapter",
+          callable: false,
+        }),
+      ],
+    });
+  });
+
+  it("records configured Docker backend truth on pending Code Mode approvals", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+
+    expect(run.executionBackend).toMatchObject({
+      backendId: "docker-container",
+      kind: "docker",
+      status: "available",
+      runtimeSupport: "active_runner",
+      isolationProfile: "docker/stdout-jsonrpc/no_network",
+    });
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          executionBackend: expect.objectContaining({
+            backendId: "docker-container",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("rejects Code Mode runs for missing sessions or mismatched turn traces", async () => {
     const harness = await createHarness();
     vi.mocked(harness.storage.chatSessionMeta.get).mockReturnValueOnce(undefined);
@@ -3273,6 +3346,7 @@ async function createHarness(input?: {
     localOperatorOverrideId?: string;
   }) => ToolPolicyActorContext;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
+  dockerBackend?: CapabilityRuntimeConfig["codeModeDockerBackend"];
   invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
@@ -3316,6 +3390,9 @@ async function createHarness(input?: {
         mode: "best_effort_host",
         required: input?.sandboxConfig?.required ?? true,
         bestEffortHostEnabled: input?.sandboxConfig?.bestEffortHostEnabled ?? false,
+      },
+      codeModeDockerBackend: input?.dockerBackend ?? {
+        enabled: false,
       },
     },
     storage: storage as never,

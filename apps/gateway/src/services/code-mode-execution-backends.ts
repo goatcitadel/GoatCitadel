@@ -4,6 +4,7 @@ import type {
   CodeModeRunExecutionBackendRef,
   CodeModeSandboxMetadata,
 } from "@goatcitadel/contracts";
+import type { CodeModeDockerBackendConfig } from "../config.js";
 
 export const CODE_MODE_HOST_BACKEND_ID = "trusted-code-host";
 export const CODE_MODE_DOCKER_BACKEND_ID = "docker-container";
@@ -12,22 +13,38 @@ export const CODE_MODE_AIDER_ADAPTER_ID = "aider-cli-adapter";
 export function buildCodeModeExecutionBackends(input: {
   codeModeEnabled: boolean;
   sandbox: CodeModeSandboxMetadata;
+  dockerBackend?: CodeModeDockerBackendConfig;
   env?: NodeJS.ProcessEnv;
 }): CodeModeExecutionBackendsResponse {
   const host = buildTrustedCodeHostBackend(input.codeModeEnabled, input.sandbox);
-  const docker = buildDockerPreviewBackend(input.env ?? process.env);
+  const docker = buildDockerBackend(input.codeModeEnabled, input.dockerBackend, input.env ?? process.env);
   const aider = buildAiderPreviewAdapter(input.env ?? process.env);
+  const activeBackendId = docker.callable ? docker.backendId : host.backendId;
   return {
     generatedAt: new Date().toISOString(),
     readOnly: true,
     mutationSemantics: "none",
     defaultBackendId: CODE_MODE_HOST_BACKEND_ID,
-    activeBackendId: CODE_MODE_HOST_BACKEND_ID,
+    activeBackendId,
     items: [host, docker, aider],
   };
 }
 
-export function buildCodeModeRunExecutionBackendRef(sandbox: CodeModeSandboxMetadata): CodeModeRunExecutionBackendRef {
+export function buildCodeModeRunExecutionBackendRef(
+  sandbox: CodeModeSandboxMetadata,
+  options: { dockerBackend?: CodeModeDockerBackendConfig } = {},
+): CodeModeRunExecutionBackendRef {
+  const docker = buildDockerBackend(true, options.dockerBackend, process.env);
+  if (docker.callable) {
+    return {
+      backendId: docker.backendId,
+      kind: docker.kind,
+      label: docker.label,
+      status: docker.status,
+      runtimeSupport: docker.runtimeSupport,
+      isolationProfile: "docker/stdout-jsonrpc/no_network",
+    };
+  }
   const host = buildTrustedCodeHostBackend(true, sandbox);
   return {
     backendId: host.backendId,
@@ -71,29 +88,41 @@ function buildTrustedCodeHostBackend(
   };
 }
 
-function buildDockerPreviewBackend(env: NodeJS.ProcessEnv): CodeModeExecutionBackendRecord {
+function buildDockerBackend(
+  codeModeEnabled: boolean,
+  dockerBackend: CodeModeDockerBackendConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): CodeModeExecutionBackendRecord {
   const envFlag = "GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED";
-  const requested = isTruthyEnv(env[envFlag]);
+  const enabled = dockerBackend?.enabled ?? isTruthyEnv(env[envFlag]);
+  const image = dockerBackend?.image?.trim();
+  const callable = codeModeEnabled && enabled && Boolean(image);
   return {
     backendId: CODE_MODE_DOCKER_BACKEND_ID,
     kind: "docker",
     label: "Docker execution backend",
-    status: "preview",
-    runtimeSupport: "preview_only",
+    status: callable ? "available" : "preview",
+    runtimeSupport: callable ? "active_runner" : "preview_only",
     default: false,
-    callable: false,
-    description: "Planned container backend for Code Mode runs after policy, artifact, and approval parity is wired.",
+    callable,
+    description: callable
+      ? "Configured container backend for approved Code Mode runs using stdio JSON-RPC transport."
+      : "Planned container backend for Code Mode runs after policy, artifact, and approval parity is wired.",
     blockers: [
-      "Docker backend is not wired to Code Mode launch or approval execution yet.",
-      "No container image, volume policy, network policy, or artifact-return contract has been promoted.",
-      "Docker launch has not yet been connected to the stdio_jsonrpc bridge.",
+      ...(!codeModeEnabled ? ["Code Mode v1 is disabled."] : []),
+      ...(!enabled ? ["Docker backend is not enabled."] : []),
+      ...(codeModeEnabled && enabled && !image
+        ? ["Docker backend is enabled but no container image is configured."]
+        : []),
     ],
     governance: [
       "Must preserve deny-wins policy, path jails, approval linkage, immutable artifact hashes, and runtime truth.",
       "Must not replace auth, approvals, or operator-visible sandbox posture.",
+      ...(callable ? ["Experimental: uses the configured local Docker daemon and a run-temp bind mount."] : []),
     ],
     evidence: {
-      envFlag: requested ? `${envFlag}=true` : envFlag,
+      envFlag: enabled ? `${envFlag}=true` : envFlag,
+      ...(dockerBackend?.dockerCommand ? { detectedCommand: dockerBackend.dockerCommand } : {}),
     },
   };
 }
