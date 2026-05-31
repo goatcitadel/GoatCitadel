@@ -116,6 +116,32 @@ export interface ExternalSideEffectClaimResult {
   routePath: string;
 }
 
+export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
+  label: string;
+  output?: Record<string, unknown>;
+  execute(claim: ExternalSideEffectClaimResult): Promise<TValue>;
+}
+
+export type IdempotentExternalSideEffectRunResult<TValue> =
+  | {
+      status: "executed";
+      claim: ExternalSideEffectClaimResult;
+      value: TValue;
+    }
+  | {
+      status: "blocked";
+      claim: ExternalSideEffectClaimResult;
+      message: string;
+      blockedReason: string;
+      output: Record<string, unknown>;
+    }
+  | {
+      status: "failed";
+      claim: ExternalSideEffectClaimResult;
+      error: Error;
+      output: Record<string, unknown>;
+    };
+
 export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaimInput): ExternalSideEffectClaimResult {
   const payloadHash = hashStableJson(input.payload);
   const idempotencyKey =
@@ -159,6 +185,52 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
   };
 }
 
+export async function runIdempotentExternalSideEffect<TValue>(
+  input: IdempotentExternalSideEffectRunInput<TValue>,
+): Promise<IdempotentExternalSideEffectRunResult<TValue>> {
+  const claim = claimIdempotentExternalSideEffect(input);
+  if (claim.replayOutcome !== "claimed") {
+    return {
+      status: "blocked",
+      claim,
+      message: formatExternalSideEffectReplayBlockMessage(input.label, claim.replayOutcome),
+      blockedReason: `external_side_effect_${claim.replayOutcome}`,
+      output: buildExternalSideEffectReplayOutput(claim, input.output),
+    };
+  }
+
+  try {
+    const value = await input.execute(claim);
+    markIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
+    return {
+      status: "executed",
+      claim,
+      value,
+    };
+  } catch (error) {
+    markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
+    return {
+      status: "failed",
+      claim,
+      error: error instanceof Error ? error : new Error("external_side_effect_failed"),
+      output: buildExternalSideEffectReplayOutput(claim, input.output),
+    };
+  }
+}
+
+export function buildExternalSideEffectReplayOutput(
+  claim: ExternalSideEffectClaimResult,
+  output: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...output,
+    replayPolicy: claim.replayPolicy,
+    replayOutcome: claim.replayOutcome,
+    idempotencyKey: claim.idempotencyKey,
+    payloadHash: claim.payloadHash,
+  };
+}
+
 export function markIdempotentExternalSideEffectCompleted(
   mutationStore: MutationIdempotencyStore | undefined,
   claim: ExternalSideEffectClaimResult,
@@ -185,6 +257,22 @@ export function markIdempotentExternalSideEffectFailed(
     actorScope: claim.actorScope,
     updatedAt,
   });
+}
+
+function formatExternalSideEffectReplayBlockMessage(
+  label: string,
+  outcome: IntegrationExternalWritebackReplayOutcome,
+): string {
+  if (outcome === "duplicate") {
+    return `${label} already completed for this idempotency key; the external request was not sent again.`;
+  }
+  if (outcome === "in_progress") {
+    return `${label} is already in progress for this idempotency key; the external request was not sent again.`;
+  }
+  if (outcome === "payload_mismatch") {
+    return `${label} idempotency key was reused with a different payload; the external request was not sent.`;
+  }
+  return `${label} replay-safe idempotency is unavailable; the external request was not sent.`;
 }
 
 function buildExternalSideEffectIntentId(input: ExternalSideEffectIntentInput): string {

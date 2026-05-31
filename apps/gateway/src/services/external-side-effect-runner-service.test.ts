@@ -3,6 +3,7 @@ import {
   claimIdempotentExternalSideEffect,
   markIdempotentExternalSideEffectCompleted,
   recordAuditOnlyExternalSideEffectIntent,
+  runIdempotentExternalSideEffect,
 } from "./external-side-effect-runner-service.js";
 
 describe("external-side-effect-runner-service", () => {
@@ -151,5 +152,100 @@ describe("external-side-effect-runner-service", () => {
       idempotencyKey: expect.any(String),
       payloadHash: expect.any(String),
     });
+  });
+
+  it("does not execute external work when an idempotent side-effect claim is not new", async () => {
+    const execute = vi.fn();
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "duplicate" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "completed" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:01.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      output: { provider: "trello" },
+      execute,
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_duplicate",
+      output: {
+        provider: "trello",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "duplicate",
+        idempotencyKey: "operator-key",
+      },
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("marks claimed idempotent side effects failed when execution throws", async () => {
+    const markFailed = vi.fn();
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed,
+      },
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      execute: async () => {
+        throw new Error("provider failed");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.objectContaining({ message: "provider failed" }),
+      output: {
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+        idempotencyKey: "operator-key",
+      },
+    });
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "operator-key",
+        actorScope: "conn-1",
+      }),
+    );
   });
 });

@@ -177,6 +177,46 @@ describe("integrations control routes", () => {
     );
   });
 
+  it("forwards the request idempotency key into integration operator actions", async () => {
+    const invokeIntegrationConnectionAction = vi.fn(async () => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "productivity.trello",
+      actionId: "write",
+      status: "blocked",
+      message: "Duplicate mutation blocked.",
+      checkedAt: "2026-04-10T00:00:00.000Z",
+    }));
+    app = Fastify();
+    app.decorateRequest("idempotencyKey", "");
+    app.addHook("preHandler", async (request) => {
+      const value = request.headers["idempotency-key"];
+      request.idempotencyKey = typeof value === "string" ? value : "";
+    });
+    decorateIntegrationServices(app, {
+      invokeIntegrationConnectionAction,
+    });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/actions/write",
+      headers: {
+        "idempotency-key": "route-header-key",
+      },
+      payload: {
+        input: {
+          name: "Durable card",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(invokeIntegrationConnectionAction).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", "write", {
+      input: { name: "Durable card" },
+      idempotencyKey: "route-header-key",
+    });
+  });
+
   it("lists Discord pairings through the integration route", async () => {
     const listDiscordPairings = vi.fn(() => ({
       runtime: {

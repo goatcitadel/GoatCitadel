@@ -7,10 +7,9 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import {
-  claimIdempotentExternalSideEffect,
-  markIdempotentExternalSideEffectCompleted,
-  markIdempotentExternalSideEffectFailed,
+  buildExternalSideEffectReplayOutput,
   recordAuditOnlyExternalSideEffectIntent,
+  runIdempotentExternalSideEffect,
 } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -191,7 +190,7 @@ async function invokeActivepiecesAction(
   const flowId =
     readStringInput(request.input, "flowId") ?? host.readConnectionConfigValue(connection.config, "defaultFlowId");
   const payload = readActivepiecesPayload(request.input);
-  const replayClaim = claimIdempotentExternalSideEffect({
+  const replayRun = await runIdempotentExternalSideEffect({
     mutationStore: host.mutationStore,
     boundary: "integration_operator_action",
     catalogId: connection.catalogId,
@@ -204,69 +203,39 @@ async function invokeActivepiecesAction(
       flowId,
       payload,
     },
-  });
-  if (replayClaim.replayOutcome !== "claimed") {
-    return blocked(
-      connection,
-      actionId,
-      checkedAt,
-      formatActivepiecesReplayBlockMessage(replayClaim.replayOutcome),
-      `external_side_effect_${replayClaim.replayOutcome}`,
-      {
-        provider: "activepieces",
-        ...(flowId ? { flowId } : {}),
-        replayPolicy: replayClaim.replayPolicy,
-        replayOutcome: replayClaim.replayOutcome,
-        idempotencyKey: replayClaim.idempotencyKey,
-        payloadHash: replayClaim.payloadHash,
-      },
-    );
-  }
-  let response: Response;
-  try {
-    response = await host.fetchWithDiagnosticsTimeout(target, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(authHeader ? { authorization: authHeader } : {}),
-      },
-      body: JSON.stringify({
-        source: "goatcitadel",
-        checkedAt,
-        ...(flowId ? { flowId } : {}),
-        payload,
-      }),
-    });
-  } catch (error) {
-    markIdempotentExternalSideEffectFailed(host.mutationStore, replayClaim, checkedAt);
-    return failed(connection, actionId, checkedAt, (error as Error).message, {
+    label: "Activepieces webhook trigger",
+    output: {
       provider: "activepieces",
       ...(flowId ? { flowId } : {}),
-      replayPolicy: replayClaim.replayPolicy,
-      replayOutcome: replayClaim.replayOutcome,
-      idempotencyKey: replayClaim.idempotencyKey,
-      payloadHash: replayClaim.payloadHash,
-    });
+    },
+    execute: async () => {
+      const response = await host.fetchWithDiagnosticsTimeout(target, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(authHeader ? { authorization: authHeader } : {}),
+        },
+        body: JSON.stringify({
+          source: "goatcitadel",
+          checkedAt,
+          ...(flowId ? { flowId } : {}),
+          payload,
+        }),
+      });
+      const parsed = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(parsed.message ?? `Activepieces webhook trigger failed (${response.status}).`);
+      }
+      return parsed;
+    },
+  });
+  if (replayRun.status === "blocked") {
+    return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
   }
-  const parsed = await parseResponse(response);
-  if (!response.ok) {
-    markIdempotentExternalSideEffectFailed(host.mutationStore, replayClaim, checkedAt);
-    return failed(
-      connection,
-      actionId,
-      checkedAt,
-      parsed.message ?? `Activepieces webhook trigger failed (${response.status}).`,
-      {
-        provider: "activepieces",
-        ...(flowId ? { flowId } : {}),
-        replayPolicy: replayClaim.replayPolicy,
-        replayOutcome: replayClaim.replayOutcome,
-        idempotencyKey: replayClaim.idempotencyKey,
-        payloadHash: replayClaim.payloadHash,
-      },
-    );
+  if (replayRun.status === "failed") {
+    return failed(connection, actionId, checkedAt, replayRun.error.message, replayRun.output);
   }
-  markIdempotentExternalSideEffectCompleted(host.mutationStore, replayClaim, checkedAt);
+  const parsed = replayRun.value;
   const responseOutput = isRecord(parsed.output) ? parsed.output : undefined;
   const responseId =
     typeof responseOutput?.id === "string" && responseOutput.id.trim() ? responseOutput.id.trim() : undefined;
@@ -276,31 +245,14 @@ async function invokeActivepiecesAction(
     actionId,
     status: "executed",
     message: parsed.message ?? "Triggered the configured Activepieces webhook flow.",
-    output: {
+    output: buildExternalSideEffectReplayOutput(replayRun.claim, {
       provider: "activepieces",
       ...(flowId ? { flowId } : {}),
       ...(responseId ? { id: responseId } : {}),
-      replayPolicy: replayClaim.replayPolicy,
-      replayOutcome: replayClaim.replayOutcome,
-      idempotencyKey: replayClaim.idempotencyKey,
-      payloadHash: replayClaim.payloadHash,
       response: responseOutput ?? parsed.output,
-    },
+    }),
     checkedAt,
   };
-}
-
-function formatActivepiecesReplayBlockMessage(outcome: string): string {
-  if (outcome === "duplicate") {
-    return "Activepieces webhook trigger already completed for this idempotency key; the webhook was not sent again.";
-  }
-  if (outcome === "in_progress") {
-    return "Activepieces webhook trigger is already in progress for this idempotency key; the webhook was not sent again.";
-  }
-  if (outcome === "payload_mismatch") {
-    return "Activepieces idempotency key was reused with different payload; the webhook was not sent.";
-  }
-  return "Activepieces replay-safe idempotency is unavailable; the webhook was not sent.";
 }
 
 async function invokeTrelloAction(
@@ -370,26 +322,53 @@ async function invokeTrelloAction(
     url.searchParams.set("idList", listId);
     url.searchParams.set("name", name);
     url.searchParams.set("desc", desc);
-    const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
-    const parsed = await parseResponse(response);
-    if (!response.ok) {
-      return failed(
-        connection,
-        actionId,
-        checkedAt,
-        parsed.message ?? `Trello card create failed (${response.status}).`,
-        {
-          provider: "trello",
-        },
-      );
+    const replayRun = await runIdempotentExternalSideEffect({
+      mutationStore: host.mutationStore,
+      boundary: "integration_operator_action",
+      catalogId: connection.catalogId,
+      connectionId: connection.connectionId,
+      actionId,
+      checkedAt,
+      idempotencyKey: request.idempotencyKey,
+      payload: {
+        provider: "trello",
+        listId,
+        name,
+        desc,
+      },
+      label: "Trello card create",
+      output: {
+        provider: "trello",
+        listId,
+        name,
+      },
+      execute: async () => {
+        const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
+        const parsed = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(parsed.message ?? `Trello card create failed (${response.status}).`);
+        }
+        return parsed;
+      },
+    });
+    if (replayRun.status === "blocked") {
+      return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
     }
+    if (replayRun.status === "failed") {
+      return failed(connection, actionId, checkedAt, replayRun.error.message, replayRun.output);
+    }
+    const parsed = replayRun.value;
+    const output = normalizeProviderOutput(parsed.output);
     return {
       connectionId: connection.connectionId,
       catalogId: connection.catalogId,
       actionId,
       status: "executed",
       message: "Created a Trello card through the configured connection.",
-      output: isRecord(parsed.output) ? parsed.output : { raw: parsed.output },
+      output: buildExternalSideEffectReplayOutput(replayRun.claim, {
+        provider: "trello",
+        ...output,
+      }),
       checkedAt,
     };
   }
@@ -476,32 +455,65 @@ async function invokeGmailAction(
       "",
       bodyText,
     ].join("\r\n");
-    const response = await host.fetchWithDiagnosticsTimeout(
-      new URL("/gmail/v1/users/me/messages/send", resolveGmailApiBaseUrl()).toString(),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          raw: Buffer.from(rawMessage).toString("base64url"),
-        }),
-      },
-    );
-    const parsed = await parseResponse(response);
-    if (!response.ok) {
-      return failed(connection, actionId, checkedAt, parsed.message ?? `Gmail send failed (${response.status}).`, {
+    const replayRun = await runIdempotentExternalSideEffect({
+      mutationStore: host.mutationStore,
+      boundary: "integration_operator_action",
+      catalogId: connection.catalogId,
+      connectionId: connection.connectionId,
+      actionId,
+      checkedAt,
+      idempotencyKey: request.idempotencyKey,
+      payload: {
         provider: "gmail",
-      });
+        to,
+        subject,
+        bodyText,
+      },
+      label: "Gmail send",
+      output: {
+        provider: "gmail",
+        to,
+        subject,
+      },
+      execute: async () => {
+        const response = await host.fetchWithDiagnosticsTimeout(
+          new URL("/gmail/v1/users/me/messages/send", resolveGmailApiBaseUrl()).toString(),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              raw: Buffer.from(rawMessage).toString("base64url"),
+            }),
+          },
+        );
+        const parsed = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(parsed.message ?? `Gmail send failed (${response.status}).`);
+        }
+        return parsed;
+      },
+    });
+    if (replayRun.status === "blocked") {
+      return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
     }
+    if (replayRun.status === "failed") {
+      return failed(connection, actionId, checkedAt, replayRun.error.message, replayRun.output);
+    }
+    const parsed = replayRun.value;
+    const output = normalizeProviderOutput(parsed.output);
     return {
       connectionId: connection.connectionId,
       catalogId: connection.catalogId,
       actionId,
       status: "executed",
       message: "Sent a Gmail operator test message through the configured connection.",
-      output: isRecord(parsed.output) ? parsed.output : { raw: parsed.output },
+      output: buildExternalSideEffectReplayOutput(replayRun.claim, {
+        provider: "gmail",
+        ...output,
+      }),
       checkedAt,
     };
   }
@@ -677,6 +689,15 @@ function readExternalReferenceId(output: Record<string, unknown> | undefined): s
     }
   }
   return undefined;
+}
+
+function normalizeProviderOutput(
+  output: Record<string, unknown> | unknown[] | string | undefined,
+): Record<string, unknown> {
+  if (isRecord(output)) {
+    return output;
+  }
+  return output === undefined ? {} : { raw: output };
 }
 
 function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {

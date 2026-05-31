@@ -97,11 +97,12 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       });
     }
     try {
+      const idempotencyKey = parsed.data.idempotencyKey ?? request.idempotencyKey;
       return reply.send(
         await fastify.services.integrations.invokeIntegrationConnectionAction(
           params.data.connectionId,
           params.data.actionId,
-          parsed.data,
+          idempotencyKey ? { ...parsed.data, idempotencyKey } : parsed.data,
         ),
       );
     } catch (error) {

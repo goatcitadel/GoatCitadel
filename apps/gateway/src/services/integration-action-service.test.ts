@@ -42,6 +42,23 @@ function createHost(
       return typeof envValue === "string" && envValue.length > 0 ? envValue : undefined;
     }),
     publishRealtime: vi.fn(),
+    mutationStore: {
+      claim: vi.fn((input) => ({
+        outcome: "claimed" as const,
+        record: {
+          method: input.method,
+          routePath: input.routePath,
+          idempotencyKey: input.idempotencyKey,
+          actorScope: input.actorScope ?? "",
+          payloadHash: input.payloadHash,
+          status: "pending" as const,
+          createdAt: input.now ?? "2026-04-10T12:00:00.000Z",
+          updatedAt: input.now ?? "2026-04-10T12:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    },
     ...overrides,
   };
 }
@@ -134,7 +151,7 @@ describe("integration-action-service", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("records audit-only durable envelopes for external writeback actions", async () => {
+  it("records replay-safe durable envelopes for core-native external writeback actions", async () => {
     const connection = createConnection({
       catalogId: "productivity.trello",
       key: "trello",
@@ -174,7 +191,8 @@ describe("integration-action-service", () => {
     expect(result.durableWriteback).toEqual(
       expect.objectContaining({
         status: "recorded",
-        replayPolicy: "audit_only",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
         resumable: false,
         envelopeId: "env-writeback-1",
         contentHash: "content-hash",
@@ -191,14 +209,23 @@ describe("integration-action-service", () => {
           externalSideEffect: true,
           externalSideEffectIntentId: expect.stringMatching(/^external-side-effect-/),
           externalSideEffectIdempotencyKey: expect.any(String),
-          replayPolicy: "audit_only",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "claimed",
+          payloadHash: expect.any(String),
           resumable: false,
           connectionId: connection.connectionId,
           catalogId: "productivity.trello",
           actionId: "write",
           status: "executed",
           inputKeys: ["name"],
-          outputKeys: ["id", "url"],
+          outputKeys: expect.arrayContaining([
+            "id",
+            "url",
+            "replayPolicy",
+            "replayOutcome",
+            "idempotencyKey",
+            "payloadHash",
+          ]),
           externalReferenceId: "id:card-1",
         }),
       }),
@@ -213,7 +240,164 @@ describe("integration-action-service", () => {
     );
   });
 
-  it("triggers Activepieces webhooks as one-shot audit-only external writebacks", async () => {
+  it.each([
+    {
+      label: "Trello",
+      outcome: "duplicate" as const,
+      connection: createConnection({
+        catalogId: "productivity.trello",
+        key: "trello",
+        label: "Trello",
+        config: {
+          apiKey: "trello-key",
+          token: "trello-token",
+          defaultListId: "list-123",
+        },
+      }),
+      input: { name: "Durable card" },
+    },
+    {
+      label: "Gmail",
+      outcome: "payload_mismatch" as const,
+      connection: createConnection({
+        catalogId: "automation.gmail",
+        key: "gmail",
+        kind: "automation",
+        label: "Gmail",
+        config: {
+          accessToken: "gmail-token",
+        },
+      }),
+      input: {
+        to: "ops@example.com",
+        subject: "GoatCitadel operator check",
+        bodyText: "This is a GoatCitadel Gmail operator check.",
+      },
+    },
+  ])(
+    "does not send $label writes when the shared idempotency runner reports $outcome",
+    async ({ connection, input, outcome }) => {
+      const fetchMock = vi.fn();
+      const host = createHost(connection, {
+        fetchWithDiagnosticsTimeout: fetchMock,
+        evidenceEnvelopeService: {
+          createEnvelope: vi.fn(() => ({
+            envelopeId: `env-${connection.key}-${outcome}`,
+            eventKind: "external_writeback",
+            contentHash: "content-hash",
+            payloadHash: "payload-hash",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-04-10T12:00:00.000Z",
+          })),
+        } as never,
+        mutationStore: {
+          claim: vi.fn(() => ({
+            outcome,
+            record: {
+              method: "POST",
+              routePath: "external",
+              idempotencyKey: "operator-key",
+              actorScope: connection.connectionId,
+              payloadHash: "payload-hash",
+              status: outcome === "duplicate" ? ("completed" as const) : ("pending" as const),
+              createdAt: "2026-04-10T12:00:00.000Z",
+              updatedAt: "2026-04-10T12:00:01.000Z",
+            },
+          })),
+          markCompleted: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+        idempotencyKey: "operator-key",
+        input,
+      });
+
+      expect(result).toMatchObject({
+        status: "blocked",
+        blockedReason: `external_side_effect_${outcome}`,
+        output: {
+          replayPolicy: "idempotent_external",
+          replayOutcome: outcome,
+          idempotencyKey: "operator-key",
+        },
+        durableWriteback: {
+          status: "recorded",
+          replayPolicy: "idempotent_external",
+          replayOutcome: outcome,
+        },
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+    },
+  );
+
+  it("marks replay-safe external writeback claims failed when a provider write fails", async () => {
+    const connection = createConnection({
+      catalogId: "productivity.trello",
+      key: "trello",
+      label: "Trello",
+      config: {
+        apiKey: "trello-key",
+        token: "trello-token",
+        defaultListId: "list-123",
+      },
+    });
+    const markFailed = vi.fn();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("board archived", { status: 409 })),
+      mutationStore: {
+        claim: vi.fn((input) => ({
+          outcome: "claimed" as const,
+          record: {
+            method: input.method,
+            routePath: input.routePath,
+            idempotencyKey: input.idempotencyKey,
+            actorScope: input.actorScope ?? "",
+            payloadHash: input.payloadHash,
+            status: "pending" as const,
+            createdAt: input.now ?? "2026-04-10T12:00:00.000Z",
+            updatedAt: input.now ?? "2026-04-10T12:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed,
+      },
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "operator-key",
+      input: { name: "Durable card" },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: "board archived",
+      output: {
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+        idempotencyKey: "operator-key",
+      },
+      durableWriteback: {
+        status: "unavailable",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+      },
+    });
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "operator-key",
+        actorScope: connection.connectionId,
+      }),
+    );
+    expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it("triggers Activepieces webhooks with idempotent external writeback evidence", async () => {
     const connection = createConnection({
       catalogId: "automation.activepieces",
       key: "activepieces",
