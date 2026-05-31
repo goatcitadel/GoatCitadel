@@ -104,6 +104,8 @@ Production runs launch a child-process harness with:
 
 Guest source is never loaded as a normal CommonJS or ESM module inside the child process. The harness evaluates submitted source only through a restricted host API.
 
+Configured Docker execution uses the same approval and artifact path with `GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED=true` plus `GOATCITADEL_CODE_MODE_DOCKER_IMAGE`. The Aider adapter is a separate audit-only execution backend: it requires Docker to be callable plus `GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED=true` and `GOATCITADEL_CODE_MODE_AIDER_IMAGE`, with optional `GOATCITADEL_CODE_MODE_AIDER_COMMAND` and `GOATCITADEL_CODE_MODE_AIDER_MODEL`. Aider runs only in Code Mode run-temp/artifact space and may record request, plan, stdout/stderr, result envelope, and optional patch evidence; it does not apply patches, promote candidates, replay side effects, or mutate the operator workspace.
+
 ### RPC Contract
 
 Parent and child communicate over framed JSON-RPC on the IPC channel.

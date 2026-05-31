@@ -559,6 +559,15 @@ export const AssistantConfigInputSchema = z
           })
           .passthrough()
           .optional(),
+        codeModeAiderAdapter: z
+          .object({
+            enabled: z.boolean().optional(),
+            image: z.string().optional(),
+            command: z.string().optional(),
+            model: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .optional(),

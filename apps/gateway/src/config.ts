@@ -78,6 +78,7 @@ export interface CapabilityRuntimeConfig {
   tempRoot: string;
   codeModeSandbox: CodeModeSandboxConfig;
   codeModeDockerBackend: CodeModeDockerBackendConfig;
+  codeModeAiderAdapter: CodeModeAiderAdapterConfig;
 }
 
 export interface CodeModeSandboxConfig {
@@ -91,6 +92,13 @@ export interface CodeModeDockerBackendConfig {
   image?: string;
   dockerCommand?: string;
   nodeCommand?: string;
+}
+
+export interface CodeModeAiderAdapterConfig {
+  enabled: boolean;
+  image?: string;
+  command?: string;
+  model?: string;
 }
 
 export interface MemoryConfig {
@@ -806,6 +814,22 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (codeModeDockerNodeCommand) {
     assistant.capabilities.codeModeDockerBackend.nodeCommand = codeModeDockerNodeCommand;
   }
+  const codeModeAiderAdapterEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED);
+  if (codeModeAiderAdapterEnabled !== undefined) {
+    assistant.capabilities.codeModeAiderAdapter.enabled = codeModeAiderAdapterEnabled;
+  }
+  const codeModeAiderImage = process.env.GOATCITADEL_CODE_MODE_AIDER_IMAGE?.trim();
+  if (codeModeAiderImage) {
+    assistant.capabilities.codeModeAiderAdapter.image = codeModeAiderImage;
+  }
+  const codeModeAiderCommand = process.env.GOATCITADEL_CODE_MODE_AIDER_COMMAND?.trim();
+  if (codeModeAiderCommand) {
+    assistant.capabilities.codeModeAiderAdapter.command = codeModeAiderCommand;
+  }
+  const codeModeAiderModel = process.env.GOATCITADEL_CODE_MODE_AIDER_MODEL?.trim();
+  if (codeModeAiderModel) {
+    assistant.capabilities.codeModeAiderAdapter.model = codeModeAiderModel;
+  }
 }
 
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
@@ -887,6 +911,12 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         image: capabilitiesInput.codeModeDockerBackend?.image,
         dockerCommand: capabilitiesInput.codeModeDockerBackend?.dockerCommand,
         nodeCommand: capabilitiesInput.codeModeDockerBackend?.nodeCommand,
+      },
+      codeModeAiderAdapter: {
+        enabled: capabilitiesInput.codeModeAiderAdapter?.enabled ?? false,
+        image: capabilitiesInput.codeModeAiderAdapter?.image,
+        command: capabilitiesInput.codeModeAiderAdapter?.command,
+        model: capabilitiesInput.codeModeAiderAdapter?.model,
       },
     },
     workspaceDir: input.workspaceDir ?? "./workspace",

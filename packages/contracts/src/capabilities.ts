@@ -331,6 +331,7 @@ export interface CodeModeRunComparisonRecord {
 export interface CodeModeRunRequest {
   language: CodeModeLanguage;
   source: string;
+  executionBackendId?: string;
   originSurface?: import("./proactive.js").ProactiveOriginSurface;
   workspaceId?: string;
   operatorId?: string;
@@ -341,6 +342,11 @@ export interface CodeModeRunRequest {
   saveCandidateOnSuccess?: boolean;
   sessionId?: string;
   turnId?: string;
+  aider?: {
+    requestMarkdown: string;
+    repositoryRootRelPath?: string;
+    model?: string;
+  };
 }
 
 export interface CodeModeRunListOptions {

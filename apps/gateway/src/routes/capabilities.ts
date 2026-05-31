@@ -40,6 +40,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const codeModeRunBodySchema = z.object({
     language: z.enum(["javascript", "typescript"]),
     source: z.string().min(1),
+    executionBackendId: z.string().trim().min(1).optional(),
     originSurface: z.enum(["chat", "cowork", "code"]).optional(),
     input: z.record(z.unknown()).optional(),
     requestedOutputIntent: z.string().trim().min(1).optional(),
@@ -49,6 +50,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     localOperatorOverrideId: z.string().trim().min(1).optional(),
     sessionId: z.string().trim().min(1).optional(),
     turnId: z.string().trim().min(1).optional(),
+    aider: z
+      .object({
+        requestMarkdown: z.string().trim().min(1),
+        repositoryRootRelPath: z.string().trim().min(1).optional(),
+        model: z.string().trim().min(1).optional(),
+      })
+      .optional(),
   });
 
   const runParamsSchema = z.object({

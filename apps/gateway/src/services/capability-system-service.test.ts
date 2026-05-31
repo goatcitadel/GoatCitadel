@@ -332,6 +332,53 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("creates explicit Docker-backed Aider runs only with audit request metadata", async () => {
+    const harness = await createHarness({
+      sandboxConfig: { bestEffortHostEnabled: true },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      aider: {
+        requestMarkdown: "Refactor this run-temp file.",
+        repositoryRootRelPath: "workspace",
+      },
+    });
+
+    expect(run.executionBackend).toMatchObject({
+      backendId: "aider-cli-adapter",
+      kind: "aider_adapter",
+      adapterForBackendId: "docker-container",
+      isolationProfile: "docker/aider-audit/no_operator_workspace",
+    });
+    expect(harness.storage.pendingApprovalActions.find(run.approvalId!)).toMatchObject({
+      request: {
+        aider: {
+          requestMarkdown: "Refactor this run-temp file.",
+          repositoryRootRelPath: "workspace",
+        },
+      },
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        executionBackendId: "aider-cli-adapter",
+      }),
+    ).rejects.toThrow("Aider Code Mode runs require aider.requestMarkdown.");
+  });
+
   it("lists Code Mode execution backends without promoting Docker or Aider as callable", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -3438,6 +3485,7 @@ async function createHarness(input?: {
   }) => ToolPolicyActorContext;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
   dockerBackend?: CapabilityRuntimeConfig["codeModeDockerBackend"];
+  aiderAdapter?: CapabilityRuntimeConfig["codeModeAiderAdapter"];
   invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
@@ -3483,6 +3531,9 @@ async function createHarness(input?: {
         bestEffortHostEnabled: input?.sandboxConfig?.bestEffortHostEnabled ?? false,
       },
       codeModeDockerBackend: input?.dockerBackend ?? {
+        enabled: false,
+      },
+      codeModeAiderAdapter: input?.aiderAdapter ?? {
         enabled: false,
       },
     },

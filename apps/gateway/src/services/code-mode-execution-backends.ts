@@ -4,7 +4,7 @@ import type {
   CodeModeRunExecutionBackendRef,
   CodeModeSandboxMetadata,
 } from "@goatcitadel/contracts";
-import type { CodeModeDockerBackendConfig } from "../config.js";
+import type { CodeModeAiderAdapterConfig, CodeModeDockerBackendConfig } from "../config.js";
 
 export const CODE_MODE_HOST_BACKEND_ID = "trusted-code-host";
 export const CODE_MODE_DOCKER_BACKEND_ID = "docker-container";
@@ -14,11 +14,12 @@ export function buildCodeModeExecutionBackends(input: {
   codeModeEnabled: boolean;
   sandbox: CodeModeSandboxMetadata;
   dockerBackend?: CodeModeDockerBackendConfig;
+  aiderAdapter?: CodeModeAiderAdapterConfig;
   env?: NodeJS.ProcessEnv;
 }): CodeModeExecutionBackendsResponse {
   const host = buildTrustedCodeHostBackend(input.codeModeEnabled, input.sandbox);
   const docker = buildDockerBackend(input.codeModeEnabled, input.dockerBackend, input.env ?? process.env);
-  const aider = buildAiderPreviewAdapter(input.env ?? process.env);
+  const aider = buildAiderAdapter(input.codeModeEnabled, docker, input.aiderAdapter, input.env ?? process.env);
   const activeBackendId = docker.callable ? docker.backendId : host.backendId;
   return {
     generatedAt: new Date().toISOString(),
@@ -32,9 +33,49 @@ export function buildCodeModeExecutionBackends(input: {
 
 export function buildCodeModeRunExecutionBackendRef(
   sandbox: CodeModeSandboxMetadata,
-  options: { dockerBackend?: CodeModeDockerBackendConfig } = {},
+  options: {
+    dockerBackend?: CodeModeDockerBackendConfig;
+    aiderAdapter?: CodeModeAiderAdapterConfig;
+    requestedBackendId?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): CodeModeRunExecutionBackendRef {
-  const docker = buildDockerBackend(true, options.dockerBackend, process.env);
+  const docker = buildDockerBackend(true, options.dockerBackend, options.env ?? process.env);
+  const aider = buildAiderAdapter(true, docker, options.aiderAdapter, options.env ?? process.env);
+  if (options.requestedBackendId === CODE_MODE_AIDER_ADAPTER_ID) {
+    if (!aider.callable) {
+      throw new Error(aider.blockers[0] ?? "Aider Code Mode adapter is not callable.");
+    }
+    return {
+      backendId: aider.backendId,
+      kind: aider.kind,
+      label: aider.label,
+      status: aider.status,
+      runtimeSupport: aider.runtimeSupport,
+      adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
+      isolationProfile: "docker/aider-audit/no_operator_workspace",
+    };
+  }
+  if (options.requestedBackendId === CODE_MODE_DOCKER_BACKEND_ID && !docker.callable) {
+    throw new Error(docker.blockers[0] ?? "Docker Code Mode execution backend is not callable.");
+  }
+  if (options.requestedBackendId === CODE_MODE_HOST_BACKEND_ID) {
+    const host = buildTrustedCodeHostBackend(true, sandbox);
+    if (!host.callable) {
+      throw new Error(host.blockers[0] ?? "Trusted-code host runner is not callable.");
+    }
+    return {
+      backendId: host.backendId,
+      kind: host.kind,
+      label: host.label,
+      status: host.status,
+      runtimeSupport: host.runtimeSupport,
+      isolationProfile: sandbox.isolationProfile,
+    };
+  }
+  if (options.requestedBackendId && options.requestedBackendId !== CODE_MODE_DOCKER_BACKEND_ID) {
+    throw new Error(`Code Mode execution backend ${options.requestedBackendId} is not available.`);
+  }
   if (docker.callable) {
     return {
       backendId: docker.backendId,
@@ -127,29 +168,44 @@ function buildDockerBackend(
   };
 }
 
-function buildAiderPreviewAdapter(env: NodeJS.ProcessEnv): CodeModeExecutionBackendRecord {
+function buildAiderAdapter(
+  codeModeEnabled: boolean,
+  docker: CodeModeExecutionBackendRecord,
+  aiderAdapter: CodeModeAiderAdapterConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): CodeModeExecutionBackendRecord {
   const envFlag = "GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED";
-  const requested = isTruthyEnv(env[envFlag]);
+  const enabled = aiderAdapter?.enabled ?? isTruthyEnv(env[envFlag]);
+  const image = aiderAdapter?.image?.trim();
+  const callable = codeModeEnabled && enabled && docker.callable && Boolean(image);
   return {
     backendId: CODE_MODE_AIDER_ADAPTER_ID,
     kind: "aider_adapter",
     label: "Aider CLI adapter",
-    status: "preview",
-    runtimeSupport: "preview_only",
+    status: callable ? "available" : "preview",
+    runtimeSupport: callable ? "active_runner" : "preview_only",
     adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
     default: false,
-    callable: false,
-    description: "Planned adapter for routing approved Code Mode tasks into Aider-compatible workflows.",
+    callable,
+    description: callable
+      ? "Configured Docker-backed Aider adapter for approved audit-only Code Mode runs."
+      : "Planned adapter for routing approved Code Mode tasks into Aider-compatible workflows.",
     blockers: [
-      "Aider invocation planner and evidence bundle contracts exist, but the adapter is not connected to Code Mode run creation or Docker execution yet.",
-      "No replay-safe patch application runner has been promoted.",
+      ...(!codeModeEnabled ? ["Code Mode v1 is disabled."] : []),
+      ...(!enabled ? ["Aider adapter is not enabled."] : []),
+      ...(!docker.callable ? ["Docker execution backend is not callable."] : []),
+      ...(enabled && !image ? ["Aider adapter is enabled but no container image is configured."] : []),
     ],
     governance: [
       "Must retain explicit approvals and immutable run evidence.",
-      "Must surface generated diffs/artifacts through the Code Mode ledger before any callable exposure.",
+      "Runs only in run-temp/artifact space; operator workspace patches are not applied.",
+      "Replay posture remains audit-only and non-replayable.",
     ],
     evidence: {
-      envFlag: requested ? `${envFlag}=true` : envFlag,
+      envFlag: enabled ? `${envFlag}=true` : envFlag,
+      ...(image ? { imageConfigured: true } : {}),
+      ...(aiderAdapter?.command ? { command: aiderAdapter.command } : {}),
+      ...(aiderAdapter?.model ? { model: aiderAdapter.model } : {}),
     },
   };
 }

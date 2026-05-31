@@ -390,6 +390,38 @@ describe("capabilities routes", () => {
     });
   });
 
+  it("passes explicit Aider backend requests through Code Mode run creation", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs",
+      payload: {
+        language: "typescript",
+        source: "return { ok: true };",
+        executionBackendId: "aider-cli-adapter",
+        aider: {
+          requestMarkdown: "Refactor this safely.",
+          repositoryRootRelPath: "workspace",
+          model: "local/aider",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(service.createCodeModeRun).toHaveBeenCalledWith({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      aider: {
+        requestMarkdown: "Refactor this safely.",
+        repositoryRootRelPath: "workspace",
+        model: "local/aider",
+      },
+      operatorId: "operator-test",
+    });
+  });
+
   it("returns candidate detail through the capability route service", async () => {
     const getCapabilityCandidateDetail = vi.fn((candidateId: string) => ({
       candidateId,

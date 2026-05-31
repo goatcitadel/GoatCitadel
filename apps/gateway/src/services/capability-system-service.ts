@@ -52,7 +52,12 @@ import {
   createCodeModeExecutionBackendRunner,
 } from "./code-mode-execution-backend-runner.js";
 import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
-import { buildCodeModeExecutionBackends, buildCodeModeRunExecutionBackendRef } from "./code-mode-execution-backends.js";
+import { executeCodeModeAiderAdapter } from "./code-mode-aider-execution.js";
+import {
+  CODE_MODE_AIDER_ADAPTER_ID,
+  buildCodeModeExecutionBackends,
+  buildCodeModeRunExecutionBackendRef,
+} from "./code-mode-execution-backends.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
@@ -209,6 +214,7 @@ export class CapabilitySystemService {
       codeModeEnabled: this.options.readFeatureFlags().codeModeV1Enabled,
       sandbox: this.resolveCurrentSandboxMetadata(),
       dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
+      aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
     });
   }
 
@@ -657,9 +663,21 @@ export class CapabilitySystemService {
     const runInput = request.input ?? {};
     const runInputHash = sha256Text(JSON.stringify(runInput));
     const sandbox = this.resolveCurrentSandboxMetadata();
-    const executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
-      dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
-    });
+    let executionBackend: CodeModeRunExecutionBackendRef;
+    try {
+      executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
+        dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
+        aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
+        requestedBackendId: request.executionBackendId?.trim() || undefined,
+      });
+    } catch (error) {
+      throw new ValidationError({
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (executionBackend.backendId === CODE_MODE_AIDER_ADAPTER_ID && !request.aider?.requestMarkdown?.trim()) {
+      throw new ValidationError({ message: "Aider Code Mode runs require aider.requestMarkdown." });
+    }
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -889,6 +907,7 @@ export class CapabilitySystemService {
         request: {
           runId: stored.runId,
           input: runInput,
+          aider: request.aider,
           originSurface,
           workspaceId,
           operatorId: request.operatorId,
@@ -1264,20 +1283,28 @@ export class CapabilitySystemService {
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
       const compiledSource = transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
-      await this.ensureHarnessFile();
-      const execution = await this.executeChildHarness({
-        runId,
-        sandbox,
-        executionBackend: finalRun.executionBackend,
-        source: compiledSource,
-        input: runInput,
-        requestedOutputIntent: finalRun.requestedOutputIntent,
-        wrapperManifest,
-        policyContext: wrapperPolicyContext,
-        workspaceId: finalRun.workspaceId,
-        parentSessionId: finalRun.sessionId,
-        signal,
-      });
+      const execution =
+        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID
+          ? await this.executeAiderAdapterRun({
+              runId,
+              language: finalRun.language,
+              source,
+              pendingAiderRequest: pending.request.aider,
+              signal,
+            })
+          : await this.executeGovernedChildHarness({
+              runId,
+              sandbox,
+              executionBackend: finalRun.executionBackend,
+              source: compiledSource,
+              input: runInput,
+              requestedOutputIntent: finalRun.requestedOutputIntent,
+              wrapperManifest,
+              policyContext: wrapperPolicyContext,
+              workspaceId: finalRun.workspaceId,
+              parentSessionId: finalRun.sessionId,
+              signal,
+            });
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution started.`);
 
       let stdoutArtifact: CapabilityArtifactRecord | undefined;
@@ -1330,7 +1357,11 @@ export class CapabilitySystemService {
       }
       finalRun = terminalRun;
 
-      if (!execution.failed && finalRun.saveCandidateOnSuccess) {
+      if (
+        !execution.failed &&
+        finalRun.saveCandidateOnSuccess &&
+        finalRun.executionBackend?.backendId !== CODE_MODE_AIDER_ADAPTER_ID
+      ) {
         try {
           await this.stageCandidateBundle(finalRun, source, wrapperManifest, runInput);
         } catch (candidateError) {
@@ -2022,6 +2053,63 @@ export class CapabilitySystemService {
     };
   }
 
+  private async executeGovernedChildHarness(input: {
+    runId: string;
+    sandbox: CodeModeSandboxMetadata;
+    executionBackend?: CodeModeRunExecutionBackendRef;
+    source: string;
+    input: Record<string, unknown>;
+    requestedOutputIntent?: string;
+    wrapperManifest: CodeModeWrapperManifest;
+    policyContext?: ToolPolicyActorContext;
+    workspaceId?: string;
+    parentSessionId?: string;
+    signal?: AbortSignal;
+  }) {
+    await this.ensureHarnessFile();
+    return this.executeChildHarness(input);
+  }
+
+  private async executeAiderAdapterRun(input: {
+    runId: string;
+    language: CodeModeLanguage;
+    source: string;
+    pendingAiderRequest: unknown;
+    signal?: AbortSignal;
+  }): Promise<{
+    result?: Record<string, unknown>;
+    error?: string;
+    errorCode?: string;
+    errorDetails?: Record<string, unknown>;
+    failed: boolean;
+    stdout: BoundedCaptureState;
+    stderr: BoundedCaptureState;
+  }> {
+    const aider = readPendingAiderRunRequest(input.pendingAiderRequest);
+    const execution = await executeCodeModeAiderAdapter({
+      runId: input.runId,
+      runTempRoot: path.join(this.tempRoot, input.runId),
+      language: input.language,
+      source: input.source,
+      requestMarkdown: aider.requestMarkdown,
+      repositoryRootRelPath: aider.repositoryRootRelPath,
+      model: aider.model,
+      aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
+      dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
+      persister: this.buildAiderArtifactPersister(),
+      signal: input.signal,
+    });
+    return {
+      result: execution.result,
+      error: execution.error,
+      errorCode: execution.errorCode,
+      errorDetails: execution.errorDetails,
+      failed: execution.failed,
+      stdout: toCaptureState(execution.stdout),
+      stderr: toCaptureState(execution.stderr),
+    };
+  }
+
   private async executeChildHarness(input: {
     runId: string;
     sandbox: CodeModeSandboxMetadata;
@@ -2570,6 +2658,21 @@ export class CapabilitySystemService {
       JSON.stringify(value, null, 2),
       "application/json",
     );
+  }
+
+  private buildAiderArtifactPersister() {
+    return {
+      persistText: (input: { segments: string[]; filename: string; content: string; mimeType: string }) =>
+        this.persistManagedTextArtifact(
+          this.artifactRoot,
+          input.segments,
+          input.filename,
+          input.content,
+          input.mimeType,
+        ),
+      persistJson: (input: { segments: string[]; filename: string; value: unknown }) =>
+        this.persistManagedJsonArtifact(this.artifactRoot, input.segments, input.filename, input.value),
+    };
   }
 
   private async persistManagedTextArtifact(
@@ -3576,6 +3679,13 @@ function createBoundedCapture(): {
   };
 }
 
+function toCaptureState(text: string): BoundedCaptureState {
+  return {
+    text,
+    truncated: false,
+  };
+}
+
 async function waitForWrapperTasksToSettle(tasks: Set<Promise<void>>): Promise<void> {
   const snapshot = [...tasks];
   if (snapshot.length === 0) {
@@ -3660,6 +3770,25 @@ function isStaleCodeModeExecutionClaim(startedAt?: string): boolean {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readPendingAiderRunRequest(value: unknown): {
+  requestMarkdown: string;
+  repositoryRootRelPath?: string;
+  model?: string;
+} {
+  if (!isRecord(value)) {
+    throw new Error("Aider Code Mode pending action is missing aider request metadata.");
+  }
+  const requestMarkdown = asOptionalString(value.requestMarkdown);
+  if (!requestMarkdown) {
+    throw new Error("Aider Code Mode pending action is missing requestMarkdown.");
+  }
+  return {
+    requestMarkdown,
+    repositoryRootRelPath: asOptionalString(value.repositoryRootRelPath),
+    model: asOptionalString(value.model),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
