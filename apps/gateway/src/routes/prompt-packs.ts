@@ -16,6 +16,10 @@ const promptPackParamsSchema = z.object({
   packId: z.string().min(1),
 });
 
+const promptPackBuiltinParamsSchema = z.object({
+  packKey: z.string().min(1),
+});
+
 const promptPackTestParamsSchema = z.object({
   packId: z.string().min(1),
   testId: z.string().min(1),
@@ -129,6 +133,22 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({
       items: promptPacks.listPromptPacks(query.data.limit),
     });
+  });
+
+  fastify.get("/api/v1/prompt-packs/builtins", async (_request, reply) => {
+    return reply.send(promptPacks.listSecurityEvalPacks());
+  });
+
+  fastify.post("/api/v1/prompt-packs/builtins/:packKey/import", async (request, reply) => {
+    const params = promptPackBuiltinParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(promptPacks.importBuiltinPromptPack(params.data.packKey));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/prompt-packs/:packId/tests", async (request, reply) => {

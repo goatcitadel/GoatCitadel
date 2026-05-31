@@ -9,6 +9,7 @@ import type {
   PromptPackRecord,
   PromptPackReportRecord,
   PromptPackRunRecord,
+  PromptPackSecurityEvalPacksResponse,
   PromptPackTestRecord,
   ReplayRegressionResult,
   ReplayRegressionRun,
@@ -32,6 +33,19 @@ export async function importPromptPack(input: {
 
 export async function fetchPromptPacks(limit = 200): Promise<{ items: PromptPackRecord[] }> {
   return request<{ items: PromptPackRecord[] }>(`/api/v1/prompt-packs?limit=${Math.max(1, Math.min(limit, 2000))}`);
+}
+
+export async function fetchPromptPackBuiltins(): Promise<PromptPackSecurityEvalPacksResponse> {
+  return request<PromptPackSecurityEvalPacksResponse>("/api/v1/prompt-packs/builtins");
+}
+
+export async function importBuiltinPromptPack(packKey: string): Promise<{
+  pack: PromptPackRecord;
+  tests: PromptPackTestRecord[];
+}> {
+  return request(`/api/v1/prompt-packs/builtins/${encodeURIComponent(packKey)}/import`, {
+    method: "POST",
+  });
 }
 
 export async function fetchPromptPackTests(packId: string, limit = 2000): Promise<{ items: PromptPackTestRecord[] }> {

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { BarChart3, ClipboardCopy } from "lucide-react";
-import type { LlmEvalProofRunRecord, PromptPackRecord } from "@goatcitadel/contracts";
+import type { LlmEvalProofRunRecord, PromptPackRecord, PromptPackSecurityEvalPackRecord } from "@goatcitadel/contracts";
 import {
   exportLlmEvalProofRuns,
   fetchLlmEvalProofRuns,
+  fetchPromptPackBuiltins,
   fetchPromptPacks,
+  importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
@@ -16,24 +18,34 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [packs, evalRuns] = await Promise.all([
+    const [packs, evalRuns, securityEvalPacks] = await Promise.all([
       nativeLoad("Prompt packs", fetchPromptPacks(200), { items: [] as PromptPackRecord[] }),
       nativeLoad("Eval proof runs", fetchLlmEvalProofRuns(25), {
         generatedAt: new Date(0).toISOString(),
         items: [] as LlmEvalProofRunRecord[],
       }),
+      nativeLoad("Security eval packs", fetchPromptPackBuiltins(), {
+        generatedAt: new Date(0).toISOString(),
+        items: [] as PromptPackSecurityEvalPackRecord[],
+        warnings: [],
+      }),
     ]);
     return {
-      issues: nativeLoadIssues([packs, evalRuns]),
+      issues: nativeLoadIssues([packs, evalRuns, securityEvalPacks]),
       packs: packs.data.items,
       evalRuns: evalRuns.data.items,
+      securityEvalPacks: securityEvalPacks.data.items,
+      securityEvalWarnings: securityEvalPacks.data.warnings,
     };
   }, []);
 
   const packs = data?.packs ?? [];
   const evalRuns = data?.evalRuns ?? [];
+  const securityEvalPacks = data?.securityEvalPacks ?? [];
   const totalTests = packs.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0);
+  const securityEvalTests = securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0);
   const latestEval = evalRuns[0];
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
 
@@ -57,6 +69,21 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     }
   };
 
+  const importSecurityEvalPack = async (packKey: string) => {
+    setImportingPackKey(packKey);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const imported = await importBuiltinPromptPack(packKey);
+      setExportNotice(`Imported ${imported.pack.name} with ${imported.tests.length} tests.`);
+      await reload();
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportingPackKey(null);
+    }
+  };
+
   return (
     <NativePageFrame
       area="ops"
@@ -69,6 +96,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       metrics={[
         { label: "Prompt packs", value: String(packs.length) },
         { label: "Pack tests", value: String(totalTests) },
+        { label: "Red-team tests", value: String(securityEvalTests) },
         { label: "Eval runs", value: String(evalRuns.length) },
         { label: "Pareto models", value: String(paretoModels.length) },
       ]}
@@ -116,6 +144,62 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ) : (
             <EmptyState size="compact" title="No prompt packs are available." />
           )}
+          <button
+            type="button"
+            className="mc-next-directory-action"
+            onClick={() => navigate({ area: "library", section: "prompt-packs", theme: route.theme })}
+          >
+            <span>Open prompt packs</span>
+          </button>
+        </NativeCard>
+
+        <NativeCard
+          title="Security eval packs"
+          subtitle="Red-team packs are visible as governed definitions; running them remains an explicit operator action."
+          stats={[
+            { label: "Packs", value: String(securityEvalPacks.length) },
+            { label: "Tests", value: String(securityEvalTests) },
+          ]}
+        >
+          {data?.securityEvalWarnings?.[0] ? (
+            <div className="mc-next-runtime-notice tone-info">{data.securityEvalWarnings[0]}</div>
+          ) : null}
+          <NativeList
+            density="compact"
+            items={securityEvalPacks.map((pack) => ({
+              title: pack.title,
+              meta: [
+                formatSecurityEvalStatus(pack.status),
+                `${pack.testCount} tests`,
+                `Chat ${pack.modeCounts.chat ?? 0}`,
+                `Cowork ${pack.modeCounts.cowork ?? 0}`,
+                `Code ${pack.modeCounts.code ?? 0}`,
+              ].join(" · "),
+              body:
+                pack.blockers.length > 0
+                  ? pack.blockers.join(" ")
+                  : `${pack.capabilityTargets.slice(0, 4).join(", ")} coverage is ready for prompt-pack runs.`,
+            }))}
+            emptyLabel="No security eval pack definitions are visible."
+            maxHeight="min(38vh, 24rem)"
+          />
+          {securityEvalPacks.some((pack) => pack.status === "available") ? (
+            <div className="mc-next-approvals-inline-actions">
+              {securityEvalPacks
+                .filter((pack) => pack.status === "available")
+                .map((pack) => (
+                  <button
+                    key={pack.packKey}
+                    type="button"
+                    className="mc-next-secondary-button"
+                    onClick={() => void importSecurityEvalPack(pack.packKey)}
+                    disabled={importingPackKey === pack.packKey}
+                  >
+                    {importingPackKey === pack.packKey ? "Importing..." : "Import defensive security pack"}
+                  </button>
+                ))}
+            </div>
+          ) : null}
           <button
             type="button"
             className="mc-next-directory-action"
@@ -274,4 +358,10 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
 
 function formatScore(value: number): string {
   return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(2);
+}
+
+function formatSecurityEvalStatus(status: PromptPackSecurityEvalPackRecord["status"]): string {
+  if (status === "imported") return "Imported";
+  if (status === "available") return "Available";
+  return "Unavailable";
 }

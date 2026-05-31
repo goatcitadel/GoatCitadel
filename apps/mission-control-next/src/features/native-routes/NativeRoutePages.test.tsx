@@ -79,6 +79,42 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
+  fetchPromptPackBuiltins: vi.fn(async () => ({
+    generatedAt: "2026-05-02T20:00:00.000Z",
+    warnings: [
+      "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+    ],
+    items: [
+      {
+        packKey: "security-red-team-v6",
+        title: "Defensive Security Evaluation",
+        sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+        status: "available",
+        testCount: 18,
+        modeCounts: { chat: 6, cowork: 6, code: 6 },
+        toolTierCounts: { "no-tools": 6, "implicit-tools": 6, "explicit-tools": 6 },
+        capabilityTargets: ["prompt-injection", "tool-governance"],
+        likelyFailureClasses: ["unsafe_tool_use"],
+        safetyPosture: {
+          definitionOnly: true,
+          requiresOperatorRun: true,
+          callsProviders: false,
+          mutationPerformed: false,
+          note: "definition only",
+        },
+        blockers: ["Import this prompt pack before it can produce run, score, or benchmark evidence."],
+      },
+    ],
+  })),
+  importBuiltinPromptPack: vi.fn(async () => ({
+    pack: {
+      packId: "security-red-team-v6",
+      name: "Defensive Security Evaluation",
+      testCount: 18,
+      sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+    },
+    tests: Array.from({ length: 18 }, (_, index) => ({ testId: `test-${index + 1}` })),
+  })),
   fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
   createTask: vi.fn(async () => ({
     taskId: "task-2",
@@ -293,6 +329,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchOperators: mocks.fetchOperators,
     fetchLlmEvalProofRuns: mocks.fetchLlmEvalProofRuns,
     fetchPromptPacks: mocks.fetchPromptPacks,
+    fetchPromptPackBuiltins: mocks.fetchPromptPackBuiltins,
+    importBuiltinPromptPack: mocks.importBuiltinPromptPack,
     fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
     fetchAgenticRuns: mocks.fetchAgenticRuns,
     fetchTaskDeliverables: mocks.fetchTaskDeliverables,
@@ -463,8 +501,14 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     const text = collectText(renderer!.root);
     expect(mocks.fetchPromptPacks).toHaveBeenCalledWith(200);
     expect(mocks.fetchLlmEvalProofRuns).toHaveBeenCalledWith(25);
+    expect(mocks.fetchPromptPackBuiltins).toHaveBeenCalledWith();
     expect(text).toContain("Quality Dashboard");
     expect(text).toContain("Security Red Team");
+    expect(text).toContain("Defensive Security Evaluation");
+    expect(text).toContain("Security eval packs");
+    expect(text).toContain("Red-team tests");
+    expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
+    expect(text).toContain("Import defensive security pack");
     expect(text).toContain("Eval proof");
     expect(text).toContain("Eval proof JSON export");
     expect(text).toContain("Run trace JSON");
@@ -479,6 +523,13 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(collectText(renderer!.root)).toContain(
       "Copied eval proof export goatcitadel-llm-eval-proof-2026-05-02T20-05-00-000Z.json.",
     );
+
+    await act(async () => {
+      findButton(renderer!.root, "Import defensive security pack").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
 
     await act(async () => {
       findButton(renderer!.root, "Open prompt packs").props.onClick();

@@ -569,6 +569,8 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 ### Prompt Lab
 
 - `POST /api/v1/prompt-packs/import`
+- `GET /api/v1/prompt-packs/builtins`
+- `POST /api/v1/prompt-packs/builtins/:packKey/import`
 - `POST /api/v1/prompt-packs/:packId/tests/:testId/run`
 - `POST /api/v1/prompt-packs/:packId/tests/:testId/score`
 - `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score`

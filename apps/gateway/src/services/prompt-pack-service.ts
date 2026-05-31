@@ -7,6 +7,7 @@ import { logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
+const SECURITY_RED_TEAM_PACK_FILE = "goatcitadel_prompt_pack_v6_security_red_team.md";
 import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
@@ -57,6 +58,8 @@ import type {
   PromptPackScoreRecordV3,
   PromptPackScoringSchemaVersion,
   PromptPackScoreState,
+  PromptPackSecurityEvalPackRecord,
+  PromptPackSecurityEvalPacksResponse,
   PromptPackTestRecord,
   PromptPackToolTier,
   PromptPackVerdict,
@@ -371,8 +374,41 @@ export class PromptPackService {
     return imported;
   }
 
+  importBuiltinPromptPack(packKey: string): {
+    pack: PromptPackRecord;
+    tests: PromptPackTestRecord[];
+  } {
+    if (packKey !== "security-red-team-v6") {
+      throw new Error(`Unknown built-in prompt pack: ${packKey}`);
+    }
+    const filePath = resolveSecurityRedTeamPackPath(this.ctx.config.rootDir);
+    if (!filePath) {
+      throw new Error(`${SECURITY_RED_TEAM_PACK_FILE} was not found in this checkout.`);
+    }
+    return this.importPromptPack({
+      packId: packKey,
+      name: "Defensive Security Evaluation",
+      sourceLabel: path.basename(filePath),
+      content: fsSync.readFileSync(filePath, "utf8"),
+    });
+  }
+
   listPromptPacks(limit = 100): PromptPackRecord[] {
     return this.ctx.storage.promptPacks.listPacks(limit);
+  }
+
+  listSecurityEvalPacks(): PromptPackSecurityEvalPacksResponse {
+    const generatedAt = new Date().toISOString();
+    const importedPacks = this.ctx.storage.promptPacks.listPacks(2000);
+    const warnings: string[] = [
+      "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+      "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
+    ];
+    return {
+      generatedAt,
+      items: [buildSecurityRedTeamEvalPack(this.ctx.config.rootDir, importedPacks, warnings)],
+      warnings,
+    };
   }
 
   listPromptPackTests(packId: string, limit = 2000): PromptPackTestRecord[] {
@@ -3119,6 +3155,107 @@ function inferPromptPackName(sourceLabel?: string): string {
   const base = path.basename(sourceLabel).replace(/\.[^.]+$/, "");
   const cleaned = base.replace(/[_-]+/g, " ").trim();
   return cleaned ? toTitleCase(cleaned) : "GoatCitadel Prompt Pack";
+}
+
+function buildSecurityRedTeamEvalPack(
+  rootDir: string,
+  importedPacks: PromptPackRecord[],
+  warnings: string[],
+): PromptPackSecurityEvalPackRecord {
+  const imported = importedPacks.find(isSecurityRedTeamPack);
+  const filePath = resolveSecurityRedTeamPackPath(rootDir);
+  if (!filePath) {
+    warnings.push(`${SECURITY_RED_TEAM_PACK_FILE} was not found in this checkout.`);
+    return {
+      packKey: "security-red-team-v6",
+      title: "Defensive Security Evaluation",
+      sourceLabel: SECURITY_RED_TEAM_PACK_FILE,
+      status: imported ? "imported" : "unavailable",
+      importedPackId: imported?.packId,
+      importedPackName: imported?.name,
+      testCount: imported?.testCount ?? 0,
+      modeCounts: {},
+      toolTierCounts: {},
+      capabilityTargets: [],
+      likelyFailureClasses: [],
+      safetyPosture: buildSecurityEvalSafetyPosture(),
+      blockers: ["Bundled security red-team prompt-pack markdown is unavailable in this checkout."],
+    };
+  }
+
+  const tests = parsePromptPackTests(fsSync.readFileSync(filePath, "utf8"));
+  return {
+    packKey: "security-red-team-v6",
+    title: "Defensive Security Evaluation",
+    sourceLabel: path.basename(filePath),
+    status: imported ? "imported" : "available",
+    importedPackId: imported?.packId,
+    importedPackName: imported?.name,
+    testCount: tests.length,
+    modeCounts: countPromptPackModes(tests),
+    toolTierCounts: countPromptPackToolTiers(tests),
+    capabilityTargets: sortedUnique(
+      tests.flatMap((test) => test.diagnosticMetadata?.capabilityTargets ?? []).filter(Boolean),
+    ),
+    likelyFailureClasses: sortedUnique(
+      tests.flatMap((test) => test.diagnosticMetadata?.likelyFailureClasses ?? []).filter(Boolean),
+    ),
+    safetyPosture: buildSecurityEvalSafetyPosture(),
+    blockers: imported ? [] : ["Import this prompt pack before it can produce run, score, or benchmark evidence."],
+  };
+}
+
+function buildSecurityEvalSafetyPosture(): PromptPackSecurityEvalPackRecord["safetyPosture"] {
+  return {
+    definitionOnly: true,
+    requiresOperatorRun: true,
+    callsProviders: false,
+    mutationPerformed: false,
+    note: "This catalog endpoint only describes the red-team pack. Running or scoring tests remains an explicit operator action.",
+  };
+}
+
+function resolveSecurityRedTeamPackPath(rootDir: string): string | undefined {
+  const candidates = [
+    path.resolve(rootDir, SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), "..", "..", SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), "..", "..", "..", SECURITY_RED_TEAM_PACK_FILE),
+  ];
+  return candidates.find((candidate) => fsSync.existsSync(candidate));
+}
+
+function isSecurityRedTeamPack(pack: PromptPackRecord): boolean {
+  const haystack = `${pack.name} ${pack.sourceLabel ?? ""}`.toLowerCase();
+  return haystack.includes("security") && (haystack.includes("red_team") || haystack.includes("red team"));
+}
+
+function countPromptPackModes(tests: Array<{ mode?: string }>): PromptPackSecurityEvalPackRecord["modeCounts"] {
+  const counts: PromptPackSecurityEvalPackRecord["modeCounts"] = {};
+  for (const test of tests) {
+    if (test.mode === "chat" || test.mode === "cowork" || test.mode === "code") {
+      counts[test.mode] = (counts[test.mode] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function countPromptPackToolTiers(
+  tests: Array<{ toolTier?: string }>,
+): PromptPackSecurityEvalPackRecord["toolTierCounts"] {
+  const counts: PromptPackSecurityEvalPackRecord["toolTierCounts"] = {};
+  for (const test of tests) {
+    if (test.toolTier === "no-tools" || test.toolTier === "implicit-tools" || test.toolTier === "explicit-tools") {
+      counts[test.toolTier] = (counts[test.toolTier] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function sortedUnique(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function collectPromptPackObservedToolFamilies(run?: PromptPackRunRecord): string[] {

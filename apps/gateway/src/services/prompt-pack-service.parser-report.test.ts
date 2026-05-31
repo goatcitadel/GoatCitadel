@@ -588,6 +588,66 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
+  it("projects bundled security red-team eval packs without running providers", () => {
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [
+              {
+                packId: "pack-security",
+                name: "Security Red Team",
+                sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+                testCount: 18,
+                createdAt: "2026-05-30T00:00:00.000Z",
+                updatedAt: "2026-05-30T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        config: {
+          rootDir: process.cwd(),
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    const projection = service.listSecurityEvalPacks();
+    expect(projection.warnings.join(" ")).toContain("does not call providers");
+    expect(projection.items[0]).toMatchObject({
+      packKey: "security-red-team-v6",
+      status: "imported",
+      importedPackId: "pack-security",
+      testCount: 18,
+      modeCounts: { chat: 6, cowork: 6, code: 6 },
+      toolTierCounts: { "no-tools": 6, "implicit-tools": 6, "explicit-tools": 6 },
+      safetyPosture: {
+        definitionOnly: true,
+        requiresOperatorRun: true,
+        callsProviders: false,
+        mutationPerformed: false,
+      },
+      blockers: [],
+    });
+    expect(projection.items[0]?.capabilityTargets.length).toBeGreaterThan(0);
+    expect(projection.items[0]?.likelyFailureClasses.length).toBeGreaterThan(0);
+  });
+
   it("parses dotted manual test codes so they survive import refreshes", () => {
     const markdown = [
       "## 2.6 Baseline sanity check",

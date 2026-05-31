@@ -2,6 +2,8 @@ import type { PromptPackService } from "./prompt-pack-service.js";
 
 export interface PromptPacksRoutePort {
   importPromptPack: PromptPackService["importPromptPack"];
+  importBuiltinPromptPack: PromptPackService["importBuiltinPromptPack"];
+  listSecurityEvalPacks: PromptPackService["listSecurityEvalPacks"];
   listPromptPacks: PromptPackService["listPromptPacks"];
   listPromptPackTests: PromptPackService["listPromptPackTests"];
   runPromptPackTest: PromptPackService["runPromptPackTest"];
@@ -26,6 +28,14 @@ export class PromptPacksRouteService {
 
   public importPromptPack(input: Parameters<PromptPacksRoutePort["importPromptPack"]>[0]) {
     return this.promptPacks.importPromptPack(input);
+  }
+
+  public importBuiltinPromptPack(packKey: string) {
+    return this.promptPacks.importBuiltinPromptPack(packKey);
+  }
+
+  public listSecurityEvalPacks() {
+    return this.promptPacks.listSecurityEvalPacks();
   }
 
   public listPromptPacks(limit: number) {

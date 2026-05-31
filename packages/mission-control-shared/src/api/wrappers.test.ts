@@ -343,6 +343,14 @@ describe("shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(promptPacks.fetchPromptPacks(5000), "/api/v1/prompt-packs?limit=2000");
+    await expectCall(promptPacks.fetchPromptPackBuiltins(), "/api/v1/prompt-packs/builtins");
+    await expectCall(
+      promptPacks.importBuiltinPromptPack("security/red team"),
+      "/api/v1/prompt-packs/builtins/security%2Fred%20team/import",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(promptPacks.fetchPromptPackTests("pack/1", 0), "/api/v1/prompt-packs/pack%2F1/tests?limit=1");
     await expectCall(
       promptPacks.runPromptPackTest("pack/1", "test/1"),

@@ -125,6 +125,36 @@ export interface PromptPackRecord {
   updatedAt: string;
 }
 
+export type PromptPackSecurityEvalPackStatus = "available" | "imported" | "unavailable";
+
+export interface PromptPackSecurityEvalPackRecord {
+  packKey: string;
+  title: string;
+  sourceLabel: string;
+  status: PromptPackSecurityEvalPackStatus;
+  importedPackId?: string;
+  importedPackName?: string;
+  testCount: number;
+  modeCounts: Partial<Record<ChatMode, number>>;
+  toolTierCounts: Partial<Record<PromptPackToolTier, number>>;
+  capabilityTargets: string[];
+  likelyFailureClasses: string[];
+  safetyPosture: {
+    definitionOnly: true;
+    requiresOperatorRun: true;
+    callsProviders: false;
+    mutationPerformed: false;
+    note: string;
+  };
+  blockers: string[];
+}
+
+export interface PromptPackSecurityEvalPacksResponse {
+  generatedAt: string;
+  items: PromptPackSecurityEvalPackRecord[];
+  warnings: string[];
+}
+
 export interface PromptPackTestRecord {
   testId: string;
   packId: string;
