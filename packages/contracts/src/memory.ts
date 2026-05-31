@@ -25,7 +25,7 @@ export interface MemoryCitationProvenance {
 
 export interface MemoryCitation {
   candidateId: string;
-  sourceType: "transcript" | "file";
+  sourceType: "transcript" | "file" | "memory_item";
   sourceRef: string;
   snippet?: string;
   score: number;

@@ -401,6 +401,29 @@ describe("NativeRoutePages Library provenance helpers", () => {
       }),
     );
     expect(
+      formatKnowledgeCitationAction(
+        {
+          sourceRef: "mem-browser",
+          sourceType: "memory_item",
+          score: 0.82,
+          provenance: {
+            relationScope: "self",
+            freshness: "recent",
+            selectionReason: "selected for lexical/recency score 1.330",
+            sourceTimestamp: "2026-05-30T18:05:00.000Z",
+          },
+        },
+        "ctx-2",
+        0,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        label: "mem-browser",
+        description: "selected for lexical/recency score 1.330",
+        meta: expect.stringContaining("memory_item"),
+      }),
+    );
+    expect(
       formatArtifactProvenance({
         artifactId: "artifact-1",
         sessionId: "session-1",

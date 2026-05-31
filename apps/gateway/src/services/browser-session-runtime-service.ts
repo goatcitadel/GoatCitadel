@@ -263,6 +263,34 @@ export class BrowserSessionRuntimeService {
     return rows.map((row) => mapEventRow(this.deps.gatewaySql, row));
   }
 
+  public listGrants(
+    sessionId: string,
+    input: { status?: "active" | "revoked" | "all"; limit?: number } = {},
+  ): BrowserSessionGrantRecord[] {
+    this.requireSession(sessionId);
+    const clauses = ["session_id = @sessionId"];
+    const params: Record<string, unknown> = { sessionId, limit: normalizeLimit(input.limit) };
+    if (input.status === "active") {
+      clauses.push("revoked_at IS NULL");
+      clauses.push("(expires_at IS NULL OR expires_at > @now)");
+      params.now = new Date().toISOString();
+    } else if (input.status === "revoked") {
+      clauses.push("revoked_at IS NOT NULL");
+    }
+    const rows = this.deps.gatewaySql
+      .prepare(
+        `
+        SELECT *
+        FROM browser_session_grants
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY created_at DESC
+        LIMIT @limit
+      `,
+      )
+      .all(params) as BrowserSessionGrantRow[];
+    return rows.map((row) => mapGrantRow(this.deps.gatewaySql, row));
+  }
+
   public assertAccess(check: BrowserSessionAccessCheck): void {
     const session = this.requireSession(check.sessionId);
     if (session.status !== "active") {

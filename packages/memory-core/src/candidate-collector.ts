@@ -3,6 +3,7 @@ import type { MemoryCandidate, MemorySourceInput } from "./types.js";
 export interface CandidateCollectorOptions {
   maxTranscriptEvents: number;
   maxFileCandidates: number;
+  maxMemoryItems?: number;
   maxCharsPerCandidate: number;
 }
 
@@ -13,7 +14,10 @@ export function collectMemoryCandidates(
   const out: MemoryCandidate[] = [];
   const maxTranscriptEvents = Math.max(0, Math.floor(options.maxTranscriptEvents));
   const maxFileCandidates = Math.max(0, Math.floor(options.maxFileCandidates));
+  const maxMemoryItems = Math.max(0, Math.floor(options.maxMemoryItems ?? 24));
   const maxCharsPerCandidate = Math.max(1, Math.floor(options.maxCharsPerCandidate));
+  let fileCount = 0;
+  let memoryItemCount = 0;
 
   for (const source of sources) {
     if (source.type === "transcript") {
@@ -37,13 +41,37 @@ export function collectMemoryCandidates(
       continue;
     }
 
-    if (out.filter((candidate) => candidate.sourceType === "file").length >= maxFileCandidates) {
+    if (source.type === "memory_item") {
+      if (memoryItemCount >= maxMemoryItems) {
+        continue;
+      }
+      const text = trimCandidate(
+        [`${source.title} (${source.namespace})`, source.pinned ? "Pinned memory" : "", source.content]
+          .filter(Boolean)
+          .join("\n"),
+        maxCharsPerCandidate,
+      );
+      if (!text) {
+        continue;
+      }
+      out.push({
+        candidateId: `m:${source.itemId}`,
+        sourceType: "memory_item",
+        sourceRef: source.itemId,
+        text,
+        timestamp: source.updatedAt,
+      });
+      memoryItemCount += 1;
+      continue;
+    }
+
+    if (fileCount >= maxFileCandidates) {
       continue;
     }
 
     const chunks = splitIntoChunks(source.content, maxCharsPerCandidate);
     for (let index = 0; index < chunks.length; index += 1) {
-      if (out.filter((candidate) => candidate.sourceType === "file").length >= maxFileCandidates) {
+      if (fileCount >= maxFileCandidates) {
         break;
       }
       const chunk = chunks[index]!;
@@ -54,6 +82,7 @@ export function collectMemoryCandidates(
         text: chunk,
         timestamp: source.modifiedAt,
       });
+      fileCount += 1;
     }
   }
 

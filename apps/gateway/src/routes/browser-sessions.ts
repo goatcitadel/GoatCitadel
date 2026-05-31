@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyBaseLogger, FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
@@ -35,6 +35,11 @@ const eventQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
 });
 
+const grantQuerySchema = z.object({
+  status: z.enum(["active", "revoked", "all"]).optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+});
+
 export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
@@ -45,7 +50,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       const query = listQuerySchema.parse(request.query);
       return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listSessions(query));
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -58,7 +63,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       });
       return reply.code(201).send(session);
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -67,7 +72,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       const { sessionId } = sessionParamsSchema.parse(request.params);
       return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.getSession(sessionId));
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -78,7 +83,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.gatewayRuntime.browserSessionRuntimeService.closeSession(sessionId, resolveActorId(request)),
       );
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -88,7 +93,17 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       const body = grantSchema.parse(request.body);
       return reply.code(201).send(fastify.gatewayRuntime.browserSessionRuntimeService.createGrant(sessionId, body));
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/browser-sessions/:sessionId/grants", operatorOnly, async (request, reply) => {
+    try {
+      const { sessionId } = sessionParamsSchema.parse(request.params);
+      const query = grantQuerySchema.parse(request.query);
+      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listGrants(sessionId, query));
+    } catch (error) {
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -99,7 +114,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.gatewayRuntime.browserSessionRuntimeService.revokeGrant(sessionId, grantId, resolveActorId(request)),
       );
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -110,7 +125,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.gatewayRuntime.browserSessionRuntimeService.rotateGrant(sessionId, grantId, resolveActorId(request)),
       );
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 
@@ -120,7 +135,18 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
       const query = eventQuerySchema.parse(request.query);
       return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.listEvents(sessionId, query.limit));
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      return sendBrowserSessionRouteError(reply, error, request.log);
     }
   });
 };
+
+function sendBrowserSessionRouteError(
+  reply: FastifyReply,
+  error: unknown,
+  log: FastifyBaseLogger,
+): ReturnType<FastifyReply["send"]> {
+  if (error instanceof z.ZodError) {
+    return reply.code(400).send({ error: error.flatten() });
+  }
+  return sendRouteError(reply, error, log);
+}

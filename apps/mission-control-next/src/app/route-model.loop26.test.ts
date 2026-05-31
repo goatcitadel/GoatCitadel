@@ -43,6 +43,16 @@ describe("mission-control-next route model loop 26 tails", () => {
     });
   });
 
+  it("keeps browser session governance as a sessions subview", () => {
+    const route = parseAppRoute("/ops/sessions?view=browser-sessions");
+    expect(route).toMatchObject({
+      area: "ops",
+      section: "sessions",
+      view: "browser-sessions",
+    });
+    expect(buildAppHref(route)).toBe("/ops/sessions?view=browser-sessions");
+  });
+
   it("keeps /settings/safety as an alias for the permissions section", () => {
     expect(parseAppRoute("/settings/safety")).toMatchObject({
       area: "settings",

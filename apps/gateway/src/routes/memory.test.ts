@@ -136,6 +136,45 @@ describe("memory routes", () => {
     expect(getMemoryContext).toHaveBeenCalledWith("ctx-1");
   });
 
+  it("passes explicit memory relation scope through context composition", async () => {
+    const composeContext = vi.fn((input) => ({
+      contextId: "ctx-compose",
+      scope: input.scope,
+      relationScope: input.relationScope,
+    }));
+    const built = buildApp({ composeContext });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/context/compose",
+      payload: {
+        scope: "chat",
+        prompt: "Find browser governance memory.",
+        relationScope: "project",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(composeContext).toHaveBeenCalledWith({
+      scope: "chat",
+      prompt: "Find browser governance memory.",
+      relationScope: "project",
+    });
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/context/compose",
+      payload: {
+        scope: "chat",
+        prompt: "Find browser governance memory.",
+        relationScope: "global",
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {
     const runMemoryMaintenanceNow = vi.fn(() => ({
       runId: "mmrun_123",

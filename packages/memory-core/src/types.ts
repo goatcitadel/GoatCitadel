@@ -12,11 +12,21 @@ export interface MemoryFileSource {
   modifiedAt: string;
 }
 
-export type MemorySourceInput = MemoryTranscriptSource | MemoryFileSource;
+export interface MemoryItemSource {
+  type: "memory_item";
+  itemId: string;
+  namespace: string;
+  title: string;
+  content: string;
+  updatedAt: string;
+  pinned?: boolean;
+}
+
+export type MemorySourceInput = MemoryTranscriptSource | MemoryFileSource | MemoryItemSource;
 
 export interface MemoryCandidate {
   candidateId: string;
-  sourceType: "transcript" | "file";
+  sourceType: "transcript" | "file" | "memory_item";
   sourceRef: string;
   text: string;
   timestamp?: string;

@@ -999,6 +999,65 @@
   border-color: color-mix(in oklab, var(--danger) 42%, var(--border));
 }
 
+.mc-next-browser-session-controls,
+.mc-next-browser-grant-form,
+.mc-next-browser-grant-list {
+  display: grid;
+  gap: 0.56rem;
+}
+
+.mc-next-browser-session-list {
+  display: grid;
+  gap: 0.42rem;
+  max-height: min(48vh, 28rem);
+  overflow: auto;
+  padding-right: 0.18rem;
+}
+
+.mc-next-browser-session-row,
+.mc-next-browser-grant-row {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  padding: 0.54rem 0.58rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+  text-align: left;
+}
+
+.mc-next-browser-session-row {
+  cursor: pointer;
+}
+
+.mc-next-browser-session-row.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+}
+
+.mc-next-browser-session-row span,
+.mc-next-browser-session-row small,
+.mc-next-browser-grant-row span,
+.mc-next-browser-grant-row small {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-browser-grant-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.mc-next-browser-grant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.32rem;
+}
+
 .mc-next-runtime-posture-card {
   grid-column: 1 / -1;
 }

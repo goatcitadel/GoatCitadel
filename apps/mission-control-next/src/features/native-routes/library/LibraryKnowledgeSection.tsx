@@ -191,8 +191,8 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
             ) : null}
           </NativeCard>
           <NativeCard
-            title="Source visibility"
-            subtitle="Knowledge context stays tied to visible file, citation, and context-pack source evidence."
+            title="Why memory was used"
+            subtitle="Recent context-pack citations expose source type, score, relation scope, freshness, and selection reason."
           >
             <LibraryMetricGrid
               items={[

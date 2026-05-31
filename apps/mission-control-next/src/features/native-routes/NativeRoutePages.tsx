@@ -4,6 +4,7 @@ import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePa
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
+import { BrowserSessionsRoutePage } from "./ops/BrowserSessionsRoutePage";
 import { KanbanRoutePage } from "./ops/KanbanRoutePage";
 import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
@@ -63,6 +64,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     const section = route.section ?? "activity";
     if (route.view === "run-detail" || route.runId) {
       return <RunDetailRoutePage {...props} />;
+    }
+    if (section === "sessions" && route.view === "browser-sessions") {
+      return <BrowserSessionsRoutePage {...props} />;
     }
     if (section === "approvals") {
       return <ApprovalsRoutePage {...props} />;

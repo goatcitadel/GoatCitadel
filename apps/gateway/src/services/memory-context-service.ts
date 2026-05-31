@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   ChatCompletionResponse,
+  MemoryCitation,
   MemoryContextComposeRequest,
   MemoryContextPack,
   MemoryFreshness,
@@ -20,9 +21,10 @@ import {
   parseDistillerJson,
   rankMemoryCandidates,
   validateCitations,
-  type DistillationPayload,
   type MemoryFileSource,
+  type MemoryItemSource,
   type MemorySourceInput,
+  type ParsedDistillation,
 } from "@goatcitadel/memory-core";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
@@ -44,9 +46,7 @@ export class MemoryContextService {
     const maxContextTokens = reserveMemoryContextBudget(input.maxContextTokens ?? qmd.maxContextTokens);
     const prompt = input.prompt.trim();
     const relationScope = resolveMemoryRelationScope(input);
-    const shouldShortCircuit = !memoryConfig.enabled
-      || !qmd.enabled
-      || prompt.length < qmd.minPromptChars;
+    const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
     const queryHash = buildQueryHash(prompt);
     if (shouldShortCircuit) {
       const fallback = composeFallbackContext([], maxContextTokens);
@@ -109,6 +109,7 @@ export class MemoryContextService {
       collectMemoryCandidates(sources, {
         maxTranscriptEvents: qmd.maxTranscriptEvents,
         maxFileCandidates: qmd.maxMemoryFiles,
+        maxMemoryItems: qmd.maxMemoryFiles,
         maxCharsPerCandidate: 1400,
       }),
       { maxCandidates: 40 },
@@ -167,6 +168,8 @@ export class MemoryContextService {
 
     if (candidates.length === 0) {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
+      const candidateMap = toCandidateMap(candidates);
+      const citations = enrichMemoryCitations(fallback.citations, relationScope, candidateMap);
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
@@ -177,7 +180,7 @@ export class MemoryContextService {
         queryHash,
         sourcesHash,
         contextText: fallback.contextText,
-        citations: fallback.citations,
+        citations,
         quality: {
           status: "fallback",
           reason: "no_candidates",
@@ -186,7 +189,7 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
-      const enrichedFallback = enrichMemoryPack(pack, relationScope, new Map(candidates.map((candidate) => [candidate.candidateId, candidate])));
+      const enrichedFallback = enrichMemoryPack(pack, relationScope, candidateMap);
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
@@ -196,11 +199,11 @@ export class MemoryContextService {
         status: "fallback",
         durationMs: Math.max(1, Date.now() - startedAt),
         candidateCount: candidates.length,
-          citationsCount: enrichedFallback.citations.length,
-          originalTokenEstimate,
-          distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
-          savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
-        });
+        citationsCount: enrichedFallback.citations.length,
+        originalTokenEstimate,
+        distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
+        savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
+      });
       this.publishRealtime("memory_qmd_fallback", {
         contextId: enrichedFallback.contextId,
         scope: input.scope,
@@ -211,8 +214,9 @@ export class MemoryContextService {
 
     const runtime = this.llmService.getRuntimeConfig();
     const providerId = qmd.distiller.providerId ?? runtime.activeProviderId;
-    const model = qmd.distiller.model
-      ?? (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
+    const model =
+      qmd.distiller.model ??
+      (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
 
     try {
       const response = await withTimeout(
@@ -254,6 +258,8 @@ export class MemoryContextService {
         maxContextTokens,
       });
 
+      const candidateMap = toCandidateMap(candidates);
+      const citations = enrichMemoryCitations(parsed.citations, relationScope, candidateMap);
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
@@ -264,7 +270,7 @@ export class MemoryContextService {
         queryHash,
         sourcesHash,
         contextText: composed.contextText,
-        citations: parsed.citations,
+        citations,
         quality: {
           status: "generated",
         },
@@ -272,11 +278,7 @@ export class MemoryContextService {
         distilledTokenEstimate: composed.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
-      const enrichedGenerated = enrichMemoryPack(
-        pack,
-        relationScope,
-        new Map(candidates.map((candidate) => [candidate.candidateId, candidate])),
-      );
+      const enrichedGenerated = enrichMemoryPack(pack, relationScope, candidateMap);
 
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
@@ -307,6 +309,8 @@ export class MemoryContextService {
       return enrichedGenerated;
     } catch (error) {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
+      const candidateMap = toCandidateMap(candidates);
+      const citations = enrichMemoryCitations(fallback.citations, relationScope, candidateMap);
       const message = truncate((error as Error).message, 500);
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
@@ -318,7 +322,7 @@ export class MemoryContextService {
         queryHash,
         sourcesHash,
         contextText: fallback.contextText,
-        citations: fallback.citations,
+        citations,
         quality: {
           status: "fallback",
           reason: message,
@@ -327,11 +331,7 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
-      const enrichedFallback = enrichMemoryPack(
-        pack,
-        relationScope,
-        new Map(candidates.map((candidate) => [candidate.candidateId, candidate])),
-      );
+      const enrichedFallback = enrichMemoryPack(pack, relationScope, candidateMap);
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
@@ -385,6 +385,10 @@ export class MemoryContextService {
       });
     }
 
+    for (const item of this.collectMemoryItemSources()) {
+      sources.push(item);
+    }
+
     const workspaceRelative = input.workspace?.trim() || "memory";
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const basePath = path.resolve(workspaceRoot, workspaceRelative);
@@ -403,6 +407,24 @@ export class MemoryContextService {
     }
 
     return sources;
+  }
+
+  private collectMemoryItemSources(): MemoryItemSource[] {
+    try {
+      return this.storage.memoryMaintenance
+        .listActiveMemoryItems(this.config.assistant.memory.qmd.maxMemoryFiles)
+        .map((item) => ({
+          type: "memory_item",
+          itemId: item.itemId,
+          namespace: item.namespace,
+          title: item.title,
+          content: item.content,
+          updatedAt: item.updatedAt,
+          pinned: item.pinned,
+        }));
+    } catch {
+      return [];
+    }
   }
 
   private async resolveTranscriptSessionIds(
@@ -427,27 +449,53 @@ export class MemoryContextService {
 function enrichMemoryPack(
   pack: MemoryContextPack,
   relationScope: MemoryRelationScope,
-  candidatesById: Map<string, { sourceType: "transcript" | "file"; timestamp?: string; rankScore?: number }>,
+  candidatesById: Map<
+    string,
+    { sourceType: "transcript" | "file" | "memory_item"; timestamp?: string; rankScore?: number }
+  >,
 ): MemoryContextPack {
   return {
     ...pack,
     relationScope,
-    citations: pack.citations.map((citation) => {
-      const candidate = candidatesById.get(citation.candidateId);
-      const selectionReason = candidate?.rankScore !== undefined
-        ? `selected for lexical/recency score ${candidate.rankScore.toFixed(3)}`
-        : "selected from reusable cached context";
-      return {
-        ...citation,
-        provenance: {
-          relationScope,
-          freshness: classifyMemoryFreshness(candidate?.timestamp),
-          selectionReason,
-          sourceTimestamp: candidate?.timestamp,
-        },
-      };
-    }),
+    citations: enrichMemoryCitations(pack.citations, relationScope, candidatesById),
   };
+}
+
+function enrichMemoryCitations(
+  citations: MemoryCitation[],
+  relationScope: MemoryRelationScope,
+  candidatesById: Map<
+    string,
+    { sourceType: "transcript" | "file" | "memory_item"; timestamp?: string; rankScore?: number }
+  >,
+): MemoryCitation[] {
+  return citations.map((citation) => {
+    const candidate = candidatesById.get(citation.candidateId);
+    const selectionReason =
+      candidate?.rankScore !== undefined
+        ? `selected for lexical/recency score ${candidate.rankScore.toFixed(3)}`
+        : (citation.provenance?.selectionReason ?? "selected from reusable cached context");
+    return {
+      ...citation,
+      provenance: {
+        relationScope: citation.provenance?.relationScope ?? relationScope,
+        freshness: citation.provenance?.freshness ?? classifyMemoryFreshness(candidate?.timestamp),
+        selectionReason,
+        sourceTimestamp: citation.provenance?.sourceTimestamp ?? candidate?.timestamp,
+      },
+    };
+  });
+}
+
+function toCandidateMap(
+  candidates: Array<{
+    candidateId: string;
+    sourceType: "transcript" | "file" | "memory_item";
+    timestamp?: string;
+    rankScore?: number;
+  }>,
+) {
+  return new Map(candidates.map((candidate) => [candidate.candidateId, candidate] as const));
 }
 
 function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {
@@ -568,16 +616,7 @@ async function walkRecursive(
   }
 }
 
-function parseDistillerResponse(response: ChatCompletionResponse): {
-  payload: DistillationPayload;
-  citations: Array<{
-    candidateId: string;
-    sourceType: "transcript" | "file";
-    sourceRef: string;
-    snippet?: string;
-    score: number;
-  }>;
-} {
+function parseDistillerResponse(response: ChatCompletionResponse): ParsedDistillation {
   const content = extractMessageContent(response);
   if (!content.trim()) {
     throw new Error("memory distiller returned empty content");

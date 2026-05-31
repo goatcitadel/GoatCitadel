@@ -13,5 +13,6 @@
  */
 
 export * from "./client.js";
+export * from "./browser-sessions.js";
 export * from "./review-readiness.js";
 export * from "./trust.js";

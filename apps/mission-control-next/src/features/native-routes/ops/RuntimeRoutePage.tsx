@@ -286,6 +286,22 @@ export function RuntimeRoutePage({
               title="Session posture"
               subtitle="Keep session truth next to approvals and activity in one operator view."
               density="compact"
+              actions={
+                <button
+                  type="button"
+                  className="mc-next-settings-filter"
+                  onClick={() =>
+                    navigate({
+                      area: "ops",
+                      section: "sessions",
+                      view: "browser-sessions",
+                      theme: route.theme,
+                    })
+                  }
+                >
+                  Browser Sessions
+                </button>
+              }
             >
               <MetricGrid
                 items={[

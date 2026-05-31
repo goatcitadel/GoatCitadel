@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as agentCatalog from "./agent-catalog";
 import * as agentic from "./agentic";
+import * as browserSessions from "./browser-sessions";
 import * as capabilities from "./capabilities";
 import * as cron from "./cron";
 import * as demo from "./demo";
@@ -217,6 +218,42 @@ describe("additional shared API wrappers", () => {
     await expectCall(cron.deleteCronJob("job/1"), "/api/v1/cron/jobs/job%2F1", { method: "DELETE" });
     await expectCall(demo.fetchDemoState(), "/api/v1/demo/state");
     await expectCall(demo.bootstrapDemo(), "/api/v1/demo/bootstrap", { method: "POST" });
+    await expectCall(
+      browserSessions.fetchBrowserSessions({ workspaceId: "workspace/1", status: "active", limit: 999 }),
+      "/api/v1/browser-sessions?workspaceId=workspace%2F1&status=active&limit=500",
+    );
+    await expectCall(
+      browserSessions.createBrowserSession({ workspaceId: "workspace/1", label: "Ops browser" }),
+      "/api/v1/browser-sessions",
+      { method: "POST" },
+    );
+    await expectCall(browserSessions.fetchBrowserSession("session/1"), "/api/v1/browser-sessions/session%2F1");
+    await expectCall(browserSessions.closeBrowserSession("session/1"), "/api/v1/browser-sessions/session%2F1", {
+      method: "DELETE",
+    });
+    await expectCall(
+      browserSessions.createBrowserSessionGrant("session/1", { actorId: "operator", scopes: ["read"] }),
+      "/api/v1/browser-sessions/session%2F1/grants",
+      { method: "POST" },
+    );
+    await expectCall(
+      browserSessions.fetchBrowserSessionGrants("session/1", { status: "active", limit: 999 }),
+      "/api/v1/browser-sessions/session%2F1/grants?status=active&limit=500",
+    );
+    await expectCall(
+      browserSessions.rotateBrowserSessionGrant("session/1", "grant/1"),
+      "/api/v1/browser-sessions/session%2F1/grants/grant%2F1/rotate",
+      { method: "POST" },
+    );
+    await expectCall(
+      browserSessions.revokeBrowserSessionGrant("session/1", "grant/1"),
+      "/api/v1/browser-sessions/session%2F1/grants/grant%2F1",
+      { method: "DELETE" },
+    );
+    await expectCall(
+      browserSessions.fetchBrowserSessionEvents("session/1", 999),
+      "/api/v1/browser-sessions/session%2F1/events?limit=500",
+    );
 
     await expectCall(sessions.fetchSessions(), "/api/v1/sessions?limit=50");
     await expectCall(sessions.fetchSessionSummary("session/1"), "/api/v1/sessions/session%2F1/summary");

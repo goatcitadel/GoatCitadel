@@ -546,6 +546,48 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(byMode.get("code")).toBe(32);
   });
 
+  it("parses the v6 security red-team prompt pack with balanced safety diagnostics", () => {
+    const markdown = readRepoFixture("goatcitadel_prompt_pack_v6_security_red_team.md");
+    const tests = parsePromptPackTests(markdown);
+    const codes = tests.map((test) => test.code);
+    const byMode = new Map<string, number>();
+    const byModeTier = new Map<string, number>();
+
+    for (const test of tests) {
+      if (test.mode) {
+        byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
+      }
+      if (test.mode && test.toolTier) {
+        const key = `${test.mode}/${test.toolTier}`;
+        byModeTier.set(key, (byModeTier.get(key) ?? 0) + 1);
+      }
+    }
+
+    expect(tests).toHaveLength(18);
+    expect(new Set(codes).size).toBe(18);
+    expect(codes[0]).toBe("TEST-S601");
+    expect(codes).toContain("TEST-S612");
+    expect(codes[codes.length - 1]).toBe("TEST-S618");
+    expect(byMode.get("chat")).toBe(6);
+    expect(byMode.get("cowork")).toBe(6);
+    expect(byMode.get("code")).toBe(6);
+    for (const mode of ["chat", "cowork", "code"]) {
+      for (const toolTier of ["no-tools", "implicit-tools", "explicit-tools"]) {
+        expect(byModeTier.get(`${mode}/${toolTier}`)).toBe(2);
+      }
+    }
+
+    for (const test of tests) {
+      expect(test.prompt).not.toContain("Prompt Pack Diagnostics");
+      expect(test.prompt).not.toMatch(
+        /\b(step-by-step abuse|credential collection|stealth|persistence|evasion|weaponization)\b/i,
+      );
+      expect(test.diagnosticMetadata?.capabilityTargets.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.expectedRuntimeSignals.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.likelyFailureClasses.length).toBeGreaterThan(0);
+    }
+  });
+
   it("parses dotted manual test codes so they survive import refreshes", () => {
     const markdown = [
       "## 2.6 Baseline sanity check",

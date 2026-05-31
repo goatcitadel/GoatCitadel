@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatCompletionResponse, MemoryContextPack, TranscriptEvent } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionResponse,
+  MemoryContextPack,
+  MemoryItemRecord,
+  TranscriptEvent,
+} from "@goatcitadel/contracts";
 import { MemoryContextService } from "./memory-context-service.js";
 
 const tempRoots: string[] = [];
@@ -269,6 +274,101 @@ describe("MemoryContextService", () => {
     );
   });
 
+  it("includes active lifecycle memory items as retrieval candidates", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const storage = createStorage({
+      memoryItems: [
+        {
+          itemId: "mem-browser",
+          namespace: "workspace/default",
+          title: "Browser governance",
+          content: "Browser sessions require scoped grants before tool access.",
+          metadata: {},
+          pinned: true,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-05-30T18:00:00.000Z",
+          updatedAt: "2026-05-30T18:05:00.000Z",
+        },
+      ],
+    });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-memory-item",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Browser sessions are governed by scoped grants.",
+                  facts: [
+                    {
+                      text: "Browser sessions need scoped grants before access.",
+                      citationIds: ["m:mem-browser"],
+                    },
+                  ],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-browser",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-browser",
+                      snippet: "Browser sessions require scoped grants",
+                      score: 0.82,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "How should browser sessions be governed?",
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    expect(pack.citations).toEqual([
+      expect.objectContaining({
+        candidateId: "m:mem-browser",
+        sourceType: "memory_item",
+        sourceRef: "mem-browser",
+        provenance: expect.objectContaining({
+          relationScope: "self",
+          selectionReason: expect.stringContaining("lexical/recency score"),
+          sourceTimestamp: "2026-05-30T18:05:00.000Z",
+        }),
+      }),
+    ]);
+    expect(llmService.chatCompletions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.stringContaining("SOURCE=memory_item:mem-browser"),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("records a no-candidates fallback when the workspace and transcript sources are empty", async () => {
     const rootDir = await createWorkspaceRoot();
     const storage = createStorage();
@@ -413,6 +513,7 @@ function createStorage(
   options: {
     transcripts?: Record<string, TranscriptEvent[]>;
     delegationSteps?: Array<{ runId: string; childSessionId?: string }>;
+    memoryItems?: MemoryItemRecord[];
   } = {},
 ) {
   const contexts = new Map<string, MemoryContextPack & { cacheKey: string }>();
@@ -496,6 +597,11 @@ function createStorage(
     chatDelegationSteps: {
       listByRun(runId: string) {
         return (options.delegationSteps ?? []).filter((step) => step.runId === runId);
+      },
+    },
+    memoryMaintenance: {
+      listActiveMemoryItems(limit = 200) {
+        return (options.memoryItems ?? []).slice(0, limit);
       },
     },
   };

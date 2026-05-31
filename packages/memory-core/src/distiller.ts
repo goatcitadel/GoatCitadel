@@ -8,7 +8,10 @@ export interface DistillerRequest {
 
 export function buildDistillerPrompt(request: DistillerRequest): string {
   const evidence = request.candidates
-    .map((candidate) => `ID=${candidate.candidateId}\nSOURCE=${candidate.sourceType}:${candidate.sourceRef}\nTEXT=${candidate.text}`)
+    .map(
+      (candidate) =>
+        `ID=${candidate.candidateId}\nSOURCE=${candidate.sourceType}:${candidate.sourceRef}\nTEXT=${candidate.text}`,
+    )
     .join("\n\n---\n\n");
 
   return [
@@ -33,34 +36,53 @@ export function parseDistillerJson(raw: string): ParsedDistillation {
   const parsed = parseJsonObject(raw);
   const payload: DistillationPayload = {
     summary: asString(parsed.summary),
-    facts: asArray(parsed.facts).map((item) => {
-      const object = asObject(item);
-      return {
-        text: asString(object.text),
-        citationIds: asArray(object.citationIds).map((value) => asString(value)).filter(Boolean),
-      };
-    }).filter((entry) => entry.text.length > 0),
-    risks: asArray(parsed.risks).map((value) => asString(value)).filter(Boolean),
-    openQuestions: asArray(parsed.openQuestions).map((value) => asString(value)).filter(Boolean),
-    saferNextSteps: asArray(parsed.saferNextSteps).map((value) => asString(value)).filter(Boolean),
+    facts: asArray(parsed.facts)
+      .map((item) => {
+        const object = asObject(item);
+        return {
+          text: asString(object.text),
+          citationIds: asArray(object.citationIds)
+            .map((value) => asString(value))
+            .filter(Boolean),
+        };
+      })
+      .filter((entry) => entry.text.length > 0),
+    risks: asArray(parsed.risks)
+      .map((value) => asString(value))
+      .filter(Boolean),
+    openQuestions: asArray(parsed.openQuestions)
+      .map((value) => asString(value))
+      .filter(Boolean),
+    saferNextSteps: asArray(parsed.saferNextSteps)
+      .map((value) => asString(value))
+      .filter(Boolean),
   };
-  const citations: MemoryCitation[] = asArray(parsed.citations).map((item) => {
-    const object = asObject(item);
-    const sourceType: "file" | "transcript" = asString(object.sourceType) === "file" ? "file" : "transcript";
-    return {
-      candidateId: asString(object.candidateId),
-      sourceType,
-      sourceRef: asString(object.sourceRef),
-      snippet: optionalString(object.snippet),
-      score: Number(asNumber(object.score).toFixed(3)),
-    };
-  }).filter((entry) => entry.candidateId && entry.sourceRef);
+  const citations: MemoryCitation[] = asArray(parsed.citations)
+    .map((item) => {
+      const object = asObject(item);
+      const sourceType = parseSourceType(asString(object.sourceType));
+      return {
+        candidateId: asString(object.candidateId),
+        sourceType,
+        sourceRef: asString(object.sourceRef),
+        snippet: optionalString(object.snippet),
+        score: Number(asNumber(object.score).toFixed(3)),
+      };
+    })
+    .filter((entry) => entry.candidateId && entry.sourceRef);
 
   if (!payload.summary && payload.facts.length === 0) {
     throw new Error("distillation payload is empty");
   }
 
   return { payload, citations };
+}
+
+function parseSourceType(value: string): MemoryCitation["sourceType"] {
+  if (value === "file" || value === "memory_item") {
+    return value;
+  }
+  return "transcript";
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {

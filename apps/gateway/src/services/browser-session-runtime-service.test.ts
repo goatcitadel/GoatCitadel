@@ -26,6 +26,8 @@ describe("BrowserSessionRuntimeService", () => {
     });
 
     expect(grant.allowedHosts).toEqual(["example.com"]);
+    expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(1);
+    expect(service.listGrants(session.sessionId, { status: "revoked" })).toHaveLength(0);
     expect(() =>
       service.assertAccess({
         sessionId: session.sessionId,
@@ -42,6 +44,9 @@ describe("BrowserSessionRuntimeService", () => {
         host: "example.com",
       }),
     ).toThrow(/does not grant interact access/i);
+    service.revokeGrant(session.sessionId, grant.grantId, "operator");
+    expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(0);
+    expect(service.listGrants(session.sessionId, { status: "revoked" })).toHaveLength(1);
     expect(service.listEvents(session.sessionId).map((event) => event.eventType)).toContain("grant_created");
   });
 

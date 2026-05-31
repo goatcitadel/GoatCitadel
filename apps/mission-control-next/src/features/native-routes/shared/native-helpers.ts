@@ -412,11 +412,24 @@ export function formatKnowledgeCitationAction(citation: unknown, contextId: stri
   const chunk = readPayloadString(citation, ["chunkId", "chunk", "locator"]);
   const mode = readPayloadString(citation, ["retrievalMode", "sourceType", "kind"]) ?? "source";
   const score = readPayloadString(citation, ["score", "confidence"]);
+  const whyUsed = readPayloadString(citation, ["provenance.selectionReason"]);
+  const freshness = readPayloadString(citation, ["provenance.freshness"]);
+  const relationScope = readPayloadString(citation, ["provenance.relationScope"]);
+  const sourceTimestamp = readPayloadString(citation, ["provenance.sourceTimestamp"]);
   return {
     id: `${contextId}:${index}:${label}`,
     label,
-    description: chunk ? `Context ${contextId} cites chunk ${chunk}.` : `Context ${contextId} cites this source.`,
-    meta: [mode, score ? `score ${score}` : undefined].filter((value): value is string => Boolean(value)).join(" · "),
+    description:
+      whyUsed ?? (chunk ? `Context ${contextId} cites chunk ${chunk}.` : `Context ${contextId} cites this source.`),
+    meta: [
+      mode,
+      score ? `score ${score}` : undefined,
+      relationScope,
+      freshness,
+      sourceTimestamp ? `source ${formatDateTime(sourceTimestamp)}` : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" · "),
   };
 }
 

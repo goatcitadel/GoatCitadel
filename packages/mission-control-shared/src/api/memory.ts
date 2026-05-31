@@ -89,6 +89,7 @@ export async function composeMemoryContext(input: {
   runId?: string;
   phaseId?: string;
   workspace?: string;
+  relationScope?: "self" | "peer" | "project";
   maxContextTokens?: number;
   forceRefresh?: boolean;
 }): Promise<MemoryContextPack> {

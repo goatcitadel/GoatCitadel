@@ -630,6 +630,18 @@ export {
   updateCronJob,
 } from "./cron.js";
 export {
+  closeBrowserSession,
+  createBrowserSession,
+  createBrowserSessionGrant,
+  fetchBrowserSession,
+  fetchBrowserSessionEvents,
+  fetchBrowserSessionGrants,
+  fetchBrowserSessions,
+  revokeBrowserSessionGrant,
+  rotateBrowserSessionGrant,
+} from "./browser-sessions.js";
+export type { BrowserSessionGrantListQuery, BrowserSessionListQuery } from "./browser-sessions.js";
+export {
   createDurableRun,
   fetchDurableRun,
   fetchObserveRunTrace,

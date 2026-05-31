@@ -130,10 +130,54 @@ describe("memory candidate collection", () => {
         [
           { type: "transcript", events: [transcriptEvent("one", { message: "should not appear" })] },
           { type: "file", relativePath: "notes.md", content: "abc", modifiedAt: "2026-05-01T00:00:00.000Z" },
+          {
+            type: "memory_item",
+            itemId: "mem-1",
+            namespace: "workspace/default",
+            title: "Launch fact",
+            content: "should not appear",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+          },
         ],
-        { maxTranscriptEvents: 0, maxFileCandidates: 0, maxCharsPerCandidate: 0 },
+        { maxTranscriptEvents: 0, maxFileCandidates: 0, maxMemoryItems: 0, maxCharsPerCandidate: 0 },
       ),
     ).toEqual([]);
+  });
+
+  it("collects bounded semantic memory item candidates", () => {
+    const collected = collectMemoryCandidates(
+      [
+        {
+          type: "memory_item",
+          itemId: "mem-1",
+          namespace: "workspace/default",
+          title: "Launch decision",
+          content: "Use governed browser sessions for external research.",
+          updatedAt: "2026-05-02T00:00:00.000Z",
+          pinned: true,
+        },
+        {
+          type: "memory_item",
+          itemId: "mem-2",
+          namespace: "workspace/default",
+          title: "Ignored",
+          content: "Past the cap.",
+          updatedAt: "2026-05-03T00:00:00.000Z",
+        },
+      ],
+      { maxTranscriptEvents: 0, maxFileCandidates: 0, maxMemoryItems: 1, maxCharsPerCandidate: 120 },
+    );
+
+    expect(collected).toEqual([
+      expect.objectContaining({
+        candidateId: "m:mem-1",
+        sourceType: "memory_item",
+        sourceRef: "mem-1",
+        text: expect.stringContaining("Launch decision (workspace/default)"),
+        timestamp: "2026-05-02T00:00:00.000Z",
+      }),
+    ]);
+    expect(collected[0]?.text).toContain("Pinned memory");
   });
 
   it("truncates long transcript candidates with a marker", () => {
@@ -291,6 +335,7 @@ describe("memory context composition and distillation", () => {
       "saferNextSteps": [" next "],
       "citations": [
         { "candidateId": "one", "sourceType": "file", "sourceRef": "notes.md", "snippet": " text ", "score": 0.12345 },
+        { "candidateId": "memory", "sourceType": "memory_item", "sourceRef": "mem-1", "score": 0.8 },
         { "candidateId": "two", "sourceType": "unknown", "sourceRef": "event-2", "score": "bad" },
         9,
         { "candidateId": "", "sourceRef": "ignored" }
@@ -306,6 +351,7 @@ describe("memory context composition and distillation", () => {
     });
     expect(parsed.citations).toEqual([
       { candidateId: "one", sourceType: "file", sourceRef: "notes.md", snippet: "text", score: 0.123 },
+      { candidateId: "memory", sourceType: "memory_item", sourceRef: "mem-1", snippet: undefined, score: 0.8 },
       { candidateId: "two", sourceType: "transcript", sourceRef: "event-2", snippet: undefined, score: 0 },
     ]);
   });

@@ -16,7 +16,7 @@ export function rankMemoryCandidates(
   const scored = candidates.map((candidate) => {
     const lexical = lexicalScore(terms, candidate.text);
     const recency = recencyScore(now, candidate.timestamp);
-    const diversity = candidate.sourceType === "transcript" ? 0.1 : 0;
+    const diversity = candidate.sourceType === "transcript" ? 0.1 : candidate.sourceType === "memory_item" ? 0.08 : 0;
     return {
       ...candidate,
       rankScore: lexical + recency + diversity,

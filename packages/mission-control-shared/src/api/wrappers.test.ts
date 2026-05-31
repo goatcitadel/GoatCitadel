@@ -231,9 +231,11 @@ describe("shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(memory.fetchMemoryFiles("project/docs"), "/api/v1/memory/files?dir=project%2Fdocs");
-    await expectCall(memory.composeMemoryContext({ scope: "chat", prompt: "hi" }), "/api/v1/memory/context/compose", {
-      method: "POST",
-    });
+    await expectCall(
+      memory.composeMemoryContext({ scope: "chat", prompt: "hi", relationScope: "project" }),
+      "/api/v1/memory/context/compose",
+      { method: "POST", body: JSON.stringify({ scope: "chat", prompt: "hi", relationScope: "project" }) },
+    );
     await expectCall(memory.fetchMemoryContext("ctx/1"), "/api/v1/memory/context/ctx%2F1");
     await expectCall(memory.fetchMemoryQmdStats("a", "b", 10), "/api/v1/memory/qmd/stats?from=a&to=b&limit=10");
     await expectCall(
