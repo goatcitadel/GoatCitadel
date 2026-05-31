@@ -175,6 +175,48 @@ export interface CodeModeExecutionBackendsResponse {
   items: CodeModeExecutionBackendRecord[];
 }
 
+export type CodeModeAiderAdapterOutcome = "patch_produced" | "no_changes" | "failed" | "refused";
+
+export interface CodeModeAiderAdapterPatchArtifact {
+  kind: "unified_diff" | "git_patch";
+  artifact: CapabilityArtifactRecord;
+  baseRef?: string;
+  headRef?: string;
+  fileCount?: number;
+}
+
+export interface CodeModeAiderAdapterResultEnvelope {
+  contractVersion: 1;
+  adapterId: "aider-cli-adapter";
+  outcome: CodeModeAiderAdapterOutcome;
+  runId?: string;
+  repository?: {
+    rootRelPath?: string;
+    baseRef?: string;
+    headRef?: string;
+  };
+  command: {
+    argvRedacted: string[];
+    cwdRelPath?: string;
+    exitCode?: number;
+    startedAt?: string;
+    finishedAt?: string;
+  };
+  patchArtifact?: CodeModeAiderAdapterPatchArtifact;
+  stdoutArtifact?: CapabilityArtifactRecord;
+  stderrArtifact?: CapabilityArtifactRecord;
+  error?: {
+    code?: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+  replay: {
+    replaySafe: false;
+    policy: "audit_only";
+    reason: string;
+  };
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
