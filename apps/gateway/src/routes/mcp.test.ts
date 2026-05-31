@@ -410,6 +410,92 @@ describe("mcp routes", () => {
     expect(discoveryResponse.json()).toEqual({ items: [{ templateId: "filesystem", category: "development" }] });
   });
 
+  it("serves a read-only remote MCP preview without making remote transports callable", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [
+        {
+          serverId: "srv-http",
+          label: "Remote HTTP",
+          transport: "http",
+          url: "https://mcp.example.test/sse",
+          authType: "token",
+          enabled: false,
+          status: "disconnected",
+          category: "research",
+          trustTier: "restricted",
+          costTier: "unknown",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "strict",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+            notes: "preview only",
+          },
+          createdAt: "2026-05-30T00:00:00.000Z",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+        },
+      ]),
+      listMcpTemplates: vi.fn(() => [
+        {
+          templateId: "remote-template",
+          label: "Remote template",
+          description: "Remote MCP template",
+          transport: "sse",
+          url: "https://mcp.example.test/events",
+          authType: "oauth2",
+          category: "research",
+          trustTier: "restricted",
+          costTier: "unknown",
+          enabledByDefault: false,
+          installed: false,
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "strict",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+        },
+      ]),
+    });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/mcp/remote-preview",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.listMcpServers).toHaveBeenCalledWith();
+    expect(service.listMcpTemplates).toHaveBeenCalledWith();
+    expect(response.json()).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      experimentalRemoteRecordsAllowed: false,
+      runtimeSupport: "internal_approval_inbox_only",
+      summary: {
+        remoteServers: 1,
+        remoteTemplates: 1,
+        runtimeSupported: 0,
+        blocked: 1,
+        configuredOnly: 1,
+      },
+      items: [
+        expect.objectContaining({
+          label: "Remote HTTP",
+          posture: "configured_only",
+          callableState: "not_callable",
+          runtimeSupported: false,
+          blockers: [expect.stringContaining("not supported")],
+        }),
+        expect.objectContaining({
+          label: "Remote template",
+          posture: "blocked",
+          callableState: "not_callable",
+          createAllowed: false,
+        }),
+      ],
+    });
+  });
+
   it("maps MCP template discovery conflicts to 409", async () => {
     await registerMcpService({
       listMcpTemplateDiscovery: vi.fn(() => {

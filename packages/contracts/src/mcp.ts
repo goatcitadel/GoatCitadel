@@ -164,6 +164,54 @@ export interface McpTemplateDiscoveryResult {
   }>;
 }
 
+export type McpRemotePreviewPosture =
+  | "runtime_supported"
+  | "configured_only"
+  | "experimental_record_allowed"
+  | "blocked";
+export type McpRemotePreviewCallableState = "runtime_invokable" | "not_callable";
+
+export interface McpRemotePreviewItem {
+  source: "server" | "template";
+  id: string;
+  label: string;
+  transport: Extract<McpTransport, "http" | "sse">;
+  url?: string;
+  authType: "none" | "token" | "oauth2";
+  trustTier: McpTrustTier;
+  status?: McpServerStatus;
+  enabled?: boolean;
+  installed?: boolean;
+  posture: McpRemotePreviewPosture;
+  callableState: McpRemotePreviewCallableState;
+  createAllowed: boolean;
+  runtimeSupported: boolean;
+  blockers: string[];
+  governance: string[];
+  evidence: {
+    policyNotes?: string;
+    verifiedAt?: string;
+    lastConnectedAt?: string;
+    lastError?: string;
+  };
+}
+
+export interface McpRemotePreviewResponse {
+  generatedAt: string;
+  readOnly: true;
+  mutationSemantics: "none";
+  experimentalRemoteRecordsAllowed: boolean;
+  runtimeSupport: "internal_approval_inbox_only" | "experimental_records_only" | "not_available";
+  summary: {
+    remoteServers: number;
+    remoteTemplates: number;
+    runtimeSupported: number;
+    blocked: number;
+    configuredOnly: number;
+  };
+  items: McpRemotePreviewItem[];
+}
+
 export interface ConnectorDiagnosticReport {
   connectorType: "mcp_server" | "integration_connection";
   connectorId: string;

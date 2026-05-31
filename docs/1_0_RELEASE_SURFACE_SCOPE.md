@@ -50,5 +50,5 @@ Status meanings:
 | `/settings/addons` | `experimental` | Add-on posture only; no full marketplace/install lifecycle claim. |
 | `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
-| `/settings/mcp` | `ship` | Local stdio and Approval Inbox paths are visible; remote transports stay blocked/experimental. |
+| `/settings/mcp` | `ship` | Local stdio and Approval Inbox paths are visible; remote http/sse preview is read-only and remains blocked/experimental for generic invocation. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |

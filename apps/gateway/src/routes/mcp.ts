@@ -1,8 +1,16 @@
 import type { FastifyPluginAsync } from "fastify";
+import type {
+  McpRemotePreviewItem,
+  McpRemotePreviewResponse,
+  McpServerRecord,
+  McpServerTemplateRecord,
+} from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
+  areExperimentalRemoteMcpTransportsEnabled,
   buildUnsupportedMcpTransportMessage,
   isAllowedMcpDefinitionForCreate,
+  isRuntimeSupportedMcpDefinition,
 } from "../services/mcp-template-visibility.js";
 
 const serverParamsSchema = z.object({
@@ -108,6 +116,15 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
+  });
+
+  fastify.get("/api/v1/mcp/remote-preview", READ_ROUTE_OPTIONS, async (_request, reply) => {
+    return reply.send(
+      buildMcpRemotePreview({
+        servers: fastify.services.mcp.listMcpServers(),
+        templates: fastify.services.mcp.listMcpTemplates(),
+      }),
+    );
   });
 
   fastify.post("/api/v1/mcp/servers", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
@@ -297,3 +314,101 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+export function buildMcpRemotePreview(input: {
+  servers: McpServerRecord[];
+  templates: Array<McpServerTemplateRecord & { installed?: boolean }>;
+}): McpRemotePreviewResponse {
+  const experimentalRemoteRecordsAllowed = areExperimentalRemoteMcpTransportsEnabled();
+  const serverItems = input.servers.filter(isRemoteMcpDefinition).map((server): McpRemotePreviewItem => {
+    const base = buildRemotePreviewBase(server, experimentalRemoteRecordsAllowed, "server");
+    return {
+      ...base,
+      source: "server",
+      id: server.serverId,
+      status: server.status,
+      enabled: server.enabled,
+      evidence: {
+        policyNotes: server.policy.notes,
+        verifiedAt: server.verifiedAt,
+        lastConnectedAt: server.lastConnectedAt,
+        lastError: server.lastError,
+      },
+    };
+  });
+  const templateItems = input.templates.filter(isRemoteMcpDefinition).map((template): McpRemotePreviewItem => {
+    const base = buildRemotePreviewBase(template, experimentalRemoteRecordsAllowed, "template");
+    return {
+      ...base,
+      source: "template",
+      id: template.templateId,
+      installed: template.installed ?? false,
+      evidence: {
+        policyNotes: template.policy.notes,
+      },
+    };
+  });
+  const items = [...serverItems, ...templateItems].sort((left, right) =>
+    `${left.source}:${left.label}`.localeCompare(`${right.source}:${right.label}`),
+  );
+  return {
+    generatedAt: new Date().toISOString(),
+    readOnly: true,
+    mutationSemantics: "none",
+    experimentalRemoteRecordsAllowed,
+    runtimeSupport: experimentalRemoteRecordsAllowed ? "experimental_records_only" : "internal_approval_inbox_only",
+    summary: {
+      remoteServers: serverItems.length,
+      remoteTemplates: templateItems.length,
+      runtimeSupported: items.filter((item) => item.runtimeSupported).length,
+      blocked: items.filter((item) => item.posture === "blocked").length,
+      configuredOnly: items.filter((item) => item.posture === "configured_only").length,
+    },
+    items,
+  };
+}
+
+function buildRemotePreviewBase(
+  item: McpServerRecord | McpServerTemplateRecord,
+  experimentalRemoteRecordsAllowed: boolean,
+  source: "server" | "template",
+): Omit<McpRemotePreviewItem, "source" | "id" | "evidence"> {
+  const runtimeSupported = isRuntimeSupportedMcpDefinition(item);
+  const createAllowed = isAllowedMcpDefinitionForCreate(item);
+  const posture = runtimeSupported
+    ? "runtime_supported"
+    : source === "server"
+      ? "configured_only"
+      : experimentalRemoteRecordsAllowed
+        ? "experimental_record_allowed"
+        : "blocked";
+  const blockers = runtimeSupported
+    ? []
+    : ["Generic remote http/sse MCP runtime invocation is not supported in this shell."];
+  const governance = [
+    "Deny-wins tool policy and MCP approval gates still apply before invocation.",
+    item.authType === "none"
+      ? "No remote auth configured."
+      : `${item.authType} credentials are required before connect.`,
+    item.trustTier === "quarantined" ? "Quarantined servers remain non-callable." : `Trust tier is ${item.trustTier}.`,
+  ];
+  return {
+    label: item.label,
+    transport: item.transport as Extract<McpServerRecord["transport"], "http" | "sse">,
+    url: item.url,
+    authType: item.authType,
+    trustTier: item.trustTier,
+    posture,
+    callableState: runtimeSupported ? "runtime_invokable" : "not_callable",
+    createAllowed,
+    runtimeSupported,
+    blockers,
+    governance,
+  };
+}
+
+function isRemoteMcpDefinition(
+  item: Pick<McpServerRecord | McpServerTemplateRecord, "transport">,
+): item is McpServerRecord | McpServerTemplateRecord {
+  return item.transport === "http" || item.transport === "sse";
+}

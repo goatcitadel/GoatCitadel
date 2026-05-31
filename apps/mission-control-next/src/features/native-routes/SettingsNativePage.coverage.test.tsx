@@ -45,6 +45,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationFormSchema: fn(),
     fetchIntegrationPlugins: fn(),
     fetchLlamaCppModels: fn(),
+    fetchMcpRemotePreview: fn(),
     fetchMcpServers: fn(),
     fetchMcpTemplates: fn(),
     fetchMcpTools: fn(),
@@ -164,6 +165,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationFormSchema: settingsMocks.fetchIntegrationFormSchema,
   fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
   fetchLlamaCppModels: settingsMocks.fetchLlamaCppModels,
+  fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
   fetchMcpServers: settingsMocks.fetchMcpServers,
   fetchMcpTemplates: settingsMocks.fetchMcpTemplates,
   fetchMcpTools: settingsMocks.fetchMcpTools,
@@ -529,6 +531,21 @@ function setupResponses() {
     ],
   });
   settingsMocks.fetchMcpTemplates.mockResolvedValue({ items: [] });
+  settingsMocks.fetchMcpRemotePreview.mockResolvedValue({
+    generatedAt: "2026-05-30T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    experimentalRemoteRecordsAllowed: false,
+    runtimeSupport: "internal_approval_inbox_only",
+    summary: {
+      remoteServers: 0,
+      remoteTemplates: 0,
+      runtimeSupported: 0,
+      blocked: 0,
+      configuredOnly: 0,
+    },
+    items: [],
+  });
   settingsMocks.fetchMcpTools.mockResolvedValue({ items: [] });
   settingsMocks.fetchChannelSetupDefinitions.mockResolvedValue({
     items: [

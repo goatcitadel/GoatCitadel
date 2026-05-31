@@ -552,6 +552,40 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
+  fetchMcpRemotePreview: vi.fn(async () => ({
+    generatedAt: "2026-05-30T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    experimentalRemoteRecordsAllowed: false,
+    runtimeSupport: "internal_approval_inbox_only",
+    summary: {
+      remoteServers: 1,
+      remoteTemplates: 1,
+      runtimeSupported: 0,
+      blocked: 1,
+      configuredOnly: 1,
+    },
+    items: [
+      {
+        source: "server",
+        id: "srv-http",
+        label: "Remote HTTP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        authType: "none",
+        trustTier: "restricted",
+        status: "disconnected",
+        enabled: false,
+        posture: "configured_only",
+        callableState: "not_callable",
+        createAllowed: false,
+        runtimeSupported: false,
+        blockers: ["Generic remote http/sse MCP runtime invocation is not supported in this shell."],
+        governance: ["Deny-wins tool policy and MCP approval gates still apply before invocation."],
+        evidence: {},
+      },
+    ],
+  })),
   fetchMcpTools: vi.fn(async () => ({ items: [] })),
   createMcpServer: vi.fn(async () => ({
     serverId: "srv-stdio",
@@ -674,6 +708,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
     fetchMcpServers: mocks.fetchMcpServers,
+    fetchMcpRemotePreview: mocks.fetchMcpRemotePreview,
     fetchMcpTemplates: mocks.fetchMcpTemplates,
     fetchMcpTools: mocks.fetchMcpTools,
     createMcpServer: mocks.createMcpServer,
@@ -3638,6 +3673,9 @@ describe("SettingsNativePage MCP", () => {
     const text = collectText(renderer!.root);
     expect(text).toContain("Configured only; runtime actions are disabled.");
     expect(text).toContain("Generic http/sse runtime invocation is not supported");
+    expect(text).toContain("Remote MCP preview");
+    expect(text).toContain("Generic remote http/sse MCP remains not callable here.");
+    expect(text).toContain("Remote HTTP");
     expect(findButton(renderer!.root, "Connect").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Health check").props.disabled).toBe(true);
   });

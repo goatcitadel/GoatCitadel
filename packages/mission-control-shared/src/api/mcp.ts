@@ -2,6 +2,7 @@ import type {
   ConnectorDiagnosticReport,
   McpInvokeResponse,
   McpOAuthStartResponse,
+  McpRemotePreviewResponse,
   McpServerRecord,
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
@@ -19,6 +20,10 @@ export async function fetchMcpTemplates(): Promise<{ items: Array<McpServerTempl
 
 export async function fetchMcpTemplateDiscovery(): Promise<{ items: McpTemplateDiscoveryResult[] }> {
   return request<{ items: McpTemplateDiscoveryResult[] }>("/api/v1/mcp/templates/discovery");
+}
+
+export async function fetchMcpRemotePreview(): Promise<McpRemotePreviewResponse> {
+  return request<McpRemotePreviewResponse>("/api/v1/mcp/remote-preview");
 }
 
 export async function createMcpServer(input: {

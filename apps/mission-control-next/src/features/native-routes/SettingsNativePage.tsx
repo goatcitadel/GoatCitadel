@@ -40,6 +40,7 @@ import type {
   GoogleMeetSessionRecord,
   IntegrationPluginRecord,
   IntegrationFormSchema,
+  McpRemotePreviewResponse,
   McpServerRecord,
   OnboardingState,
   FilesystemReadAccessMode,
@@ -98,6 +99,7 @@ import {
   fetchLlmProviderAdvice,
   fetchSlackOAuthStatus,
   fetchLlamaCppModels,
+  fetchMcpRemotePreview,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchMcpTools,
@@ -5386,14 +5388,16 @@ function ChannelsSection(_props: SettingsSectionProps) {
 
 function McpSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [servers, templates] = await Promise.all([
+    const [servers, templates, remotePreview] = await Promise.all([
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("MCP templates", fetchMcpTemplates(), { items: [] }),
+      nativeLoad("MCP remote preview", fetchMcpRemotePreview(), createEmptyMcpRemotePreview()),
     ]);
     return {
-      issues: nativeLoadIssues([servers, templates]),
+      issues: nativeLoadIssues([servers, templates, remotePreview]),
       servers: servers.data.items,
       templates: templates.data.items,
+      remotePreview: remotePreview.data,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -5615,6 +5619,50 @@ function McpSection(_props: SettingsSectionProps) {
                   }))}
                 />
               ) : null}
+            </SettingsPanel>
+            <SettingsPanel
+              title="Remote MCP preview"
+              subtitle="Read-only posture for http/sse MCP records before any future governed remote runtime support."
+            >
+              <SettingsMetricGrid
+                items={[
+                  {
+                    label: "Remote servers",
+                    value: String(data.remotePreview.summary.remoteServers),
+                    meta: "configured records",
+                  },
+                  {
+                    label: "Remote templates",
+                    value: String(data.remotePreview.summary.remoteTemplates),
+                    meta: "catalog entries",
+                  },
+                  {
+                    label: "Callable",
+                    value: String(data.remotePreview.summary.runtimeSupported),
+                    meta: data.remotePreview.runtimeSupport.replaceAll("_", " "),
+                  },
+                  {
+                    label: "Blocked",
+                    value: String(data.remotePreview.summary.blocked),
+                    meta: data.remotePreview.experimentalRemoteRecordsAllowed ? "experimental records" : "default",
+                  },
+                ]}
+              />
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Generic remote http/sse MCP remains not callable here. This preview explains records, blockers, auth, trust, and approval posture without changing policy.",
+                }}
+              />
+              <SettingsActionList
+                items={data.remotePreview.items.map((item) => ({
+                  label: item.label,
+                  meta: `${item.source} · ${item.transport} · ${item.callableState.replaceAll("_", " ")}`,
+                  description: formatMcpRemotePreviewItem(item),
+                }))}
+                emptyLabel="No remote MCP records or templates are visible."
+              />
             </SettingsPanel>
           </SettingsStack>
           <SettingsPanel
@@ -8278,6 +8326,30 @@ export function applyIntegrationDefaults(
 
 export function isRuntimeInvokableMcpServer(server: { transport: string; url?: string }) {
   return server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
+}
+
+export function createEmptyMcpRemotePreview(): McpRemotePreviewResponse {
+  return {
+    generatedAt: new Date(0).toISOString(),
+    readOnly: true,
+    mutationSemantics: "none",
+    experimentalRemoteRecordsAllowed: false,
+    runtimeSupport: "internal_approval_inbox_only",
+    summary: {
+      remoteServers: 0,
+      remoteTemplates: 0,
+      runtimeSupported: 0,
+      blocked: 0,
+      configuredOnly: 0,
+    },
+    items: [],
+  };
+}
+
+export function formatMcpRemotePreviewItem(item: McpRemotePreviewResponse["items"][number]): string {
+  const blocker = item.blockers[0] ?? "No runtime blocker recorded.";
+  const governance = item.governance[0] ?? "No governance note recorded.";
+  return `${item.posture.replaceAll("_", " ")} · ${blocker} · ${governance}`;
 }
 
 export function readDraftString(record: Record<string, unknown>, key: string): string | undefined {
