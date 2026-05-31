@@ -3,11 +3,16 @@ import type {
   CapabilityPackManifest,
   CapabilityPackPreview,
 } from "@goatcitadel/contracts";
+import { createHash } from "node:crypto";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 
 export interface CapabilityPackInstallInput {
   actorId?: string;
+}
+
+export interface LocalCapabilityPackInput extends CapabilityPackInstallInput {
+  manifest: CapabilityPackManifest;
 }
 
 export interface CapabilityPackServiceDependencies {
@@ -145,38 +150,32 @@ export class CapabilityPackService {
 
   public previewPack(packId: string): CapabilityPackPreview {
     const manifest = this.requirePack(packId);
-    const unsupportedAssets = manifest.assets.filter((asset) => asset.runtimeSupport === "unsupported");
-    const installPlan = manifest.assets.map((asset) => ({
-      assetId: asset.id,
-      kind: asset.kind,
-      outcome: asset.runtimeSupport === "unsupported" ? ("unsupported" as const) : asset.installMode,
-      reason:
-        asset.runtimeSupport === "unsupported"
-          ? "Runtime support is not available in this build."
-          : asset.installMode === "enabled"
-            ? "Asset can be enabled immediately by local policy."
-            : asset.installMode === "disabled"
-              ? "Asset is staged disabled for operator review."
-              : "Asset requires explicit operator review before enablement.",
-    }));
-    return {
-      manifest,
-      unsupportedAssets,
-      installPlan,
-      policyChanges: manifest.policyDefaults,
-      reviewRequired:
-        unsupportedAssets.length > 0 ||
-        installPlan.some((item) => item.outcome === "review_required" || item.outcome === "disabled"),
-    };
+    return buildCapabilityPackPreview(manifest);
+  }
+
+  public previewLocalPack(manifest: CapabilityPackManifest): CapabilityPackPreview {
+    return buildCapabilityPackPreview(normalizePortableCapabilityPackManifest(manifest));
   }
 
   public installPack(packId: string, input: CapabilityPackInstallInput = {}): CapabilityPackInstallResult {
     const preview = this.previewPack(packId);
+    return this.stagePreview(preview, input);
+  }
+
+  public installLocalPack(input: LocalCapabilityPackInput): CapabilityPackInstallResult {
+    const preview = this.previewLocalPack(input.manifest);
+    return this.stagePreview(preview, input);
+  }
+
+  private stagePreview(
+    preview: CapabilityPackPreview,
+    input: CapabilityPackInstallInput = {},
+  ): CapabilityPackInstallResult {
     const actorId = input.actorId?.trim() || "operator";
     const envelope = this.deps.evidenceEnvelopeService.createEnvelope({
       eventKind: "capability_pack_install",
       metadata: {
-        packId,
+        packId: preview.manifest.packId,
         actorId,
         trustTier: preview.manifest.trustTier,
         installPlan: preview.installPlan,
@@ -184,7 +183,7 @@ export class CapabilityPackService {
       },
     });
     const result: CapabilityPackInstallResult = {
-      packId,
+      packId: preview.manifest.packId,
       actorId,
       installedAt: envelope.createdAt,
       preview,
@@ -192,7 +191,7 @@ export class CapabilityPackService {
       evidenceEnvelopeId: envelope.envelopeId,
     };
     this.deps.publishRealtime?.("capability_pack_installed", "settings", {
-      packId,
+      packId: preview.manifest.packId,
       actorId,
       evidenceEnvelopeId: envelope.envelopeId,
       stagedAssets: result.stagedAssets,
@@ -211,4 +210,112 @@ export class CapabilityPackService {
 
 function hasMcpTemplate(templateId: string): boolean {
   return MCP_SERVER_TEMPLATES.some((template) => template.templateId === templateId);
+}
+
+function buildCapabilityPackPreview(manifest: CapabilityPackManifest): CapabilityPackPreview {
+  validateCapabilityPackManifest(manifest);
+  const unsupportedAssets = manifest.assets.filter((asset) => asset.runtimeSupport === "unsupported");
+  const installPlan = manifest.assets.map((asset) => ({
+    assetId: asset.id,
+    kind: asset.kind,
+    outcome: asset.runtimeSupport === "unsupported" ? ("unsupported" as const) : asset.installMode,
+    reason:
+      asset.runtimeSupport === "unsupported"
+        ? "Runtime support is not available in this build."
+        : asset.installMode === "enabled"
+          ? "Asset can be enabled immediately by local policy."
+          : asset.installMode === "disabled"
+            ? "Asset is staged disabled for operator review."
+            : "Asset requires explicit operator review before enablement.",
+  }));
+  return {
+    manifest,
+    unsupportedAssets,
+    installPlan,
+    policyChanges: manifest.policyDefaults,
+    reviewRequired:
+      unsupportedAssets.length > 0 ||
+      installPlan.some((item) => item.outcome === "review_required" || item.outcome === "disabled"),
+  };
+}
+
+function normalizePortableCapabilityPackManifest(manifest: CapabilityPackManifest): CapabilityPackManifest {
+  validateCapabilityPackManifest(manifest);
+  if (manifest.provenance.source !== "local_file") {
+    throw new Error("Portable capability pack manifests must use local_file provenance.");
+  }
+  const normalized: CapabilityPackManifest = {
+    ...structuredClone(manifest),
+    policyDefaults: {
+      ...manifest.policyDefaults,
+      autoRunEnabled: false,
+    },
+    provenance: {
+      ...manifest.provenance,
+      contentHash: manifest.provenance.contentHash ?? hashManifest(manifest),
+    },
+    assets: manifest.assets.map((asset) => ({
+      ...asset,
+      installMode:
+        asset.installMode === "enabled" && asset.kind !== "runtime_preset" ? "review_required" : asset.installMode,
+      warnings: [
+        ...(asset.warnings ?? []),
+        ...(asset.installMode === "enabled" && asset.kind !== "runtime_preset"
+          ? ["Portable skill/add-on assets are staged for review and are not auto-enabled."]
+          : []),
+      ],
+    })),
+    installWarnings: [
+      ...manifest.installWarnings,
+      "Portable local packs stage assets for operator review; they do not grant tools, bypass approvals, or make add-ons runnable automatically.",
+    ],
+  };
+  return normalized;
+}
+
+function validateCapabilityPackManifest(manifest: CapabilityPackManifest): void {
+  for (const field of ["packId", "name", "description", "version"] as const) {
+    if (typeof manifest[field] !== "string" || !manifest[field].trim()) {
+      throw new Error(`Capability pack manifest ${field} is required.`);
+    }
+  }
+  if (!["trusted", "restricted", "community"].includes(manifest.trustTier)) {
+    throw new Error("Capability pack manifest trustTier is invalid.");
+  }
+  if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+    throw new Error("Capability pack manifest must declare at least one asset.");
+  }
+  if (!manifest.provenance || !["bundled", "local_file"].includes(manifest.provenance.source)) {
+    throw new Error("Capability pack manifest provenance source is invalid.");
+  }
+  if (!manifest.provenance.publisher?.trim()) {
+    throw new Error("Capability pack manifest provenance publisher is required.");
+  }
+  for (const asset of manifest.assets) {
+    if (!asset.id?.trim() || !asset.label?.trim()) {
+      throw new Error("Capability pack assets require id and label.");
+    }
+    if (!["skill", "addon", "mcp_template", "plugin", "runtime_preset"].includes(asset.kind)) {
+      throw new Error(`Capability pack asset ${asset.id} kind is invalid.`);
+    }
+    if (!["available", "requires_configuration", "unsupported"].includes(asset.runtimeSupport)) {
+      throw new Error(`Capability pack asset ${asset.id} runtimeSupport is invalid.`);
+    }
+    if (!["enabled", "disabled", "review_required", "unsupported"].includes(asset.installMode)) {
+      throw new Error(`Capability pack asset ${asset.id} installMode is invalid.`);
+    }
+  }
+}
+
+function hashManifest(manifest: CapabilityPackManifest): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        packId: manifest.packId,
+        version: manifest.version,
+        assets: manifest.assets,
+        policyDefaults: manifest.policyDefaults,
+      }),
+    )
+    .digest("hex");
 }

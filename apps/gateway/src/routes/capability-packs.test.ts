@@ -54,6 +54,28 @@ describe("capability pack routes", () => {
     expect(previewPack).toHaveBeenCalledWith("memory-core");
   });
 
+  it("previews local portable packs through route services before dynamic pack routes", async () => {
+    const manifest = { packId: "local-pack" };
+    const previewLocalPack = vi.fn(() => ({ manifest, reviewRequired: true }));
+    const previewPack = vi.fn();
+    app = buildApp({
+      previewLocalPack,
+      previewPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capability-packs/local/preview",
+      payload: { manifest },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ manifest, reviewRequired: true });
+    expect(previewLocalPack).toHaveBeenCalledWith(manifest);
+    expect(previewPack).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when preview service rejects the pack", async () => {
     const previewPack = vi.fn(() => {
       throw new Error("Unknown capability pack: missing");
@@ -90,6 +112,30 @@ describe("capability pack routes", () => {
     expect(response.statusCode).toBe(201);
     expect(response.json()).toEqual({ installed: true, packId: "memory-core" });
     expect(installPack).toHaveBeenCalledWith("memory-core", { actorId: "operator:test" });
+  });
+
+  it("stages local portable packs with authenticated actor fallback", async () => {
+    const manifest = { packId: "local-pack" };
+    const installLocalPack = vi.fn(() => ({ packId: "local-pack", evidenceEnvelopeId: "env-1" }));
+    app = Fastify();
+    app.decorate(
+      "requireOperatorAuth",
+      vi.fn(async (request: FastifyRequest) => {
+        request.authActorId = "operator:auth";
+      }) as never,
+    );
+    app.decorate("services", { capabilityPacks: { installLocalPack } } as never);
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capability-packs/local/install",
+      payload: { manifest },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ packId: "local-pack", evidenceEnvelopeId: "env-1" });
+    expect(installLocalPack).toHaveBeenCalledWith({ manifest, actorId: "operator:auth" });
   });
 
   it("uses authenticated actor id when install payload omits actor id", async () => {

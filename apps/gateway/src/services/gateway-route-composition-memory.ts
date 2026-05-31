@@ -20,8 +20,10 @@ export function composeMemoryKnowledgeRouteDependencies(
   return {
     capabilities: gateway.capabilitySystemService,
     capabilityPacks: {
+      installLocalPack: (input) => gateway.capabilityPackService.installLocalPack(input),
       installPack: (packId, input) => gateway.capabilityPackService.installPack(packId, input),
       listPacks: () => gateway.capabilityPackService.listPacks(),
+      previewLocalPack: (manifest) => gateway.capabilityPackService.previewLocalPack(manifest),
       previewPack: (packId) => gateway.capabilityPackService.previewPack(packId),
     },
     curator: {

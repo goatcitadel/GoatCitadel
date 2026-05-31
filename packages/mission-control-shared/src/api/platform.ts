@@ -233,6 +233,15 @@ export async function fetchCapabilityPackPreview(packId: string): Promise<Capabi
   return request<CapabilityPackPreview>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/preview`);
 }
 
+export async function fetchLocalCapabilityPackPreview(
+  manifest: CapabilityPackManifest,
+): Promise<CapabilityPackPreview> {
+  return request<CapabilityPackPreview>("/api/v1/capability-packs/local/preview", {
+    method: "POST",
+    body: JSON.stringify({ manifest }),
+  });
+}
+
 export async function installCapabilityPack(
   packId: string,
   input: { actorId?: string } = {},
@@ -240,6 +249,16 @@ export async function installCapabilityPack(
   return request<CapabilityPackInstallResult>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/install`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function installLocalCapabilityPack(
+  manifest: CapabilityPackManifest,
+  input: { actorId?: string } = {},
+): Promise<CapabilityPackInstallResult> {
+  return request<CapabilityPackInstallResult>("/api/v1/capability-packs/local/install", {
+    method: "POST",
+    body: JSON.stringify({ ...input, manifest }),
   });
 }
 

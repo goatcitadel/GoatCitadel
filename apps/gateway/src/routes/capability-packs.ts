@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import type { CapabilityPackManifest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { withRouteAccess } from "./route-access.js";
 
@@ -10,11 +11,30 @@ const installSchema = z.object({
   actorId: z.string().trim().min(1).optional(),
 });
 
+const localPackSchema = z.object({
+  actorId: z.string().trim().min(1).optional(),
+  manifest: z.unknown(),
+});
+
 export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
 
   fastify.get("/api/v1/capability-packs", operatorOnly, async (_request, reply) => {
     return reply.send({ items: fastify.services.capabilityPacks.listPacks() });
+  });
+
+  fastify.post("/api/v1/capability-packs/local/preview", operatorOnly, async (request, reply) => {
+    const body = localPackSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      return reply.send(
+        fastify.services.capabilityPacks.previewLocalPack(body.data.manifest as CapabilityPackManifest),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/capability-packs/:packId/preview", operatorOnly, async (request, reply) => {
@@ -26,6 +46,28 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(fastify.services.capabilityPacks.previewPack(parsed.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capability-packs/local/install", operatorOnly, async (request, reply) => {
+    const body = localPackSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      const actorId =
+        body.data.actorId ??
+        (typeof request.authActorId === "string" && request.authActorId.trim()
+          ? request.authActorId.trim()
+          : undefined);
+      return reply.code(201).send(
+        fastify.services.capabilityPacks.installLocalPack({
+          manifest: body.data.manifest as CapabilityPackManifest,
+          actorId,
+        }),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
     }
   });
 
