@@ -206,6 +206,166 @@ describe("dashboard route service", () => {
     expect(trace.artifacts.items[0]).not.toHaveProperty("content");
   });
 
+  it.each([
+    {
+      label: "Chat",
+      runId: "run-chat",
+      workflowKey: "chat.turn.execute",
+      mode: "chat",
+      surface: "chat",
+      payload: buildChatTurnPayload("chat"),
+    },
+    {
+      label: "Cowork",
+      runId: "run-cowork",
+      workflowKey: "orchestration.plan.execute",
+      mode: "cowork",
+      surface: "cowork",
+      payload: {
+        version: "orchestration.plan.execute.v1",
+        orchestrationRunId: "orchestration-cowork",
+        planId: "plan-cowork",
+        workspaceId: "workspace-cowork",
+        requestedAt: "2026-05-30T00:00:00.000Z",
+      },
+    },
+    {
+      label: "Code Mode",
+      runId: "run-code",
+      workflowKey: "chat.turn.execute",
+      mode: "code",
+      surface: "code",
+      payload: buildChatTurnPayload("code", "Run the governed code change"),
+      approvalIds: ["approval-code-mode"],
+      toolRuns: [
+        {
+          toolRunId: "tool-code-mode",
+          turnId: "turn-code",
+          sessionId: "session-code",
+          toolName: "code_mode.run",
+          status: "executed",
+          approvalId: "approval-code-mode",
+          startedAt: "2026-05-30T00:00:10.000Z",
+          finishedAt: "2026-05-30T00:00:50.000Z",
+        },
+      ],
+    },
+  ])(
+    "preserves $label durable run trace posture and mode evidence",
+    async ({ runId, workflowKey, mode, surface, payload, approvalIds = [], toolRuns = [] }) => {
+      const deps = createDeps();
+      const sessionId = `session-${surface}`;
+      const turnId = `turn-${surface}`;
+      deps.storage.approvals.get.mockImplementation((approvalId: string) =>
+        approvalId === "approval-code-mode"
+          ? {
+              approvalId: "approval-code-mode",
+              kind: "code_mode.run",
+              riskLevel: "caution",
+              status: "approved",
+              payload: { actionType: "code_mode.run", runId: "code-mode-run-1" },
+              preview: { actionType: "code_mode.run", runId: "code-mode-run-1" },
+              linkage: {
+                sessionId: "session-code",
+                turnId: "turn-code",
+                runId: "code-mode-run-1",
+                durableRunId: "run-code",
+                originSurface: "code",
+                actionType: "code_mode.run",
+              },
+              createdAt: "2026-05-30T00:00:10.000Z",
+              expiresAt: "2026-05-30T00:15:10.000Z",
+              resolvedAt: "2026-05-30T00:00:30.000Z",
+              resolvedBy: "operator",
+              resolutionNote: "Approved governed Code Mode run.",
+              explanationStatus: "not_requested",
+            }
+          : undefined,
+      );
+      deps.durableOperatorService.getRun.mockReturnValue({
+        runId,
+        workflowKey,
+        status: "completed",
+        attemptCount: 1,
+        maxAttempts: 3,
+        version: 1,
+        payload,
+        metadata: { surface },
+        createdAt: "2026-05-30T00:00:00.000Z",
+        updatedAt: "2026-05-30T00:01:00.000Z",
+      });
+      deps.durableOperatorService.listRunCheckpoints.mockReturnValue([]);
+      deps.durableOperatorService.listRunTimeline.mockReturnValue([]);
+      deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue({
+        query: { runId },
+        canonical: { runId, sessionId, turnId },
+        linked: {
+          sessionIds: [sessionId],
+          turnIds: [turnId],
+          runIds: [runId],
+          proactiveRunIds: [],
+          approvalIds,
+          taskIds: [],
+          workspaceIds: [`workspace-${surface}`],
+        },
+        session: { sessionId, channel: mode },
+        sessionSummary: { transcriptEventCount: 1 },
+        turns: [
+          {
+            turnId,
+            sessionId,
+            status: "completed",
+            mode,
+            startedAt: "2026-05-30T00:00:00.000Z",
+            durableRunId: runId,
+            routing: { effectiveProviderId: "openai", effectiveModel: "gpt-5" },
+            completion: {
+              status: "completed",
+              repaired: false,
+              usage: { inputTokens: 7, outputTokens: 11, cachedInputTokens: 2, costUsd: 0.03, costSource: "estimated" },
+              latencyMs: 900,
+              providerCallCount: 1,
+            },
+          },
+        ],
+        toolRuns,
+      });
+      const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+      const trace = await service.getObserveRunTrace(runId);
+
+      expect(trace).toMatchObject({
+        version: "observe.run_trace.v1",
+        runId,
+        run: { runId, workflowKey, status: "completed" },
+        lifecycle: { state: "available" },
+        session: { state: "available", item: { sessionId, channel: mode } },
+        thread: { state: "available", turns: [{ turnId, mode, durableRunId: runId }] },
+        providerUsage: {
+          state: "available",
+          totals: { inputTokens: 7, outputTokens: 11, cachedInputTokens: 2, costUsd: 0.03 },
+        },
+        approvals: {
+          state: approvalIds.length > 0 ? "available" : "not_available",
+          items: approvalIds.length > 0 ? [{ approvalId: "approval-code-mode", kind: "code_mode.run" }] : [],
+          missingIds: [],
+        },
+        toolCalls: {
+          state: toolRuns.length > 0 ? "available" : "not_available",
+          items: toolRuns.length > 0 ? [{ toolRunId: "tool-code-mode", toolName: "code_mode.run" }] : [],
+        },
+        artifacts: { state: "not_available", items: [] },
+        memoryContext: { state: "not_available", items: [] },
+        posture: {
+          readOnly: true,
+          sideEffectPosture: "audit_only",
+          audit: { state: "available" },
+        },
+      });
+      expect(deps.durableOperatorService.getRun).toHaveBeenCalledWith(runId);
+    },
+  );
+
   it("returns a partial run trace with explicit unknown and not_available states when optional stores fail", async () => {
     const deps = createDeps();
     deps.durableOperatorService.getRun.mockReturnValue({
@@ -410,5 +570,24 @@ function createDeps() {
       getRuntimeLifecycle: vi.fn(),
     },
     isFeatureEnabled: vi.fn(() => true),
+  };
+}
+
+function buildChatTurnPayload(surface: "chat" | "code", content = "Trace this run") {
+  return {
+    version: "chat.turn.execute.v1",
+    sessionId: `session-${surface}`,
+    turnId: `turn-${surface}`,
+    userMessageId: `user-${surface}`,
+    assistantMessageId: `assistant-${surface}`,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request: {
+      content,
+      mode: surface,
+      providerId: "openai",
+      model: "gpt-5",
+      toolAutonomy: surface === "code" ? "manual" : "safe_auto",
+    },
   };
 }
