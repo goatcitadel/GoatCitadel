@@ -58,6 +58,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/runtime", accessClass: "operator" },
   { prefix: "/api/v1/system", accessClass: "operator" },
   { prefix: "/api/v1/observe", accessClass: "operator" },
+  { prefix: "/api/v1/ops", accessClass: "operator" },
   { prefix: "/api/v1/secrets", accessClass: "operator" },
   { prefix: "/api/v1/sessions", accessClass: "operator" },
   { prefix: "/api/v1/chat", accessClass: "operator" },

@@ -239,6 +239,11 @@ const healthSummaryQuerySchema = z.object({
   backupLimit: z.coerce.number().int().positive().max(24).default(6),
 });
 
+const opsQualityQuerySchema = z.object({
+  packLimit: z.coerce.number().int().positive().max(2000).default(200),
+  evalLimit: z.coerce.number().int().positive().max(200).default(25),
+});
+
 export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dashboard/state", async (_request, reply) => {
     return reply.send(fastify.services.dashboard.getDashboardState());
@@ -273,6 +278,14 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         replayRuns: fastify.services.improvement.listDecisionReplayRuns(parsed.data.improvementLimit),
       },
     });
+  });
+
+  fastify.get("/api/v1/ops/quality", async (request, reply) => {
+    const parsed = opsQualityQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.dashboard.getOpsQualitySnapshot(parsed.data));
   });
 
   fastify.get("/api/v1/observe/health", async (request, reply) => {

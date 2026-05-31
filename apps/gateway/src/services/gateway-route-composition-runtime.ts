@@ -107,6 +107,7 @@ export function composeRuntimeAdminRouteDependencies(
       isFeatureEnabled: (flag) => gateway.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryLifecycleService: gateway.memoryLifecycleService,
       operatorSummaryCache: gateway.operatorSummaryCache,
+      promptPackService: gateway.promptPackService,
       realtimeEventService: gateway.realtimeEventService,
       runtimeLifecycleReadService: gateway.runtimeLifecycleReadService,
       storage: gateway.storage,

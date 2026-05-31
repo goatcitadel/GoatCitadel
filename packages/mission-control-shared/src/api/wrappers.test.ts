@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as integrations from "./integrations";
 import * as memory from "./memory";
+import * as opsQuality from "./ops-quality";
 import * as promptPacks from "./prompt-packs";
 import * as improvement from "./improvement";
 import * as platform from "./platform";
@@ -669,6 +670,10 @@ describe("shared API wrappers", () => {
       },
     );
     await expectCall(platform.generateLlmImage({} as never), "/api/v1/llm/images", { method: "POST" });
+    await expectCall(
+      opsQuality.fetchOpsQualitySnapshot({ packLimit: 9999, evalLimit: 999 }),
+      "/api/v1/ops/quality?packLimit=2000&evalLimit=200",
+    );
     await expectCall(platform.createLlmChatCompletion({ messages: [] }), "/api/v1/llm/chat-completions", {
       method: "POST",
     });

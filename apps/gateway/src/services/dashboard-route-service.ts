@@ -8,6 +8,7 @@ import type {
   DurableRunRecord,
   DurableRunTimelineEvent,
   MemoryContextPack,
+  OpsQualitySnapshotResponse,
   RuntimeLifecycleResponse,
   RuntimeLifecycleTurnSummary,
   RuntimeLifecycleToolRunSummary,
@@ -17,6 +18,7 @@ import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DurableOperatorService } from "./durable-operator-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import type { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
+import type { PromptPackService } from "./prompt-pack-service.js";
 import type { RealtimeEventService } from "./realtime-event-service.js";
 import type { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
@@ -28,6 +30,7 @@ export const dashboardRouteMethods = [
   "getMemoryQmdStats",
   "getObserveRunTrace",
   "getObserveRunTraceExport",
+  "getOpsQualitySnapshot",
   "getSystemVitals",
   "isFeatureEnabled",
   "listBackups",
@@ -46,6 +49,7 @@ export interface DashboardRoutePortDependencies {
   durableOperatorService: Pick<DurableOperatorService, "getRun" | "listRunCheckpoints" | "listRunTimeline">;
   memoryLifecycleService: MemoryLifecycleService;
   operatorSummaryCache: OperatorSummaryCache;
+  promptPackService: Pick<PromptPackService, "listPromptPacks" | "listSecurityEvalPacks" | "listSecurityQualityGates">;
   realtimeEventService: RealtimeEventService;
   runtimeLifecycleReadService: Pick<RuntimeLifecycleReadService, "getRuntimeLifecycle">;
   storage: Storage;
@@ -193,6 +197,11 @@ export interface ObserveRunTraceExportResponse {
   content: string;
 }
 
+export interface OpsQualitySnapshotInput {
+  packLimit: number;
+  evalLimit: number;
+}
+
 export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): DashboardRoutePort {
   return {
     costSummary: (scope, from, to) => deps.storage.costLedger.summary(scope, from, to),
@@ -224,6 +233,7 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     getMemoryQmdStats: (from, to) => deps.memoryLifecycleService.getContextStats(from, to),
     getObserveRunTrace: (runId) => buildObserveRunTrace(deps, String(runId)),
     getObserveRunTraceExport: (runId) => buildObserveRunTraceExport(deps, String(runId)),
+    getOpsQualitySnapshot: (input) => buildOpsQualitySnapshot(deps, input),
     getSystemVitals: () => {
       const total = os.totalmem();
       const free = os.freemem();
@@ -256,6 +266,99 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
 
 export function createDashboardRouteService(port: DashboardRoutePort): DashboardRouteService {
   return createRouteService(port, dashboardRouteMethods);
+}
+
+function buildOpsQualitySnapshot(
+  deps: DashboardRoutePortDependencies,
+  input: OpsQualitySnapshotInput,
+): OpsQualitySnapshotResponse {
+  const generatedAt = new Date().toISOString();
+  const promptPacksResult = safeRead(() => deps.promptPackService.listPromptPacks(input.packLimit));
+  const evalProofResult = safeRead(() => deps.storage.llmEvalProofRuns.list(input.evalLimit));
+  const securityEvalPacksResult = safeRead(() => deps.promptPackService.listSecurityEvalPacks());
+  const securityQualityGatesResult = safeRead(() => deps.promptPackService.listSecurityQualityGates());
+  const promptPacks = promptPacksResult.value ?? [];
+  const evalProofRuns = evalProofResult.value ?? [];
+  const securityEvalPacks = securityEvalPacksResult.value?.items ?? [];
+  const securityQualityGates = securityQualityGatesResult.value?.items ?? [];
+  const warnings = [
+    ...(securityEvalPacksResult.value?.warnings ?? []),
+    ...(securityQualityGatesResult.value?.warnings ?? []),
+  ];
+
+  return {
+    version: "ops.quality_snapshot.v1",
+    generatedAt,
+    sourceEndpoint: "/api/v1/ops/quality",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      note: "Ops quality snapshot composes stored prompt-pack, eval-proof, and security-gate evidence. It does not run providers, score tests, approve releases, or mutate runtime state.",
+    },
+    metricScope: {
+      scope: "bounded_read",
+      promptPackLimit: input.packLimit,
+      evalRunLimit: input.evalLimit,
+      note: "Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality.",
+    },
+    metrics: {
+      promptPackCount: promptPacks.length,
+      promptPackTestCount: promptPacks.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0),
+      redTeamPackCount: securityEvalPacks.length,
+      redTeamTestCount: securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0),
+      evalRunCount: evalProofRuns.length,
+      paretoModelCount: evalProofRuns.reduce(
+        (sum, run) => sum + run.results.filter((result) => result.paretoOptimal).length,
+        0,
+      ),
+      securityGateCount: securityQualityGates.length,
+      passingSecurityGateCount: securityQualityGates.filter((gate) => gate.status === "passed").length,
+    },
+    promptPacks: {
+      state: promptPacksResult.error ? "unknown" : promptPacks.length > 0 ? "available" : "not_available",
+      items: promptPacks,
+      ...(promptPacksResult.error ? { error: promptPacksResult.error.message } : {}),
+    },
+    evalProof: {
+      state: evalProofResult.error ? "unknown" : evalProofRuns.length > 0 ? "available" : "not_available",
+      items: evalProofRuns,
+      ...(evalProofResult.error ? { error: evalProofResult.error.message } : {}),
+    },
+    securityEvalPacks: {
+      state: securityEvalPacksResult.error ? "unknown" : securityEvalPacks.length > 0 ? "available" : "not_available",
+      items: securityEvalPacks,
+      warnings: securityEvalPacksResult.value?.warnings ?? [],
+      ...(securityEvalPacksResult.error ? { error: securityEvalPacksResult.error.message } : {}),
+    },
+    securityQualityGates: {
+      state: securityQualityGatesResult.error
+        ? "unknown"
+        : securityQualityGates.length > 0
+          ? "available"
+          : "not_available",
+      items: securityQualityGates,
+      warnings: securityQualityGatesResult.value?.warnings ?? [],
+      ...(securityQualityGatesResult.error ? { error: securityQualityGatesResult.error.message } : {}),
+    },
+    warnings,
+    nextChecks: [
+      {
+        label: "Prompt gates",
+        command: "pnpm prompt:gates",
+        reason: "Use targeted prompt-pack gates for behavior changes that affect Chat, Cowork, or Code.",
+      },
+      {
+        label: "Runtime truth",
+        command: "pnpm verify:runtime:truth",
+        reason: "Use runtime truth for gateway, durable execution, and runtime API changes.",
+      },
+      {
+        label: "Surface regression",
+        command: "pnpm verify:surface:regression",
+        reason: "Use surface regression for visible operator route changes.",
+      },
+    ],
+  };
 }
 
 async function buildObserveRunTraceExport(

@@ -860,6 +860,7 @@ export {
   updateRetentionPolicy,
   verifyBackup,
 } from "./system.js";
+export { fetchOpsQualitySnapshot } from "./ops-quality.js";
 
 export type EventStreamConnectionState = "connecting" | "open" | "retrying" | "error" | "closed";
 

@@ -89,6 +89,62 @@ describe("dashboard observe aggregate routes", () => {
     expect(listCronReviewQueue).not.toHaveBeenCalled();
   });
 
+  it("returns the read-only Ops quality aggregate", async () => {
+    const getOpsQualitySnapshot = vi.fn(() => ({
+      version: "ops.quality_snapshot.v1",
+      generatedAt: "2026-05-31T00:00:00.000Z",
+      sourceEndpoint: "/api/v1/ops/quality",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        note: "stored evidence only",
+      },
+      metricScope: {
+        scope: "bounded_read",
+        promptPackLimit: 10,
+        evalRunLimit: 3,
+        note: "bounded read",
+      },
+      metrics: {
+        promptPackCount: 1,
+        promptPackTestCount: 2,
+        redTeamPackCount: 1,
+        redTeamTestCount: 4,
+        evalRunCount: 1,
+        paretoModelCount: 1,
+        securityGateCount: 1,
+        passingSecurityGateCount: 1,
+      },
+      promptPacks: { state: "available", items: [{ packId: "pack-1" }] },
+      evalProof: { state: "available", items: [{ runId: "eval-1" }] },
+      securityEvalPacks: { state: "available", items: [{ packKey: "security" }], warnings: [] },
+      securityQualityGates: { state: "available", items: [{ gateId: "gate-1" }], warnings: [] },
+      warnings: [],
+      nextChecks: [],
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      dashboard: {
+        getOpsQualitySnapshot,
+      },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/ops/quality?packLimit=10&evalLimit=3",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getOpsQualitySnapshot).toHaveBeenCalledWith({ packLimit: 10, evalLimit: 3 });
+    expect(response.json()).toMatchObject({
+      version: "ops.quality_snapshot.v1",
+      posture: { readOnly: true, sideEffectPosture: "audit_only" },
+      metricScope: { scope: "bounded_read", promptPackLimit: 10, evalRunLimit: 3 },
+      metrics: { promptPackCount: 1, evalRunCount: 1 },
+    });
+  });
+
   it("returns the unified health aggregate", async () => {
     app = Fastify();
     app.decorate("services", {

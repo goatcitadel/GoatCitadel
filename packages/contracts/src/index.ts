@@ -62,6 +62,7 @@ export * from "./research.js";
 export * from "./research-search.js";
 export * from "./update-scout.js";
 export * from "./prompt-pack.js";
+export * from "./ops-quality.js";
 export * from "./proactive.js";
 export * from "./learned-memory.js";
 export * from "./improvement.js";

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BarChart3, ClipboardCopy } from "lucide-react";
 import type {
   LlmEvalProofRunRecord,
+  OpsQualitySnapshotResponse,
   PromptPackExportRecord,
   PromptPackRecord,
   PromptPackReportRecord,
@@ -10,17 +11,21 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   exportLlmEvalProofRuns,
-  fetchLlmEvalProofRuns,
-  fetchPromptPackBuiltins,
+  fetchOpsQualitySnapshot,
   fetchPromptPackExport,
   fetchPromptPackReport,
-  fetchPromptPackSecurityGates,
-  fetchPromptPacks,
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
-import { formatBytes, formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
+import {
+  formatBytes,
+  formatDateTime,
+  nativeLoad,
+  nativeLoadIssues,
+  useAsyncLoad,
+  type NativeLoadIssue,
+} from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -31,31 +36,60 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [packs, evalRuns, securityEvalPacks, securityGates] = await Promise.all([
-      nativeLoad("Prompt packs", fetchPromptPacks(200), { items: [] as PromptPackRecord[] }),
-      nativeLoad("Eval proof runs", fetchLlmEvalProofRuns(25), {
+    const snapshot = await nativeLoad(
+      "Ops quality snapshot",
+      fetchOpsQualitySnapshot({ packLimit: 200, evalLimit: 25 }),
+      {
+        version: "ops.quality_snapshot.v1",
         generatedAt: new Date(0).toISOString(),
-        items: [] as LlmEvalProofRunRecord[],
-      }),
-      nativeLoad("Security eval packs", fetchPromptPackBuiltins(), {
-        generatedAt: new Date(0).toISOString(),
-        items: [] as PromptPackSecurityEvalPackRecord[],
+        sourceEndpoint: "/api/v1/ops/quality",
+        posture: {
+          readOnly: true,
+          sideEffectPosture: "audit_only",
+          note: "Ops quality snapshot is unavailable; showing empty fallback state.",
+        },
+        metricScope: {
+          scope: "bounded_read",
+          promptPackLimit: 200,
+          evalRunLimit: 25,
+          note: "Fallback snapshot contains no stored evidence.",
+        },
+        metrics: {
+          promptPackCount: 0,
+          promptPackTestCount: 0,
+          redTeamPackCount: 0,
+          redTeamTestCount: 0,
+          evalRunCount: 0,
+          paretoModelCount: 0,
+          securityGateCount: 0,
+          passingSecurityGateCount: 0,
+        },
+        promptPacks: { state: "not_available", items: [] as PromptPackRecord[] },
+        evalProof: { state: "not_available", items: [] as LlmEvalProofRunRecord[] },
+        securityEvalPacks: {
+          state: "not_available",
+          items: [] as PromptPackSecurityEvalPackRecord[],
+          warnings: [],
+        },
+        securityQualityGates: {
+          state: "not_available",
+          items: [] as PromptPackSecurityQualityGateRecord[],
+          warnings: [],
+        },
         warnings: [],
-      }),
-      nativeLoad("Security quality gates", fetchPromptPackSecurityGates(), {
-        generatedAt: new Date(0).toISOString(),
-        items: [] as PromptPackSecurityQualityGateRecord[],
-        warnings: [],
-      }),
-    ]);
+        nextChecks: [],
+      } satisfies OpsQualitySnapshotResponse,
+    );
+    const quality = snapshot.data;
     return {
-      issues: nativeLoadIssues([packs, evalRuns, securityEvalPacks, securityGates]),
-      packs: packs.data.items,
-      evalRuns: evalRuns.data.items,
-      securityEvalPacks: securityEvalPacks.data.items,
-      securityEvalWarnings: securityEvalPacks.data.warnings,
-      securityGates: securityGates.data.items,
-      securityGateWarnings: securityGates.data.warnings,
+      issues: [...nativeLoadIssues([snapshot]), ...qualitySnapshotIssues(quality)],
+      quality,
+      packs: quality.promptPacks.items,
+      evalRuns: quality.evalProof.items,
+      securityEvalPacks: quality.securityEvalPacks.items,
+      securityEvalWarnings: quality.securityEvalPacks.warnings,
+      securityGates: quality.securityQualityGates.items,
+      securityGateWarnings: quality.securityQualityGates.warnings,
     };
   }, []);
 
@@ -63,9 +97,12 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const evalRuns = data?.evalRuns ?? [];
   const securityEvalPacks = data?.securityEvalPacks ?? [];
   const securityGates = data?.securityGates ?? [];
+  const quality = data?.quality;
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? packs[0] ?? null;
-  const totalTests = packs.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0);
-  const securityEvalTests = securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0);
+  const totalTests =
+    quality?.metrics.promptPackTestCount ?? packs.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0);
+  const securityEvalTests =
+    quality?.metrics.redTeamTestCount ?? securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0);
   const latestEval = evalRuns[0];
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
   const selectedPackEvidence = useAsyncLoad(async () => {
@@ -184,11 +221,11 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       loading={loading}
       error={error}
       metrics={[
-        { label: "Prompt packs", value: String(packs.length) },
-        { label: "Pack tests", value: String(totalTests) },
-        { label: "Red-team tests", value: String(securityEvalTests) },
-        { label: "Eval runs", value: String(evalRuns.length) },
-        { label: "Pareto models", value: String(paretoModels.length) },
+        { label: "Visible prompt packs", value: String(packs.length) },
+        { label: "Visible pack tests", value: String(totalTests) },
+        { label: "Visible red-team tests", value: String(securityEvalTests) },
+        { label: "Visible eval runs", value: String(evalRuns.length) },
+        { label: "Visible Pareto models", value: String(paretoModels.length) },
       ]}
       actions={
         <>
@@ -583,23 +620,11 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         >
           <NativeList
             density="compact"
-            items={[
-              {
-                title: "Prompt gates",
-                meta: "prompt:gates",
-                body: "Run targeted prompt-pack gates for behavior changes that affect Chat, Cowork, or Code.",
-              },
-              {
-                title: "Runtime truth",
-                meta: "verify:runtime:truth",
-                body: "Use runtime truth for gateway/durable/API changes.",
-              },
-              {
-                title: "Surface regression",
-                meta: "verify:surface:regression",
-                body: "Use surface regression for visible operator route changes.",
-              },
-            ]}
+            items={(quality?.nextChecks ?? []).map((check) => ({
+              title: check.label,
+              meta: check.command.replace(/^pnpm\s+/, ""),
+              body: check.reason,
+            }))}
             emptyLabel="No checks are configured."
           />
         </NativeCard>
@@ -643,4 +668,17 @@ function formatSecurityGateStatus(status: PromptPackSecurityQualityGateRecord["s
   if (status === "review") return "Review";
   if (status === "failed") return "Failed";
   return "Passed";
+}
+
+function qualitySnapshotIssues(snapshot: OpsQualitySnapshotResponse): NativeLoadIssue[] {
+  return [
+    snapshot.promptPacks.error ? { label: "Prompt packs", message: snapshot.promptPacks.error } : null,
+    snapshot.evalProof.error ? { label: "Eval proof", message: snapshot.evalProof.error } : null,
+    snapshot.securityEvalPacks.error
+      ? { label: "Security eval packs", message: snapshot.securityEvalPacks.error }
+      : null,
+    snapshot.securityQualityGates.error
+      ? { label: "Security quality gates", message: snapshot.securityQualityGates.error }
+      : null,
+  ].filter((issue): issue is NativeLoadIssue => Boolean(issue));
 }

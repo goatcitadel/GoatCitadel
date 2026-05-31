@@ -26,6 +26,29 @@ describe("dashboard route service", () => {
     expect(await service.listRealtimeEvents(2, "cursor-1")).toEqual([{ eventId: "event-1" }]);
     expect(await service.listSessions(5, "session-cursor")).toEqual([{ sessionId: "session-1" }]);
     expect(await service.listOperators()).toEqual([{ operatorId: "operator-1" }]);
+    expect(await service.getOpsQualitySnapshot({ packLimit: 10, evalLimit: 3 })).toMatchObject({
+      version: "ops.quality_snapshot.v1",
+      metricScope: {
+        scope: "bounded_read",
+        promptPackLimit: 10,
+        evalRunLimit: 3,
+      },
+      metrics: {
+        promptPackCount: 1,
+        promptPackTestCount: 2,
+        redTeamPackCount: 1,
+        redTeamTestCount: 4,
+        evalRunCount: 1,
+        paretoModelCount: 1,
+        securityGateCount: 1,
+        passingSecurityGateCount: 1,
+      },
+      posture: { readOnly: true, sideEffectPosture: "audit_only" },
+      promptPacks: { state: "available" },
+      evalProof: { state: "available" },
+      securityEvalPacks: { state: "available", warnings: ["Security packs are stored evidence."] },
+      securityQualityGates: { state: "available", warnings: ["Security gates are read-only."] },
+    });
 
     expect(deps.storage.costLedger.summary).toHaveBeenCalledWith("month", "from", "to");
     expect(deps.storage.costLedger.usageAvailability).toHaveBeenCalledWith("from", "to");
@@ -35,6 +58,32 @@ describe("dashboard route service", () => {
     expect(deps.realtimeEventService.listRealtimeEvents).toHaveBeenCalledWith(2, "cursor-1");
     expect(deps.storage.sessions.list).toHaveBeenCalledWith(5, "session-cursor");
     expect(deps.storage.sessions.listOperatorSummaries).toHaveBeenCalledWith(expect.any(String));
+    expect(deps.promptPackService.listPromptPacks).toHaveBeenCalledWith(10);
+    expect(deps.storage.llmEvalProofRuns.list).toHaveBeenCalledWith(3);
+  });
+
+  it("returns partial Ops quality evidence with explicit unknown state when one source fails", async () => {
+    const deps = createDeps();
+    deps.promptPackService.listSecurityQualityGates.mockImplementation(() => {
+      throw new Error("security gate store unavailable");
+    });
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const snapshot = await service.getOpsQualitySnapshot({ packLimit: 10, evalLimit: 3 });
+
+    expect(snapshot.promptPacks).toMatchObject({
+      state: "available",
+      items: [{ packId: "pack-1", name: "Quality pack", testCount: 2 }],
+    });
+    expect(snapshot.evalProof).toMatchObject({ state: "available" });
+    expect(snapshot.securityEvalPacks).toMatchObject({ state: "available" });
+    expect(snapshot.securityQualityGates).toMatchObject({
+      state: "unknown",
+      items: [],
+      warnings: [],
+      error: "security gate store unavailable",
+    });
+    expect(snapshot.posture).toMatchObject({ readOnly: true, sideEffectPosture: "audit_only" });
   });
 
   it("builds dashboard state and system vitals without changing response shape", async () => {
@@ -531,6 +580,19 @@ function createDeps() {
     operatorSummaryCache: {
       get: vi.fn((loader: () => unknown) => loader()),
     },
+    promptPackService: {
+      listPromptPacks: vi.fn(() => [{ packId: "pack-1", name: "Quality pack", testCount: 2 }]),
+      listSecurityEvalPacks: vi.fn(() => ({
+        generatedAt: "2026-05-31T00:00:00.000Z",
+        items: [{ packKey: "security", title: "Security", testCount: 4, status: "available" }],
+        warnings: ["Security packs are stored evidence."],
+      })),
+      listSecurityQualityGates: vi.fn(() => ({
+        generatedAt: "2026-05-31T00:00:00.000Z",
+        items: [{ gateId: "gate-1", title: "Gate", status: "passed" }],
+        warnings: ["Security gates are read-only."],
+      })),
+    },
     realtimeEventService: {
       listRealtimeEvents: vi.fn(() => [{ eventId: "event-1" }]),
     },
@@ -561,6 +623,18 @@ function createDeps() {
       },
       memoryContexts: {
         listByRun: vi.fn(() => []),
+      },
+      llmEvalProofRuns: {
+        list: vi.fn(() => [
+          {
+            runId: "eval-1",
+            status: "completed",
+            results: [
+              { providerId: "openai", model: "gpt-5", paretoOptimal: true },
+              { providerId: "local", model: "tiny", paretoOptimal: false },
+            ],
+          },
+        ]),
       },
       chatGeneratedArtifacts: {
         listByTurnIds: vi.fn(() => new Map()),

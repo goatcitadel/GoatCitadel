@@ -1,5 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import type { OpsQualitySnapshotResponse } from "@goatcitadel/contracts";
 import {
   deriveCoworkTaskContinuation,
   formatArtifactProvenance,
@@ -65,6 +66,152 @@ const mocks = vi.hoisted(() => ({
           },
         ],
         warnings: [],
+      },
+    ],
+  })),
+  fetchOpsQualitySnapshot: vi.fn(async () => ({
+    version: "ops.quality_snapshot.v1",
+    generatedAt: "2026-05-02T20:00:00.000Z",
+    sourceEndpoint: "/api/v1/ops/quality",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      note: "stored evidence",
+    },
+    metricScope: {
+      scope: "bounded_read",
+      promptPackLimit: 200,
+      evalRunLimit: 25,
+      note: "bounded read",
+    },
+    metrics: {
+      promptPackCount: 1,
+      promptPackTestCount: 18,
+      redTeamPackCount: 1,
+      redTeamTestCount: 18,
+      evalRunCount: 1,
+      paretoModelCount: 1,
+      securityGateCount: 1,
+      passingSecurityGateCount: 0,
+    },
+    promptPacks: {
+      state: "available",
+      items: [
+        {
+          packId: "pack-1",
+          name: "Security Red Team",
+          testCount: 18,
+          sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+        },
+      ],
+    },
+    evalProof: {
+      state: "available",
+      items: [
+        {
+          runId: "eval-proof-1",
+          promptHash: "abcdef1234567890",
+          status: "completed",
+          createdAt: "2026-05-02T19:00:00.000Z",
+          candidates: [{ providerId: "openai", model: "gpt-5", qualityScore: 0.91 }],
+          results: [
+            {
+              providerId: "openai",
+              model: "gpt-5",
+              qualityScore: 0.91,
+              measurementSource: "live",
+              qualityScoreSource: "operator",
+              latencyMs: 1200,
+              estimatedCostUsd: 0.04,
+              paretoOptimal: true,
+              notes: ["strong quality frontier"],
+            },
+          ],
+          warnings: [],
+        },
+      ],
+    },
+    securityEvalPacks: {
+      state: "available",
+      warnings: [
+        "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+      ],
+      items: [
+        {
+          packKey: "security-red-team-v6",
+          title: "Defensive Security Evaluation",
+          sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+          status: "available",
+          testCount: 18,
+          modeCounts: { chat: 6, cowork: 6, code: 6 },
+          toolTierCounts: { "no-tools": 6, "implicit-tools": 6, "explicit-tools": 6 },
+          capabilityTargets: ["prompt-injection", "tool-governance"],
+          likelyFailureClasses: ["unsafe_tool_use"],
+          safetyPosture: {
+            definitionOnly: true,
+            requiresOperatorRun: true,
+            callsProviders: false,
+            mutationPerformed: false,
+            note: "definition only",
+          },
+          blockers: ["Import this prompt pack before it can produce run, score, or benchmark evidence."],
+        },
+      ],
+    },
+    securityQualityGates: {
+      state: "available",
+      warnings: ["Security quality gates are read-only projections from stored prompt-pack reports."],
+      items: [
+        {
+          gateId: "prompt-pack:security-red-team-v6:security-quality",
+          packKey: "security-red-team-v6",
+          title: "Defensive Security Evaluation gate",
+          status: "needs_score",
+          releaseGate: true,
+          readOnly: true,
+          packId: "pack-1",
+          reportEndpoint: "/api/v1/prompt-packs/pack-1/report",
+          generatedAt: "2026-05-02T20:00:00.000Z",
+          evidence: {
+            definitionStatus: "imported",
+            testCount: 18,
+            completedRuns: 12,
+            failedRuns: 2,
+            needsScoreCount: 3,
+            passCount: 8,
+            failCount: 2,
+            reviewCount: 2,
+            effectivePassRate: 0.67,
+            passThreshold: 75,
+            failingCodes: ["SEC-003", "SEC-007"],
+          },
+          blockers: ["Score all completed defensive security runs before treating this gate as release evidence."],
+          nextActions: ["Auto-score or human-review every completed defensive security run."],
+          posture: {
+            callsProviders: false,
+            mutationPerformed: false,
+            source: "stored_prompt_pack_report",
+            note: "stored evidence",
+          },
+        },
+      ],
+    },
+    warnings: ["Security quality gates are read-only projections from stored prompt-pack reports."],
+    nextChecks: [
+      {
+        label: "Prompt gates",
+        command: "pnpm prompt:gates",
+        reason: "Run targeted prompt-pack gates for behavior changes that affect Chat, Cowork, or Code.",
+      },
+      {
+        label: "Runtime truth",
+        command: "pnpm verify:runtime:truth",
+        reason: "Use runtime truth for gateway/durable/API changes.",
+      },
+      {
+        label: "Surface regression",
+        command: "pnpm verify:surface:regression",
+        reason: "Use surface regression for visible operator route changes.",
       },
     ],
   })),
@@ -420,6 +567,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     exportLlmEvalProofRuns: mocks.exportLlmEvalProofRuns,
     fetchOperators: mocks.fetchOperators,
     fetchLlmEvalProofRuns: mocks.fetchLlmEvalProofRuns,
+    fetchOpsQualitySnapshot: mocks.fetchOpsQualitySnapshot,
     fetchPromptPacks: mocks.fetchPromptPacks,
     fetchPromptPackExport: mocks.fetchPromptPackExport,
     fetchPromptPackReport: mocks.fetchPromptPackReport,
@@ -594,12 +742,9 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     });
 
     const text = collectText(renderer!.root);
-    expect(mocks.fetchPromptPacks).toHaveBeenCalledWith(200);
+    expect(mocks.fetchOpsQualitySnapshot).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25 });
     expect(mocks.fetchPromptPackReport).toHaveBeenCalledWith("pack-1");
     expect(mocks.fetchPromptPackExport).toHaveBeenCalledWith("pack-1");
-    expect(mocks.fetchLlmEvalProofRuns).toHaveBeenCalledWith(25);
-    expect(mocks.fetchPromptPackBuiltins).toHaveBeenCalledWith();
-    expect(mocks.fetchPromptPackSecurityGates).toHaveBeenCalledWith();
     expect(text).toContain("Quality Dashboard");
     expect(text).toContain("Prompt-pack gate evidence");
     expect(text).toContain("Pass rate");
@@ -616,7 +761,7 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain(
       "Score all completed defensive security runs before treating this gate as release evidence.",
     );
-    expect(text).toContain("Red-team tests");
+    expect(text).toContain("Visible red-team tests");
     expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
     expect(text).toContain("Import and open defensive security pack");
     expect(text).toContain("Review security pack scoring");
@@ -665,6 +810,43 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       view: undefined,
       theme: "ops",
     });
+  });
+
+  it("renders partial Ops quality snapshots with section-level source errors", async () => {
+    const baseSnapshot = (await mocks.fetchOpsQualitySnapshot()) as unknown as OpsQualitySnapshotResponse;
+    mocks.fetchOpsQualitySnapshot.mockClear();
+    mocks.fetchPromptPackReport.mockClear();
+    mocks.fetchPromptPackExport.mockClear();
+    const partialSnapshot = {
+      ...baseSnapshot,
+      metrics: {
+        ...baseSnapshot.metrics,
+        promptPackCount: 0,
+        promptPackTestCount: 0,
+      },
+      promptPacks: {
+        state: "unknown",
+        items: [],
+        error: "prompt pack store unavailable",
+      },
+    } as OpsQualitySnapshotResponse;
+    mocks.fetchOpsQualitySnapshot.mockResolvedValueOnce(partialSnapshot as never);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderOpsQuality();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(mocks.fetchOpsQualitySnapshot).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25 });
+    expect(text).toContain("Prompt packs");
+    expect(text).toContain("prompt pack store unavailable");
+    expect(text).toContain("No prompt packs are available.");
+    expect(text).toContain("Eval proof");
+    expect(mocks.fetchPromptPackReport).not.toHaveBeenCalled();
+    expect(mocks.fetchPromptPackExport).not.toHaveBeenCalled();
   });
 });
 
