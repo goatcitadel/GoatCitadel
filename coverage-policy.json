@@ -3,11 +3,6 @@
   "allowedReasonCategories": ["generated-static-adapter", "test-harness-setup", "type-only-barrel"],
   "exclusions": [
     {
-      "pattern": "apps/mission-control/src/test/setup.ts",
-      "reasonCategory": "test-harness-setup",
-      "reason": "Vitest/react-test-renderer setup shim, not runtime-owned application behavior."
-    },
-    {
       "pattern": "apps/mission-control-next/src/test/setup.ts",
       "reasonCategory": "test-harness-setup",
       "reason": "Vitest/react-test-renderer setup shim, not runtime-owned application behavior."
