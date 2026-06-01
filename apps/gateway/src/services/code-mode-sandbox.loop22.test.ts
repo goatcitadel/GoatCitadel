@@ -76,6 +76,7 @@ describe("code-mode sandbox loop22 coverage", () => {
     const input = launchInput(runTempRoot);
 
     expect(buildAdvisoryUnsandboxedLaunchSpec(input)).toEqual({
+      transport: "node_ipc",
       executable: input.nodePath,
       args: ["--max-old-space-size=512", input.harnessPath],
       cwd: runTempRoot,

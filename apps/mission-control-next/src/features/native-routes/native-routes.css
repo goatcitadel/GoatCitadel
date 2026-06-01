@@ -397,6 +397,20 @@
   align-items: start;
 }
 
+.mc-next-directory-grid-native.mc-next-quality-dashboard-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.mc-next-quality-dashboard-grid .mc-next-directory-list-head {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.16rem;
+}
+
+.mc-next-quality-dashboard-grid .mc-next-directory-list-head span {
+  max-width: none;
+  text-align: left;
+}
+
 .mc-next-directory-card {
   display: grid;
   gap: 0.55rem;

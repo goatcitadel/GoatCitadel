@@ -1102,6 +1102,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
             item.section === "notifications" ||
             item.section === "approvals" ||
             item.section === "costs" ||
+            item.section === "quality" ||
             item.section === "runtime" ||
             item.section === "diagnostics" ||
             item.section === "kanban",

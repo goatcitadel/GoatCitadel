@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Surface Scope
 
-Last updated: 2026-05-26
+Last updated: 2026-06-01
 
 This table freezes the visible Mission Control Next `1.0` route surface after the final release-readiness promotion. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 
@@ -35,6 +35,7 @@ Status meanings:
 | `/ops/notifications` | `ship` | Review runtime issues, self-repair proposals, and follow-up signals. |
 | `/ops/approvals` | `ship` | Review pending decisions, replay effects, and approval history. |
 | `/ops/costs` | `ship` | Inspect spend visibility and cost evidence. |
+| `/ops/quality` | `ship` | Inspect eval proof, prompt-pack gate posture, and read-only trace/report export paths. |
 | `/ops/runtime` | `ship` | Inspect gateway health, daemon posture, host vitals, and backups. |
 | `/ops/diagnostics` | `ship` | Inspect durable, daemon, admin, docs, and readiness diagnostics. |
 | `/ops/kanban` | `experimental` | Multi-agent board is experimental; bulk controls are not final release control. |
@@ -43,6 +44,7 @@ Status meanings:
 | `/settings/personalities` | `experimental` | Personality presets are experimental Chat-default polish. |
 | `/settings/access` | `ship` | Inspect auth posture, secret storage truth, and access boundaries. |
 | `/settings/permissions` | `ship` | Configure permission profiles and local operator override evidence. |
+| `/settings/trust-policy` | `ship` | Inspect the unified Trust & Policy matrix, then jump to Permissions, Tools, MCP, Skills, Capabilities, or Approvals for edits. |
 | `/settings/budget` | `ship` | Set budget mode and review cost evidence. |
 | `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |

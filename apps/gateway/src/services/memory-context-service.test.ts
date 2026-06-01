@@ -282,7 +282,7 @@ describe("MemoryContextService", () => {
     );
   });
 
-  it("includes active lifecycle memory items as semantic-vector retrieval candidates", async () => {
+  it("includes active lifecycle memory items with semantic-vector retrieval signals", async () => {
     const rootDir = await createWorkspaceRoot();
     const storage = createStorage({
       memoryItems: [
@@ -291,7 +291,10 @@ describe("MemoryContextService", () => {
           namespace: "workspace/default",
           title: "Browser governance",
           content: "Browser sessions require scoped grants before tool access.",
-          metadata: { retrievalHints: ["browser automation", "external research"] },
+          metadata: {
+            embedding: [0.1, 0.2, 0.3],
+            retrievalHints: ["browser automation", "external research"],
+          },
           pinned: true,
           status: "active",
           lifecycleState: "active",
@@ -352,6 +355,7 @@ describe("MemoryContextService", () => {
       prompt: "How should browser sessions be governed?",
       workspace: "memory",
       forceRefresh: true,
+      queryEmbedding: [0.1, 0.2, 0.3],
     });
 
     expect(pack.citations).toEqual([
@@ -361,8 +365,8 @@ describe("MemoryContextService", () => {
         sourceRef: "mem-browser",
         provenance: expect.objectContaining({
           relationScope: "self",
-          retrievalStrategy: "semantic_vector",
-          selectionReason: expect.stringContaining("semantic-vector retrieval score"),
+          retrievalStrategy: "hybrid_rank",
+          selectionReason: expect.stringContaining("embedding"),
           matchSignals: expect.objectContaining({
             lexicalScore: expect.any(Number),
             semanticVectorScore: expect.any(Number),

@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchDurableRunTimeline: vi.fn(),
   fetchMemoryDecisions: vi.fn(),
   fetchMemoryEntities: vi.fn(),
+  fetchMemoryFeedback: vi.fn(),
   fetchMemoryFiles: vi.fn(),
   fetchMemoryItemHistory: vi.fn(),
   fetchMemoryItems: vi.fn(),
@@ -18,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMemoryMaintenanceStatus: vi.fn(),
   fetchMemoryQmdStats: vi.fn(),
   fetchMemoryRelations: vi.fn(),
+  fetchTraceMemoryCandidates: vi.fn(),
   fetchSettings: vi.fn(),
   forgetMemoryItem: vi.fn(),
   patchMemoryItem: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock("../api/client", () => ({
   fetchDurableRunTimeline: apiMocks.fetchDurableRunTimeline,
   fetchMemoryDecisions: apiMocks.fetchMemoryDecisions,
   fetchMemoryEntities: apiMocks.fetchMemoryEntities,
+  fetchMemoryFeedback: apiMocks.fetchMemoryFeedback,
   fetchMemoryFiles: apiMocks.fetchMemoryFiles,
   fetchMemoryItemHistory: apiMocks.fetchMemoryItemHistory,
   fetchMemoryItems: apiMocks.fetchMemoryItems,
@@ -42,6 +45,7 @@ vi.mock("../api/client", () => ({
   fetchMemoryMaintenanceStatus: apiMocks.fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats: apiMocks.fetchMemoryQmdStats,
   fetchMemoryRelations: apiMocks.fetchMemoryRelations,
+  fetchTraceMemoryCandidates: apiMocks.fetchTraceMemoryCandidates,
   fetchSettings: apiMocks.fetchSettings,
   forgetMemoryItem: apiMocks.forgetMemoryItem,
   patchMemoryItem: apiMocks.patchMemoryItem,
@@ -204,6 +208,36 @@ describe("useMemoryOperatorSnapshot", () => {
         },
       ],
     });
+    apiMocks.fetchMemoryFeedback.mockResolvedValue({
+      items: [
+        {
+          id: "feedback-1",
+          workspaceId: "default",
+          kind: "useful",
+          targetKind: "item",
+          targetId: "mem-1",
+          status: "open",
+          note: "Kept deployment context precise.",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.fetchTraceMemoryCandidates.mockResolvedValue({
+      items: [
+        {
+          id: "candidate-1",
+          workspaceId: "default",
+          status: "proposed",
+          sourceKind: "session",
+          sourceRef: "session-1",
+          summary: "Deployment requires verification before release.",
+          confidence: 0.82,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
     apiMocks.fetchMemoryItemHistory.mockResolvedValue({
       items: [
         { changeId: "chg-1", changeType: "updated", createdAt: "2026-04-22T00:00:00.000Z", actorId: "operator:test" },
@@ -336,6 +370,8 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.memoryEntities.map((item) => item.title)).toEqual(["Project Alpha"]);
     expect(latest?.data?.memoryRelations.map((item) => item.relationType)).toEqual(["uses"]);
     expect(latest?.data?.memoryDecisions.map((item) => item.title)).toEqual(["Keep automation advisory"]);
+    expect(latest?.data?.memoryFeedback.map((item) => item.kind)).toEqual(["useful"]);
+    expect(latest?.data?.traceMemoryCandidates.map((item) => item.status)).toEqual(["proposed"]);
     expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
     expect(apiMocks.fetchMemoryEntities).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
@@ -464,6 +500,8 @@ describe("useMemoryOperatorSnapshot", () => {
     apiMocks.fetchMemoryItemHistory.mockRejectedValue(new Error("history unavailable"));
     apiMocks.fetchMemoryMaintenanceStatus.mockRejectedValue(new Error("status unavailable"));
     apiMocks.fetchMemoryMaintenanceRecommendations.mockRejectedValue(new Error("recommendations unavailable"));
+    apiMocks.fetchMemoryFeedback.mockRejectedValue(new Error("feedback unavailable"));
+    apiMocks.fetchTraceMemoryCandidates.mockRejectedValue(new Error("trace unavailable"));
     apiMocks.fetchMemoryMaintenanceRunProvenance.mockRejectedValue(new Error("provenance unavailable"));
     apiMocks.fetchDurableRun.mockRejectedValue(new Error("durable unavailable"));
     apiMocks.fetchDurableRunTimeline.mockRejectedValue(new Error("timeline unavailable"));
@@ -479,6 +517,8 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.sectionErrors.memoryHistory).toBe("history unavailable");
     expect(latest?.data?.sectionErrors.maintenanceStatus).toBe("status unavailable");
     expect(latest?.data?.sectionErrors.maintenanceRecommendations).toBe("recommendations unavailable");
+    expect(latest?.data?.sectionErrors.memoryFeedback).toBe("feedback unavailable");
+    expect(latest?.data?.sectionErrors.traceMemoryCandidates).toBe("trace unavailable");
     expect(latest?.data?.sectionErrors.selectedRunProvenance).toBe("provenance unavailable");
     expect(latest?.data?.sectionErrors.selectedDurableRun).toBe("durable unavailable");
     expect(latest?.data?.sectionErrors.selectedDurableTimeline).toBe("timeline unavailable");

@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- Route metadata intentionally centralizes the 40-route release surface contract. */
+/* eslint-disable max-lines -- Route metadata intentionally centralizes the release surface contract. */
 export type PrimaryArea = "chat" | "cowork" | "code" | "projects" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
 export type LibrarySection =

@@ -167,6 +167,8 @@ const CHECK_GROUPS = Object.freeze({
           "apps/gateway/src/routes/comms.test.ts",
           "--exclude",
           ".worktrees/**",
+          "--exclude",
+          ".claude/worktrees/**",
         ],
         {
           timeoutMs: 180_000,

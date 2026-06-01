@@ -93,6 +93,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/comms", accessClass: "operator" },
   { prefix: "/api/v1/knowledge", accessClass: "operator" },
   { prefix: "/api/v1/prompt-packs", accessClass: "operator" },
+  { prefix: "/api/v1/trust", accessClass: "operator" },
   { prefix: "/api/v1/replay", accessClass: "operator" },
   { prefix: "/api/v1/admin", accessClass: "operator" },
   { prefix: "/api/v1/docs", accessClass: "operator" },

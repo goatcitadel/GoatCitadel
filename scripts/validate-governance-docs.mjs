@@ -419,8 +419,8 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
-if (!/^Last updated: 2026-05-26$/m.test(releaseEvidence)) {
-  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-26 freshness header.");
+if (!/^Last updated: 2026-06-01$/m.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-06-01 freshness header.");
 }
 if (!/large-service debt/i.test(releaseEvidence) || !/not proof that broad GatewayService decomposition is complete/i.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must keep architecture metrics framed as a large-service debt guard, not decomposition proof.");
@@ -496,6 +496,10 @@ for (const scope of routeReleaseScopes) {
 const canonicalNextReleaseRoutes = routeReleaseScopes.filter((scope) => scope.status !== "hide");
 const manifestRouteKeys = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map(nextReleaseRouteKey));
 const canonicalRouteKeys = new Set(canonicalNextReleaseRoutes.map(nextReleaseRouteKey));
+const releaseScopeDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_SURFACE_SCOPE.md"), "utf8");
+const releaseEvidenceDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md"), "utf8");
+validateReleaseSurfaceScopeDoc(releaseScopeDoc, canonicalNextReleaseRoutes);
+validateReleaseEvidenceCounts(releaseEvidenceDoc, canonicalNextReleaseRoutes);
 if (NEXT_RELEASE_SURFACE_MANIFEST.length !== canonicalNextReleaseRoutes.length) {
   errors.push(
     `scripts/verification/lib/release-surface-manifest.mjs must cover the ${canonicalNextReleaseRoutes.length} canonical Mission Control Next release-surface routes.`,
@@ -687,4 +691,104 @@ function extractTypeUnionLiterals(source, typeName) {
 
 function nextReleaseRouteKey(route) {
   return `${route.expectedArea}/${route.expectedSection ?? "root"}`;
+}
+
+function validateReleaseSurfaceScopeDoc(source, canonicalRoutes) {
+  const documentedRows = parseReleaseSurfaceScopeRows(source);
+  const documentedByRoute = new Map();
+  for (const row of documentedRows) {
+    if (documentedByRoute.has(row.route)) {
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md repeats route ${row.route}.`);
+      continue;
+    }
+    if (!VALID_RELEASE_SURFACE_STATUSES.has(row.status)) {
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md route ${row.route} uses unknown status ${row.status}.`);
+    }
+    documentedByRoute.set(row.route, row);
+  }
+
+  const canonicalByRoute = new Map(canonicalRoutes.map((route) => [releaseScopeDocRoutePath(route), route]));
+  for (const [routePath, route] of canonicalByRoute) {
+    const documented = documentedByRoute.get(routePath);
+    if (!documented) {
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md is missing canonical route ${routePath}.`);
+      continue;
+    }
+    if (documented.status !== route.status) {
+      errors.push(
+        `docs/1_0_RELEASE_SURFACE_SCOPE.md route ${routePath} must use status ${route.status}, not ${documented.status}.`,
+      );
+    }
+  }
+
+  for (const routePath of documentedByRoute.keys()) {
+    if (!canonicalByRoute.has(routePath)) {
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md includes non-canonical route ${routePath}.`);
+    }
+  }
+}
+
+function parseReleaseSurfaceScopeRows(source) {
+  const rows = [];
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/);
+    if (!match) {
+      continue;
+    }
+    rows.push({ route: match[1], status: match[2] });
+  }
+  return rows;
+}
+
+function validateReleaseEvidenceCounts(source, canonicalRoutes) {
+  const expectedCounts = countReleaseStatuses(canonicalRoutes);
+  const match = source.match(
+    /current `1\.0` surface is (\d+) visible routes: (\d+) `ship`, (\d+) `needs_release_polish`, and (\d+) `experimental`/i,
+  );
+  if (!match) {
+    errors.push("docs/1_0_RELEASE_EVIDENCE.md must declare the current visible route status counts.");
+    return;
+  }
+
+  const actual = {
+    total: Number(match[1]),
+    ship: Number(match[2]),
+    needs_release_polish: Number(match[3]),
+    experimental: Number(match[4]),
+  };
+  const expected = {
+    total: canonicalRoutes.length,
+    ship: expectedCounts.ship,
+    needs_release_polish: expectedCounts.needs_release_polish,
+    experimental: expectedCounts.experimental,
+  };
+  for (const key of Object.keys(expected)) {
+    if (actual[key] !== expected[key]) {
+      errors.push(`docs/1_0_RELEASE_EVIDENCE.md route count ${key} must be ${expected[key]}, not ${actual[key]}.`);
+    }
+  }
+}
+
+function countReleaseStatuses(routes) {
+  const counts = {
+    ship: 0,
+    needs_release_polish: 0,
+    experimental: 0,
+  };
+  for (const route of routes) {
+    if (route.status in counts) {
+      counts[route.status] += 1;
+    }
+  }
+  return counts;
+}
+
+function releaseScopeDocRoutePath(route) {
+  if (route.expectedArea === "cowork" && route.expectedSection === "workspace") {
+    return "/cowork";
+  }
+  if (route.expectedSection === "root") {
+    return `/${route.expectedArea}`;
+  }
+  return `/${route.expectedArea}/${route.expectedSection}`;
 }
