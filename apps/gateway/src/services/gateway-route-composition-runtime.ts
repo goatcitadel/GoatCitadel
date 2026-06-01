@@ -109,6 +109,7 @@ export function composeRuntimeAdminRouteDependencies(
       operatorSummaryCache: gateway.operatorSummaryCache,
       promptPackService: gateway.promptPackService,
       realtimeEventService: gateway.realtimeEventService,
+      rootDir: gateway.config.rootDir,
       runtimeLifecycleReadService: gateway.runtimeLifecycleReadService,
       storage: gateway.storage,
     }),

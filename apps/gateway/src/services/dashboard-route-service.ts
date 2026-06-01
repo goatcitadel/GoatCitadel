@@ -8,6 +8,7 @@ import type {
   DurableRunRecord,
   DurableRunTimelineEvent,
   MemoryContextPack,
+  OpsDesignQualitySnapshot,
   OpsQualitySecurityExecutionItem,
   OpsQualitySnapshotResponse,
   PromptPackSecurityEvalPackRecord,
@@ -16,6 +17,7 @@ import type {
   RuntimeLifecycleTurnSummary,
   RuntimeLifecycleToolRunSummary,
 } from "@goatcitadel/contracts";
+import { readDesignQualityEvidence } from "@goatcitadel/skills";
 import type { Storage } from "@goatcitadel/storage";
 import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { DurableOperatorService } from "./durable-operator-service.js";
@@ -54,9 +56,11 @@ export interface DashboardRoutePortDependencies {
   operatorSummaryCache: OperatorSummaryCache;
   promptPackService: Pick<PromptPackService, "listPromptPacks" | "listSecurityEvalPacks" | "listSecurityQualityGates">;
   realtimeEventService: RealtimeEventService;
+  rootDir: string;
   runtimeLifecycleReadService: Pick<RuntimeLifecycleReadService, "getRuntimeLifecycle">;
   storage: Storage;
   isFeatureEnabled: (flag: string) => boolean;
+  readDesignQualityEvidence?: typeof readDesignQualityEvidence;
 }
 
 export type RunTraceAvailabilityState = "available" | "not_available" | "unknown";
@@ -280,14 +284,19 @@ function buildOpsQualitySnapshot(
   const evalProofResult = safeRead(() => deps.storage.llmEvalProofRuns.list(input.evalLimit));
   const securityEvalPacksResult = safeRead(() => deps.promptPackService.listSecurityEvalPacks());
   const securityQualityGatesResult = safeRead(() => deps.promptPackService.listSecurityQualityGates());
+  const designQualityResult = safeRead(() =>
+    (deps.readDesignQualityEvidence ?? readDesignQualityEvidence)(deps.rootDir),
+  );
   const promptPacks = promptPacksResult.value ?? [];
   const evalProofRuns = evalProofResult.value ?? [];
   const securityEvalPacks = securityEvalPacksResult.value?.items ?? [];
   const securityQualityGates = securityQualityGatesResult.value?.items ?? [];
   const securityExecution = buildSecurityExecutionItems(securityEvalPacks, securityQualityGates);
+  const designQuality = designQualityResult.value ?? buildUnknownDesignQualitySnapshot(designQualityResult.error);
   const warnings = [
     ...(securityEvalPacksResult.value?.warnings ?? []),
     ...(securityQualityGatesResult.value?.warnings ?? []),
+    ...designQuality.warnings,
   ];
 
   return {
@@ -319,6 +328,8 @@ function buildOpsQualitySnapshot(
       passingSecurityGateCount: securityQualityGates.filter((gate) => gate.status === "passed").length,
       securityExecutionReadyCount: securityExecution.filter((item) => item.state === "passing").length,
       securityExecutionBlockedCount: securityExecution.filter((item) => item.blockers.length > 0).length,
+      designQualityCheckCount: designQuality.summary.totalChecks,
+      designQualityBlockingCount: designQuality.summary.blockingCount,
     },
     promptPacks: {
       state: promptPacksResult.error ? "unknown" : promptPacks.length > 0 ? "available" : "not_available",
@@ -365,6 +376,7 @@ function buildOpsQualitySnapshot(
           }
         : {}),
     },
+    designQuality,
     warnings,
     nextChecks: [
       {
@@ -382,7 +394,55 @@ function buildOpsQualitySnapshot(
         command: "pnpm verify:surface:regression",
         reason: "Use surface regression for visible operator route changes.",
       },
+      {
+        label: "Design quality",
+        command: "pnpm verify:design:quality",
+        reason: "Use the read-only design-quality checker for skill, routing, anti-slop, and proof-lane evidence.",
+      },
+      {
+        label: "Visual regression",
+        command: "pnpm verify:visual:regression",
+        reason: "Use visual regression for visible layout or baseline-sensitive Mission Control changes.",
+      },
     ],
+  };
+}
+
+function buildUnknownDesignQualitySnapshot(error: Error | undefined): OpsDesignQualitySnapshot {
+  return {
+    state: "unknown",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      source: "repo_files",
+      callsProviders: false,
+      mutationPerformed: false,
+      note: "Design quality evidence could not be read; no providers, browsers, source writes, or baseline updates were attempted.",
+    },
+    summary: {
+      totalChecks: 1,
+      passingCount: 0,
+      advisoryCount: 0,
+      blockingCount: 0,
+      unknownCount: 1,
+      p0Count: 0,
+      p1Count: 1,
+      p2Count: 0,
+      p3Count: 0,
+    },
+    checks: [
+      {
+        id: "design-quality.snapshot",
+        label: "Design quality snapshot",
+        severity: "P1",
+        status: "unknown",
+        owner: "skills/design-quality",
+        evidence: "packages/skills/src/design-quality.ts",
+        nextAction: "Inspect the design-quality checker error and rerun pnpm verify:design:quality.",
+      },
+    ],
+    warnings: [],
+    ...(error ? { error: error.message } : {}),
   };
 }
 

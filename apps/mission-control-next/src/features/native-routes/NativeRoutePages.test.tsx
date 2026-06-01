@@ -95,6 +95,8 @@ const mocks = vi.hoisted(() => ({
       passingSecurityGateCount: 0,
       securityExecutionReadyCount: 0,
       securityExecutionBlockedCount: 1,
+      designQualityCheckCount: 4,
+      designQualityBlockingCount: 0,
     },
     promptPacks: {
       state: "available",
@@ -238,6 +240,64 @@ const mocks = vi.hoisted(() => ({
         },
       ],
     },
+    designQuality: {
+      state: "available",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        source: "repo_files",
+        callsProviders: false,
+        mutationPerformed: false,
+        note: "Design quality evidence reads repo files only.",
+      },
+      summary: {
+        totalChecks: 4,
+        passingCount: 3,
+        advisoryCount: 1,
+        blockingCount: 0,
+        unknownCount: 0,
+        p0Count: 0,
+        p1Count: 1,
+        p2Count: 0,
+        p3Count: 3,
+      },
+      checks: [
+        {
+          id: "design-intelligence.modules",
+          label: "Design-intelligence module integrity",
+          severity: "P3",
+          status: "passing",
+          owner: "skills/bundled/design-intelligence",
+          evidence: "skills/bundled/design-intelligence",
+        },
+        {
+          id: "skills.routing-hints.design-quality",
+          label: "Design-quality routing hints",
+          severity: "P3",
+          status: "passing",
+          owner: "packages/skills",
+          evidence: "packages/skills/src/routing-hints.generated.ts",
+        },
+        {
+          id: "mission-control.anti-slop.scan",
+          label: "Calibrated anti-slop scan",
+          severity: "P1",
+          status: "advisory",
+          owner: "mission-control-next",
+          evidence: "apps/mission-control-next/src",
+          nextAction: "Review token-backed intent for anti-slop hits.",
+        },
+        {
+          id: "design-quality.proof-lanes",
+          label: "Design proof lanes are wired",
+          severity: "P3",
+          status: "passing",
+          owner: "scripts",
+          evidence: "package.json",
+        },
+      ],
+      warnings: ["Design quality advisories are calibrated signals, not release blockers unless promoted to P0."],
+    },
     warnings: ["Security quality gates are read-only projections from stored prompt-pack reports."],
     nextChecks: [
       {
@@ -254,6 +314,16 @@ const mocks = vi.hoisted(() => ({
         label: "Surface regression",
         command: "pnpm verify:surface:regression",
         reason: "Use surface regression for visible operator route changes.",
+      },
+      {
+        label: "Design quality",
+        command: "pnpm verify:design:quality",
+        reason: "Use the read-only design-quality checker.",
+      },
+      {
+        label: "Visual regression",
+        command: "pnpm verify:visual:regression",
+        reason: "Use visual regression for visible layout or baseline-sensitive changes.",
       },
     ],
   })),
@@ -811,6 +881,14 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain("Scoring required · 67% run coverage · 50% scored · 67% pass");
     expect(text).toContain("12/18 runs · 3 need score");
     expect(text).toContain("Failing codes: SEC-003, SEC-007");
+    expect(text).toContain("Design quality");
+    expect(text).toContain("Design-intelligence module integrity");
+    expect(text).toContain("Calibrated anti-slop scan");
+    expect(text).toContain("P1 · Advisory · mission-control-next");
+    expect(text).toContain("No provider calls");
+    expect(text).toContain("No source writes");
+    expect(text).toContain("design:quality");
+    expect(text).toContain("visual:regression");
     expect(text).toContain("Eval proof");
     expect(text).toContain("Eval proof JSON export");
     expect(text).toContain("Run trace JSON");

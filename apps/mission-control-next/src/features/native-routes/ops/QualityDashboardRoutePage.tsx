@@ -65,6 +65,8 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           passingSecurityGateCount: 0,
           securityExecutionReadyCount: 0,
           securityExecutionBlockedCount: 0,
+          designQualityCheckCount: 0,
+          designQualityBlockingCount: 0,
         },
         promptPacks: { state: "not_available", items: [] as PromptPackRecord[] },
         evalProof: { state: "not_available", items: [] as LlmEvalProofRunRecord[] },
@@ -83,6 +85,30 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           items: [],
           warnings: [],
         },
+        designQuality: {
+          state: "not_available",
+          posture: {
+            readOnly: true,
+            sideEffectPosture: "audit_only",
+            source: "repo_files",
+            callsProviders: false,
+            mutationPerformed: false,
+            note: "Fallback design-quality snapshot contains no repo evidence.",
+          },
+          summary: {
+            totalChecks: 0,
+            passingCount: 0,
+            advisoryCount: 0,
+            blockingCount: 0,
+            unknownCount: 0,
+            p0Count: 0,
+            p1Count: 0,
+            p2Count: 0,
+            p3Count: 0,
+          },
+          checks: [],
+          warnings: [],
+        },
         warnings: [],
         nextChecks: [],
       } satisfies OpsQualitySnapshotResponse,
@@ -99,6 +125,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       securityGateWarnings: quality.securityQualityGates.warnings,
       securityExecution: quality.securityExecution.items,
       securityExecutionWarnings: quality.securityExecution.warnings,
+      designQuality: quality.designQuality,
     };
   }, []);
 
@@ -107,6 +134,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const securityEvalPacks = data?.securityEvalPacks ?? [];
   const securityGates = data?.securityGates ?? [];
   const securityExecution = data?.securityExecution ?? [];
+  const designQuality = data?.designQuality;
   const quality = data?.quality;
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? packs[0] ?? null;
   const totalTests =
@@ -509,6 +537,65 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         </NativeCard>
 
         <NativeCard
+          title="Design quality"
+          subtitle="Read-only skill, routing, anti-slop, and visual-proof evidence for Mission Control design work."
+          stats={[
+            { label: "Checks", value: String(designQuality?.summary.totalChecks ?? 0) },
+            { label: "Passing", value: String(designQuality?.summary.passingCount ?? 0) },
+            { label: "Advisory", value: String(designQuality?.summary.advisoryCount ?? 0) },
+            { label: "Blocking", value: String(designQuality?.summary.blockingCount ?? 0) },
+          ]}
+        >
+          {designQuality?.error ? (
+            <div className="mc-next-directory-alert">{designQuality.error}</div>
+          ) : data?.designQuality?.warnings[0] ? (
+            <div className="mc-next-runtime-notice tone-info">{data.designQuality.warnings[0]}</div>
+          ) : null}
+          <div className="mc-next-approvals-chip-row">
+            <StatusChip tone={designQuality?.state === "available" ? "success" : "warning"}>
+              {formatAvailabilityState(designQuality?.state)}
+            </StatusChip>
+            <StatusChip tone="muted">Read-only</StatusChip>
+            <StatusChip tone="muted">No provider calls</StatusChip>
+            <StatusChip tone="muted">No source writes</StatusChip>
+          </div>
+          <LibraryMetricGrid
+            items={[
+              { label: "P0", value: String(designQuality?.summary.p0Count ?? 0), meta: "blocking" },
+              { label: "P1", value: String(designQuality?.summary.p1Count ?? 0), meta: "serious advisory" },
+              { label: "P2", value: String(designQuality?.summary.p2Count ?? 0), meta: "medium advisory" },
+              { label: "P3", value: String(designQuality?.summary.p3Count ?? 0), meta: "passing/info" },
+            ]}
+          />
+          <NativeList
+            density="compact"
+            items={(designQuality?.checks ?? []).map((check) => ({
+              title: check.label,
+              meta: `${check.severity} · ${formatDesignQualityStatus(check.status)} · ${check.owner}`,
+              body: check.nextAction ?? check.evidence,
+            }))}
+            emptyLabel="No design-quality checks are available."
+            maxHeight="min(36vh, 24rem)"
+          />
+          <div className="mc-next-approvals-inline-actions">
+            <button
+              type="button"
+              className="mc-next-secondary-button"
+              onClick={() => navigate({ area: "library", section: "skills", theme: route.theme })}
+            >
+              Open skills
+            </button>
+            <button
+              type="button"
+              className="mc-next-secondary-button"
+              onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
+            >
+              Open runtime evidence
+            </button>
+          </div>
+        </NativeCard>
+
+        <NativeCard
           title="Security execution depth"
           subtitle="Stored defensive-security run coverage, scoring coverage, and pass posture by pack."
           stats={[
@@ -742,6 +829,21 @@ function formatSecurityExecutionState(
   return "Unknown";
 }
 
+function formatAvailabilityState(state: OpsQualitySnapshotResponse["designQuality"]["state"] | undefined): string {
+  if (state === "available") return "Available";
+  if (state === "not_available") return "Not available";
+  return "Unknown";
+}
+
+function formatDesignQualityStatus(
+  status: OpsQualitySnapshotResponse["designQuality"]["checks"][number]["status"],
+): string {
+  if (status === "passing") return "Passing";
+  if (status === "advisory") return "Advisory";
+  if (status === "blocking") return "Blocking";
+  return "Unknown";
+}
+
 function formatSecurityModeCounts(
   counts: OpsQualitySnapshotResponse["securityExecution"]["items"][number]["modeCounts"],
 ): string {
@@ -769,5 +871,6 @@ function qualitySnapshotIssues(snapshot: OpsQualitySnapshotResponse): NativeLoad
     snapshot.securityExecution.error
       ? { label: "Security execution depth", message: snapshot.securityExecution.error }
       : null,
+    snapshot.designQuality.error ? { label: "Design quality", message: snapshot.designQuality.error } : null,
   ].filter((issue): issue is NativeLoadIssue => Boolean(issue));
 }

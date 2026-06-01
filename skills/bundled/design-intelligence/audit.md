@@ -36,6 +36,10 @@ Full audit should produce:
 
 Audit every output across these eight dimensions.
 
+Before scoring, name the surface register: `product UI`, `ops dashboard`,
+`brand/marketing`, `docs/evidence`, or `mobile`. The same visual choice can be a
+healthy product-system move in one register and AI slop in another.
+
 ### 1. Correctness
 
 Check:
@@ -201,6 +205,41 @@ Evaluate these questions:
 - forced uniqueness that damages readability
 - expressive motion in a settings page
 - characterful typography that makes a data console harder to scan
+
+## Five-Dimension Critique
+
+Use this quick scoring pass before shipping or reporting a substantial visual
+change. Score each dimension from 1 to 5, then fix anything under 3 before
+claiming the work is polished.
+
+1. `Intent fit`: the surface register, audience, density, and tone match the job.
+2. `Hierarchy`: the eye has a clear path through headings, actions, and status.
+3. `Execution`: spacing, alignment, contrast, type, and responsive behavior hold
+   together under real content.
+4. `Specificity`: copy, metrics, labels, and imagery are grounded in the product
+   instead of generic filler.
+5. `Restraint`: accent, motion, elevation, and ornament serve one clear purpose.
+
+For GoatCitadel, do not penalize token-backed dark operations chrome, compact
+panels, rails, or teal/cool accents by default. Penalize them only when they
+hide status, harm readability, or create inaccessible contrast/motion.
+
+## Design Quality Evidence
+
+When the audit feeds Ops Quality or a verification lane, findings must be
+machine-readable enough to route:
+
+- `P0`: blocks design-quality success; usually missing files, unresolved
+  placeholders, broken accessibility/correctness, or absent proof wiring.
+- `P1`: serious advisory; likely design debt or stale routing that should be
+  fixed before shipping a related surface.
+- `P2`: medium advisory; quality weakness, false-positive-prone anti-slop hit,
+  or proof improvement.
+- `P3`: polish or informational evidence.
+
+Every finding should include a concrete evidence path and a next action where
+possible. Do not claim browser, screenshot, provider, or source-write proof
+unless that proof actually ran.
 
 ## Dimension Checklists
 

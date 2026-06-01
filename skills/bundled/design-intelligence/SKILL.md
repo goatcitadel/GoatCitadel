@@ -25,6 +25,87 @@ This skill is not for:
 
 Assume React, TypeScript, and Tailwind examples when useful. Keep the reasoning framework portable to other stacks.
 
+## Design Quality V1
+
+This skill is also GoatCitadel's native design-quality layer. It may borrow
+portable concepts from outside design tools, but it must not install, invoke, or
+claim external design runtimes by default.
+
+Use this model for GoatCitadel work:
+
+- `surface intent`: what the user is trying to do and which register the UI
+  belongs to
+- `design system/tokens`: the existing Mission Control tokens, primitives,
+  spacing, typography, icon family, and route patterns
+- `craft rules`: universal quality rules for hierarchy, state coverage,
+  accessibility, motion, specificity, and anti-slop behavior
+
+These three axes keep design work grounded. A tasteful idea that ignores
+surface intent is noise. A strong craft rule that fights the product tokens
+needs calibration. A token-faithful surface that ships missing states is still
+not good enough.
+
+### Lifecycle Vocabulary
+
+Use this lifecycle when explaining design work:
+
+- `Start`: lock the product brief, audience, surface register, and constraints
+  before designing. Maps mostly to `Create`.
+- `Iterate`: improve something visible in place using the existing code and
+  design system. Maps mostly to `Adopt`.
+- `Polish`: run the pre-ship pass for hierarchy, states, copy specificity,
+  responsiveness, accessibility, and visual coherence. Maps mostly to `Repair`
+  plus `shipping` profile.
+- `Maintain`: pay down design debt, token drift, inconsistent components, and
+  recurring AI-output tells before they harden. Maps to `Repair` in conservative
+  mode.
+
+### GoatCitadel Registers
+
+Always identify the register before recommending visual changes:
+
+- `product UI`: Chat, Cowork, Code, Projects, Library, Settings, and most app
+  workflows. Optimize for trust, scanability, state visibility, and repeated use.
+- `ops dashboard`: Runtime, Quality, diagnostics, cost, backups, approvals, and
+  release proof. Dense is acceptable when hierarchy is clear; dark technical
+  chrome and teal/cool accents are valid when token-backed.
+- `brand/marketing`: public pages, launch narratives, decks, and screenshots.
+  Stronger variance is allowed, but claims and imagery must remain truthful.
+- `docs/evidence`: reference, reports, runbooks, quality evidence, and release
+  notes. Optimize for reading order, provenance, and durable anchors.
+- `mobile`: not a shrunken desktop. Reprioritize navigation, touch targets,
+  safe areas, loading/error states, and long content.
+
+### Calibrated Anti-Slop
+
+Treat these as high-signal problems:
+
+- inaccessible controls, missing keyboard/focus behavior, unsafe motion
+- fake completeness, placeholder copy, invented metrics, or vague hype
+- missing loading/empty/error/disabled/success/no-access states
+- generic purple/blue gradients, decorative glass, emoji-as-icons, or card
+  patterns that do not serve the product
+- flat type hierarchy, weak content specificity, and layout that collapses on
+  mobile or long strings
+
+Do not over-apply outside advice. GoatCitadel may use dark operational chrome,
+cool neon/teal accents, compact panels, rails, and data-heavy layouts when they
+come from the Mission Control system and improve operator comprehension.
+
+### Pre-Ship Loop
+
+For non-trivial UI work, run this loop before final reporting:
+
+1. Read the existing tokens, components, route context, and proof lanes.
+2. Lock the brief: audience, surface register, success criteria, and constraints.
+3. Plan the smallest visible change that fits the current system.
+4. Implement or recommend using existing primitives first.
+5. Check the required state set and accessibility contracts.
+6. Run a five-dimension critique: intent fit, hierarchy, execution, specificity,
+   and restraint.
+7. Report proof: files touched, evidence checked, validation run, and remaining
+   uncertainty.
+
 ## Operating Modes
 
 ### Create

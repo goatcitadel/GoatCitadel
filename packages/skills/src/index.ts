@@ -6,3 +6,4 @@ export * from "./activation.js";
 export * from "./loader.js";
 export * from "./routing-hints.generated.js";
 export * from "./export-renderer.js";
+export * from "./design-quality.js";

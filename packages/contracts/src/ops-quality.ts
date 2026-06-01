@@ -7,6 +7,45 @@ import type { LlmEvalProofRunRecord } from "./llm.js";
 
 export type OpsQualityAvailabilityState = "available" | "not_available" | "unknown";
 
+export type OpsDesignQualitySeverity = "P0" | "P1" | "P2" | "P3";
+export type OpsDesignQualityCheckStatus = "passing" | "advisory" | "blocking" | "unknown";
+
+export interface OpsDesignQualityCheck {
+  id: string;
+  label: string;
+  severity: OpsDesignQualitySeverity;
+  status: OpsDesignQualityCheckStatus;
+  owner: string;
+  evidence: string;
+  nextAction?: string;
+}
+
+export interface OpsDesignQualitySnapshot {
+  state: OpsQualityAvailabilityState;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    source: "repo_files";
+    callsProviders: false;
+    mutationPerformed: false;
+    note: string;
+  };
+  summary: {
+    totalChecks: number;
+    passingCount: number;
+    advisoryCount: number;
+    blockingCount: number;
+    unknownCount: number;
+    p0Count: number;
+    p1Count: number;
+    p2Count: number;
+    p3Count: number;
+  };
+  checks: OpsDesignQualityCheck[];
+  warnings: string[];
+  error?: string;
+}
+
 export type OpsQualitySecurityExecutionState =
   | "definition_missing"
   | "definition_only"
@@ -76,6 +115,8 @@ export interface OpsQualitySnapshotResponse {
     passingSecurityGateCount: number;
     securityExecutionReadyCount: number;
     securityExecutionBlockedCount: number;
+    designQualityCheckCount: number;
+    designQualityBlockingCount: number;
   };
   promptPacks: {
     state: OpsQualityAvailabilityState;
@@ -105,6 +146,7 @@ export interface OpsQualitySnapshotResponse {
     warnings: string[];
     error?: string;
   };
+  designQuality: OpsDesignQualitySnapshot;
   warnings: string[];
   nextChecks: Array<{
     label: string;

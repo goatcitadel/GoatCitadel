@@ -18,10 +18,20 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     confidenceBoost: 0.1,
   },
   "design-intelligence": {
-    phrases: ["design review", "visual polish", "layout critique", "ux review"],
-    keywords: ["design", "layout", "visual", "accessibility", "ux"],
+    phrases: [
+      "design review",
+      "design quality",
+      "visual polish",
+      "layout critique",
+      "ux review",
+      "anti-slop",
+      "design-system audit",
+    ],
+    keywords: ["design", "design-quality", "anti-slop", "layout", "visual", "accessibility", "ux"],
     surfaces: ["code", "cowork"],
-    whenToUse: ["Review or improve UI quality, visual hierarchy, responsive behavior, or accessibility."],
+    whenToUse: [
+      "Review or improve UI quality, visual hierarchy, responsive behavior, accessibility, anti-slop posture, or design-system fit.",
+    ],
     whenNotToUse: ["Do not use for backend-only changes without user-visible UI implications."],
     confidenceBoost: 0.08,
   },

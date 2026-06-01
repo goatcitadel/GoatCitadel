@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpsDesignQualitySnapshot } from "@goatcitadel/contracts";
 import {
   createDashboardRoutePort,
   createDashboardRouteService,
@@ -44,6 +45,8 @@ describe("dashboard route service", () => {
         passingSecurityGateCount: 1,
         securityExecutionReadyCount: 1,
         securityExecutionBlockedCount: 0,
+        designQualityCheckCount: 2,
+        designQualityBlockingCount: 0,
       },
       posture: { readOnly: true, sideEffectPosture: "audit_only" },
       promptPacks: { state: "available" },
@@ -64,6 +67,15 @@ describe("dashboard route service", () => {
           },
         ],
       },
+      designQuality: {
+        state: "available",
+        summary: {
+          totalChecks: 2,
+          passingCount: 2,
+          advisoryCount: 0,
+          blockingCount: 0,
+        },
+      },
     });
 
     expect(deps.storage.costLedger.summary).toHaveBeenCalledWith("month", "from", "to");
@@ -76,6 +88,7 @@ describe("dashboard route service", () => {
     expect(deps.storage.sessions.listOperatorSummaries).toHaveBeenCalledWith(expect.any(String));
     expect(deps.promptPackService.listPromptPacks).toHaveBeenCalledWith(10);
     expect(deps.storage.llmEvalProofRuns.list).toHaveBeenCalledWith(3);
+    expect(deps.readDesignQualityEvidence).toHaveBeenCalledWith(deps.rootDir);
   });
 
   it("returns partial Ops quality evidence with explicit unknown state when one source fails", async () => {
@@ -112,6 +125,73 @@ describe("dashboard route service", () => {
       error: "security gate store unavailable",
     });
     expect(snapshot.posture).toMatchObject({ readOnly: true, sideEffectPosture: "audit_only" });
+  });
+
+  it("projects blocking and advisory design-quality evidence into the Ops quality snapshot", async () => {
+    const deps = createDeps();
+    deps.readDesignQualityEvidence.mockReturnValueOnce(
+      buildDesignQualitySnapshot({
+        checks: [
+          {
+            id: "design-intelligence.modules",
+            label: "Design-intelligence module integrity",
+            severity: "P0",
+            status: "blocking",
+            owner: "skills/bundled/design-intelligence",
+            evidence: "skills/bundled/design-intelligence",
+            nextAction: "Restore missing module.",
+          },
+          {
+            id: "mission-control.anti-slop.scan",
+            label: "Calibrated anti-slop scan",
+            severity: "P2",
+            status: "advisory",
+            owner: "mission-control-next",
+            evidence: "apps/mission-control-next/src",
+            nextAction: "Review token-backed intent.",
+          },
+        ],
+        warnings: ["Design quality advisories are calibrated signals."],
+      }),
+    );
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const snapshot = await service.getOpsQualitySnapshot({ packLimit: 10, evalLimit: 3 });
+
+    expect(snapshot.metrics.designQualityCheckCount).toBe(2);
+    expect(snapshot.metrics.designQualityBlockingCount).toBe(1);
+    expect(snapshot.designQuality).toMatchObject({
+      state: "available",
+      summary: {
+        totalChecks: 2,
+        advisoryCount: 1,
+        blockingCount: 1,
+      },
+      checks: [
+        { id: "design-intelligence.modules", severity: "P0", status: "blocking" },
+        { id: "mission-control.anti-slop.scan", severity: "P2", status: "advisory" },
+      ],
+    });
+    expect(snapshot.warnings).toContain("Design quality advisories are calibrated signals.");
+  });
+
+  it("keeps Ops quality available when design-quality evidence cannot be read", async () => {
+    const deps = createDeps();
+    deps.readDesignQualityEvidence.mockImplementationOnce(() => {
+      throw new Error("design quality store unavailable");
+    });
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const snapshot = await service.getOpsQualitySnapshot({ packLimit: 10, evalLimit: 3 });
+
+    expect(snapshot.promptPacks.state).toBe("available");
+    expect(snapshot.designQuality).toMatchObject({
+      state: "unknown",
+      error: "design quality store unavailable",
+      checks: [{ id: "design-quality.snapshot", status: "unknown" }],
+    });
+    expect(snapshot.metrics.designQualityCheckCount).toBe(1);
+    expect(snapshot.metrics.designQualityBlockingCount).toBe(0);
   });
 
   it("builds dashboard state and system vitals without changing response shape", async () => {
@@ -593,6 +673,8 @@ describe("dashboard route service", () => {
 
 function createDeps() {
   return {
+    rootDir: "F:/code/personal-ai",
+    readDesignQualityEvidence: vi.fn(() => buildDesignQualitySnapshot()),
     backupRetentionService: {
       listBackups: vi.fn(() => [{ backupId: "backup-1" }]),
     },
@@ -694,6 +776,58 @@ function createDeps() {
       getRuntimeLifecycle: vi.fn(),
     },
     isFeatureEnabled: vi.fn(() => true),
+  };
+}
+
+function buildDesignQualitySnapshot(
+  input: {
+    checks?: OpsDesignQualitySnapshot["checks"];
+    warnings?: string[];
+    error?: string;
+  } = {},
+): OpsDesignQualitySnapshot {
+  const checks = input.checks ?? [
+    {
+      id: "design-intelligence.modules",
+      label: "Design-intelligence module integrity",
+      severity: "P3",
+      status: "passing",
+      owner: "skills/bundled/design-intelligence",
+      evidence: "skills/bundled/design-intelligence",
+    },
+    {
+      id: "design-quality.proof-lanes",
+      label: "Design proof lanes are wired",
+      severity: "P3",
+      status: "passing",
+      owner: "scripts",
+      evidence: "package.json",
+    },
+  ];
+  return {
+    state: input.error ? "unknown" : "available",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      source: "repo_files",
+      callsProviders: false,
+      mutationPerformed: false,
+      note: "Design quality evidence reads repo files only.",
+    },
+    summary: {
+      totalChecks: checks.length,
+      passingCount: checks.filter((item) => item.status === "passing").length,
+      advisoryCount: checks.filter((item) => item.status === "advisory").length,
+      blockingCount: checks.filter((item) => item.status === "blocking").length,
+      unknownCount: checks.filter((item) => item.status === "unknown").length,
+      p0Count: checks.filter((item) => item.severity === "P0").length,
+      p1Count: checks.filter((item) => item.severity === "P1").length,
+      p2Count: checks.filter((item) => item.severity === "P2").length,
+      p3Count: checks.filter((item) => item.severity === "P3").length,
+    },
+    checks,
+    warnings: input.warnings ?? [],
+    ...(input.error ? { error: input.error } : {}),
   };
 }
 
