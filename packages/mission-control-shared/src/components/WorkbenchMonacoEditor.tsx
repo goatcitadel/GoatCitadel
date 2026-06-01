@@ -1,11 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
-import {
-  loadMonacoEditorRuntime,
-  normalizeMonacoLoaderLanguage,
-  type MonacoEditorApiModule,
-} from "./monaco-loader";
+import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface WorkbenchMonacoEditorProps {
   value: string;
@@ -18,6 +14,9 @@ interface WorkbenchMonacoEditorProps {
   onSave?: () => void;
   className?: string;
 }
+
+const WORKBENCH_EDITOR_FONT_SIZE = 12;
+const WORKBENCH_EDITOR_LINE_HEIGHT = 18;
 
 function resolveMonacoTheme(): "vs" | "vs-dark" {
   if (typeof document === "undefined") {
@@ -43,9 +42,25 @@ export function WorkbenchMonacoEditor({
   const monacoRef = useRef<MonacoEditorApiModule | null>(null);
   const editorRef = useRef<MonacoEditorNamespace.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
-  const latestPropsRef = useRef({ value, language: resolvedLanguage, readOnly, onChange, onCommandPalette, onQuickOpen, onSave });
+  const latestPropsRef = useRef({
+    value,
+    language: resolvedLanguage,
+    readOnly,
+    onChange,
+    onCommandPalette,
+    onQuickOpen,
+    onSave,
+  });
   const applyingExternalValueRef = useRef(false);
-  latestPropsRef.current = { value, language: resolvedLanguage, readOnly, onChange, onCommandPalette, onQuickOpen, onSave };
+  latestPropsRef.current = {
+    value,
+    language: resolvedLanguage,
+    readOnly,
+    onChange,
+    onCommandPalette,
+    onQuickOpen,
+    onSave,
+  };
 
   useEffect(() => {
     if (!shouldRenderMonacoRuntime() || !containerRef.current) {
@@ -63,7 +78,9 @@ export function WorkbenchMonacoEditor({
       modelRef.current = model;
       const editor = monaco.editor.create(containerRef.current, {
         automaticLayout: true,
+        fontSize: WORKBENCH_EDITOR_FONT_SIZE,
         glyphMargin: false,
+        lineHeight: WORKBENCH_EDITOR_LINE_HEIGHT,
         lineNumbers: "on",
         minimap: { enabled: false },
         model,
@@ -156,5 +173,11 @@ export function WorkbenchMonacoEditor({
     );
   }
 
-  return <div ref={containerRef} className={className} style={{ minHeight: typeof height === "number" ? `${height}px` : height }} />;
+  return (
+    <div
+      ref={containerRef}
+      className={className}
+      style={{ minHeight: typeof height === "number" ? `${height}px` : height }}
+    />
+  );
 }

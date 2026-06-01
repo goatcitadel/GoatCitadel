@@ -1921,7 +1921,7 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   border-radius: 0.72rem;
 }
 
-@container (min-width: 31rem) {
+@container (min-width: 44rem) {
   .mc-next-threaded-side-panel.code .mc-next-workbench-body {
     grid-template-columns:
       minmax(7.5rem, clamp(7.5rem, var(--mc-code-file-pane, 22%), 12rem))
@@ -1942,7 +1942,7 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   }
 }
 
-@container (min-width: 58rem) {
+@container (min-width: 64rem) {
   .mc-next-threaded-side-panel.code .mc-next-workbench-body {
     grid-template-columns: minmax(10rem, var(--mc-code-file-pane, 25%)) minmax(0, 1fr) minmax(14rem, 17rem);
   }

@@ -14,6 +14,7 @@
  * authoritative source. See `scripts/check-mission-control-next-token-drift.mjs`.
  */
 .mc-next-shell {
+  --density-type-scale: 0.92;
   --gc-area-chat: var(--area-chat);
   --gc-area-cowork: var(--area-cowork);
   --gc-area-code: var(--area-code);
@@ -27,12 +28,25 @@
   --gc-risk-nuclear: var(--risk-nuclear);
   --mc-area-color: var(--area-chat);
   --mc-scrollbar-safe-gutter: 0.85rem;
+  --text-xs: calc(0.75rem * var(--density-type-scale));
+  --text-sm: calc(0.8125rem * var(--density-type-scale));
+  --text-md: calc(0.875rem * var(--density-type-scale));
+  --text-lg: calc(1rem * var(--density-type-scale));
+  --text-xl: calc(1.125rem * var(--density-type-scale));
   min-height: 100dvh;
   position: relative;
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
   font-size: var(--text-sm, 0.8125rem);
+}
+
+.mc-next-shell.ui-density-comfortable {
+  --density-type-scale: 1;
+}
+
+.mc-next-shell.ui-density-compact {
+  --density-type-scale: 0.88;
 }
 
 .mc-next-shell[data-area="chat"] {
@@ -942,7 +956,7 @@
 .mc-next-inspector-section p {
   color: var(--text-secondary);
   line-height: 1.45;
-  font-size: 0.9rem;
+  font-size: var(--text-md);
 }
 
 .mc-next-stage-chips {
@@ -961,7 +975,7 @@
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-stage-chip.warning {
@@ -1066,12 +1080,12 @@
 }
 
 .mc-next-inline-metrics strong {
-  font-size: 1.05rem;
+  font-size: var(--text-lg);
 }
 
 .mc-next-inline-metrics span {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-inspector-section {
@@ -1081,7 +1095,7 @@
 
 .mc-next-inspector-section h4 {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: var(--text-md);
   color: var(--foreground);
 }
 

@@ -1,11 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
-import {
-  loadMonacoEditorRuntime,
-  normalizeMonacoLoaderLanguage,
-  type MonacoEditorApiModule,
-} from "./monaco-loader";
+import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface MonacoDiffEditorProps {
   original: string;
@@ -15,6 +11,9 @@ interface MonacoDiffEditorProps {
   className?: string;
   renderSideBySide?: boolean;
 }
+
+const WORKBENCH_DIFF_FONT_SIZE = 12;
+const WORKBENCH_DIFF_LINE_HEIGHT = 18;
 
 function resolveMonacoTheme(): "vs" | "vs-dark" {
   if (typeof document === "undefined") {
@@ -71,7 +70,9 @@ export function MonacoDiffEditor({
       monaco.editor.setTheme(resolveMonacoTheme());
       editorRef.current = monaco.editor.createDiffEditor(containerRef.current, {
         automaticLayout: true,
+        fontSize: WORKBENCH_DIFF_FONT_SIZE,
         glyphMargin: false,
+        lineHeight: WORKBENCH_DIFF_LINE_HEIGHT,
         lineNumbers: "on",
         minimap: { enabled: false },
         readOnly: true,
