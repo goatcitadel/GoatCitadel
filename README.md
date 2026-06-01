@@ -10,76 +10,87 @@
 [![Monorepo](https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge)](./package.json)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/goatcitadel/GoatCitadel)
 
-[goatcitadel.app](https://goatcitadel.app) is the public website for GoatCitadel. This repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported claims.
+README last updated: 2026-06-01
 
-GoatCitadel is a hybrid local/cloud AI workspace for real operator workflows. It combines a Mission Control UI, a Fastify gateway, shared orchestration and policy packages, governed code execution, local-first memory/context flows, native desktop packaging, and inspectable runtime evidence.
+[goatcitadel.app](https://goatcitadel.app) is the public product site. This repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported technical claims.
 
-It is not only a chat UI. GoatCitadel is meant to help users talk with AI, supervise agentic work, implement and review code, manage providers/tools/memory/integrations, and understand what happened when the system used context, tools, approvals, or durable execution.
+GoatCitadel is built for operators who want more leverage than a chat box and more control than a hidden-state agent platform. It combines a Mission Control UI, a Fastify gateway, shared orchestration and policy packages, governed Code Mode, local-first memory/context flows, native Windows desktop packaging, and inspectable runtime evidence.
+
+## Screenshots
+
+The images below are regenerated from a sanitized Mission Control Next demo runtime. They are for a quick product tour; release visual proof is owned by the checked-in visual regression baselines and `pnpm verify:visual:regression`.
+
+<table>
+  <tr>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/chat.png" alt="Mission Control Chat surface" /></td>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/cowork.png" alt="Mission Control Cowork surface" /></td>
+  </tr>
+  <tr>
+    <td><strong>Chat</strong><br />Fast conversation with routing, context, citations, and tool visibility nearby.</td>
+    <td><strong>Cowork</strong><br />Supervised agentic work with plans, approvals, checkpoints, and run evidence.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/code.png" alt="Mission Control Code surface" /></td>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/projects.png" alt="Mission Control Projects surface" /></td>
+  </tr>
+  <tr>
+    <td><strong>Code</strong><br />Implementation, review, debugging, workbench state, and governed Code Mode runs.</td>
+    <td><strong>Projects</strong><br />Project containers that bind Chat, Cowork, and Code work together.</td>
+  </tr>
+  <tr>
+    <td width="33%"><img src="./docs/screenshots/mission-control-next/library-capabilities.png" alt="Mission Control Library capability browser" /></td>
+    <td width="33%"><img src="./docs/screenshots/mission-control-next/ops-runtime.png" alt="Mission Control Ops runtime surface" /></td>
+    <td width="33%"><img src="./docs/screenshots/mission-control-next/settings-providers.png" alt="Mission Control Settings providers surface" /></td>
+  </tr>
+  <tr>
+    <td><strong>Library</strong><br />Skills, memory, files, artifacts, and capability evidence.</td>
+    <td><strong>Ops</strong><br />Runtime health, backups, diagnostics, activity, costs, and proof posture.</td>
+    <td><strong>Settings</strong><br />Providers, models, integrations, channels, MCP, tools, auth, and workspace controls.</td>
+  </tr>
+</table>
+
+[Open the generated screenshot gallery.](./docs/screenshots/mission-control-next/index.html)
+
+Regenerate the public gallery from a throwaway sanitized runtime:
+
+```bash
+pnpm screenshots:capture
+```
+
+## Current Release Truth
+
+| Area | Current truth |
+| --- | --- |
+| Canonical shell | [apps/mission-control-next](./apps/mission-control-next) is the `1.0` Mission Control shell. |
+| Retired shell | `apps/mission-control` source is archived from disk. Generated build/runtime residue may still exist locally, but it is not a shipped compatibility source. |
+| Runtime owner | [apps/gateway](./apps/gateway) is the Fastify control plane for runtime APIs, orchestration, approvals, memory, integrations, audit, policy, realtime events, and persistence coordination. |
+| Visible IA | Mission Control navigation is `Chat / Cowork / Code / Projects / Library / Ops / Settings`. |
+| Route scope | The current visible route surface is 41 routes: 36 `ship`, 0 `needs_release_polish`, and 5 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
+| Durable execution | Durable runs own the shipped resumable mission-session Chat, Cowork, and Code flow set. |
+| Code Mode | Code Mode v1 is a governed trusted-code surface with explicit approval, recorded artifact hashes, and execution-time hash checks. It is not a hostile-code sandbox claim. |
+| Code backends | The trusted-code host runner is the default. Docker is selectable only when explicitly configured. The Aider adapter is Docker-backed and audit-only; no patch replay, candidate promotion, or operator-workspace mutation is claimed. |
+| Memory | `MemoryLifecycleService` owns operator-facing memory lifecycle behavior, explicit recall, trace-derived memory proposals, feedback, dedupe, scope, and write policy. |
+| MCP | Local `stdio` plus the built-in Approval Inbox path are the runtime-supported MCP invocation posture. Remote HTTP/SSE is read-only preview/blocked for generic invocation unless separately promoted. |
+| Desktop/installers | Windows x64 and arm64 installer paths are part of the product shape. Public-trust signed EXE distribution requires exact-SHA proof plus a release certificate; unsigned convenience installers must be labeled as unsigned. |
+| Docker | Docker is a supported local/shared-host runtime boundary. It does not replace auth, approvals, path jails, allowlists, or policy. |
+
+The authoritative claim set is [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md), and [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./docs/CANONICAL_RUNTIME_STATE_MODEL.md).
 
 ## Product Surfaces
 
 | Surface | Purpose | Primary feel |
 | --- | --- | --- |
-| Chat | Fast conversation, questions, drafting, and lightweight help | Simple, direct, low-friction |
-| Cowork | Supervised agentic work, planning, research, approvals, and durable multi-step execution | Guided, transparent, powerful |
-| Code | Implementation, debugging, review, and governed trusted-code execution | Technical, precise, test-driven |
+| Chat | Fast conversation, questions, drafting, lightweight help | Simple, direct, low-friction |
+| Cowork | Supervised agentic work, planning, research, approvals, durable multi-step execution | Guided, transparent, powerful |
+| Code | Implementation, debugging, review, governed trusted-code execution | Technical, precise, test-driven |
 | Projects | Workspace and project organization | Structured, navigable |
-| Library | Skills, memory, files, artifacts, and capability evidence | Inspectable, provenance-aware |
-| Ops | Runtime health, activity, cost, diagnostics, backups, and release proof | Operational, high-signal |
-| Settings | Providers, models, tools, integrations, channels, auth, and workspace controls | Clear, progressive, safe |
-
-## Mission Control Screenshots
-
-These README-facing screenshots are regenerated from a sanitized Mission Control Next demo runtime. They are useful for a quick product tour; release visual proof still comes from the checked-in visual regression baselines described below.
-
-| Chat | Cowork |
-| --- | --- |
-| ![Chat surface](./docs/screenshots/mission-control-next/chat.png) | ![Cowork surface](./docs/screenshots/mission-control-next/cowork.png) |
-
-| Code | Projects |
-| --- | --- |
-| ![Code surface](./docs/screenshots/mission-control-next/code.png) | ![Projects surface](./docs/screenshots/mission-control-next/projects.png) |
-
-| Library capabilities | Ops runtime | Settings providers |
-| --- | --- | --- |
-| ![Library capability browser](./docs/screenshots/mission-control-next/library-capabilities.png) | ![Ops runtime surface](./docs/screenshots/mission-control-next/ops-runtime.png) | ![Settings providers surface](./docs/screenshots/mission-control-next/settings-providers.png) |
-
-[Open the full generated gallery.](./docs/screenshots/mission-control-next/index.html)
-
-## Current Product Truth
-
-- `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
-- `apps/mission-control` was retired in 1.x cleanup; the legacy source is archived from disk and is no longer wired into builds, CI, or the dev launcher.
-- The Fastify gateway owns runtime APIs, routing, orchestration entrypoints, approvals, policy enforcement, integrations, audit, realtime events, and persistence coordination.
-- Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
-- Durable execution owns the shipped resumable mission-session Chat / Cowork / Code flow set.
-- The capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs through inspectable and callable catalogs.
-- Code Mode v1 is a governed trusted-code surface with explicit operator approval, recorded artifact hashes, and execution-time hash checks. It is not a hostile-code sandbox claim.
-- Native Windows desktop hosting and installer paths are part of the product shape.
-- Docker is a supported local/shared-host runtime boundary, but it does not replace auth, approvals, path jails, allowlists, or policy.
-- Public claims should stay aligned with [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md), [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./docs/CANONICAL_RUNTIME_STATE_MODEL.md), and the current implementation.
-
-## What's Current On `main`
-
-- **Cowork delegation approvals are more explicit**: threaded surfaces keep approval state and follow-on actions visible in the active composer flow, with regression coverage around delegation policy actions.
-- **Cowork artifacts and document tooling are stronger**: PPTX/document artifact execution is represented through the policy/tool registry path, and trace persistence now preserves richer artifact metadata for operator review.
-- **Mission Control Next received contrast polish**: Cowork and threaded workflow surfaces have refreshed contrast treatment for denser operator output.
-- **Gateway runtime lifecycle work keeps tightening**: orchestration helpers, chat turn streaming, prompt-pack policy, duplicate-run prevention, queued starts, cancellation truth, cost-limit enforcement, worktree release, and durable abort handling are covered by focused regressions.
-- **Security and trust boundaries are more explicit**: MCP child env keys, Firecrawl env-name input, Code Mode env passthrough, secrets routes, and high-risk approval behavior use explicit allowlists and route-level regressions instead of broad ambient runtime state.
-- **First-run provider setup is clearer**: canonical Settings/onboarding keeps loopback bypass off by default, labels provider setup as `Providers & Models`, and shows key-on-file status without returning saved provider secrets to the browser.
-- **Release evidence stays current**: closeout status, release-lane proof, installer posture, visual baselines, and governance checks are tracked in [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md) and [docs/review/backlog-closeout-2026-05-15.md](./docs/review/backlog-closeout-2026-05-15.md).
+| Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
+| Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
+| Settings | Providers, models, tools, integrations, channels, auth, workspace controls | Clear, progressive, safe |
 
 ## Quickstart
 
-### Website
-
-Start with the public site:
-
-- [https://goatcitadel.app](https://goatcitadel.app)
-
-Use the repo docs below when you need implementation-level setup, validation, release proof, or contribution guidance.
-
-### Windows source bootstrap
+### Windows Source Bootstrap
 
 Power-user one-liner:
 
@@ -94,11 +105,11 @@ iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-This source bootstrap clones or updates the repo and adds the `goatcitadel` and `goat` command launchers. It is not the packaged Windows `.exe` installer. The packaged installer release assets install the native Mission Control desktop host; the source bootstrap opens the local Mission Control web runtime through the launcher.
+The source bootstrap clones or updates the repo and adds the `goatcitadel` and `goat` launchers. It does not create packaged Windows desktop shortcuts. Packaged Windows installer assets install the native Mission Control desktop host.
 
 Full setup, update, uninstall, and troubleshooting guidance lives in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
-### Source clone
+### Source Clone
 
 Use this path for development, contribution, and raw GitHub validation.
 
@@ -112,7 +123,7 @@ pnpm config:sync
 pnpm dev
 ```
 
-`pnpm dev` starts the gateway plus `@goatcitadel/mission-control-next`. The legacy `apps/mission-control` shell is retired and no longer reachable through the launcher.
+`pnpm dev` starts the gateway plus `@goatcitadel/mission-control-next`.
 
 Default source endpoints:
 
@@ -140,8 +151,6 @@ Default container endpoints:
 - Mission Control: `http://localhost:4173`
 - Gateway health: `http://127.0.0.1:8787/health`
 
-Docker improves runtime isolation and repeatability, especially for Postgres-backed shared-host deployments. It is still not a complete hostile-code sandbox, and it does not replace GoatCitadel auth, approval gates, path jails, or network policy.
-
 Before exposing GoatCitadel beyond your own machine, set long generated values for:
 
 - `GOATCITADEL_AUTH_TOKEN`
@@ -150,9 +159,55 @@ Before exposing GoatCitadel beyond your own machine, set long generated values f
 
 The compose file binds published ports to `127.0.0.1` by default. Set `GOATCITADEL_DOCKER_BIND_IP` only when you intentionally want another host or interface to reach the stack.
 
-## Useful Commands
+## Platform Support
+
+| OS | Arch | Package | Status |
+| --- | --- | --- | --- |
+| Windows | x64 | `GoatCitadel-Setup-windows-x64.exe` | Supported |
+| Windows | arm64 | `GoatCitadel-Setup-windows-arm64.exe` | Supported |
+| macOS | x64 / arm64 | source/dev install | Development-only |
+| Linux | x64 | source/dev install or Docker | Development-only |
+| Linux | arm64 | n/a | Not shipped |
+
+See [docs/supported-platforms.md](./docs/supported-platforms.md) for runtime expectations and installer notes.
+
+## Configuration Basics
+
+Tracked config ships as templates:
+
+- tracked: `config/*.example.json`
+- local runtime copies: `config/*.json`
+
+Fresh installs and raw clones materialize local runtime config through `goatcitadel install`, `goatcitadel update`, or `pnpm config:sync`.
+
+Create a local env file for repo-based development or provider setup:
 
 ```bash
+cp .env.example .env
+```
+
+Windows:
+
+```powershell
+Copy-Item .env.example .env -Force
+```
+
+Set at least one model provider key if you plan to use cloud models:
+
+```env
+OPENAI_API_KEY=your_key_here
+GLM_API_KEY=your_key_here
+MOONSHOT_API_KEY=your_key_here
+```
+
+Provider secrets prefer OS secure-store persistence and may fall back to local env/config storage when secure-store persistence is unavailable or disabled.
+
+## Useful Commands
+
+Everyday local commands:
+
+```bash
+pnpm dev
 pnpm verify:install
 pnpm doctor:deep
 pnpm typecheck
@@ -161,7 +216,21 @@ pnpm build
 pnpm docs:check
 ```
 
-Focused release and runtime proof lanes:
+Installed launcher basics:
+
+```bash
+goatcitadel help
+goatcitadel status --json
+goatcitadel launch --no-open --json --wait
+goatcitadel up
+goatcitadel stop --json
+```
+
+PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `gc` because PowerShell already uses it as the built-in alias for `Get-Content`.
+
+## Verification
+
+Use the smallest lane that proves your change. Important release and runtime lanes include:
 
 ```bash
 pnpm verify:fast
@@ -187,35 +256,33 @@ pnpm verify:desktop
 
 Proof-type shorthand:
 
-- Live end-to-end proof: `verify:runtime:truth`, `verify:durable:recovery`, `verify:operator:proof`, `verify:surface:regression`, `verify:visual:regression`, `verify:backup:roundtrip`, and `verify:desktop` exercise real runtime, UI, recovery, backup, or packaging paths.
-- Targeted contract/behavior proof: `verify:auth:matrix`, `verify:code-mode:sandbox`, `verify:agentic:governance`, `verify:agentic:proof`, `verify:memory:truth`, `verify:realtime:truth`, and `verify:api:compat` prove named security, contract, retained-evidence, and event-envelope behaviors.
-- Parity sample: `verify:catalog:parity` executes the runtime-backed operator action classes declared in its parity scenario; it is not complete product-wide catalog proof.
-- Architecture debt guard: `verify:architecture:metrics` fails on coupling regressions and reports large-service debt; it is not proof broad `GatewayService` decomposition is complete.
+- Live end-to-end proof: `verify:runtime:truth`, `verify:durable:recovery`, `verify:operator:proof`, `verify:surface:regression`, `verify:visual:regression`, `verify:backup:roundtrip`, and `verify:desktop`.
+- Targeted contract/behavior proof: `verify:auth:matrix`, `verify:code-mode:sandbox`, `verify:agentic:governance`, `verify:agentic:proof`, `verify:memory:truth`, `verify:realtime:truth`, and `verify:api:compat`. `verify:agentic:proof` is targeted contract/behavior proof for retained agentic evidence, orchestration lineage anchors, and governance/harness proof families; it is not live end-to-end product proof.
+- REST/SSE compatibility proof: `verify:api:compat` snapshots REST route/status compatibility and realtime event envelopes. It is not a full response-schema diff.
+- Backup proof: `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set.
+- Parity sample: `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario; it is a parity sample, not proof every future visible catalog entry has a live action.
+- Architecture debt guard: `verify:architecture:metrics` fails on coupling regressions and reports large-service debt. It is not proof broad `GatewayService` decomposition is complete.
 
-Installed launcher basics:
+For UI changes, include browser or visual proof when practical. `verify:visual:regression` compares checked-in shell and route baselines for the current Mission Control Next surface. Intentional visual baseline updates go through:
 
 ```bash
-goatcitadel help
-goatcitadel status --json
-goatcitadel launch --no-open --json --wait
-goatcitadel up
-goatcitadel stop --json
+pnpm verify:visual:rebaseline
+pnpm verify:visual:regression
 ```
-
-PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `gc` because PowerShell already uses it as the built-in alias for `Get-Content`.
 
 ## What Ships In This Repo
 
-### Apps
+Apps:
 
-- [apps/mission-control-next](./apps/mission-control-next): canonical `1.0` React/Vite operator console used by `pnpm dev`
-- [apps/mission-control-desktop](./apps/mission-control-desktop): native desktop host for packaged Mission Control (Tauri shell pointing at mission-control-next)
+- [apps/mission-control-next](./apps/mission-control-next): canonical React/Vite Mission Control shell used by `pnpm dev`
+- [apps/mission-control-desktop](./apps/mission-control-desktop): Tauri desktop host for packaged Mission Control
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
 - [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
 
-### Shared packages
+Shared packages:
 
 - [packages/contracts](./packages/contracts): shared contracts and schemas
+- [packages/gateway-core](./packages/gateway-core): shared gateway runtime primitives
 - [packages/storage](./packages/storage): SQLite/Postgres repositories and persistence helpers
 - [packages/policy-engine](./packages/policy-engine): tool policy, wrappers, and runtime guardrails
 - [packages/orchestration](./packages/orchestration): agent and workflow primitives
@@ -227,75 +294,40 @@ PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `g
 
 ## Architecture At A Glance
 
-- **Gateway runtime**: control plane and operational source of truth for runtime APIs, orchestration, approvals, policy, integrations, audit, realtime events, and persistence coordination.
-- **Mission Control**: API client surfaces for Chat, Cowork, Code, Projects, Library, Ops, and Settings. It should not bypass gateway-owned runtime state.
-- **Provider layer**: shared abstractions for OpenAI, Anthropic, Google, Moonshot, Perplexity, local/OpenAI-compatible runtimes, usage, streaming, metadata, and errors.
-- **Durable execution**: authority for resumable mission-session work, approval wait/resume, recovery, retries, cancellation truth, and dead-letter handling.
-- **Capability and skills layer**: governed tools, runtime skills, generated candidates, proposals, callable catalogs, inspectable catalogs, and Code Mode run artifacts.
-- **Memory and context**: `MemoryLifecycleService` owns operator-facing memory lifecycle behavior, including context composition, learned-memory policy, item list/edit/forget/history, dedupe, scope, and write policy.
-- **Policy and security**: deny-wins policy, approval gates, path jails, allowlists, auth boundaries, and tool grants remain authoritative.
-- **Storage, audit, and realtime**: canonical state belongs in repositories and durable logs; retained realtime events are operator signals, not the complete historical record.
+- Gateway runtime is the operational source of truth for runtime APIs, orchestration, approvals, policy, integrations, audit, realtime events, and persistence coordination.
+- Mission Control is an API client for Chat, Cowork, Code, Projects, Library, Ops, and Settings. It should not bypass gateway-owned runtime state.
+- Durable execution owns resumable mission-session work, approval wait/resume, recovery, retries, cancellation truth, and dead-letter handling.
+- Capability and skills catalogs split inspectable review state from callable runtime state. Inactive candidates and proposals are never callable.
+- Memory lifecycle is explicit, scoped, and operator-visible. Trace-derived memory remains proposal-first.
+- Deny-wins policy, approval gates, path jails, allowlists, auth boundaries, and tool grants remain authoritative.
+- Canonical state belongs in repositories and durable logs. Retained realtime events are operator signals, not the complete historical record.
 
-## Status And Claims
-
-GoatCitadel ships at the `1.0.0` bar defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The evidence map for those claims lives in [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
+## Claims Boundaries
 
 Safe public claims today:
 
-- the current shell is Mission Control Next
-- Chat, Cowork, and Code are distinct operator surfaces
-- the gateway is the control plane for orchestration, approvals, memory, integrations, audit, policy, and runtime APIs
-- durable execution owns the shipped mission-session resumable flow set
-- the capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs
-- Code Mode v1 is a trusted-code, approval-gated surface with recorded artifact hashes and execution-time hash checks
-- visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
-- backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth
-- filesystem-backed restore is offline-only for `1.0`; the live admin restore route returns `offline_restore_required` instead of mutating an active runtime
-- Postgres backups support create and verify; restore remains an operator-run `pg_restore` workflow
-- Docker adds a useful runtime boundary when paired with auth and policy configuration
-- `@goatcitadel/extensions-sdk` is the published author boundary for add-ons and integration plugins
-- multi-user RBAC is not shipped for `1.0`; gateway auth is deployment-level while permission profiles, tool grants, route access classes, Local Operator Override, and deny-wins policy govern actions inside the authenticated runtime
-- provider secrets prefer OS secure-store persistence and may fall back to local env/config storage when secure-store persistence is unavailable or disabled
-- `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
-- `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario instead of stopping at metadata checks; it is a parity sample, not proof every future visible catalog entry has a live action
-- `verify:agentic:proof` is targeted contract/behavior proof for retained agentic evidence, orchestration lineage anchors, and governance/harness proof families; it is not live end-to-end product proof
-- `verify:architecture:metrics` reports large-service debt and fails on coupling regressions; it is not proof broad `GatewayService` decomposition is complete
-- `verify:api:compat` snapshots REST route/status compatibility and realtime event envelopes; it is not a full response-schema diff
+- GoatCitadel `1.0.0` is defined by [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md) and backed by [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
+- Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
+- Durable execution owns the shipped mission-session resumable flow set.
+- The capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs.
+- Code Mode v1 is trusted-code, approval-gated execution with recorded artifact hashes and execution-time hash checks.
+- Visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only shells.
+- Backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth.
+- `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file.
+- Filesystem-backed restore is offline-only for `1.0`; the live admin restore route returns `offline_restore_required` instead of mutating an active runtime.
+- `@goatcitadel/extensions-sdk` is the author boundary for add-ons and integration plugins.
+- Docker adds a useful runtime boundary when paired with auth and policy configuration.
+- Multi-user RBAC is not shipped for `1.0`; gateway auth is deployment-level while permission profiles, tool grants, route access classes, Local Operator Override, and deny-wins policy govern actions inside the authenticated runtime.
 
 Do not claim without fresh proof:
 
 - hostile-code sandboxing for Code Mode
 - autonomous high-risk tool activation without governance
-- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still has targeted service coverage rather than full release evidence
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal
+- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still has targeted service coverage rather than full release evidence
 - compatibility shell parity as canonical product readiness
 - generic remote MCP transport invocation as a shipped runtime surface
-- generated screenshot, release proof, or installer signing that was not actually produced
-- backup restore guarantees beyond the documented offline/operator-run paths
-
-## Visual Proof
-
-Current release visual proof is driven by checked-in Mission Control Next shell and route baselines, not by the README gallery. `verify:visual:regression` compares checked-in shell and route baselines for the full current Mission Control Next release-surface footprint (`Chat / Cowork / Code / Projects / Library / Ops / Settings`).
-
-```bash
-pnpm verify:visual:regression
-```
-
-That lane compares the current Mission Control Next release-surface footprint (`Chat / Cowork / Code / Projects / Library / Ops / Settings`) against maintained visual baselines.
-
-Intentional baseline updates go through:
-
-```bash
-pnpm verify:visual:rebaseline
-```
-
-Shareable README and gallery screenshots are regenerated from a sanitized demo runtime with:
-
-```bash
-pnpm screenshots:capture
-```
-
-That command updates the tracked public gallery under [docs/screenshots/mission-control-next](./docs/screenshots/mission-control-next). Keep README embeds limited to current tracked assets from that folder.
+- generated screenshot, release proof, installer signing, or backup restore guarantee that was not actually produced
 
 ## Public Docs
 
@@ -308,20 +340,20 @@ That command updates the tracked public gallery under [docs/screenshots/mission-
 - [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./docs/CANONICAL_RUNTIME_STATE_MODEL.md)
 - [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
 - [docs/ENGINEERING_HANDBOOK.md](./docs/ENGINEERING_HANDBOOK.md)
-- [docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md)
 - [docs/PLUGIN_SDK_CONTRACT.md](./docs/PLUGIN_SDK_CONTRACT.md)
+- [docs/security/findings-triage.md](./docs/security/findings-triage.md)
 
 ## Repo Layout
 
 ```text
-apps/                  product runtimes and UI
-packages/              shared libraries and runtime modules
-scripts/               repo automation and verification
-templates/             add-on, integration, companion, and verification templates
-config/*.example.json  public config templates
-scripts/verification/baselines/visual/  checked-in Mission Control visual baselines
-docs/screenshots/mission-control-next/   sanitized public screenshot gallery
-artifacts/verification/                 local verification output, regenerated by proof lanes
+apps/                                      product runtimes and UI
+packages/                                  shared libraries and runtime modules
+scripts/                                   repo automation and verification
+templates/                                 add-on, integration, companion, and verification templates
+config/*.example.json                      public config templates
+scripts/verification/baselines/visual/     checked-in Mission Control visual baselines
+docs/screenshots/mission-control-next/     sanitized public screenshot gallery
+artifacts/verification/                    local verification output, regenerated by proof lanes
 ```
 
 ## Development Posture
@@ -333,16 +365,9 @@ When changing this repo:
 - keep diffs surgical and avoid unrelated formatting churn
 - preserve public truth across docs, UI copy, release notes, and implementation
 - do not mutate user data, secrets, generated evidence, or runtime state casually
-- validate proportionally to the risk and report what remains uncertain
+- validate proportionally to risk and report what remains uncertain
 
-## Philosophy
-
-GoatCitadel aims to sit in the useful middle:
-
-- faster than heavy agent platforms
-- more capable than a plain chat box
-- local-first where privacy, latency, or cost matter
-- explicit about models, tools, memory, context, approvals, cost, runtime state, and remaining uncertainty
+Before acting on a GitHub Security finding, read [docs/security/findings-triage.md](./docs/security/findings-triage.md).
 
 ## License And Credits
 

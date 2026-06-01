@@ -45,6 +45,7 @@ const publicScreenshotTargets = [
     file: "projects.png",
     title: "Projects",
     description: "Workspace and project containers that group Chat, Cowork, and Code threads.",
+    readyText: "Release readiness",
   },
   {
     slug: "library-capabilities",
@@ -75,7 +76,7 @@ const screenshotTargets = publicScreenshotTargets.map((target) => {
     ...target,
     href: route.href,
     readySelector: route.readySelector,
-    readyText: route.readyText,
+    readyText: target.readyText ?? route.readyText,
     settleMs: route.settleMs ?? DEFAULT_SCREENSHOT_SETTLE_MS,
     scrollY: route.scrollY,
   };
@@ -96,7 +97,19 @@ async function main() {
   });
   const ui = await startProcess(
     "ui",
-    [pnpmCommand(), "--dir", repoRoot, "--filter", uiTarget.packageName, "exec", "vite", "--host", "127.0.0.1", "--port", String(uiPort)],
+    [
+      pnpmCommand(),
+      "--dir",
+      repoRoot,
+      "--filter",
+      uiTarget.packageName,
+      "exec",
+      "vite",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(uiPort),
+    ],
     {
       VITE_GATEWAY_URL: gatewayUrl,
     },
@@ -126,11 +139,9 @@ async function prepareRuntimeRoot() {
     await fs.cp(path.join(repoRoot, "skills"), path.join(runtimeRoot, "skills"), { recursive: true });
   }
   if (existsSync(path.join(repoRoot, "workspaces", "default"))) {
-    await fs.cp(
-      path.join(repoRoot, "workspaces", "default"),
-      path.join(runtimeRoot, "workspaces", "default"),
-      { recursive: true },
-    );
+    await fs.cp(path.join(repoRoot, "workspaces", "default"), path.join(runtimeRoot, "workspaces", "default"), {
+      recursive: true,
+    });
   }
   await forceScreenshotRuntimeAuthModeNone();
 }
@@ -199,12 +210,11 @@ async function startProcess(name, commandArgs, extraEnv) {
     shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const logPipelines = Promise.all([
-    pipeline(child.stdout, stdout),
-    pipeline(child.stderr, stderr),
-  ]).catch((error) => {
+  const logPipelines = Promise.all([pipeline(child.stdout, stdout), pipeline(child.stderr, stderr)]).catch((error) => {
     if (!stopping) {
-      console.error(`[screenshots] ${name} log stream failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `[screenshots] ${name} log stream failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   });
   let stopping = false;
@@ -302,6 +312,14 @@ async function seedDemoData() {
     slug: workspaceSlug,
   });
 
+  const project = await postJson("/api/v1/chat/projects", {
+    workspaceId: workspace.workspaceId,
+    name: "Release readiness",
+    description: "Public-share project container for the sanitized Mission Control gallery.",
+    workspacePath: "workspace/demo/release-readiness",
+    color: "#22d3ee",
+  });
+
   await putJson(`/api/v1/workspaces/${encodeURIComponent(workspace.workspaceId)}/guidance/goatcitadel`, {
     content: [
       "# Release Demo Guidance",
@@ -314,10 +332,28 @@ async function seedDemoData() {
 
   const session = await postJson("/api/v1/chat/sessions", {
     workspaceId: workspace.workspaceId,
+    projectId: project.projectId,
     title: "1.0 release prep",
+    mode: "chat",
   });
 
-  await seedChatMessages(session.sessionId);
+  const coworkSession = await postJson("/api/v1/chat/sessions", {
+    workspaceId: workspace.workspaceId,
+    projectId: project.projectId,
+    title: "Launch supervision plan",
+    mode: "cowork",
+  });
+
+  const codeSession = await postJson("/api/v1/chat/sessions", {
+    workspaceId: workspace.workspaceId,
+    projectId: project.projectId,
+    title: "Installer proof checklist",
+    mode: "code",
+  });
+
+  await seedChatMessages(session.sessionId, "chat");
+  await seedChatMessages(coworkSession.sessionId, "cowork");
+  await seedChatMessages(codeSession.sessionId, "code");
 
   await postJson("/api/v1/tasks", {
     workspaceId: workspace.workspaceId,
@@ -326,19 +362,25 @@ async function seedDemoData() {
     priority: "high",
     status: "review",
   }).then(async (task) => {
-    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, {
-      workspaceId: workspace.workspaceId,
-      activityType: "comment",
-      message: "Checklist trimmed to the highest-signal release flows.",
-      agentId: "operator",
-    });
-    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, {
-      workspaceId: workspace.workspaceId,
-      deliverableType: "artifact",
-      title: "Readiness checklist",
-      path: "workspace/demo/release-checklist.md",
-      description: "Public-share gate review notes.",
-    });
+    await postJson(
+      `/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities?workspaceId=${encodeURIComponent(workspace.workspaceId)}`,
+      {
+        workspaceId: workspace.workspaceId,
+        activityType: "comment",
+        message: "Checklist trimmed to the highest-signal release flows.",
+        agentId: "operator",
+      },
+    );
+    await postJson(
+      `/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables?workspaceId=${encodeURIComponent(workspace.workspaceId)}`,
+      {
+        workspaceId: workspace.workspaceId,
+        deliverableType: "artifact",
+        title: "Readiness checklist",
+        path: "workspace/demo/release-checklist.md",
+        description: "Public-share gate review notes.",
+      },
+    );
   });
 
   await postJson("/api/v1/cron/jobs", {
@@ -404,7 +446,8 @@ async function seedDemoData() {
   await postJson("/api/v1/knowledge/memory/write", {
     namespace: "integrations",
     title: "Discord rollout order",
-    content: "Discord is the first external channel for 1.0 launch validation, with Slack second after sandbox validation.",
+    content:
+      "Discord is the first external channel for 1.0 launch validation, with Slack second after sandbox validation.",
     tags: ["channels", "discord"],
     source: "release-demo",
     sessionId: session.sessionId,
@@ -455,17 +498,50 @@ async function seedDemoData() {
   return {
     onboarding,
     workspaceId: workspace.workspaceId,
+    projectId: project.projectId,
     sessionId: session.sessionId,
+    coworkSessionId: coworkSession.sessionId,
+    codeSessionId: codeSession.sessionId,
   };
 }
 
-async function seedChatMessages(sessionId) {
+async function seedChatMessages(sessionId, mode) {
   const storage = new Storage({
     dbPath: path.join(runtimeRoot, "data", "index.db"),
     transcriptsDir: path.join(runtimeRoot, "data", "transcripts"),
     auditDir: path.join(runtimeRoot, "data", "audit"),
   });
   try {
+    const copy = {
+      chat: {
+        user: "Give me a tight 1.0 readiness summary before I share the repo.",
+        assistant: [
+          "Installer path is primary, manual clone is secondary, and the current release gate is green.",
+          "Next move is a clean laptop install from GitHub plus Discord sandbox validation.",
+        ].join(" "),
+        actorId: "goatherder",
+      },
+      cowork: {
+        user: "Plan the public launch review and keep approval checkpoints visible.",
+        assistant: [
+          "I split the review into install proof, provider setup, surface walkthrough, and external-channel validation.",
+          "Three approvals are waiting so risky setup steps stay operator-owned.",
+        ].join(" "),
+        actorId: "release-shepherd",
+      },
+      code: {
+        user: "Review the installer proof checklist and tell me what code path owns it.",
+        assistant: [
+          "The launcher and desktop packaging proof start in scripts/packaging and bin/goatcitadel.mjs.",
+          "The next safe code action is a targeted verify:desktop run after any installer-touching patch.",
+        ].join(" "),
+        actorId: "coder",
+      },
+    }[mode] ?? {
+      user: "Summarize the current workspace state.",
+      assistant: "The release demo workspace is ready for review.",
+      actorId: "goatherder",
+    };
     const baseTime = Date.now() - 10 * 60 * 1000;
     storage.chatMessages.upsertMany([
       {
@@ -474,7 +550,7 @@ async function seedChatMessages(sessionId) {
         role: "user",
         actorType: "user",
         actorId: "operator",
-        content: "Give me a tight 1.0 readiness summary before I share the repo.",
+        content: copy.user,
         timestamp: new Date(baseTime).toISOString(),
       },
       {
@@ -482,11 +558,8 @@ async function seedChatMessages(sessionId) {
         sessionId,
         role: "assistant",
         actorType: "agent",
-        actorId: "goatherder",
-        content: [
-          "Installer path is primary, manual clone is secondary, and the current release gate is green.",
-          "Next move is a clean laptop install from GitHub plus Discord sandbox validation.",
-        ].join(" "),
+        actorId: copy.actorId,
+        content: copy.assistant,
         timestamp: new Date(baseTime + 45_000).toISOString(),
         tokenInput: 412,
         tokenOutput: 188,
@@ -511,11 +584,16 @@ async function captureScreenshots(activeWorkspaceId) {
       colorScheme: "dark",
       deviceScaleFactor: 1,
     });
-    await context.addInitScript(({ workspaceId }) => {
-      window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", workspaceId);
-      window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
-      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
-    }, { workspaceId: activeWorkspaceId });
+    await context.addInitScript(
+      ({ workspaceId }) => {
+        window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", workspaceId);
+        window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
+        window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
+        window.localStorage.setItem("goatcitadel.notifications.toasts.v1", "false");
+        window.localStorage.setItem("goatcitadel.notifications.sound_mode.v1", "off");
+      },
+      { workspaceId: activeWorkspaceId },
+    );
 
     const page = await context.newPage();
     for (const target of screenshotTargets) {
@@ -542,6 +620,9 @@ async function captureScreenshots(activeWorkspaceId) {
       } else {
         await page.evaluate(() => window.scrollTo(0, 0));
       }
+      await page.addStyleTag({
+        content: ".notification-stack { display: none !important; }",
+      });
       if (target.screenshotSelector) {
         await page.locator(target.screenshotSelector).screenshot({
           path: path.join(outputDir, target.file),
@@ -559,15 +640,17 @@ async function captureScreenshots(activeWorkspaceId) {
 }
 
 async function writeGalleryIndex() {
-  const cards = screenshotTargets.map((target) => (
-    [
-      `        <section class="card">`,
-      `          <h2>${escapeHtml(target.title)}</h2>`,
-      `          <p>${escapeHtml(target.description)}</p>`,
-      `          <img src="./${target.file}" alt="${escapeHtml(target.title)} screenshot" />`,
-      `        </section>`,
-    ].join("\n")
-  )).join("\n");
+  const cards = screenshotTargets
+    .map((target) =>
+      [
+        `        <section class="card">`,
+        `          <h2>${escapeHtml(target.title)}</h2>`,
+        `          <p>${escapeHtml(target.description)}</p>`,
+        `          <img src="./${target.file}" alt="${escapeHtml(target.title)} screenshot" />`,
+        `        </section>`,
+      ].join("\n"),
+    )
+    .join("\n");
   const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -648,11 +731,7 @@ ${cards}
 }
 
 function escapeHtml(value) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;");
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 async function postJson(route, body) {
