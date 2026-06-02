@@ -4,9 +4,20 @@ name: Visual Rebaseline (manual)
 # baselines on the Ubuntu CI renderer (the only environment whose font/AA output
 # matches the verification lane) and opens a PR with the refreshed PNGs.
 # Trigger from the Actions tab or: gh workflow run visual-rebaseline.yml --ref main
+# Scope to specific routes/variants to keep the diff small, e.g.:
+#   gh workflow run visual-rebaseline.yml --ref main -f route_slugs=settings-general
 
 on:
   workflow_dispatch:
+    inputs:
+      route_slugs:
+        description: "Comma-separated visual route slugs to rebaseline (empty = all routes)"
+        required: false
+        default: ""
+      variant_slugs:
+        description: "Comma-separated visual variant slugs to rebaseline (empty = all variants)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -40,6 +51,8 @@ jobs:
       - name: Regenerate visual baselines
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
+          GOATCITADEL_VERIFY_VISUAL_ROUTE_SLUGS: ${{ inputs.route_slugs }}
+          GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS: ${{ inputs.variant_slugs }}
         run: pnpm verify:visual:rebaseline
 
       - name: Open rebaseline PR
@@ -58,4 +71,6 @@ jobs:
           git add scripts/verification/baselines/visual
           git commit -m "chore(verification): refresh mc-next visual baselines"
           git push origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" --title "chore(verification): refresh visual baselines (mc-next)" --body "Automated rebaseline run ${GITHUB_RUN_ID}. Review the image diff before merging."
+          SCOPE_ROUTES="${{ inputs.route_slugs }}"
+          SCOPE_VARIANTS="${{ inputs.variant_slugs }}"
+          gh pr create --base main --head "$BRANCH" --title "chore(verification): refresh visual baselines (mc-next)" --body "Automated rebaseline run ${GITHUB_RUN_ID}. Scope: routes=[${SCOPE_ROUTES:-all}] variants=[${SCOPE_VARIANTS:-all}]. Review the image diff before merging."
