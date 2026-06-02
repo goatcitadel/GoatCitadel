@@ -598,8 +598,48 @@ export async function runAgenticGovernanceLane(context) {
   await runAutonomousActivationGrantGovernanceScenario(context);
 }
 
+// The autonomy-grant gate (deny -> grant -> allow -> revoke -> deny) is the subject of
+// this lane. The shipped `chat-agent` default profile denies the synthetic `mcp.invoke`
+// tool outright, and deny-wins is absolute -- so under that profile a matching grant can
+// never reach an allowed invoke, masking the grant gate behind a base-policy block (and
+// making the lane pass or fail depending on whether a gitignored local
+// `config/tool-policy.json` happens to exist). Pin an explicit operator-permissive policy
+// into the runtime so `mcp.invoke` is allowed by the base policy; the autonomy grant then
+// becomes the sole gate the lane actually exercises. Deny-by-default posture for
+// `mcp.invoke` is covered separately by the policy-engine deny-wins tests.
+async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
+  await writeJson(path.join(runtimeRoot, "config", "tool-policy.json"), {
+    profiles: { danger: ["*"] },
+    tools: {
+      approvalMode: "bypass",
+      profile: "danger",
+      allow: [],
+      deny: [],
+      loopDetection: {
+        enabled: false,
+        historySize: 8,
+        warningThreshold: 3,
+        criticalThreshold: 4,
+        globalThreshold: 6,
+        detectors: { repeated_same_call: true, no_progress_polling: true, ping_pong: true },
+      },
+    },
+    agents: {},
+    sandbox: {
+      writeJailRoots: ["./workspace", "./data", "./.worktrees"],
+      readOnlyRoots: ["./skills"],
+      readAccessMode: "approval_required",
+      networkAllowlist: ["127.0.0.1", "localhost"],
+      riskyShellPatterns: ["rm", "rmdir", "del", "format", "shutdown", "reboot", "git push", "git reset --hard"],
+      requireApprovalForRiskyShell: true,
+    },
+  });
+}
+
 async function runAutonomousActivationGrantGovernanceScenario(context) {
-  const stack = await startVerificationStack(context, { includeUi: false });
+  const runtimeRoot = await prepareVerificationRuntime(context.runId);
+  await writeAutonomyGrantRuntimeToolPolicy(runtimeRoot);
+  const stack = await startVerificationStack(context, { includeUi: false, runtimeRoot });
   try {
     await runScenario(
       context,
