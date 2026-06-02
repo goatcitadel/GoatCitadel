@@ -7,6 +7,20 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveMonacoAssetPath } from "./config/monaco-assets.js";
 
+// Vitest 4 trimmed the built-in `exclude` down to node_modules/.git only, so the
+// compiled `dist/**/*.test.js` files this app emits would otherwise be collected and
+// run alongside their `src` sources. Restore the vitest 3 build-output exclusions.
+// Inlined (rather than importing the shared list) so vite.config stays inside this
+// project's tsconfig and `vite build` does not reach across the workspace root.
+const RESTORED_TEST_EXCLUDE = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/dist/**",
+  "**/coverage/**",
+  "**/build/**",
+  "**/.{idea,cache,output,temp}/**",
+];
+
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
 const CONTENT_TYPES = new Map<string, string>([
@@ -196,6 +210,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
+      exclude: RESTORED_TEST_EXCLUDE,
       setupFiles: "./src/test/setup.ts",
       testTimeout: 20000,
     },

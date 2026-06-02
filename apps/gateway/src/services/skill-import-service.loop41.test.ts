@@ -103,7 +103,10 @@ describe("SkillImportService loop41 zip install behavior", () => {
         sourceRef: firstZip,
       }),
     ]);
-  }, 15_000);
+    // Real zip pack/unpack + force-reinstall over the filesystem is genuinely slow;
+    // under v8 coverage instrumentation in a loaded parallel run it can exceed the
+    // default 15s budget, so give this I/O-heavy case explicit headroom.
+  }, 30_000);
 });
 
 function createSkillZip(rootDir: string, fileName: string): string {
