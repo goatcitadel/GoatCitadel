@@ -29,6 +29,27 @@ export interface Logger {
 const REDACTED_LOG_VALUE = "[redacted]";
 
 /**
+ * High-confidence secret shapes that are redacted wherever they appear inside a
+ * string value (log message detail, error message/stack), independent of the key
+ * name. The length floors keep these from matching benign content (a short
+ * `sk-foo` slug or a bare `Bearer` word are left intact); this is defense-in-depth
+ * on top of the key-based redaction, not a replacement for it.
+ */
+const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
+  /sk-[A-Za-z0-9]{20,}/g, // OpenAI-style API keys
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, // Authorization bearer tokens
+];
+
+function redactSecretsInString(value: string): string {
+  let result = value;
+  for (const pattern of SECRET_VALUE_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, REDACTED_LOG_VALUE);
+  }
+  return result;
+}
+
+/**
  * Segments that mark a key as credential-bearing wherever they appear. These
  * words do not occur in benign usage/config fields, so a whole-segment match is
  * safe to redact regardless of position.
@@ -169,10 +190,13 @@ function sanitizeLogContext(value: unknown, seen = new WeakSet<object>()): LogCo
 function sanitizeLogValue(value: unknown, seen: WeakSet<object>): unknown {
   if (value instanceof Error) {
     return {
-      message: value.message,
+      message: redactSecretsInString(value.message),
       name: value.name,
-      stack: value.stack,
+      stack: value.stack ? redactSecretsInString(value.stack) : value.stack,
     };
+  }
+  if (typeof value === "string") {
+    return redactSecretsInString(value);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
