@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { createElement } from "react";
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
@@ -12,10 +12,10 @@ import type { PrimaryArea } from "./route-model";
  */
 
 type Listeners = {
-  onOpenPalette: ReturnType<typeof vi.fn>;
-  onClosePalette: ReturnType<typeof vi.fn>;
-  onDismissTopmost: ReturnType<typeof vi.fn>;
-  onJumpToArea: ReturnType<typeof vi.fn>;
+  onOpenPalette: Mock<() => void>;
+  onClosePalette: Mock<() => void>;
+  onDismissTopmost: Mock<() => boolean>;
+  onJumpToArea: Mock<(area: PrimaryArea) => void>;
 };
 
 function Driver({ isPaletteOpen, listeners }: { isPaletteOpen: boolean; listeners: Listeners }) {
@@ -41,10 +41,10 @@ describe("useShellKeyboardManager", () => {
 
   beforeEach(() => {
     listeners = {
-      onOpenPalette: vi.fn(),
-      onClosePalette: vi.fn(),
-      onDismissTopmost: vi.fn().mockReturnValue(false),
-      onJumpToArea: vi.fn(),
+      onOpenPalette: vi.fn<() => void>(),
+      onClosePalette: vi.fn<() => void>(),
+      onDismissTopmost: vi.fn<() => boolean>().mockReturnValue(false),
+      onJumpToArea: vi.fn<(area: PrimaryArea) => void>(),
     };
     renderer = null;
   });

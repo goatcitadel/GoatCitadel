@@ -1,8 +1,10 @@
 name: Code Quality
 
-# Always-on lint gate. The richer "Verification Fast" workflow (which also carried
-# ESLint) is disabled, so lint was not running on push/PR anywhere; this restores it
-# as a fast, dependency-light required check on every change.
+# Always-on code quality gate. The richer "Verification Fast" workflow (which carried
+# both ESLint and TypeScript validation) is disabled, so neither lint nor typecheck was
+# running on push/PR anywhere; this restores both as a fast, dependency-light required
+# check on every change. `pnpm lint` is ESLint; `pnpm typecheck` runs `tsc -b` across
+# every workspace package (the TS lane is separate from ESLint in this repo).
 
 on:
   push:
@@ -38,3 +40,6 @@ jobs:
 
       - name: Run ESLint
         run: pnpm lint
+
+      - name: Run typecheck
+        run: pnpm typecheck
