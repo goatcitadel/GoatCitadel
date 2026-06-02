@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
+import { restoredTestExclude } from "../../vitest.shared";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +26,7 @@ export default defineConfig({
     testTimeout: 15_000,
     hookTimeout: 15_000,
     exclude: [
-      ...configDefaults.exclude,
+      ...restoredTestExclude,
       "src/**/*.node.test.ts",
       "src/services/chat-generated-artifact-service.test.ts",
       "src/services/chat-thread-knowledge-service.test.ts",

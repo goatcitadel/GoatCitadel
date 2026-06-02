@@ -4,6 +4,5 @@ import { restoredTestExclude } from "../../vitest.shared";
 export default defineConfig({
   test: {
     exclude: restoredTestExclude,
-    setupFiles: ["./src/test/setup.ts"],
   },
 });

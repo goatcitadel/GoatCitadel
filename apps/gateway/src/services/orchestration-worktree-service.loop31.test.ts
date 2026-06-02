@@ -13,7 +13,7 @@ const worktreeManagerMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/orchestration", () => ({
-  WorktreeManager: vi.fn().mockImplementation((input) => {
+  WorktreeManager: vi.fn().mockImplementation(function (input) {
     worktreeManagerMocks.constructor(input);
     return {
       create: worktreeManagerMocks.create,
