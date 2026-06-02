@@ -86,6 +86,18 @@ describe("MeshRepository", () => {
         "2026-02-28T10:01:00.000Z",
       );
     });
+
+    repo.issueJoinToken(token, "2027-12-31T00:00:00.000Z");
+    assert.throws(() => {
+      repo.join(
+        {
+          token,
+          nodeId: "node-c",
+          transport: "lan",
+        },
+        "2026-02-28T10:02:00.000Z",
+      );
+    });
   });
 
   it("joins and lists nodes with defaults, optional fields, and status counts", () => {
@@ -272,7 +284,7 @@ describe("MeshRepository", () => {
     );
     setRawField(db, "mesh_replication_log", "payload_json", "[]", "replication_id", second.replicationId);
 
-    const afterFirst = repo.listReplicationEvents(10, "2026-02-28T10:00:00.000Z");
+    const afterFirst = repo.listReplicationEvents(10, first.replicationId);
     assert.deepEqual(
       afterFirst.map((event) => [event.idempotencyKey, event.payload]),
       [["evt-2", {}]],

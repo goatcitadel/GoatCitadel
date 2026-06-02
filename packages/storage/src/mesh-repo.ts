@@ -74,6 +74,7 @@ export class MeshRepository {
   private readonly appendReplicationStmt;
   private readonly listReplicationStmt;
   private readonly listReplicationSinceStmt;
+  private readonly getReplicationBySourceAndIdempotencyStmt;
   private readonly setOffsetStmt;
   private readonly listOffsetsStmt;
   private readonly getOffsetStmt;
@@ -165,14 +166,28 @@ export class MeshRepository {
     `);
     this.listReplicationStmt = db.prepare(`
       SELECT * FROM mesh_replication_log
-      ORDER BY created_at ASC
+      ORDER BY created_at ASC, replication_id ASC
       LIMIT @limit
     `);
     this.listReplicationSinceStmt = db.prepare(`
-      SELECT * FROM mesh_replication_log
-      WHERE created_at > @cursor
-      ORDER BY created_at ASC
+      WITH cursor_row AS (
+        SELECT created_at
+        FROM mesh_replication_log
+        WHERE replication_id = @cursor
+      )
+      SELECT mesh_replication_log.*
+      FROM mesh_replication_log, cursor_row
+      WHERE mesh_replication_log.created_at > cursor_row.created_at
+        OR (
+          mesh_replication_log.created_at = cursor_row.created_at
+          AND mesh_replication_log.replication_id > @cursor
+        )
+      ORDER BY mesh_replication_log.created_at ASC, mesh_replication_log.replication_id ASC
       LIMIT @limit
+    `);
+    this.getReplicationBySourceAndIdempotencyStmt = db.prepare(`
+      SELECT * FROM mesh_replication_log
+      WHERE source_node_id = @sourceNodeId AND idempotency_key = @idempotencyKey
     `);
 
     this.setOffsetStmt = db.prepare(`
@@ -204,9 +219,8 @@ export class MeshRepository {
       )
       ON CONFLICT(token_hash) DO UPDATE SET
         created_at = excluded.created_at,
-        expires_at = excluded.expires_at,
-        used_at = NULL,
-        used_by_node_id = NULL
+        expires_at = excluded.expires_at
+      WHERE mesh_join_tokens.used_at IS NULL
     `);
     this.consumeJoinTokenStmt = db.prepare(`
       UPDATE mesh_join_tokens
@@ -433,17 +447,10 @@ export class MeshRepository {
     });
 
     const row = toMeshReplicationRow(
-      this.db
-        .prepare(
-          `
-      SELECT * FROM mesh_replication_log
-      WHERE source_node_id = @sourceNodeId AND idempotency_key = @idempotencyKey
-    `,
-        )
-        .get({
-          sourceNodeId: input.sourceNodeId,
-          idempotencyKey: input.idempotencyKey,
-        }),
+      this.getReplicationBySourceAndIdempotencyStmt.get({
+        sourceNodeId: input.sourceNodeId,
+        idempotencyKey: input.idempotencyKey,
+      }),
     );
 
     if (!row) {

@@ -318,7 +318,7 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("memory · User prefers concise reviews.");
     expect(text).toContain("Why used: selected by semantic-hint retrieval score 0.956");
     expect(text).toContain("semantic hints · self · recent · source 2026-05-30T00:00:00.000Z");
-    expect(text).toContain("total 0.956 · lexical 0.400 · hint 0.200 · recency 0.300");
+    expect(text).toContain("total 0.956 · lexical 0.400 · hint 0.200 · recency 0.300 · diversity 0.056");
     expect(text).toContain("External source");
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectNodeText(node).startsWith("Why used:")),

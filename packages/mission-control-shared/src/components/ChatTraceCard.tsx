@@ -2,16 +2,18 @@ import { useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   getChatTurnRecoveryActionSummary,
-  type ChatCitationRecord,
   type ChatUsageCostSource,
   type ChatTurnTraceRecord,
-  type MemoryCitationProvenance,
-  type MemoryRetrievalMatchSignals,
 } from "@goatcitadel/contracts";
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
-import { normalizeCitationDisplayText } from "./chat/assistant-display-text";
+import {
+  formatMemoryCitationMeta,
+  formatMemorySignals,
+  isMemoryCitation,
+  normalizeCitationDisplayText,
+} from "./chat/assistant-display-text";
 
 function isExternalCitationUrl(url: string | undefined): boolean {
   if (!url) {
@@ -70,63 +72,6 @@ function formatCostSource(value: ChatUsageCostSource | undefined): string {
     default:
       return "not recorded";
   }
-}
-
-function isMemoryCitation(citation: ChatCitationRecord): boolean {
-  return (
-    citation.sourceType === "memory" || citation.url?.startsWith("memory://") === true || Boolean(citation.provenance)
-  );
-}
-
-function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
-  switch (value) {
-    case "semantic_vector":
-      return "semantic vector";
-    case "semantic_hints":
-      return "semantic hints";
-    case "lexical_recency":
-      return "lexical/recency";
-    default:
-      return null;
-  }
-}
-
-function formatMemoryScore(value: number | undefined): string | null {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : null;
-}
-
-function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): string | null {
-  if (!signals) {
-    return null;
-  }
-  return [
-    ["total", signals.totalScore],
-    ["lexical", signals.lexicalScore],
-    ["vector", signals.semanticVectorScore],
-    ["hint", signals.semanticHintScore],
-    ["recency", signals.recencyScore],
-    ["diversity", signals.diversityScore],
-  ]
-    .map(([label, value]) => {
-      const score = typeof value === "number" ? formatMemoryScore(value) : null;
-      return score ? `${label} ${score}` : null;
-    })
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
-}
-
-function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | undefined): string | null {
-  if (!provenance) {
-    return null;
-  }
-  return [
-    formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
-    provenance.relationScope,
-    provenance.freshness,
-    provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
 }
 
 function summarizeTraceRouting(trace: ChatTurnTraceRecord): {

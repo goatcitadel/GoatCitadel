@@ -214,7 +214,8 @@ function readApprovalAuthActorSource(
     value === "loopback" ||
     value === "sse" ||
     value === "device" ||
-    value === "companion"
+    value === "companion" ||
+    value === "a2a_peer"
     ? value
     : undefined;
 }

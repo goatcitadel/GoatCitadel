@@ -29,6 +29,7 @@ export interface EvidenceEnvelopeServiceDependencies {
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|auth|bearer|cookie|credential|password|secret|token)/i;
 const SECRET_VALUE_PATTERN =
   /(?:sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,}|bearer\s+[a-z0-9._-]{16,})/i;
+const EVIDENCE_DIGEST_DOMAIN_KEY = "goatcitadel:evidence-envelope-digest:v1";
 
 export class EvidenceEnvelopeService {
   private readonly signingKey?: string;
@@ -55,8 +56,8 @@ export class EvidenceEnvelopeService {
       metadata,
       createdAt,
     };
-    const payloadHash = sha256(stableStringify(payload));
-    const contentHash = sha256(
+    const payloadHash = evidenceDigestHex(stableStringify(payload));
+    const contentHash = evidenceDigestHex(
       stableStringify({
         payloadHash,
         previousEnvelopeHash,
@@ -113,6 +114,10 @@ export function stableStringify(value: unknown): string {
     .filter(([, entryValue]) => entryValue !== undefined)
     .sort(([left], [right]) => left.localeCompare(right));
   return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(",")}}`;
+}
+
+export function evidenceDigestHex(canonicalPayload: string): string {
+  return createHmac("sha256", EVIDENCE_DIGEST_DOMAIN_KEY).update(canonicalPayload).digest("hex");
 }
 
 export function sha256(value: string): string {

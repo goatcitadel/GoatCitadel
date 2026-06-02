@@ -177,6 +177,45 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     });
   });
 
+  it("preserves A2A peer auth provenance in delivery governance and linkage", () => {
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: createApproval({
+        linkage: {
+          workspaceId: "workspace-1",
+          taskId: "task-1",
+          durableRunId: "durable-run-1",
+          originSurface: "cowork",
+          operatorId: "operator-1",
+          authActorId: "peer-1",
+          authActorSource: "a2a_peer",
+        },
+      }),
+      connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
+      token: "grat_token",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    expect(payload).toMatchObject({
+      authActorId: "peer-1",
+      authActorSource: "a2a_peer",
+      payload: {
+        authActorId: "peer-1",
+        authActorSource: "a2a_peer",
+        arguments: {
+          governance: {
+            authActorId: "peer-1",
+            authActorSource: "a2a_peer",
+          },
+          linkage: {
+            authActorId: "peer-1",
+            authActorSource: "a2a_peer",
+          },
+        },
+      },
+    });
+  });
+
   it("skips connectors without the required delivery capabilities or metadata", () => {
     expect(
       buildApprovalRemoteTokenConnectorDeliveryPayload({

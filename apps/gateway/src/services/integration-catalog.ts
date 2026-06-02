@@ -719,14 +719,6 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     "https://api.moonshot.ai/v1",
     "kimi-k2.6",
   ),
-  "model_provider.lmstudio": providerSchema(
-    "model_provider.lmstudio",
-    "LM Studio",
-    "",
-    "http://127.0.0.1:1234/v1",
-    "local-model",
-    true,
-  ),
   "model_provider.ollama": providerSchema(
     "model_provider.ollama",
     "Ollama",

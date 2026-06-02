@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  type ChatCitationRecord,
-  type ChatThreadTurnRecord,
-  type MemoryCitationProvenance,
-  type MemoryRetrievalMatchSignals,
-} from "@goatcitadel/contracts";
+import { type ChatCitationRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
-import { normalizeCitationDisplayText } from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
+import {
+  formatMemoryCitationMeta,
+  formatMemorySignals,
+  isMemoryCitation,
+  normalizeCitationDisplayText,
+} from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
 import { toTitleCase } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
   ChatThreadDelegationSummary,
@@ -76,60 +76,6 @@ function formatCitationSource(citation: ChatCitationRecord): string {
     return citation.knowledge.retrievalMode === "full_text" ? "knowledge full text" : "knowledge retrieval";
   }
   return citation.sourceType ?? "source";
-}
-
-function isMemoryCitation(citation: ChatCitationRecord): boolean {
-  return citation.sourceType === "memory" || citation.url.startsWith("memory://") || Boolean(citation.provenance);
-}
-
-function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
-  switch (value) {
-    case "semantic_vector":
-      return "semantic vector";
-    case "semantic_hints":
-      return "semantic hints";
-    case "lexical_recency":
-      return "lexical/recency";
-    default:
-      return null;
-  }
-}
-
-function formatMemoryScore(value: number | undefined): string | null {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : null;
-}
-
-function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): string | null {
-  if (!signals) {
-    return null;
-  }
-  return [
-    ["total", signals.totalScore],
-    ["lexical", signals.lexicalScore],
-    ["vector", signals.semanticVectorScore],
-    ["hint", signals.semanticHintScore],
-    ["recency", signals.recencyScore],
-  ]
-    .map(([label, value]) => {
-      const score = typeof value === "number" ? formatMemoryScore(value) : null;
-      return score ? `${label} ${score}` : null;
-    })
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
-}
-
-function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | undefined): string | null {
-  if (!provenance) {
-    return null;
-  }
-  return [
-    formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
-    provenance.relationScope,
-    provenance.freshness,
-    provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
 }
 
 function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {

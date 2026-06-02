@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type {
   ExternalSideEffectRunRecord,
   ExternalSideEffectRunStatus,
@@ -9,6 +9,8 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+
+const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
 
 export interface ExternalSideEffectRunStore {
   createOrGet(
@@ -745,14 +747,15 @@ function buildExternalSideEffectIdempotencyKey(input: ExternalSideEffectIntentIn
 }
 
 function hashStableIntentParts(parts: Array<string | undefined>): string {
-  return createHash("sha256")
-    .update(JSON.stringify(parts.map((part) => part ?? "")))
-    .digest("hex")
-    .slice(0, 24);
+  return domainSeparatedDigestHex(JSON.stringify(parts.map((part) => part ?? ""))).slice(0, 24);
+}
+
+function domainSeparatedDigestHex(canonicalPayload: string): string {
+  return createHmac("sha256", EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY).update(canonicalPayload).digest("hex");
 }
 
 function hashStableJson(value: unknown): string {
-  return createHash("sha256").update(stableStringify(value)).digest("hex");
+  return domainSeparatedDigestHex(stableStringify(value));
 }
 
 function stableStringify(value: unknown): string {

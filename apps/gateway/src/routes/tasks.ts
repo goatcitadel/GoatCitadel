@@ -305,15 +305,19 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.a2a.previewTaskExport(parsed.data, { checkedAt }));
   });
 
-  fastify.post("/api/v1/a2a/jsonrpc", withRouteAccess(fastify, "a2a-peer"), async (request, reply) => {
-    const auth = fastify.services.a2a.authenticatePeerRequest(request);
-    if ("statusCode" in auth) {
-      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
-    }
-    const checkedAt = new Date().toISOString();
-    const response = await fastify.services.a2a.handleJsonRpc(auth, request.body, checkedAt);
-    return reply.send(response);
-  });
+  fastify.post(
+    "/api/v1/a2a/jsonrpc",
+    withRouteAccess(fastify, "a2a-peer", { config: { rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX } } }),
+    async (request, reply) => {
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      const checkedAt = new Date().toISOString();
+      const response = await fastify.services.a2a.handleJsonRpc(auth, request.body, checkedAt);
+      return reply.send(response);
+    },
+  );
 
   fastify.post("/api/v1/a2a/outbound/preview", withRouteAccess(fastify, "operator"), async (request, reply) => {
     const parsed = a2aOutboundBodySchema.safeParse(request.body ?? {});

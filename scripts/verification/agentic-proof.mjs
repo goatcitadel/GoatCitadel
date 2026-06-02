@@ -159,16 +159,15 @@ const CHECK_GROUPS = Object.freeze({
         "Gateway channel delivery runtime behavior",
         "pnpm",
         [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
           "vitest",
           "run",
           "--reporter",
           "verbose",
-          "apps/gateway/src/services/channel-delivery-runtime-service.test.ts",
-          "apps/gateway/src/routes/comms.test.ts",
-          "--exclude",
-          ".worktrees/**",
-          "--exclude",
-          ".claude/worktrees/**",
+          "src/services/channel-delivery-runtime-service.test.ts",
+          "src/routes/comms.test.ts",
         ],
         {
           timeoutMs: 180_000,
@@ -593,24 +592,6 @@ async function runCheck(check) {
         error: error instanceof Error ? error.message : String(error),
         stdoutTail: clampString(String(error?.stdout ?? ""), 4000),
         stderrTail: clampString(String(error?.stderr ?? ""), 4000),
-      };
-    }
-  }
-
-  if (check.kind === "behavioral") {
-    try {
-      const result = check.run();
-      return {
-        title: check.title,
-        status: result.passed ? "passed" : "failed",
-        detail: result.detail,
-        failures: result.failures ?? [],
-      };
-    } catch (error) {
-      return {
-        title: check.title,
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
       };
     }
   }

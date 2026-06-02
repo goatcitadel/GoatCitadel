@@ -1,3 +1,5 @@
+import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
+
 const FENCED_CODE_BLOCK_RE = /(```[\s\S]*?```)/g;
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
@@ -27,6 +29,63 @@ export function normalizeCitationDisplayText(content: string | undefined | null)
   }
   const normalized = stripHtmlNoiseOutsideCode(decodeJsonUnicodeEscapes(content));
   return normalized.trim() || undefined;
+}
+
+export function isMemoryCitation(citation: ChatCitationRecord): boolean {
+  return (
+    citation.sourceType === "memory" || citation.url?.startsWith("memory://") === true || Boolean(citation.provenance)
+  );
+}
+
+export function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
+  switch (value) {
+    case "semantic_vector":
+      return "semantic vector";
+    case "semantic_hints":
+      return "semantic hints";
+    case "lexical_recency":
+      return "lexical/recency";
+    default:
+      return null;
+  }
+}
+
+export function formatMemoryScore(value: number | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : null;
+}
+
+export function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): string | null {
+  if (!signals) {
+    return null;
+  }
+  return [
+    ["total", signals.totalScore],
+    ["lexical", signals.lexicalScore],
+    ["vector", signals.semanticVectorScore],
+    ["hint", signals.semanticHintScore],
+    ["recency", signals.recencyScore],
+    ["diversity", signals.diversityScore],
+  ]
+    .map(([label, value]) => {
+      const score = typeof value === "number" ? formatMemoryScore(value) : null;
+      return score ? `${label} ${score}` : null;
+    })
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+}
+
+export function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | undefined): string | null {
+  if (!provenance) {
+    return null;
+  }
+  return [
+    formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
+    provenance.relationScope,
+    provenance.freshness,
+    provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 }
 
 export function decodeJsonUnicodeEscapes(content: string): string {

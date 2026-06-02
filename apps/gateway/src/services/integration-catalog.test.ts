@@ -164,6 +164,13 @@ describe("integration-catalog", () => {
     }
   });
 
+  it("keeps local model providers on registered catalog ids", () => {
+    expect(requireCatalogEntry("model_provider.local-models").label).toBe("Local Models");
+    expect(getIntegrationFormSchema("model_provider.local-models")?.title).toBe("Local Models Provider");
+    expect(INTEGRATION_CATALOG.find((entry) => entry.catalogId === "model_provider.lmstudio")).toBeUndefined();
+    expect(getIntegrationFormSchema("model_provider.lmstudio")).toBeUndefined();
+  });
+
   it("does not advertise operator-action capabilities without matching shipped actions", () => {
     const actionCapabilities = new Set(["read", "write", "search", "capture"]);
 
