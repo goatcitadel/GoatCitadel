@@ -86,6 +86,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The code-mode sandbox proofs spawn a child `pnpm --filter @goatcitadel/gateway exec tsx`
+      # which resolves @goatcitadel/* via node_modules -> dist (there are no tsconfig path
+      # mappings). On a clean runner those dist outputs do not exist (no prepare/postinstall
+      # build), so the hostile-sandbox proof CLI fails with ERR_MODULE_NOT_FOUND. Build the
+      # gateway's workspace dependencies first so the spawned process can resolve them.
+      - name: Build workspace dependencies
+        run: pnpm --filter "@goatcitadel/gateway^..." build
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 

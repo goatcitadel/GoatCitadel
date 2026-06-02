@@ -71,6 +71,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Code-mode sandbox proofs spawn a child gateway `tsx` that resolves @goatcitadel/*
+      # via node_modules -> dist (no tsconfig path mappings, no prepare build). Build the
+      # gateway's workspace dependencies so those lanes can resolve them on a clean runner.
+      - name: Build workspace dependencies
+        run: pnpm --filter "@goatcitadel/gateway^..." build
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 
