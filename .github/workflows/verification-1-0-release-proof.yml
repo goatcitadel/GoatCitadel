@@ -23,6 +23,10 @@ jobs:
             artifactSlug: auth-matrix
           - laneScript: verify:code-mode:sandbox
             artifactSlug: code-mode-sandbox
+          - laneScript: verify:code-mode:hostile-sandbox
+            artifactSlug: code-mode-hostile-sandbox
+          - laneScript: verify:mesh:readiness
+            artifactSlug: mesh-readiness
           - laneScript: verify:agentic:governance
             artifactSlug: agentic-governance
           - laneScript: verify:agentic:proof

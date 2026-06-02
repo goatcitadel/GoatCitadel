@@ -57,6 +57,10 @@ export const meshRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.mesh.getMeshStatus());
   });
 
+  fastify.get("/api/v1/mesh/readiness", async (_request, reply) => {
+    return reply.send(fastify.services.mesh.getMeshReadinessDiagnostics());
+  });
+
   fastify.get("/api/v1/mesh/nodes", async (request, reply) => {
     const parsed = nodesQuerySchema.safeParse(request.query);
     if (!parsed.success) {

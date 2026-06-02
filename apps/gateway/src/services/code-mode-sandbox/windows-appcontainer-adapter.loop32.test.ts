@@ -40,9 +40,13 @@ describe("WindowsAppContainerSandboxAdapter loop32 diagnostics", () => {
     await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 
-  it("reports IPC preservation as the current Windows launch blocker", async () => {
+  it("reports stdio JSON-RPC as the current Windows AppContainer transport", async () => {
     const root = await makeTempRoot();
     const runTempRoot = path.join(root, "run");
+    const nodePath = path.join(root, "node.exe");
+    const harnessPath = path.join(root, "harness.mjs");
+    await fs.writeFile(nodePath, "test node", "utf8");
+    await fs.writeFile(harnessPath, "process.exit(0);\n", "utf8");
     const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
     const adapter = new WindowsAppContainerSandboxAdapter({
       platform: "win32",
@@ -52,22 +56,22 @@ describe("WindowsAppContainerSandboxAdapter loop32 diagnostics", () => {
 
     const metadata = adapter.probe(baseConfig());
     expect(metadata).toMatchObject({
-      available: false,
+      available: true,
       platform: "win32",
     });
-    expect(metadata.checksFailed).toContain("win32_node_ipc_not_preserved");
+    expect(metadata.checksFailed).toEqual([]);
+    expect(metadata.checksPassed).toContain("win32_stdio_jsonrpc_transport_intended");
 
-    await expect(
-      adapter.prepareLaunch({
-        runId: "loop32-run",
-        nodePath: path.join(root, "node.exe"),
-        harnessPath: path.join(root, "harness.mjs"),
-        runTempRoot,
-        heapMb: 384,
-        env: { GOATCITADEL_CODE_MODE: "1" },
-      }),
-    ).rejects.toThrow("win32_node_ipc_not_preserved");
-    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
+    const launch = await adapter.prepareLaunch({
+      runId: "loop32-run",
+      nodePath,
+      harnessPath,
+      runTempRoot,
+      heapMb: 384,
+      env: { GOATCITADEL_CODE_MODE: "1" },
+    });
+    expect(launch.transport).toBe("stdio_jsonrpc");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).resolves.toBeTruthy();
   });
 });
 

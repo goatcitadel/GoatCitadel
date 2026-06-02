@@ -24,10 +24,10 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - Legacy traces without durable linkage may still use compatibility reads or resume fallbacks for historical records, but mission-session LLM sends and retries no longer rely on a non-durable ownership path.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners. Manual lifecycle admin still obeys `memoryLifecycleAdminV1Enabled`; scheduled expired-memory auto-forget is controlled separately by `memoryLifecycleAutoForgetEnabled` so operators can disable cron deletion without disabling admin inspection.
 - Memory retrieval provenance must stay truth-preserving: lexical/recency scoring is the default, semantic-hint scoring may only use operator-visible memory item metadata such as `retrievalHints`, `semanticTerms`, `tags`, `aliases`, or `keywords`, and semantic-vector scoring must be recorded as `semantic_vector` and bounded to active lifecycle memory item candidates unless a separate retrieval path proves broader embedding search.
-- `packages/mesh-core` has targeted service coverage but does not count toward the `1.0` readiness bar until it has full release evidence.
+- `packages/mesh-core` readiness is evidence-bearing only when `verify:mesh:readiness` is green for join-token lifecycle, mTLS/tailnet posture, lease lifecycle, owner failover, replication offsets, Settings visibility, and Gateway diagnostics.
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
-- MCP server-mode ships a limited `goatcitadel mcp-server` stdio proxy for read-only, closed-world callable descriptors. It re-enters the authenticated Gateway manifest and call-preview routes for `initialize`, `tools/list`, and `tools/call`; do not describe it as a standalone Gateway-free MCP server or remote MCP transport invocation.
+- MCP server-mode ships a limited `goatcitadel mcp-server` stdio proxy for read-only, closed-world callable descriptors. It re-enters the authenticated Gateway manifest and call-preview routes for `initialize`, `tools/list`, and `tools/call`; do not describe it as a standalone Gateway-free MCP server. Remote HTTP/SSE MCP invocation is a separate governed Gateway bridge, including OAuth2 only when OAuth metadata and ready token refs are present.
 - Filesystem-backed backup restore is offline-only for `1.0`; operators must stop any gateway serving the same runtime root before invoking the CLI restore, and the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
 - Surface-regression and visual-regression derive from the same canonical Mission Control Next release-surface manifest, covering the current `Chat / Cowork / Code / Projects / Library / Ops / Settings` operator navigation while legacy `Work / Observe / Tune` remains release taxonomy only.
@@ -133,7 +133,7 @@ Development runtime:
 - Supervisor behavior: restart-on-change with explicit child process tree shutdown, port release wait, and health check before returning to ready state.
 - `pnpm dev:gateway:watch` is available as direct `tsx watch` fallback.
 
-### 3.2 Mission Control (`apps/mission-control-next` primary, `apps/mission-control` compatibility)
+### 3.2 Mission Control (`apps/mission-control-next` primary; legacy source archived)
 
 Mission Control is an API client, not a backend extension. It:
 
@@ -142,7 +142,7 @@ Mission Control is an API client, not a backend extension. It:
 - Maintains local browser preferences for operator UX.
 - Never writes data directly to local storage files or SQLite.
 - Uses a topic-scoped refresh bus for SSE updates to avoid full-page refresh churn during active operations.
-- Treats `apps/mission-control-next` as the canonical `1.0` shell; the legacy shell remains available only for compatibility, rollback, and parity comparison.
+- Treats `apps/mission-control-next` as the canonical `1.0` shell; `apps/mission-control` source is archived from disk and cannot be cited as current readiness or compatibility-shell parity evidence.
 
 ### 3.3 Shared Domain Packages
 

@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import type {
   McpToolRecord,
   McpOAuthStartResponse,
+  McpOAuthConfig,
   McpServerCreateInput,
   McpServerPolicy,
   McpServerRecord,
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
+import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 import {
@@ -15,13 +17,15 @@ import {
   isRuntimeSupportedMcpDefinition,
 } from "./mcp-template-visibility.js";
 
-interface McpAuthStateRecord {
+export interface McpAuthStateRecord {
   accessTokenRef?: string;
   refreshTokenRef?: string;
   tokenExpiresAt?: string;
   oauthState?: string;
   scopes?: string[];
   updatedAt: string;
+  lastRefreshedAt?: string;
+  error?: string;
   lastCodePreview?: string;
 }
 
@@ -35,6 +39,11 @@ export interface McpServerAdminHost {
   readMcpTools(): McpToolRecord[];
   writeMcpTools(tools: McpToolRecord[]): void;
   resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[]): Promise<McpToolRecord[]>;
+  exchangeMcpOAuthCode?(
+    server: McpServerRecord,
+    code: string,
+    stateRecord: McpAuthStateRecord,
+  ): Promise<McpAuthStateRecord>;
   requireMcpServer(serverId: string): McpServerRecord;
   readMcpAuthState(): Record<string, McpAuthStateRecord>;
   writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void;
@@ -54,6 +63,7 @@ export function createMcpServer(host: McpServerAdminHost, input: McpServerCreate
     args: input.args?.map((item) => item.trim()).filter(Boolean),
     url: input.url?.trim() || undefined,
     authType: input.authType ?? "none",
+    oauth: normalizeMcpOAuthConfig(input.oauth),
     enabled: input.enabled ?? true,
     category: input.category ?? inferMcpCategory(input.transport),
     trustTier: input.trustTier ?? "restricted",
@@ -92,6 +102,7 @@ export function updateMcpServer(
       args: input.args === undefined ? item.args : input.args.map((entry) => entry.trim()).filter(Boolean),
       url: input.url === undefined ? item.url : input.url.trim() || undefined,
       authType: input.authType ?? item.authType,
+      oauth: input.oauth === undefined ? item.oauth : normalizeMcpOAuthConfig(input.oauth),
       enabled: input.enabled ?? item.enabled,
       category: input.category ?? item.category,
       trustTier: input.trustTier ?? item.trustTier,
@@ -155,17 +166,34 @@ export function disconnectMcpServer(host: McpServerAdminHost, serverId: string):
 
 export function startMcpOAuth(host: McpServerAdminHost, serverId: string): McpOAuthStartResponse {
   const server = host.requireMcpServer(serverId);
+  if (server.authType !== "oauth2") {
+    throw new Error("MCP OAuth can only be started for oauth2 servers.");
+  }
+  if (!server.oauth?.authorizationUrl?.trim() || !server.oauth.tokenUrl?.trim()) {
+    throw new Error("MCP OAuth requires authorizationUrl and tokenUrl metadata.");
+  }
   const state = randomUUID();
-  const callback = encodeURIComponent("http://127.0.0.1:8787/api/v1/mcp/oauth/callback");
-  const authorizeUrl = `${server.url ?? "https://example-mcp-provider.local/oauth/authorize"}?state=${encodeURIComponent(state)}&redirect_uri=${callback}`;
+  const callback = server.oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback";
+  const authorizeUrl = new URL(server.oauth.authorizationUrl);
+  authorizeUrl.searchParams.set("response_type", "code");
+  authorizeUrl.searchParams.set("state", state);
+  authorizeUrl.searchParams.set("redirect_uri", callback);
+  const clientId = resolveEnvValue(server.oauth.clientIdEnv);
+  if (clientId) {
+    authorizeUrl.searchParams.set("client_id", clientId);
+  }
+  if (server.oauth.scopes?.length) {
+    authorizeUrl.searchParams.set("scope", server.oauth.scopes.join(" "));
+  }
   const authRows = host.readMcpAuthState();
   authRows[serverId] = {
     ...(authRows[serverId] ?? {}),
     oauthState: state,
+    error: undefined,
     updatedAt: new Date().toISOString(),
   };
   host.writeMcpAuthState(authRows);
-  return { authorizeUrl, state };
+  return { authorizeUrl: authorizeUrl.toString(), state };
 }
 
 export async function completeMcpOAuth(
@@ -182,14 +210,11 @@ export async function completeMcpOAuth(
   if (state && authRow.oauthState && authRow.oauthState !== state) {
     throw new Error("OAuth state mismatch.");
   }
-  authRows[serverId] = {
-    ...authRow,
-    accessTokenRef: `keychain:goatcitadel:mcp:${serverId}:access-token`,
-    refreshTokenRef: `keychain:goatcitadel:mcp:${serverId}:refresh-token`,
-    oauthState: undefined,
-    updatedAt: new Date().toISOString(),
-    lastCodePreview: code.slice(0, 8),
-  };
+  const server = host.requireMcpServer(serverId);
+  if (!host.exchangeMcpOAuthCode) {
+    throw new Error("MCP OAuth token exchange is not available in this Gateway runtime.");
+  }
+  authRows[serverId] = await host.exchangeMcpOAuthCode(server, code, authRow);
   host.writeMcpAuthState(authRows);
   return connectMcpServer(host, serverId);
 }
@@ -201,6 +226,11 @@ export function deleteMcpServer(host: McpServerAdminHost, serverId: string): { d
   if (deleted) {
     host.writeMcpServers(next);
     host.writeMcpTools(host.readMcpTools().filter((tool) => tool.serverId !== serverId));
+    const authRows = host.readMcpAuthState();
+    if (authRows[serverId]) {
+      delete authRows[serverId];
+      host.writeMcpAuthState(authRows);
+    }
     host.storage.approvalInbox.deleteByReceiver("mcp", serverId);
     host.publishRealtime("system", "mcp", {
       type: "mcp_server_deleted",
@@ -208,4 +238,27 @@ export function deleteMcpServer(host: McpServerAdminHost, serverId: string): { d
     });
   }
   return { deleted };
+}
+
+function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const normalized: McpOAuthConfig = {
+    authorizationUrl: input.authorizationUrl?.trim() || undefined,
+    tokenUrl: input.tokenUrl?.trim() || undefined,
+    clientIdEnv: input.clientIdEnv?.trim() || undefined,
+    clientSecretEnv: input.clientSecretEnv?.trim() || undefined,
+    scopes: input.scopes?.map((item) => item.trim()).filter(Boolean),
+    redirectUri: input.redirectUri?.trim() || undefined,
+    tokenRefreshSkewSeconds: input.tokenRefreshSkewSeconds,
+  };
+  return Object.values(normalized).some((value) => (Array.isArray(value) ? value.length > 0 : value !== undefined))
+    ? normalized
+    : undefined;
+}
+
+function resolveEnvValue(envKey?: string): string | undefined {
+  const key = normalizeSafeEnvKeyNames(envKey ? [envKey] : [])[0];
+  return key ? process.env[key]?.trim() || undefined : undefined;
 }

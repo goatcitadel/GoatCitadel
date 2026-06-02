@@ -21,25 +21,41 @@ describe("mcp template visibility", () => {
     ).toBe(true);
   });
 
-  it("hides generic remote MCP transports from the visible 1.0 template library", () => {
+  it("shows remote MCP definitions when the runtime bridge can invoke them", () => {
     expect(
       isVisibleMcpTemplateRecord({
         transport: "http",
-        url: "https://api.githubcopilot.com/mcp/",
+        url: "https://learn.microsoft.com/api/mcp",
+        authType: "none",
+        policy: {
+          requireFirstToolApproval: true,
+          redactionMode: "basic",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+        },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isVisibleMcpTemplateRecord({
         transport: "sse",
         url: "https://example.test/mcp/sse",
+        authType: "token",
+        policy: {
+          requireFirstToolApproval: true,
+          redactionMode: "strict",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+          allowedEnvKeys: ["EXAMPLE_MCP_TOKEN"],
+        },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("keeps generic remote MCP creation behind an explicit experimental flag", () => {
+  it("keeps unsupported remote MCP auth behind an explicit experimental flag", () => {
     const remoteDefinition = {
       transport: "http" as const,
       url: "https://api.githubcopilot.com/mcp/",
+      authType: "oauth2" as const,
     };
 
     expect(isAllowedMcpDefinitionForCreate(remoteDefinition, {})).toBe(false);

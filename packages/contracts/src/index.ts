@@ -1,5 +1,6 @@
 export * from "./provider-templates.js";
 export * from "./activation.js";
+export * from "./autonomy.js";
 export * from "./capabilities.js";
 export * from "./addons.js";
 export * from "./capability-packs.js";

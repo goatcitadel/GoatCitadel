@@ -117,6 +117,9 @@ function buildTrustedCodeHostBackend(
       ...(sandbox.required && !sandbox.available
         ? [sandbox.failClosedReason ?? "Required Code Mode sandbox is unavailable."]
         : []),
+      ...(sandbox.hostileSandboxClaim?.publicClaimAllowed
+        ? []
+        : (sandbox.hostileSandboxClaim?.blockers ?? ["Hostile-code sandboxing is not promoted."])),
     ],
     governance: [
       "Requires explicit Code Mode approval before execution.",
@@ -159,6 +162,7 @@ function buildDockerBackend(
     governance: [
       "Must preserve deny-wins policy, path jails, approval linkage, immutable artifact hashes, and runtime truth.",
       "Must not replace auth, approvals, or operator-visible sandbox posture.",
+      "Docker is extra isolation evidence, not sufficient evidence for a hostile-code sandbox claim.",
       ...(callable ? ["Experimental: uses the configured local Docker daemon and a run-temp bind mount."] : []),
     ],
     evidence: {

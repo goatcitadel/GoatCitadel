@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,6 +35,66 @@ function createTestServer(script: string, extraArgs: string[] = []): McpServerRe
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function createRemoteTestServer(url: string, input: Partial<McpServerRecord> = {}): McpServerRecord {
+  const now = new Date().toISOString();
+  return {
+    ...createTestServer(""),
+    serverId: input.serverId ?? "srv-remote",
+    label: input.label ?? "Remote MCP",
+    transport: input.transport ?? "http",
+    command: undefined,
+    args: undefined,
+    url,
+    authType: input.authType ?? "none",
+    category: input.category ?? "research",
+    trustTier: input.trustTier ?? "restricted",
+    status: input.status ?? "connected",
+    policy: input.policy ?? {
+      requireFirstToolApproval: false,
+      redactionMode: "off",
+      allowedToolPatterns: [],
+      blockedToolPatterns: [],
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function withRemoteMcpHttpServer<T>(
+  handler: (input: {
+    message: Record<string, unknown>;
+    request: http.IncomingMessage;
+    response: http.ServerResponse;
+  }) => void,
+  run: (url: string) => Promise<T>,
+): Promise<T> {
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      if (request.method === "DELETE") {
+        response.writeHead(405).end();
+        return;
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const message = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      handler({ message, request, response });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Remote MCP test server did not bind to a TCP port.");
+    }
+    return await run(`http://127.0.0.1:${address.port}/mcp`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }
 
 const MCP_TEST_SCRIPT = String.raw`
@@ -369,6 +430,60 @@ describe("mcp runtime", () => {
     expect(tools.map((tool) => tool.toolName)).toEqual(["browser.navigate", "browser.extract"]);
   });
 
+  it("discovers tools from a remote streamable HTTP MCP server through the network allowlist", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response
+            .writeHead(200, {
+              "content-type": "application/json",
+              "mcp-session-id": "remote-session-1",
+            })
+            .end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "remote-test", version: "1.0.0" },
+                },
+              }),
+            );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/list") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                tools: [{ name: "remote.search", description: "Search remote docs", inputSchema: { type: "object" } }],
+              },
+            }),
+          );
+        }
+      },
+      async (url) => {
+        const server = createRemoteTestServer(url);
+        const tools = await discoverMcpTools(server, 1000, { networkAllowlist: [new URL(url).host] });
+
+        expect(tools).toEqual([
+          expect.objectContaining({
+            serverId: "srv-remote",
+            toolName: "remote.search",
+            description: "Search remote docs",
+            inputSchema: { type: "object" },
+          }),
+        ]);
+      },
+    );
+  });
+
   it("executes a browser-capable MCP adapter through tools/call", async () => {
     const server = createTestServer(MCP_TEST_SCRIPT);
 
@@ -387,6 +502,79 @@ describe("mcp runtime", () => {
       },
       contentText: undefined,
     });
+  });
+
+  it("executes a remote streamable HTTP MCP tool through tools/call", async () => {
+    const seenHeaders: Array<{ sessionId?: string; protocol?: string; authorization?: string }> = [];
+    await withRemoteMcpHttpServer(
+      ({ message, request, response }) => {
+        seenHeaders.push({
+          sessionId: request.headers["mcp-session-id"] as string | undefined,
+          protocol: request.headers["mcp-protocol-version"] as string | undefined,
+          authorization: request.headers.authorization,
+        });
+        if (message.method === "initialize") {
+          response
+            .writeHead(200, {
+              "content-type": "application/json",
+              "mcp-session-id": "remote-session-2",
+            })
+            .end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "remote-test", version: "1.0.0" },
+                },
+              }),
+            );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/call") {
+          response.writeHead(200, { "content-type": "text/event-stream" }).end(
+            [
+              "event: message",
+              `data: ${JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  content: [{ type: "text", text: `remote:${(message.params as { name?: string }).name}` }],
+                  structuredContent: { ok: true },
+                },
+              })}`,
+              "",
+            ].join("\n"),
+          );
+        }
+      },
+      async (url) => {
+        const server = createRemoteTestServer(url);
+        const result = await invokeMcpRuntimeTool(
+          server,
+          {
+            toolName: "remote.search",
+            arguments: { q: "goatcitadel" },
+          },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.output).toMatchObject({
+          structuredContent: { ok: true },
+          contentText: "remote:remote.search",
+        });
+        expect(seenHeaders.find((headers) => headers.sessionId === "remote-session-2")).toMatchObject({
+          protocol: "2025-06-18",
+        });
+      },
+    );
   });
 
   it("aborts a slow MCP tool call when the signal fires", async () => {
@@ -459,13 +647,15 @@ describe("mcp runtime", () => {
     ]);
   });
 
-  it("keeps non-stdio and missing-command invocation failures structured", async () => {
+  it("keeps missing remote URL and missing-command invocation failures structured", async () => {
     await expect(
       invokeMcpRuntimeTool(
         {
           ...createTestServer(""),
           transport: "http",
-          url: "https://mcp.example.test",
+          command: undefined,
+          args: undefined,
+          url: undefined,
         },
         { toolName: "browser.navigate", arguments: {} },
       ),
@@ -473,14 +663,9 @@ describe("mcp runtime", () => {
       ok: false,
       output: {
         transport: "http",
-        liveness: "url_configured",
+        liveness: "missing_url",
       },
-      contentItems: [
-        {
-          type: "error",
-          text: expect.stringContaining("HTTP"),
-        },
-      ],
+      error: "MCP HTTP URL is missing.",
     });
 
     await expect(
@@ -495,6 +680,26 @@ describe("mcp runtime", () => {
       ok: false,
       error: "MCP stdio command is missing.",
     });
+  });
+
+  it("blocks remote MCP invocation when the endpoint is not network-allowlisted", async () => {
+    await withRemoteMcpHttpServer(
+      ({ response }) => {
+        response.writeHead(500).end("should not be reached");
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          { toolName: "remote.search", arguments: {} },
+          1000,
+          { networkAllowlist: [] },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("Private");
+        expect(result.error).toContain("blocked");
+      },
+    );
   });
 
   it("redacts provider secrets from MCP tool error payloads", async () => {

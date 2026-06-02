@@ -26,6 +26,30 @@ export interface McpServerPolicy {
   notes?: string;
 }
 
+export interface McpOAuthConfig {
+  authorizationUrl?: string;
+  tokenUrl?: string;
+  clientIdEnv?: string;
+  clientSecretEnv?: string;
+  scopes?: string[];
+  redirectUri?: string;
+  tokenRefreshSkewSeconds?: number;
+}
+
+export type McpOAuthReadiness = "not_required" | "needs_auth" | "ready" | "expired" | "missing_oauth_config";
+
+export interface McpServerAuthState {
+  authType: McpServerRecord["authType"];
+  readiness: McpOAuthReadiness;
+  accessTokenRef?: string;
+  refreshTokenRef?: string;
+  tokenExpiresAt?: string;
+  scopes?: string[];
+  updatedAt?: string;
+  lastRefreshedAt?: string;
+  error?: string;
+}
+
 export interface McpServerRecord {
   serverId: string;
   label: string;
@@ -34,6 +58,8 @@ export interface McpServerRecord {
   args?: string[];
   url?: string;
   authType: "none" | "token" | "oauth2";
+  oauth?: McpOAuthConfig;
+  authState?: McpServerAuthState;
   enabled: boolean;
   status: McpServerStatus;
   category: McpServerCategory;
@@ -56,6 +82,7 @@ export interface McpServerTemplateRecord {
   args?: string[];
   url?: string;
   authType: "none" | "token" | "oauth2";
+  oauth?: McpOAuthConfig;
   category: McpServerCategory;
   trustTier: McpTrustTier;
   costTier: McpCostTier;
@@ -79,6 +106,7 @@ export interface McpServerCreateInput {
   args?: string[];
   url?: string;
   authType?: "none" | "token" | "oauth2";
+  oauth?: McpOAuthConfig;
   enabled?: boolean;
   category?: McpServerCategory;
   trustTier?: McpTrustTier;
@@ -93,6 +121,7 @@ export interface McpServerUpdateInput {
   args?: string[];
   url?: string;
   authType?: "none" | "token" | "oauth2";
+  oauth?: McpOAuthConfig;
   enabled?: boolean;
   category?: McpServerCategory;
   trustTier?: McpTrustTier;
@@ -118,6 +147,8 @@ export interface McpInvokeRequest {
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   surface?: PermissionSurface;
+  autonomousActivation?: boolean;
+  estimatedCostUsd?: number;
   policyContext?: ToolPolicyActorContext;
   consentContext?: {
     operatorId?: string;
@@ -146,11 +177,21 @@ export interface McpInvokeResponse {
   output?: Record<string, unknown>;
   contentItems?: McpNormalizedContentItem[];
   diagnostics?: McpInvokeDiagnostics;
+  autonomousActivation?: AutonomousActivationRuntimeEvidence;
   error?: string;
   approvalRequired?: boolean;
   approvalId?: string;
   policyReason?: string;
   reasonCodes?: string[];
+}
+
+export interface AutonomousActivationRuntimeEvidence {
+  requested: boolean;
+  allowed: boolean;
+  matchedGrantId?: string;
+  riskLevel?: import("./autonomy.js").AutonomousActivationRiskLevel;
+  governance: string[];
+  blockers: string[];
 }
 
 export interface McpTemplateDiscoveryResult {
@@ -186,6 +227,7 @@ export interface McpRemotePreviewItem {
   transport: Extract<McpTransport, "http" | "sse">;
   url?: string;
   authType: "none" | "token" | "oauth2";
+  authReadiness: McpOAuthReadiness;
   trustTier: McpTrustTier;
   status?: McpServerStatus;
   enabled?: boolean;
@@ -205,6 +247,7 @@ export interface McpRemotePreviewItem {
     verifiedAt?: string;
     lastConnectedAt?: string;
     lastError?: string;
+    authState?: McpServerAuthState;
   };
 }
 
@@ -213,7 +256,11 @@ export interface McpRemotePreviewResponse {
   readOnly: true;
   mutationSemantics: "none";
   experimentalRemoteRecordsAllowed: boolean;
-  runtimeSupport: "internal_approval_inbox_only" | "experimental_records_only" | "not_available";
+  runtimeSupport:
+    | "internal_approval_inbox_only"
+    | "remote_http_sse_bridge"
+    | "experimental_records_only"
+    | "not_available";
   summary: {
     remoteServers: number;
     remoteTemplates: number;

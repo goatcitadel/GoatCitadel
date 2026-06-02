@@ -22,6 +22,7 @@ It is not just a chat UI. It is a multi-surface, multi-provider, skill-aware wor
 - Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
 - Durable execution owns the shipped resumable mission-session Chat, Cowork, and Code flow set.
 - The capability system governs tools, runtime skills, candidates, proposals, and Code Mode runs through inspectable and callable catalogs.
+- Autonomous activation is governed by expiring operator grants and remains subordinate to deny-wins policy, approvals, auth, path jails, provenance, and health checks.
 - Code Mode v1 is a governed trusted-code surface with explicit approval, immutable ledger references, recorded artifact hashes, and execution-time hash checks. Do not claim hostile-code sandboxing.
 - Native Windows desktop hosting and installer paths are part of the product shape.
 - Docker is a supported local/shared-host runtime boundary, but it does not replace auth, approvals, path jails, or policy.
@@ -235,10 +236,10 @@ For installer, desktop, release, auth, backup, provider, or Code Mode changes, u
 Do not claim:
 
 - hostile-code sandboxing for Code Mode
-- autonomous high-risk tool activation
+- ungoverned autonomous high-risk tool activation
 - full local inference maturity from the optional NPU sidecar
 - compatibility shell parity as canonical product readiness
-- remote MCP transport invocation if only local `stdio` is supported
+- remote MCP transport invocation that bypasses Gateway policy, approvals, network allowlists, audit, or supported auth
 - generated screenshot or release proof that was not actually produced
 - backup restore guarantees beyond the documented offline/operator-run paths
 

@@ -47,6 +47,7 @@ export async function createMcpServer(input: {
   args?: string[];
   url?: string;
   authType?: "none" | "token" | "oauth2";
+  oauth?: McpServerRecord["oauth"];
   enabled?: boolean;
   category?: McpServerRecord["category"];
   trustTier?: McpServerRecord["trustTier"];
@@ -68,6 +69,7 @@ export async function updateMcpServer(
     args?: string[];
     url?: string;
     authType?: "none" | "token" | "oauth2";
+    oauth?: McpServerRecord["oauth"];
     enabled?: boolean;
     category?: McpServerRecord["category"];
     trustTier?: McpServerRecord["trustTier"];
@@ -140,7 +142,14 @@ export async function invokeMcpTool(input: {
   arguments?: Record<string, unknown>;
   agentId?: string;
   sessionId?: string;
+  workspaceId?: string;
   taskId?: string;
+  runId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: "chat" | "cowork" | "code" | "tools" | "mcp" | "all";
+  autonomousActivation?: boolean;
+  estimatedCostUsd?: number;
 }): Promise<McpInvokeResponse> {
   return request<McpInvokeResponse>("/api/v1/mcp/invoke", {
     method: "POST",

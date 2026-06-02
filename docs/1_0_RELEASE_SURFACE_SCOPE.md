@@ -52,5 +52,5 @@ Status meanings:
 | `/settings/addons` | `experimental` | Add-on posture plus staged/exportable capability-pack evidence and evidence-only materialization receipts; no full marketplace or asset-activation lifecycle claim. |
 | `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
-| `/settings/mcp` | `ship` | Local stdio and Approval Inbox paths are visible; remote http/sse preview is read-only and remains blocked/experimental for generic invocation. |
+| `/settings/mcp` | `ship` | Local stdio, Approval Inbox, and governed remote http/sse no-auth, token-env, and OAuth2 paths are visible; OAuth records show connect/reconnect readiness and fail closed as `needs_auth` when token refs are missing or expired. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |

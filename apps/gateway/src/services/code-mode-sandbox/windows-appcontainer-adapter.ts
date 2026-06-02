@@ -30,13 +30,13 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
     }
 
     if (isAppContainerCapable(this.dependencies.osRelease)) {
-      checks.checksPassed.push("win32_appcontainer_prerequisites_available");
-      checks.checksFailed.push(
-        "win32_node_ipc_not_preserved",
-        "network_isolation_not_enforced",
-        "temp_workspace_not_enforced",
-        "privilege_reduction_not_enforced",
-        "windows_job_limits_not_enforced",
+      checks.checksPassed.push(
+        "win32_appcontainer_prerequisites_available",
+        "win32_stdio_jsonrpc_transport_intended",
+        "network_isolation_intended",
+        "temp_workspace_acl_intended",
+        "privilege_reduction_intended",
+        "windows_job_limits_intended",
       );
     } else {
       checks.checksFailed.push("win32_appcontainer_os_unsupported");
@@ -62,38 +62,54 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
         },
         checksPassed:
           powershellPath && isAppContainerCapable(this.dependencies.osRelease)
-            ? ["win32_powershell_present", "win32_appcontainer_prerequisites_available"]
+            ? [
+                "win32_powershell_present",
+                "win32_appcontainer_prerequisites_available",
+                "win32_stdio_jsonrpc_transport_intended",
+                "network_isolation_intended",
+                "temp_workspace_acl_intended",
+                "privilege_reduction_intended",
+                "windows_job_limits_intended",
+              ]
             : [],
         checksFailed: [
           ...(powershellPath ? [] : ["win32_powershell_missing"]),
           ...(isAppContainerCapable(this.dependencies.osRelease) ? [] : ["win32_appcontainer_os_unsupported"]),
-          ...(isAppContainerCapable(this.dependencies.osRelease)
-            ? [
-                "win32_node_ipc_not_preserved",
-                "network_isolation_not_enforced",
-                "temp_workspace_not_enforced",
-                "privilege_reduction_not_enforced",
-                "windows_job_limits_not_enforced",
-              ]
-            : []),
         ],
       }),
     );
     const launchPowerShellPath = powershellPath as string;
 
+    rejectUnsafeProfilePath(input.runTempRoot);
+    rejectUnsafeProfilePath(input.nodePath);
+    rejectUnsafeProfilePath(input.harnessPath);
     await fs.mkdir(input.runTempRoot, { recursive: true });
+    const stagedNodePath = path.join(input.runTempRoot, "code-mode-node.exe");
+    await fs.copyFile(input.nodePath, stagedNodePath);
     const launcherPath = path.join(input.runTempRoot, "code-mode-appcontainer-launcher.ps1");
-    await fs.writeFile(launcherPath, buildPowerShellLauncher(input), "utf8");
+    await fs.writeFile(
+      launcherPath,
+      buildPowerShellLauncher({ ...input, nodePath: stagedNodePath }, [
+        `--max-old-space-size=${input.heapMb}`,
+        "--input-type=module",
+        "--eval",
+        buildHarnessEvalBootstrap(resolveSandboxRelativeArgument(input.runTempRoot, input.harnessPath)),
+      ]),
+      "utf8",
+    );
 
     return {
-      transport: "node_ipc",
+      transport: "stdio_jsonrpc",
       executable: launchPowerShellPath,
       args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcherPath],
       cwd: input.runTempRoot,
-      env: input.env,
+      env: {
+        ...input.env,
+        GOATCITADEL_CODE_MODE_TRANSPORT: "stdio_jsonrpc",
+      },
       shell: false,
       enforcedWorkspaceRoot: input.runTempRoot,
-      generatedArtifacts: [launcherPath],
+      generatedArtifacts: [launcherPath, stagedNodePath],
       advisoryUnsandboxed: false,
     };
   }
@@ -116,7 +132,7 @@ function isAppContainerCapable(osRelease: string): boolean {
   return major > 6 || (major === 6 && minor >= 2);
 }
 
-function buildPowerShellLauncher(input: CodeModeSandboxLaunchInput): string {
+function buildPowerShellLauncher(input: CodeModeSandboxLaunchInput, nodeArguments: string[]): string {
   rejectUnsafeProfilePath(input.runTempRoot);
   rejectUnsafeProfilePath(input.nodePath);
   rejectUnsafeProfilePath(input.harnessPath);
@@ -126,8 +142,7 @@ $profileName = ${quotePowerShell(profileName)}
 $displayName = 'GoatCitadel Code Mode'
 $workspace = ${quotePowerShell(input.runTempRoot)}
 $nodePath = ${quotePowerShell(input.nodePath)}
-$harnessPath = ${quotePowerShell(input.harnessPath)}
-$arguments = @(${quotePowerShell(`--max-old-space-size=${input.heapMb}`)}, $harnessPath)
+$arguments = @(${nodeArguments.map((argument) => quotePowerShell(argument)).join(", ")})
 
 Add-Type -TypeDefinition @"
 using System;
@@ -140,9 +155,13 @@ using System.Security.Principal;
 public static class GoatCitadelAppContainerLauncher {
   private const int EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
   private const int PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
+  private const int STARTF_USESTDHANDLES = 0x00000100;
   private const int JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008;
   private const int JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
   private const int JobObjectExtendedLimitInformation = 9;
+  private const int STD_INPUT_HANDLE = -10;
+  private const int STD_OUTPUT_HANDLE = -11;
+  private const int STD_ERROR_HANDLE = -12;
   private const uint INFINITE = 0xFFFFFFFF;
 
   [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -180,6 +199,9 @@ public static class GoatCitadelAppContainerLauncher {
 
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool CreateProcessW(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, int dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFOEX lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr GetStdHandle(int nStdHandle);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
@@ -284,6 +306,10 @@ public static class GoatCitadelAppContainerLauncher {
 
       STARTUPINFOEX startupInfo = new STARTUPINFOEX();
       startupInfo.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+      startupInfo.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+      startupInfo.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+      startupInfo.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+      startupInfo.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
       IntPtr attributeListSize = IntPtr.Zero;
       InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
       startupInfo.lpAttributeList = Marshal.AllocHGlobal(attributeListSize);
@@ -299,9 +325,10 @@ public static class GoatCitadelAppContainerLauncher {
 
       PROCESS_INFORMATION processInfo;
       string commandLine = BuildCommandLine(nodePath, arguments);
-      bool started = CreateProcessW(nodePath, commandLine, IntPtr.Zero, IntPtr.Zero, false, EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, workspace, ref startupInfo, out processInfo);
+      bool started = CreateProcessW(nodePath, commandLine, IntPtr.Zero, IntPtr.Zero, true, EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, workspace, ref startupInfo, out processInfo);
       if (!started) {
-        throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessW failed.");
+        int errorCode = Marshal.GetLastWin32Error();
+        throw new Win32Exception(errorCode, "CreateProcessW failed with error " + errorCode + ".");
       }
 
       IntPtr job = CreateJobObject(IntPtr.Zero, null);
@@ -392,6 +419,22 @@ public static class GoatCitadelAppContainerLauncher {
 
 exit [GoatCitadelAppContainerLauncher]::Launch($profileName, $displayName, $workspace, $nodePath, $arguments)
 `;
+}
+
+function resolveSandboxRelativeArgument(runTempRoot: string, filePath: string): string {
+  const relativePath = path.relative(runTempRoot, filePath);
+  if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+    return relativePath || path.basename(filePath);
+  }
+  return filePath;
+}
+
+function buildHarnessEvalBootstrap(harnessPath: string): string {
+  return [
+    'import fs from "node:fs";',
+    `const source = fs.readFileSync(${JSON.stringify(harnessPath)}, "utf8");`,
+    'await import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);',
+  ].join(" ");
 }
 
 function quotePowerShell(value: string): string {

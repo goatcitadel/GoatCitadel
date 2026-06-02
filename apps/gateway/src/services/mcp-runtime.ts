@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- MCP stdio, HTTP, SSE, auth, and normalization stay together so transport policy remains auditable. */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -8,11 +9,12 @@ import type {
   McpToolRecord,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
-import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 
 const log = logger.child("mcp-runtime");
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
+const MCP_STREAMABLE_HTTP_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
 /** Grace period before escalating a POSIX child from SIGTERM to SIGKILL. */
 const MCP_TERMINATE_GRACE_MS = 3000;
@@ -38,6 +40,17 @@ interface StdioClient {
   notify(method: string, params?: Record<string, unknown>): void;
   close(): void;
   readStderr(): string;
+}
+
+interface HttpMcpClient {
+  request(method: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcEnvelope>;
+  notify(method: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<void>;
+  close(signal?: AbortSignal): Promise<void>;
+}
+
+export interface McpRuntimeTransportOptions {
+  networkAllowlist?: string[];
+  oauthAccessTokenResolver?: (server: McpServerRecord) => Promise<string | undefined> | string | undefined;
 }
 
 export interface McpBrowserFallbackTarget {
@@ -77,32 +90,23 @@ export function inferMcpToolsForServer(server: McpServerRecord, existingTools: M
 export async function discoverMcpTools(
   server: McpServerRecord,
   timeoutMs = DEFAULT_STDIO_TIMEOUT_MS,
+  options: McpRuntimeTransportOptions = {},
 ): Promise<McpToolRecord[]> {
+  if (server.transport === "http" || server.transport === "sse") {
+    if (!server.url?.trim()) {
+      return [];
+    }
+    return withHttpMcpClient(server, timeoutMs, options, async (client) => {
+      const response = await client.request("tools/list", {});
+      return normalizeDiscoveredTools(server, response);
+    });
+  }
   if (server.transport !== "stdio" || !server.command?.trim()) {
     return [];
   }
   return withStdioMcpClient(server, timeoutMs, async (client) => {
     const response = await client.request("tools/list", {});
-    const tools = Array.isArray(response.result?.tools)
-      ? (response.result?.tools as Array<Record<string, unknown>>)
-      : [];
-    const updatedAt = new Date().toISOString();
-    const discovered: McpToolRecord[] = [];
-    for (const tool of tools) {
-      const toolName = typeof tool.name === "string" ? tool.name.trim() : "";
-      if (!toolName) {
-        continue;
-      }
-      discovered.push({
-        serverId: server.serverId,
-        toolName,
-        description: typeof tool.description === "string" ? tool.description : undefined,
-        inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : undefined,
-        enabled: true,
-        updatedAt,
-      });
-    }
-    return discovered;
+    return normalizeDiscoveredTools(server, response);
   });
 }
 
@@ -110,22 +114,45 @@ export async function invokeMcpRuntimeTool(
   server: McpServerRecord,
   input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
   timeoutMs = DEFAULT_STDIO_TIMEOUT_MS,
+  options: McpRuntimeTransportOptions = {},
 ): Promise<McpRuntimeInvocationResult> {
-  if (server.transport !== "stdio") {
-    return {
-      ok: false,
-      output: {
-        transport: server.transport,
-        liveness: server.url?.trim() ? "url_configured" : "missing_url",
-      },
-      contentItems: [
-        {
-          type: "error",
-          text: `MCP ${server.transport.toUpperCase()} runtime invocation requires a URL-backed bridge before tools can run.`,
+  if (server.transport === "http" || server.transport === "sse") {
+    if (!server.url?.trim()) {
+      return {
+        ok: false,
+        output: {
+          transport: server.transport,
+          liveness: "missing_url",
         },
-      ],
-      error: `MCP transport ${server.transport} requires a URL-backed runtime bridge before invocation.`,
-    };
+        error: `MCP ${server.transport.toUpperCase()} URL is missing.`,
+      };
+    }
+    try {
+      const first = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
+      if (!isExpiredMcpSessionError(first.error) || input.signal?.aborted) {
+        return first;
+      }
+      const second = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
+      return {
+        ...second,
+        degraded: true,
+        retryCount: 1,
+        output: second.output
+          ? {
+              ...second.output,
+              degradedReason: "expired_session_reconnect",
+            }
+          : second.output,
+        error: second.ok ? undefined : second.error,
+      };
+    } catch (error) {
+      const sanitized = sanitizeMcpRuntimeError((error as Error).message);
+      return {
+        ok: false,
+        error: sanitized,
+        contentItems: [{ type: "error", text: sanitized }],
+      };
+    }
   }
   if (!server.command?.trim()) {
     return {
@@ -161,6 +188,27 @@ export async function invokeMcpRuntimeTool(
   }
 }
 
+function normalizeDiscoveredTools(server: McpServerRecord, response: JsonRpcEnvelope): McpToolRecord[] {
+  const tools = Array.isArray(response.result?.tools) ? (response.result?.tools as Array<Record<string, unknown>>) : [];
+  const updatedAt = new Date().toISOString();
+  const discovered: McpToolRecord[] = [];
+  for (const tool of tools) {
+    const toolName = typeof tool.name === "string" ? tool.name.trim() : "";
+    if (!toolName) {
+      continue;
+    }
+    discovered.push({
+      serverId: server.serverId,
+      toolName,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : undefined,
+      enabled: true,
+      updatedAt,
+    });
+  }
+  return discovered;
+}
+
 async function performMcpRuntimeToolCall(
   server: McpServerRecord,
   input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
@@ -169,6 +217,65 @@ async function performMcpRuntimeToolCall(
   return withStdioMcpClient(
     server,
     timeoutMs,
+    async (client) => {
+      const response = await client.request(
+        "tools/call",
+        {
+          name: input.toolName,
+          arguments: input.arguments ?? {},
+        },
+        input.signal,
+      );
+      if (response.error) {
+        const detail = stringifyUnknown(response.error.data);
+        const error = sanitizeMcpRuntimeError(
+          [`MCP tool ${input.toolName} failed`, response.error.message, detail ? `details: ${detail}` : undefined]
+            .filter(Boolean)
+            .join(": "),
+        );
+        return {
+          ok: false,
+          error,
+          contentItems: [{ type: "error", text: error }],
+        };
+      }
+      const result = response.result ?? {};
+      const content = Array.isArray(result.content) ? result.content : [];
+      const contentItems = normalizeMcpContentItems(content, result);
+      const contentText = extractMcpContentText(content);
+      const output: Record<string, unknown> = {
+        ...result,
+        contentText: contentText || undefined,
+      };
+      if (result.isError === true) {
+        const error = sanitizeMcpRuntimeError(contentText || `MCP tool ${input.toolName} reported an error.`);
+        return {
+          ok: false,
+          output,
+          contentItems: contentItems.length > 0 ? contentItems : [{ type: "error", text: error }],
+          error,
+        };
+      }
+      return {
+        ok: true,
+        output,
+        contentItems,
+      };
+    },
+    input.signal,
+  );
+}
+
+async function performHttpMcpRuntimeToolCall(
+  server: McpServerRecord,
+  input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
+  timeoutMs: number,
+  options: McpRuntimeTransportOptions,
+): Promise<McpRuntimeInvocationResult> {
+  return withHttpMcpClient(
+    server,
+    timeoutMs,
+    options,
     async (client) => {
       const response = await client.request(
         "tools/call",
@@ -773,6 +880,218 @@ async function withStdioMcpClient<T>(
   } finally {
     client.close();
   }
+}
+
+async function withHttpMcpClient<T>(
+  server: McpServerRecord,
+  timeoutMs: number,
+  options: McpRuntimeTransportOptions,
+  run: (client: HttpMcpClient) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const endpoint = server.url?.trim();
+  if (!endpoint) {
+    throw new Error(`MCP ${server.transport.toUpperCase()} URL is missing.`);
+  }
+  const allowlist = options.networkAllowlist ?? [];
+  const authHeaders = await buildMcpHttpAuthHeaders(server, options);
+  let nextId = 1;
+  let sessionId: string | undefined;
+  let protocolVersion = MCP_STREAMABLE_HTTP_PROTOCOL_VERSION;
+
+  const postJsonRpc = async (
+    envelope: JsonRpcEnvelope,
+    requestSignal?: AbortSignal,
+  ): Promise<{ envelope?: JsonRpcEnvelope; response: Response }> => {
+    const headers: Record<string, string> = {
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      ...authHeaders,
+    };
+    if (sessionId) {
+      headers["Mcp-Session-Id"] = sessionId;
+      headers["MCP-Protocol-Version"] = protocolVersion;
+    }
+    const response = await fetchAllowlisted(endpoint, {
+      allowlist,
+      timeoutMs,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(envelope),
+        signal: requestSignal,
+      },
+    });
+    const responseSessionId = response.headers.get("mcp-session-id")?.trim();
+    if (responseSessionId) {
+      sessionId = responseSessionId;
+    }
+    if (!response.ok) {
+      throw new Error(`MCP ${server.transport.toUpperCase()} server ${server.label} returned HTTP ${response.status}.`);
+    }
+    if (response.status === 202) {
+      return { response };
+    }
+    return {
+      response,
+      envelope: await readHttpJsonRpcEnvelope(response, envelope.id),
+    };
+  };
+
+  const request = async (
+    method: string,
+    params: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ): Promise<JsonRpcEnvelope> => {
+    const id = nextId++;
+    const envelope: JsonRpcEnvelope = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params,
+    };
+    const result = await postJsonRpc(envelope, signal);
+    if (!result.envelope) {
+      throw new Error(`MCP ${method} request to ${server.label} returned no JSON-RPC response.`);
+    }
+    return result.envelope;
+  };
+
+  const notify = async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<void> => {
+    await postJsonRpc(
+      {
+        jsonrpc: "2.0",
+        method,
+        params,
+      },
+      signal,
+    );
+  };
+
+  const close = async (signal?: AbortSignal): Promise<void> => {
+    if (!sessionId) {
+      return;
+    }
+    try {
+      await fetchAllowlisted(endpoint, {
+        allowlist,
+        timeoutMs: Math.min(timeoutMs, 5000),
+        init: {
+          method: "DELETE",
+          headers: {
+            Accept: "application/json",
+            "Mcp-Session-Id": sessionId,
+            "MCP-Protocol-Version": protocolVersion,
+            ...authHeaders,
+          },
+          signal,
+        },
+      });
+    } catch {
+      // Best-effort session cleanup. Some MCP servers respond 405 or close
+      // without delete support; the per-operation bridge can safely move on.
+    }
+  };
+
+  const client: HttpMcpClient = { request, notify, close };
+  try {
+    const initialized = await client.request(
+      "initialize",
+      {
+        protocolVersion,
+        capabilities: {},
+        clientInfo: {
+          name: "goatcitadel-gateway",
+          version: "1.0.0",
+        },
+      },
+      signal,
+    );
+    const negotiated = readString(initialized.result?.protocolVersion);
+    if (negotiated) {
+      protocolVersion = negotiated;
+    }
+    await client.notify("notifications/initialized", {}, signal);
+    return await run(client);
+  } finally {
+    await client.close(signal);
+  }
+}
+
+async function readHttpJsonRpcEnvelope(response: Response, expectedId?: number): Promise<JsonRpcEnvelope> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const body = await response.text();
+  if (contentType.includes("text/event-stream")) {
+    const messages = parseSseJsonRpcMessages(body);
+    const matched = messages.find((message) => expectedId === undefined || message.id === expectedId);
+    if (!matched) {
+      throw new Error("MCP HTTP event stream did not include the expected JSON-RPC response.");
+    }
+    return matched;
+  }
+  try {
+    return JSON.parse(body) as JsonRpcEnvelope;
+  } catch (error) {
+    throw new Error(`MCP HTTP response was not valid JSON-RPC: ${(error as Error).message}`, { cause: error });
+  }
+}
+
+function parseSseJsonRpcMessages(body: string): JsonRpcEnvelope[] {
+  const messages: JsonRpcEnvelope[] = [];
+  let dataLines: string[] = [];
+  const flush = () => {
+    if (dataLines.length === 0) {
+      return;
+    }
+    const raw = dataLines.join("\n").trim();
+    dataLines = [];
+    if (!raw) {
+      return;
+    }
+    try {
+      messages.push(JSON.parse(raw) as JsonRpcEnvelope);
+    } catch {
+      // Ignore non-JSON events; MCP servers may stream notifications that
+      // GoatCitadel does not consume in the single-request bridge.
+    }
+  };
+  for (const line of body.split(/\r?\n/)) {
+    if (line.trim() === "") {
+      flush();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+  flush();
+  return messages;
+}
+
+async function buildMcpHttpAuthHeaders(
+  server: McpServerRecord,
+  options: McpRuntimeTransportOptions,
+): Promise<Record<string, string>> {
+  if (server.authType === "none") {
+    return {};
+  }
+  if (server.authType === "token") {
+    const tokenEnvKey = normalizeSafeEnvKeyNames(server.policy.allowedEnvKeys)[0];
+    const token = tokenEnvKey ? process.env[tokenEnvKey] : undefined;
+    if (!token?.trim()) {
+      throw new Error("MCP token auth requires a configured policy.allowedEnvKeys entry with a non-empty token.");
+    }
+    return {
+      Authorization: `Bearer ${token.trim()}`,
+    };
+  }
+  const token = await options.oauthAccessTokenResolver?.(server);
+  if (!token?.trim()) {
+    throw new Error("MCP OAuth token is unavailable; reconnect this server from Settings.");
+  }
+  return {
+    Authorization: `Bearer ${token.trim()}`,
+  };
 }
 
 function createMcpAbortError(): Error {

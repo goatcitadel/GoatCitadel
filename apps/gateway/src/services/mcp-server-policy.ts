@@ -1,4 +1,5 @@
 import type { McpServerCategory, McpServerPolicy, McpServerRecord } from "@goatcitadel/contracts";
+import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 
 export const DEFAULT_MCP_SERVER_POLICY: McpServerPolicy = {
   requireFirstToolApproval: false,
@@ -27,6 +28,7 @@ export function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServer
     blockedToolPatterns: Array.isArray(policy?.blockedToolPatterns)
       ? policy.blockedToolPatterns.map((item) => item.trim()).filter(Boolean)
       : [...DEFAULT_MCP_SERVER_POLICY.blockedToolPatterns],
+    allowedEnvKeys: normalizeSafeEnvKeyNames(policy?.allowedEnvKeys),
     notes: policy?.notes?.trim() || undefined,
   };
 }

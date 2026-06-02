@@ -29,26 +29,31 @@ describe("WindowsAppContainerSandboxAdapter loop30 coverage", () => {
     );
   });
 
-  it("fails closed before generating profile scripts while Windows IPC preservation is unavailable", async () => {
+  it("generates profile scripts for the stdio JSON-RPC AppContainer launcher", async () => {
     const root = await createTempRoot();
     const runTempRoot = path.join(root, "run");
+    const nodePath = path.join(root, "node's", "node.exe");
+    const harnessPath = path.join(root, "harness's.mjs");
+    await fs.mkdir(path.dirname(nodePath), { recursive: true });
+    await fs.writeFile(nodePath, "test node", "utf8");
+    await fs.writeFile(harnessPath, "process.exit(0);\n", "utf8");
     const adapter = new WindowsAppContainerSandboxAdapter({
       platform: "win32",
       osRelease: "10.0.22631",
       resolveCommand: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     });
 
-    await expect(
-      adapter.prepareLaunch({
-        runId: "run with unsafe chars !@#",
-        nodePath: path.join(root, "node's", "node.exe"),
-        harnessPath: path.join(root, "harness's.mjs"),
-        runTempRoot,
-        heapMb: 128,
-        env: { GOATCITADEL_CODE_MODE: "1" },
-      }),
-    ).rejects.toThrow("win32_node_ipc_not_preserved");
-    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
+    const launch = await adapter.prepareLaunch({
+      runId: "run with unsafe chars !@#",
+      nodePath,
+      harnessPath,
+      runTempRoot,
+      heapMb: 128,
+      env: { GOATCITADEL_CODE_MODE: "1" },
+    });
+
+    expect(launch.transport).toBe("stdio_jsonrpc");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).resolves.toBeTruthy();
   });
 });
 

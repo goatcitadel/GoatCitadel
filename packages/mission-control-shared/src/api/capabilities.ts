@@ -6,6 +6,11 @@ import type {
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
+  AutonomousActivationGrantCreateInput,
+  AutonomousActivationGrantEvaluationInput,
+  AutonomousActivationGrantEvaluationResult,
+  AutonomousActivationGrantRecord,
+  AutonomousActivationGrantRevokeInput,
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
@@ -39,6 +44,40 @@ export async function createCapabilityProposal(input: {
   activationTargetId?: string;
 }): Promise<CapabilityProposalRecord> {
   return request("/api/v1/capabilities/proposals", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAutonomousActivationGrants(
+  includeExpired = false,
+): Promise<{ items: AutonomousActivationGrantRecord[] }> {
+  return request(`/api/v1/capabilities/autonomy-grants?includeExpired=${includeExpired ? "true" : "false"}`);
+}
+
+export async function createAutonomousActivationGrant(
+  input: AutonomousActivationGrantCreateInput,
+): Promise<AutonomousActivationGrantRecord> {
+  return request("/api/v1/capabilities/autonomy-grants", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeAutonomousActivationGrant(
+  grantId: string,
+  input: AutonomousActivationGrantRevokeInput,
+): Promise<AutonomousActivationGrantRecord> {
+  return request(`/api/v1/capabilities/autonomy-grants/${encodeURIComponent(grantId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function evaluateAutonomousActivationGrant(
+  input: AutonomousActivationGrantEvaluationInput,
+): Promise<AutonomousActivationGrantEvaluationResult> {
+  return request("/api/v1/capabilities/autonomy-grants/evaluate", {
     method: "POST",
     body: JSON.stringify(input),
   });

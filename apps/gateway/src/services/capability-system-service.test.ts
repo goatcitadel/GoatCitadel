@@ -111,6 +111,73 @@ describe("CapabilitySystemService", () => {
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
   });
 
+  it("fails closed when an autonomous Code Mode run has no matching grant", async () => {
+    const harness = await createHarness();
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        workspaceId: "workspace-1",
+        autonomousActivation: true,
+      }),
+    ).rejects.toThrow("Autonomous Code Mode activation requires an active matching operator grant.");
+
+    expect(harness.createApproval).not.toHaveBeenCalled();
+  });
+
+  it("records matching autonomous Code Mode grants before opening the approval", async () => {
+    const harness = await createHarness();
+    const grant = harness.service.createAutonomousActivationGrant({
+      workspaceId: "workspace-1",
+      surfaces: ["code"],
+      maxRiskLevel: "danger",
+      activationKinds: ["code_mode"],
+      toolPatterns: ["code.*"],
+      grantor: "operator",
+      reason: "Allow one autonomous Code Mode promotion test.",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      maxActivations: 1,
+      budgetUsd: 1,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      workspaceId: "workspace-1",
+      autonomousActivation: true,
+      estimatedCostUsd: 0.25,
+    });
+
+    expect(run.autonomousActivation).toMatchObject({
+      requested: true,
+      allowed: true,
+      matchedGrantId: grant.grantId,
+      riskLevel: "danger",
+    });
+    expect(harness.service.listAutonomousActivationGrants(true)[0]).toMatchObject({
+      grantId: grant.grantId,
+      usedActivations: 1,
+      usedBudgetUsd: 0.25,
+    });
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          autonomousActivation: expect.objectContaining({ matchedGrantId: grant.grantId }),
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_created",
+      "capabilities",
+      expect.objectContaining({
+        autonomousActivation: expect.objectContaining({ matchedGrantId: grant.grantId }),
+      }),
+    );
+  });
+
   it("verifies Code Mode artifact previews and compares run snapshots without re-reading unmanaged files", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -3570,10 +3637,19 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
   const pendingActions = new Map<string, PendingApprovalAction>();
+  const systemSettings = new Map<string, { key: string; value: unknown; updatedAt: string }>();
   const sessionMeta = new Map<string, { sessionId: string; workspaceId?: string }>();
   const turnTraces = new Map<string, { turnId: string; sessionId: string; durable?: { runId?: string } }>();
 
   return {
+    systemSettings: {
+      get: vi.fn((key: string) => systemSettings.get(key)),
+      set: vi.fn((key: string, value: unknown, now = "2026-04-10T00:00:00.000Z") => {
+        const record = { key, value, updatedAt: now };
+        systemSettings.set(key, record);
+        return record;
+      }),
+    },
     capabilityCatalogSnapshots: {
       create(snapshot: CapabilityCatalogSnapshotRecord) {
         snapshots.set(snapshot.snapshotId, snapshot);

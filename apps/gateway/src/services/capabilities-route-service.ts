@@ -15,9 +15,13 @@ export type CapabilitiesRoutePort = Pick<
   | "listCodeModeExecutionBackends"
   | "listCodeModeRuns"
   | "compareCodeModeRuns"
+  | "createAutonomousActivationGrant"
   | "listProposals"
+  | "evaluateAutonomousActivationGrant"
+  | "listAutonomousActivationGrants"
   | "promoteCandidate"
   | "revokeCandidate"
+  | "revokeAutonomousActivationGrant"
   | "rollbackCandidate"
 >;
 
@@ -38,6 +42,29 @@ export class CapabilitiesRouteService {
 
   public createCapabilityProposal(input: Parameters<CapabilitiesRoutePort["createProposal"]>[0]) {
     return this.capabilities.createProposal(input);
+  }
+
+  public listAutonomousActivationGrants(includeExpired = false) {
+    return this.capabilities.listAutonomousActivationGrants(includeExpired);
+  }
+
+  public createAutonomousActivationGrant(
+    input: Parameters<CapabilitiesRoutePort["createAutonomousActivationGrant"]>[0],
+  ) {
+    return this.capabilities.createAutonomousActivationGrant(input);
+  }
+
+  public revokeAutonomousActivationGrant(
+    grantId: string,
+    input: Parameters<CapabilitiesRoutePort["revokeAutonomousActivationGrant"]>[1],
+  ) {
+    return this.capabilities.revokeAutonomousActivationGrant(grantId, input);
+  }
+
+  public evaluateAutonomousActivationGrant(
+    input: Parameters<CapabilitiesRoutePort["evaluateAutonomousActivationGrant"]>[0],
+  ) {
+    return this.capabilities.evaluateAutonomousActivationGrant(input);
   }
 
   public getCapabilityProposalDetail(proposalId: string) {

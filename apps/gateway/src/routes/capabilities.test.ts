@@ -59,6 +59,26 @@ describe("capabilities routes", () => {
         ...payload,
       })),
       listCapabilityProposals: vi.fn((limit: number) => [{ proposalId: `proposal-${limit}` }]),
+      listAutonomousActivationGrants: vi.fn((includeExpired: boolean) => [
+        { grantId: includeExpired ? "grant-all" : "grant-active", status: "active" },
+      ]),
+      createAutonomousActivationGrant: vi.fn((payload: Record<string, unknown>) => ({
+        grantId: "grant-created",
+        status: "active",
+        ...payload,
+      })),
+      revokeAutonomousActivationGrant: vi.fn((grantId: string, payload: Record<string, unknown>) => ({
+        grantId,
+        status: "revoked",
+        ...payload,
+      })),
+      evaluateAutonomousActivationGrant: vi.fn((payload: Record<string, unknown>) => ({
+        allowed: true,
+        matchedGrantId: "grant-created",
+        blockers: [],
+        governance: ["grant matched"],
+        ...payload,
+      })),
       listCodeModeRuns: vi.fn((input: number | { limit?: number; workspaceId?: string }) => [
         {
           runId: `code-run-${typeof input === "number" ? input : input.limit}`,
@@ -271,6 +291,67 @@ describe("capabilities routes", () => {
       proposalId: "proposal-1",
       proposalKind: "skill",
       status: "proposal",
+    });
+  });
+
+  it("routes autonomous activation grants through governed create, evaluate, and revoke endpoints", async () => {
+    const service = await registerCapabilitiesService();
+    const expiresAt = "2026-06-03T00:00:00.000Z";
+
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/autonomy-grants?includeExpired=true",
+    });
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/autonomy-grants",
+      payload: {
+        workspaceId: "default",
+        surfaces: ["cowork"],
+        maxRiskLevel: "danger",
+        capabilityPatterns: ["capability.*"],
+        toolPatterns: ["mcp.*"],
+        activationKinds: ["tool"],
+        maxActivations: 2,
+        grantor: "operator",
+        reason: "allow governed activation for this task",
+        expiresAt,
+      },
+    });
+    const evaluateResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/autonomy-grants/evaluate",
+      payload: {
+        workspaceId: "default",
+        surface: "cowork",
+        riskLevel: "danger",
+        activationKind: "tool",
+        toolName: "mcp.remote.fetch",
+      },
+    });
+    const revokeResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/autonomy-grants/grant-created/revoke",
+      payload: {
+        revokedBy: "operator",
+        reason: "stop",
+      },
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(createResponse.statusCode).toBe(201);
+    expect(evaluateResponse.statusCode).toBe(200);
+    expect(revokeResponse.statusCode).toBe(200);
+    expect(service.listAutonomousActivationGrants).toHaveBeenCalledWith(true);
+    expect(service.createAutonomousActivationGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ maxRiskLevel: "danger", expiresAt }),
+    );
+    expect(service.evaluateAutonomousActivationGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ activationKind: "tool", toolName: "mcp.remote.fetch" }),
+    );
+    expect(service.revokeAutonomousActivationGrant).toHaveBeenCalledWith("grant-created", {
+      revokedBy: "operator",
+      reason: "stop",
     });
   });
 

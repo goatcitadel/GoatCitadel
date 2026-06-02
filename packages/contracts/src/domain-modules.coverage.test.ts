@@ -8,6 +8,7 @@ const moduleLoaders = {
   admin: () => import("./admin.js"),
   agents: () => import("./agents.js"),
   approvals: () => import("./approvals.js"),
+  autonomy: () => import("./autonomy.js"),
   auth: () => import("./auth.js"),
   capabilities: () => import("./capabilities.js"),
   "capability-packs": () => import("./capability-packs.js"),

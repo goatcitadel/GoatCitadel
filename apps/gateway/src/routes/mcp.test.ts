@@ -95,6 +95,9 @@ describe("mcp routes", () => {
         toolName: "tool.echo",
         agentId: "operator",
         sessionId: "sess-1",
+        workspaceId: "workspace-1",
+        autonomousActivation: true,
+        estimatedCostUsd: 0.25,
       },
     });
 
@@ -104,9 +107,13 @@ describe("mcp routes", () => {
       toolName: "tool.echo",
       agentId: "operator",
       sessionId: "sess-1",
+      workspaceId: "workspace-1",
+      autonomousActivation: true,
+      estimatedCostUsd: 0.25,
       policyContext: expect.objectContaining({
         operatorId: "operator",
         authActorId: "operator",
+        workspaceId: "workspace-1",
         sessionId: "sess-1",
         surface: "mcp",
       }),
@@ -290,7 +297,7 @@ describe("mcp routes", () => {
     });
   });
 
-  it("rejects generic remote MCP server creation in the 1.0 runtime-invokable surface", async () => {
+  it("rejects unsupported OAuth remote MCP server creation before token resolution is promoted", async () => {
     const createMcpServer = vi.fn();
 
     app = Fastify();
@@ -321,14 +328,68 @@ describe("mcp routes", () => {
         label: "Remote GitHub MCP",
         transport: "http",
         url: "https://api.githubcopilot.com/mcp/",
+        authType: "oauth2",
       },
     });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
-      error: expect.stringContaining("not part of the 1.0 runtime-invokable surface"),
+      error: expect.stringContaining("requires local stdio"),
     });
     expect(createMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("allows supported remote MCP server creation through the runtime bridge boundary", async () => {
+    const createMcpServer = vi.fn((input) => ({
+      serverId: "srv-remote",
+      enabled: true,
+      status: "disconnected",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      ...input,
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool: vi.fn(),
+        listMcpServers: vi.fn(),
+        createMcpServer,
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer: vi.fn(),
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+        listMcpTemplates: vi.fn(),
+        listMcpTemplateDiscovery: vi.fn(),
+        runMcpServerHealthCheck: vi.fn(),
+      },
+    } as never);
+    await app.register(mcpRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/servers",
+      payload: {
+        label: "Remote Learn MCP",
+        transport: "http",
+        url: "https://learn.microsoft.com/api/mcp",
+        authType: "none",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Remote Learn MCP",
+        transport: "http",
+        url: "https://learn.microsoft.com/api/mcp",
+        authType: "none",
+      }),
+    );
   });
 
   it("allows the built-in Approval Inbox template even though it uses an internal http transport", async () => {
@@ -410,7 +471,7 @@ describe("mcp routes", () => {
     expect(discoveryResponse.json()).toEqual({ items: [{ templateId: "filesystem", category: "development" }] });
   });
 
-  it("serves a read-only remote MCP preview without making remote transports callable", async () => {
+  it("serves a read-only remote MCP preview with supported remote transports callable", async () => {
     const service = await registerMcpService({
       listMcpServers: vi.fn(() => [
         {
@@ -419,8 +480,8 @@ describe("mcp routes", () => {
           transport: "http",
           url: "https://mcp.example.test/sse",
           authType: "token",
-          enabled: false,
-          status: "disconnected",
+          enabled: true,
+          status: "connected",
           category: "research",
           trustTier: "restricted",
           costTier: "unknown",
@@ -429,6 +490,7 @@ describe("mcp routes", () => {
             redactionMode: "strict",
             allowedToolPatterns: [],
             blockedToolPatterns: [],
+            allowedEnvKeys: ["REMOTE_MCP_TOKEN"],
             notes: "preview only",
           },
           createdAt: "2026-05-30T00:00:00.000Z",
@@ -491,17 +553,17 @@ describe("mcp routes", () => {
       readOnly: true,
       mutationSemantics: "none",
       experimentalRemoteRecordsAllowed: false,
-      runtimeSupport: "internal_approval_inbox_only",
+      runtimeSupport: "remote_http_sse_bridge",
       summary: {
         remoteServers: 2,
         remoteTemplates: 1,
-        runtimeSupported: 0,
+        runtimeSupported: 1,
         blocked: 2,
-        configuredOnly: 1,
-        notCallable: 3,
+        configuredOnly: 0,
+        notCallable: 2,
         experimentalRecords: 0,
         quarantined: 1,
-        needsAuth: 2,
+        needsAuth: 1,
       },
       items: [
         expect.objectContaining({
@@ -516,14 +578,14 @@ describe("mcp routes", () => {
         }),
         expect.objectContaining({
           label: "Remote HTTP",
-          posture: "configured_only",
-          callableState: "not_callable",
-          invocationState: "configured_not_callable",
+          posture: "runtime_supported",
+          callableState: "runtime_invokable",
+          invocationState: "runtime_invokable",
           runtimePath: "generic_remote_http_sse",
-          transportRuntimeSupported: false,
-          runtimeSupported: false,
-          operatorNextAction: expect.stringContaining("Keep configured"),
-          blockers: [expect.stringContaining("not supported")],
+          transportRuntimeSupported: true,
+          runtimeSupported: true,
+          operatorNextAction: expect.stringContaining("governed MCP runtime path"),
+          blockers: [],
         }),
         expect.objectContaining({
           label: "Remote template",
@@ -531,7 +593,8 @@ describe("mcp routes", () => {
           callableState: "not_callable",
           invocationState: "blocked",
           createAllowed: false,
-          operatorNextAction: expect.stringContaining("not installable"),
+          authReadiness: "missing_oauth_config",
+          operatorNextAction: expect.stringContaining("OAuth authorizationUrl"),
         }),
       ],
     });
@@ -579,7 +642,7 @@ describe("mcp routes", () => {
           runtimeSupported: 0,
           notCallable: 1,
           experimentalRecords: 1,
-          needsAuth: 1,
+          needsAuth: 0,
         },
         items: [
           expect.objectContaining({

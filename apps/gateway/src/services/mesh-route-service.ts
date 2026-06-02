@@ -5,6 +5,7 @@ export const meshRouteMethods = [
   "acquireMeshLease",
   "claimMeshSessionOwner",
   "getMeshSessionOwner",
+  "getMeshReadinessDiagnostics",
   "getMeshStatus",
   "ingestMeshReplicationEvent",
   "listMeshLeases",
@@ -50,6 +51,7 @@ export function createMeshRoutePort(deps: MeshRoutePortDependencies): MeshRouteP
       return owner;
     },
     getMeshSessionOwner: (sessionId) => deps.meshService.getSessionOwner(sessionId),
+    getMeshReadinessDiagnostics: () => deps.meshService.readinessDiagnostics(),
     getMeshStatus: () => deps.meshService.status(),
     ingestMeshReplicationEvent: (input) => {
       const event = deps.meshService.ingestReplicationEvent(input);

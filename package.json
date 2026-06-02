@@ -75,6 +75,8 @@
     "verify:realtime:truth": "node scripts/verification/run.mjs realtime-truth",
     "verify:architecture:metrics": "node scripts/verification/run.mjs architecture-metrics",
     "verify:code-mode:sandbox": "node scripts/verification/run.mjs code-mode-sandbox",
+    "verify:code-mode:hostile-sandbox": "node scripts/verification/run.mjs code-mode-hostile-sandbox",
+    "verify:mesh:readiness": "node scripts/verification/run.mjs mesh-readiness",
     "verify:agentic:contracts": "node scripts/verification/run.mjs agentic-contracts",
     "verify:agentic:governance": "node scripts/verification/run.mjs agentic-governance",
     "verify:agentic:harnesses": "node scripts/verification/run.mjs agentic-harnesses",

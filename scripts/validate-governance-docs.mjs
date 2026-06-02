@@ -157,8 +157,8 @@ if (
 if (!/MemoryLifecycleService/.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must name MemoryLifecycleService as the memory lifecycle owner.");
 }
-if (!/mesh-core/i.test(handbook) || !/targeted service coverage/i.test(handbook) || !/full release evidence/i.test(handbook)) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope mesh-core until it has full release evidence.");
+if (!/mesh-core/i.test(handbook) || !/verify:mesh:readiness/i.test(handbook) || !/Gateway diagnostics/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must gate mesh-core readiness on verify:mesh:readiness evidence.");
 }
 if (!/npu-sidecar/i.test(handbook) || !/not part of the current `1\.0` bar/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope the NPU sidecar from the current 1.0 bar.");
@@ -237,8 +237,8 @@ if (/default:\s*`false`/i.test(durableFoundation) || /Next Step \(Activation Pla
 }
 
 const readme = await readFile(path.join(root, "README.md"), "utf8");
-if (!/mesh-core/i.test(readme) || !/targeted service coverage/i.test(readme) || !/full release evidence/i.test(readme)) {
-  errors.push("README.md must describe mesh-core as de-scoped until full release evidence exists.");
+if (!/mesh-core/i.test(readme) || !/verify:mesh:readiness/i.test(readme) || !/evidence-gated/i.test(readme)) {
+  errors.push("README.md must describe mesh-core readiness as evidence-gated by verify:mesh:readiness.");
 }
 if (!/NPU sidecar maturity or local-inference completeness as a `1\.0` signal/i.test(readme)) {
   errors.push("README.md must keep the NPU sidecar de-scoped from the 1.0 readiness bar.");
@@ -405,8 +405,8 @@ if (
 ) {
   errors.push("docs/1_0_CONTRACT.md must require the REST/SSE additive-compatibility gate.");
 }
-if (!/mesh-core/i.test(contract) || !/targeted service coverage/i.test(contract) || !/full release evidence/i.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must keep mesh-core outside the readiness-bearing 1.0 story until full release evidence exists.");
+if (!/mesh-core/i.test(contract) || !/verify:mesh:readiness/i.test(contract) || !/join-token lifecycle/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must gate mesh-core readiness on verify:mesh:readiness.");
 }
 if (!/npu-sidecar/i.test(contract) || !/optional experimental infrastructure/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar outside the readiness-bearing 1.0 story while it remains experimental.");

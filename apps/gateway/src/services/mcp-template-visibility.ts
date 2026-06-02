@@ -1,4 +1,5 @@
 import type { McpServerTemplateRecord } from "@goatcitadel/contracts";
+import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import { MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 
 const EXPERIMENTAL_REMOTE_MCP_TRANSPORTS_ENV = "GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS";
@@ -7,8 +8,17 @@ export function isVisibleMcpTemplateRecord(template: Pick<McpServerTemplateRecor
   return isAllowedMcpDefinitionForCreate(template);
 }
 
-export function isRuntimeSupportedMcpDefinition(input: Pick<McpServerTemplateRecord, "transport" | "url">): boolean {
-  return input.transport === "stdio" || input.url?.trim().toLowerCase() === MCP_APPROVAL_INBOX_URL;
+type RuntimeSupportInput = Pick<McpServerTemplateRecord, "transport" | "url"> &
+  Partial<Pick<McpServerTemplateRecord, "authType" | "oauth" | "policy">>;
+
+export function isRuntimeSupportedMcpDefinition(input: RuntimeSupportInput): boolean {
+  if (input.transport === "stdio" || input.url?.trim().toLowerCase() === MCP_APPROVAL_INBOX_URL) {
+    return true;
+  }
+  if ((input.transport === "http" || input.transport === "sse") && input.url?.trim()) {
+    return isSupportedRemoteMcpAuth(input);
+  }
+  return false;
 }
 
 export function isAllowedMcpDefinitionForCreate(
@@ -23,5 +33,18 @@ export function areExperimentalRemoteMcpTransportsEnabled(env: NodeJS.ProcessEnv
 }
 
 export function buildUnsupportedMcpTransportMessage(transport: string): string {
-  return `MCP transport ${transport} is not part of the 1.0 runtime-invokable surface. Use stdio or the built-in Approval Inbox template, or set ${EXPERIMENTAL_REMOTE_MCP_TRANSPORTS_ENV}=true for experimental remote transport records.`;
+  return `MCP transport ${transport} requires local stdio, the built-in Approval Inbox, or a remote http/sse URL with supported auth. OAuth-backed remote records require authorizationUrl/tokenUrl metadata and a connected Gateway OAuth token.`;
+}
+
+function isSupportedRemoteMcpAuth(input: RuntimeSupportInput): boolean {
+  if (!input.authType || input.authType === "none") {
+    return true;
+  }
+  if (input.authType === "token") {
+    return normalizeSafeEnvKeyNames(input.policy?.allowedEnvKeys).length > 0;
+  }
+  if (input.authType === "oauth2") {
+    return Boolean(input.oauth?.authorizationUrl?.trim() && input.oauth.tokenUrl?.trim());
+  }
+  return false;
 }

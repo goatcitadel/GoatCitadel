@@ -10,7 +10,7 @@
 [![Monorepo](https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge)](./package.json)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/goatcitadel/GoatCitadel)
 
-README last updated: 2026-06-01
+README last updated: 2026-06-02
 
 [goatcitadel.app](https://goatcitadel.app) is the public product site. This repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported technical claims.
 
@@ -67,10 +67,12 @@ pnpm screenshots:capture
 | Visible IA | Mission Control navigation is `Chat / Cowork / Code / Projects / Library / Ops / Settings`. |
 | Route scope | The current visible route surface is 41 routes: 36 `ship`, 0 `needs_release_polish`, and 5 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
 | Durable execution | Durable runs own the shipped resumable mission-session Chat, Cowork, and Code flow set. |
-| Code Mode | Code Mode v1 is a governed trusted-code surface with explicit approval, recorded artifact hashes, and execution-time hash checks. It is not a hostile-code sandbox claim. |
+| Code Mode | Code Mode v1 is a governed trusted-code surface with explicit approval, recorded artifact hashes, execution-time hash checks, and separate `hostileSandboxClaim` metadata. The Windows AppContainer hostile-sandbox promotion slice now has green adversarial canary proof; the public cross-platform hostile-code claim remains not promoted until Linux, macOS, and Windows proof all pass. |
 | Code backends | The trusted-code host runner is the default. Docker is selectable only when explicitly configured. The Aider adapter is Docker-backed and audit-only; no patch replay, candidate promotion, or operator-workspace mutation is claimed. |
+| Governed activation | Autonomous high-risk activation is opt-in through expiring operator grants scoped by workspace, surface, risk tier, capability/tool patterns, budget/count, grantor, reason, expiry, and revocation. Activations still pass deny-wins policy, path jails, auth, provenance, and health checks before durable evidence is recorded. |
 | Memory | `MemoryLifecycleService` owns operator-facing memory lifecycle behavior, explicit recall, trace-derived memory proposals, feedback, dedupe, scope, and write policy. |
-| MCP | Local `stdio` plus the built-in Approval Inbox path are the runtime-supported MCP invocation posture. Remote HTTP/SSE is read-only preview/blocked for generic invocation unless separately promoted. |
+| Mesh | `packages/mesh-core` readiness is evidence-gated by `verify:mesh:readiness`, covering join-token, mTLS/tailnet posture, leases, owner failover, replication offsets, Settings visibility, and Gateway diagnostics. |
+| MCP | Local `stdio`, the built-in Approval Inbox path, and governed remote HTTP/SSE servers are runtime-invokable for no-auth, token-env, or OAuth2 records with configured OAuth metadata and ready token refs. OAuth access/refresh tokens resolve through the OS secret store, refresh near expiry, inject `Authorization: Bearer ...` into HTTP/SSE calls, and keep audit/error output redacted; missing tokens surface as `needs_auth`, while expired tokens surface as `expired` and remain blocked until reconnect/refresh. |
 | Desktop/installers | Windows x64 and arm64 installer paths are part of the product shape. Public-trust signed EXE distribution requires exact-SHA proof plus a release certificate; unsigned convenience installers must be labeled as unsigned. |
 | Docker | Docker is a supported local/shared-host runtime boundary. It does not replace auth, approvals, path jails, allowlists, or policy. |
 
@@ -239,6 +241,8 @@ pnpm verify:auth:matrix
 pnpm verify:runtime:truth
 pnpm verify:durable:recovery
 pnpm verify:code-mode:sandbox
+pnpm verify:code-mode:hostile-sandbox
+pnpm verify:mesh:readiness
 pnpm verify:agentic:governance
 pnpm verify:agentic:proof
 pnpm verify:operator:proof
@@ -257,7 +261,7 @@ pnpm verify:desktop
 Proof-type shorthand:
 
 - Live end-to-end proof: `verify:runtime:truth`, `verify:durable:recovery`, `verify:operator:proof`, `verify:surface:regression`, `verify:visual:regression`, `verify:backup:roundtrip`, and `verify:desktop`.
-- Targeted contract/behavior proof: `verify:auth:matrix`, `verify:code-mode:sandbox`, `verify:agentic:governance`, `verify:agentic:proof`, `verify:memory:truth`, `verify:realtime:truth`, and `verify:api:compat`. `verify:agentic:proof` is targeted contract/behavior proof for retained agentic evidence, orchestration lineage anchors, and governance/harness proof families; it is not live end-to-end product proof.
+- Targeted contract/behavior proof: `verify:auth:matrix`, `verify:code-mode:sandbox`, `verify:code-mode:hostile-sandbox`, `verify:mesh:readiness`, `verify:agentic:governance`, `verify:agentic:proof`, `verify:memory:truth`, `verify:realtime:truth`, and `verify:api:compat`. `verify:code-mode:hostile-sandbox` is a promotion gate for native hostile-sandbox claim metadata and adversarial canary coverage; it runs current-platform native canaries when the adapter is available. On Windows, the lane proves AppContainer outside-root read/write denial, network denial, env-secret absence, symlink/path traversal denial, process/job limits, artifact hash integrity, and fail-closed required mode, but it does not allow a public cross-platform hostile-code claim until every Linux, macOS, and Windows proof is green. `verify:agentic:proof` is targeted contract/behavior proof for retained agentic evidence, orchestration lineage anchors, and governance/harness proof families; it is not live end-to-end product proof.
 - REST/SSE compatibility proof: `verify:api:compat` snapshots REST route/status compatibility and realtime event envelopes. It is not a full response-schema diff.
 - Backup proof: `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set.
 - Parity sample: `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario; it is a parity sample, not proof every future visible catalog entry has a live action.
@@ -311,6 +315,10 @@ Safe public claims today:
 - Durable execution owns the shipped mission-session resumable flow set.
 - The capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs.
 - Code Mode v1 is trusted-code, approval-gated execution with recorded artifact hashes and execution-time hash checks.
+- Windows-native AppContainer hostile-sandbox proof is green as a current-platform promotion slice under `verify:code-mode:hostile-sandbox`; public cross-platform hostile-code sandboxing remains unclaimed.
+- High-risk autonomous activation is governed by expiring operator grants, deny-wins policy, path jails, auth, provenance, health checks, durable audit/evidence, and an emergency revoke path.
+- Remote MCP HTTP/SSE invocation is Gateway-mediated for supported no-auth, token-env, and OAuth2 records, including OAuth token refs in the OS secret store, refresh near expiry, bearer injection, readiness blockers, and redacted audit/errors.
+- `packages/mesh-core` has a named readiness lane, `verify:mesh:readiness`, for release evidence over join tokens, mTLS/tailnet posture, leases, owner failover, replication offsets, Settings, and Gateway diagnostics.
 - Visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only shells.
 - Backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth.
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file.
@@ -321,12 +329,13 @@ Safe public claims today:
 
 Do not claim without fresh proof:
 
-- hostile-code sandboxing for Code Mode
-- autonomous high-risk tool activation without governance
+- cross-platform or general hostile-code sandboxing for Code Mode beyond the named Windows-native proof slice
+- ungoverned autonomous high-risk tool activation
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal
-- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still has targeted service coverage rather than full release evidence
+- `packages/mesh-core` readiness without a green `verify:mesh:readiness` evidence lane
 - compatibility shell parity as canonical product readiness
-- generic remote MCP transport invocation as a shipped runtime surface
+- remote MCP invocation that bypasses Gateway policy, approvals, network allowlists, audit, or supported auth
+- OAuth-backed remote MCP invocation without OAuth metadata, OS secret-store token refs, ready auth state, and redacted refresh/runtime evidence
 - generated screenshot, release proof, installer signing, or backup restore guarantee that was not actually produced
 
 ## Public Docs

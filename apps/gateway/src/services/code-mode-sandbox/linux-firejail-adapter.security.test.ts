@@ -38,6 +38,7 @@ describe("firejail profile (codex #18)", () => {
     expect(profile).toContain("private-tmp");
     expect(profile).toContain("net none");
     expect(profile).toContain("seccomp");
+    expect(profile).toContain("rlimit-nproc 1");
     expect(profile).toContain("caps.drop all");
     expect(profile).toContain("nonewprivs");
   });
@@ -63,6 +64,7 @@ describe("firejail profile (codex #18)", () => {
     });
 
     expect(launch.args).toContain(`--private=${runTempRoot}`);
+    expect(launch.args).toContain("--rlimit-nproc=1");
     expect(launch.args).toContain(runHarnessPath);
     expect(launch.args).not.toContain(sharedHarnessPath);
   });

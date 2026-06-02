@@ -114,10 +114,12 @@ import {
   fetchMcpServers,
   fetchMcpTemplates,
   fetchMcpTools,
+  fetchMeshReadiness,
   fetchNpuModels,
   fetchOpenAICodexOAuthStatus,
   fetchOnboardingState,
   fetchActiveLocalOperatorOverrides,
+  fetchAutonomousActivationGrants,
   fetchEffectivePermissionProfile,
   fetchPersonalities,
   fetchPermissionProfiles,
@@ -146,6 +148,7 @@ import {
   resolveGatewayInstallToken,
   restoreWorkspace,
   revokeDeviceAccessGrant,
+  revokeAutonomousActivationGrant,
   revokeLocalOperatorOverride,
   revokeToolGrant,
   runMcpServerHealthCheck,
@@ -153,6 +156,7 @@ import {
   selectVoiceRuntimeModel,
   setDefaultPersonality,
   startDaemon,
+  startMcpOAuth,
   startSlackOAuth,
   startOpenAICodexOAuthDeviceFlow,
   startLlamaCppRuntime,
@@ -387,22 +391,24 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
     setNotificationToastsEnabled,
   } = useUiPreferences();
   const load = useCallback(async () => {
-    const [settings, workspaces, integrations, mcpServers, tools, addons] = await Promise.all([
+    const [settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness] = await Promise.all([
       nativeLoad("Settings", fetchSettings(), null),
       nativeLoad("Workspaces", fetchWorkspaces("all", 400), { items: [] }),
       nativeLoad("Integrations", fetchIntegrationConnections(), { items: [] }),
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("Tools", fetchToolCatalog(), { items: [] }),
       nativeLoad("Add-ons", fetchInstalledAddons(), { items: [] }),
+      nativeLoad("Mesh readiness", fetchMeshReadiness(), null),
     ]);
     return {
-      issues: nativeLoadIssues([settings, workspaces, integrations, mcpServers, tools, addons]),
+      issues: nativeLoadIssues([settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness]),
       settings: settings.data,
       workspaces: workspaces.data.items,
       integrations: integrations.data.items,
       mcpServers: mcpServers.data.items,
       tools: tools.data.items,
       addons: addons.data.items,
+      meshReadiness: meshReadiness.data,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -434,6 +440,13 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                   meta: "Configured external connections",
                 },
                 { label: "MCP", value: String(data.mcpServers.length), meta: "External tool servers" },
+                {
+                  label: "Mesh readiness",
+                  value: data.meshReadiness?.status ?? "unknown",
+                  meta: data.meshReadiness
+                    ? `${data.meshReadiness.blockers.length} blocker${data.meshReadiness.blockers.length === 1 ? "" : "s"}`
+                    : "diagnostics unavailable",
+                },
                 { label: "Tools", value: String(data.tools.length), meta: "Catalog entries with policy posture" },
                 { label: "Add-ons", value: String(data.addons.length), meta: "Installed extensions" },
                 {
@@ -5811,6 +5824,8 @@ function McpSection(_props: SettingsSectionProps) {
     transport: "stdio",
     command: "",
     url: "",
+    authType: "none" as McpServerRecord["authType"],
+    oauth: undefined as McpServerRecord["oauth"] | undefined,
     enabled: true,
   });
   const [editForm, setEditForm] = useState({
@@ -5873,10 +5888,20 @@ function McpSection(_props: SettingsSectionProps) {
         transport: createForm.transport as McpServerRecord["transport"],
         command: createForm.transport === "stdio" ? createForm.command.trim() || undefined : undefined,
         url: createForm.transport !== "stdio" ? createForm.url.trim() || undefined : undefined,
+        authType: createForm.authType,
+        oauth: createForm.oauth,
         enabled: isRuntimeInvokableMcpServer(createForm) ? createForm.enabled : false,
       });
       setNotice({ tone: "success", message: `MCP server ${created.label} created.` });
-      setCreateForm({ label: "", transport: "stdio", command: "", url: "", enabled: true });
+      setCreateForm({
+        label: "",
+        transport: "stdio",
+        command: "",
+        url: "",
+        authType: "none",
+        oauth: undefined,
+        enabled: true,
+      });
       await reload();
       setSelectedServerId(created.serverId);
     } catch (createError) {
@@ -5989,7 +6014,7 @@ function McpSection(_props: SettingsSectionProps) {
                     <span>
                       {isRuntimeInvokableMcpServer(createForm)
                         ? "Enable immediately after create"
-                        : "Configured only; runtime invocation is not supported"}
+                        : "Configured only until supported auth and URL are present"}
                     </span>
                   </label>
                 </SettingsField>
@@ -5998,7 +6023,7 @@ function McpSection(_props: SettingsSectionProps) {
                 notice={{
                   tone: "info",
                   message:
-                    "Runtime invocation is limited to local stdio servers and the built-in Approval Inbox. Generic remote http/sse transports stay configured-only and experimental until a named runtime proof exists.",
+                    "Runtime invocation supports local stdio, the built-in Approval Inbox, and governed remote http/sse servers with no auth, explicit token env-key policy, or connected OAuth token state.",
                 }}
               />
               <SettingsButtonRow>
@@ -6023,6 +6048,8 @@ function McpSection(_props: SettingsSectionProps) {
                         transport: item.transport,
                         command: item.command ?? "",
                         url: item.url ?? "",
+                        authType: item.authType,
+                        oauth: item.oauth,
                         enabled: item.enabledByDefault,
                       }),
                     actionLabel: "Use",
@@ -6072,7 +6099,7 @@ function McpSection(_props: SettingsSectionProps) {
             </SettingsPanel>
             <SettingsPanel
               title="Remote MCP preview"
-              subtitle="Read-only posture for http/sse MCP records before any future governed remote runtime support."
+              subtitle="Read-only posture for http/sse MCP records, runtime support, auth, trust, and invocation state."
             >
               <SettingsMetricGrid
                 items={[
@@ -6112,7 +6139,7 @@ function McpSection(_props: SettingsSectionProps) {
                 notice={{
                   tone: "info",
                   message:
-                    "Generic remote http/sse MCP remains not callable here. This preview explains records, blockers, auth, trust, and approval posture without changing policy.",
+                    "Remote http/sse MCP can invoke through the governed Gateway bridge when auth is supported and resolved. OAuth servers show needs-auth until Gateway has a connected token.",
                 }}
               />
               <SettingsActionList
@@ -6202,13 +6229,25 @@ function McpSection(_props: SettingsSectionProps) {
                       tone: "warning",
                       message: selectedRemotePreviewItem
                         ? `${selectedRemotePreviewItem.operatorNextAction} ${selectedRemotePreviewItem.blockers[0] ?? ""}`.trim()
-                        : "This MCP server is configured for visibility only. Generic http/sse runtime invocation is not supported in this shell.",
+                        : "This MCP server is configured for visibility only until its transport, URL, auth, and trust posture are runtime-supported.",
                     }}
                   />
                 ) : null}
                 <SettingsMetricGrid
                   items={[
                     { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
+                    {
+                      label: "Auth readiness",
+                      value:
+                        selectedRemotePreviewItem?.authReadiness ??
+                        selectedServer.authState?.readiness ??
+                        "not_required",
+                      meta: selectedServer.authState?.tokenExpiresAt
+                        ? `Expires ${formatDateTime(selectedServer.authState.tokenExpiresAt)}`
+                        : selectedServer.oauth?.tokenUrl
+                          ? "OAuth metadata configured"
+                          : "No OAuth token metadata",
+                    },
                     {
                       label: "Status",
                       value: selectedServer.status,
@@ -6229,6 +6268,24 @@ function McpSection(_props: SettingsSectionProps) {
                   <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
                     <Save size={16} />
                     Save changes
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runServerAction(async () => {
+                        const flow = await startMcpOAuth(selectedServer.serverId);
+                        window.open(flow.authorizeUrl, "_blank", "noopener,noreferrer");
+                      }, "MCP OAuth authorization opened.")
+                    }
+                    disabled={
+                      selectedServer.authType !== "oauth2" ||
+                      !selectedServer.oauth?.authorizationUrl ||
+                      !selectedServer.oauth.tokenUrl
+                    }
+                  >
+                    <KeyRound size={16} />
+                    OAuth
                   </button>
                   <button
                     type="button"
@@ -6365,17 +6422,19 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
         ),
       })),
     );
-    const [profiles, effectiveLoads, activeOverrides, settings] = await Promise.all([
+    const [profiles, effectiveLoads, activeOverrides, autonomyGrants, settings] = await Promise.all([
       nativeLoad("Permission profiles", fetchPermissionProfiles({ workspaceId: activeWorkspaceId }), { items: [] }),
       effectiveLoadsPromise,
       nativeLoad("Active Local Operator Overrides", fetchActiveLocalOperatorOverrides(), { items: [] }),
+      nativeLoad("Autonomous activation grants", fetchAutonomousActivationGrants(true), { items: [] }),
       fetchSettings().catch(() => null),
     ]);
     return {
-      issues: nativeLoadIssues([profiles, ...effectiveLoads.map((item) => item.load), activeOverrides]),
+      issues: nativeLoadIssues([profiles, ...effectiveLoads.map((item) => item.load), activeOverrides, autonomyGrants]),
       profiles: profiles.data.items,
       effective: effectiveLoads.map(({ surface, load }) => readEffectivePermissionSurfaceState(surface, load.data)),
       activeOverrides: activeOverrides.data.items,
+      autonomyGrants: autonomyGrants.data.items,
       settings,
     };
   }, [activeWorkspaceId]);
@@ -6419,6 +6478,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       : null;
   const selectedProfileBypassesPrompts = selectedProfile?.approvalMode === "bypass";
   const activationBlockedByRemoteHardened = Boolean(promptSkippingProfileRestriction && selectedProfileBypassesPrompts);
+  const activeAutonomyGrants = (data?.autonomyGrants ?? []).filter((grant) => grant.status === "active");
 
   useEffect(() => {
     setOverrideDraft((current) =>
@@ -6603,6 +6663,16 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       await reload();
     } catch (revokeError) {
       setNotice({ tone: "error", message: getErrorMessage(revokeError) });
+    }
+  };
+
+  const runServerActionForPermissions = async (action: () => Promise<unknown>, successMessage: string) => {
+    try {
+      await action();
+      setNotice({ tone: "success", message: successMessage });
+      await reload();
+    } catch (actionError) {
+      setNotice({ tone: "error", message: getErrorMessage(actionError) });
     }
   };
 
@@ -6883,6 +6953,34 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 Start temporary override
               </button>
             </SettingsButtonRow>
+          </SettingsPanel>
+          <SettingsPanel
+            title="Autonomous activation grants"
+            subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
+            stats={[
+              { label: "Active", value: String(activeAutonomyGrants.length) },
+              { label: "Total", value: String(data.autonomyGrants.length) },
+            ]}
+          >
+            <SettingsActionList
+              items={data.autonomyGrants.map((grant) => ({
+                label: grant.grantId,
+                description: `${grant.workspaceId} · ${grant.surfaces.join(", ")} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
+                meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}`,
+                onClick:
+                  grant.status === "active"
+                    ? () =>
+                        void runServerActionForPermissions(async () => {
+                          await revokeAutonomousActivationGrant(grant.grantId, {
+                            revokedBy: "operator",
+                            reason: "Revoked from Settings.",
+                          });
+                        }, "Autonomous activation grant revoked.")
+                    : undefined,
+                actionLabel: grant.status === "active" ? "Revoke" : undefined,
+              }))}
+              emptyLabel="No autonomous activation grants recorded."
+            />
           </SettingsPanel>
         </SettingsGrid>
       ) : null}
@@ -9100,10 +9198,27 @@ export function applyIntegrationDefaults(
   );
 }
 
-export function isRuntimeInvokableMcpServer(server: { transport: string; url?: string; trustTier?: string }) {
+export function isRuntimeInvokableMcpServer(server: {
+  transport: string;
+  url?: string;
+  trustTier?: string;
+  authType?: string;
+  oauth?: McpServerRecord["oauth"];
+  authState?: McpServerRecord["authState"];
+  policy?: { allowedEnvKeys?: string[] };
+}) {
+  const authSupported =
+    !server.authType ||
+    server.authType === "none" ||
+    (server.authType === "token" && (server.policy?.allowedEnvKeys ?? []).some((item) => item.trim())) ||
+    (server.authType === "oauth2" &&
+      Boolean(server.oauth?.authorizationUrl?.trim() && server.oauth.tokenUrl?.trim()) &&
+      server.authState?.readiness === "ready");
   return (
     server.trustTier !== "quarantined" &&
-    (server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL)
+    (server.transport === "stdio" ||
+      server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL ||
+      ((server.transport === "http" || server.transport === "sse") && Boolean(server.url?.trim()) && authSupported))
   );
 }
 
@@ -9186,7 +9301,8 @@ export function createEmptyMcpServerModeManifest(): McpServerModeManifestRespons
 export function formatMcpRemotePreviewItem(item: McpRemotePreviewResponse["items"][number]): string {
   const blocker = item.blockers[0] ?? "No runtime blocker recorded.";
   const governance = item.governance[0] ?? "No governance note recorded.";
-  return `${item.posture.replaceAll("_", " ")} · ${item.operatorNextAction} · ${blocker} · ${governance}`;
+  const authReadiness = item.authReadiness?.replaceAll("_", " ") ?? "unknown";
+  return `${item.posture.replaceAll("_", " ")} · auth ${authReadiness} · ${item.operatorNextAction} · ${blocker} · ${governance}`;
 }
 
 export function readDraftString(record: Record<string, unknown>, key: string): string | undefined {

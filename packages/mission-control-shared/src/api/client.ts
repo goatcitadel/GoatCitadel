@@ -466,17 +466,21 @@ export {
 } from "./workspaces.js";
 export {
   createCapabilityProposal,
+  createAutonomousActivationGrant,
+  evaluateAutonomousActivationGrant,
   createCodeModeRun,
   fetchCapabilityCandidate,
   fetchCapabilityCatalog,
   fetchCapabilityCatalogSnapshot,
   fetchCapabilityProposal,
   fetchCapabilityProposals,
+  fetchAutonomousActivationGrants,
   fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRuns,
   promoteCapabilityCandidate,
   revokeCapabilityCandidate,
+  revokeAutonomousActivationGrant,
   rollbackCapabilityCandidate,
 } from "./capabilities.js";
 export {
@@ -792,6 +796,7 @@ export {
   fetchOpenAICodexOAuthStatus,
   fetchMeshLeases,
   fetchMeshNodes,
+  fetchMeshReadiness,
   fetchMeshReplicationOffsets,
   fetchMeshSessionOwners,
   fetchMeshStatus,

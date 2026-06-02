@@ -872,6 +872,117 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks autonomous MCP runtime execution without a matching operator grant", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({
+      ok: true,
+      output: { payload: "ok" },
+    }));
+    const evaluateAutonomousActivationGrant = vi.fn(() => ({
+      allowed: false,
+      blockers: ["No active autonomous activation grant matched this request."],
+      governance: ["Agentic activation is disabled unless an active expiring operator grant matches the request."],
+    }));
+    const host = createHost({
+      evaluateAutonomousActivationGrant,
+      recordAutonomousActivationGrantUse: vi.fn(),
+      invokeMcpRuntimeTool,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      autonomousActivation: true,
+      estimatedCostUsd: 0.25,
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: "Autonomous MCP activation requires an active matching operator grant.",
+      reasonCodes: ["autonomous_activation_grant_required"],
+      autonomousActivation: {
+        requested: true,
+        allowed: false,
+        blockers: ["No active autonomous activation grant matched this request."],
+      },
+    });
+    expect(evaluateAutonomousActivationGrant).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      surface: "mcp",
+      riskLevel: "danger",
+      activationKind: "mcp_tool",
+      capabilityId: "mcp:srv-1",
+      toolName: "mcp.srv-1.tool.echo",
+      estimatedCostUsd: 0.25,
+    });
+    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("records matching autonomous MCP grants before runtime execution and evidence", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({
+      ok: true,
+      output: { payload: "ok" },
+    }));
+    const evaluateAutonomousActivationGrant = vi.fn(() => ({
+      allowed: true,
+      matchedGrantId: "grant-1",
+      blockers: [],
+      governance: ["Matched expiring autonomous activation grant grant-1."],
+    }));
+    const recordAutonomousActivationGrantUse = vi.fn();
+    const recordEvidenceEnvelope = vi.fn();
+    const publishRealtime = vi.fn();
+    const host = createHost({
+      evaluateAutonomousActivationGrant,
+      recordAutonomousActivationGrantUse,
+      recordEvidenceEnvelope,
+      publishRealtime,
+      invokeMcpRuntimeTool,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      autonomousActivation: true,
+      estimatedCostUsd: 0.5,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      autonomousActivation: {
+        requested: true,
+        allowed: true,
+        matchedGrantId: "grant-1",
+        riskLevel: "danger",
+      },
+    });
+    expect(recordAutonomousActivationGrantUse).toHaveBeenCalledWith("grant-1", 0.5);
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "tool_invoked",
+      "mcp",
+      expect.objectContaining({
+        autonomousActivation: expect.objectContaining({ matchedGrantId: "grant-1" }),
+      }),
+      expect.any(Object),
+    );
+    expect(recordEvidenceEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          autonomousActivation: expect.objectContaining({ matchedGrantId: "grant-1" }),
+        }),
+      }),
+    );
+  });
+
   it("runs approved MCP replay through the real runtime without opening a new approval", async () => {
     const invokeMcpRuntimeTool = vi.fn(async () => ({
       ok: true,

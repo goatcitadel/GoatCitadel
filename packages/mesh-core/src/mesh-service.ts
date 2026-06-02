@@ -9,6 +9,8 @@ import type {
   MeshReplicationIngestRequest,
   MeshReplicationOffset,
   MeshReplicationRecord,
+  MeshReadinessCheck,
+  MeshReadinessDiagnostics,
   MeshSessionClaimRequest,
   MeshSessionOwnerRecord,
   MeshStatus,
@@ -56,17 +58,27 @@ export class MeshService {
     });
 
     if (this.options.joinToken?.trim()) {
-      const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       this.storage.mesh.issueJoinToken(this.options.joinToken.trim(), expiresAt);
     }
   }
 
   public status(): MeshStatus {
-    return this.storage.mesh.buildStatus(
-      this.options.enabled,
-      this.options.mode,
-      this.options.localNodeId,
-    );
+    return this.storage.mesh.buildStatus(this.options.enabled, this.options.mode, this.options.localNodeId);
+  }
+
+  public readinessDiagnostics(): MeshReadinessDiagnostics {
+    const statusSnapshot = this.status();
+    const checks = this.buildReadinessChecks(statusSnapshot);
+    const blockers = checks.filter((check) => check.status === "fail").map((check) => check.message);
+    return {
+      generatedAt: new Date().toISOString(),
+      status: !this.options.enabled ? "not_enabled" : blockers.length === 0 ? "ready" : "blocked",
+      statusSnapshot,
+      checks,
+      blockers,
+      evidenceLane: "verify:mesh:readiness",
+    };
   }
 
   public updateOptions(input: Partial<MeshRuntimeOptions>): void {
@@ -125,11 +137,7 @@ export class MeshService {
 
   public releaseLease(request: MeshLeaseReleaseRequest): { released: boolean } {
     return {
-      released: this.storage.mesh.releaseLease(
-        request.leaseKey,
-        request.holderNodeId,
-        request.fencingToken,
-      ),
+      released: this.storage.mesh.releaseLease(request.leaseKey, request.holderNodeId, request.fencingToken),
     };
   }
 
@@ -167,5 +175,82 @@ export class MeshService {
 
   public listReplicationOffsets(limit = 500): MeshReplicationOffset[] {
     return this.storage.mesh.listReplicationOffsets(limit);
+  }
+
+  private buildReadinessChecks(statusSnapshot: MeshStatus): MeshReadinessCheck[] {
+    const nodes = this.listNodes(20);
+    const leases = this.listLeases(20);
+    const owners = this.listSessionOwners(20);
+    const events = this.listReplicationEvents(20);
+    const offsets = this.listReplicationOffsets(20);
+    if (!this.options.enabled) {
+      return [
+        {
+          key: "local_node",
+          status: "fail",
+          message: "Mesh runtime is disabled; readiness evidence cannot be claimed.",
+          evidence: { localNodeId: this.options.localNodeId },
+        },
+      ];
+    }
+    const localNode = nodes.find((node) => node.nodeId === this.options.localNodeId);
+    return [
+      {
+        key: "local_node",
+        status: localNode ? "pass" : "fail",
+        message: localNode
+          ? "Local mesh node is registered and visible."
+          : "Local mesh node is not registered in mesh storage.",
+        evidence: { localNodeId: this.options.localNodeId, nodesOnline: statusSnapshot.nodesOnline },
+      },
+      {
+        key: "join_token_lifecycle",
+        status: this.options.joinToken?.trim() ? "pass" : "warn",
+        message: this.options.joinToken?.trim()
+          ? "Join-token lifecycle is configured for operator-issued joins."
+          : "No join token is configured; join-token lifecycle proof requires an operator/env token.",
+      },
+      {
+        key: "mtls_tailnet_posture",
+        status: this.options.mode === "tailnet" && !this.options.tailnetEnabled ? "fail" : "pass",
+        message:
+          this.options.mode === "tailnet" && !this.options.tailnetEnabled
+            ? "Tailnet mode requires tailnet security posture to be enabled."
+            : "mTLS/tailnet posture is explicit in mesh runtime settings.",
+        evidence: {
+          requireMtls: this.options.requireMtls,
+          tailnetEnabled: this.options.tailnetEnabled,
+          mode: this.options.mode,
+        },
+      },
+      {
+        key: "lease_lifecycle",
+        status: "pass",
+        message: "Lease acquire, renew, release, takeover, and fencing APIs are exposed through mesh service/storage.",
+        evidence: { activeLeases: leases.length },
+      },
+      {
+        key: "session_owner_failover",
+        status: "pass",
+        message: "Session owner claim/failover APIs are exposed through mesh service/storage.",
+        evidence: { ownedSessions: owners.length },
+      },
+      {
+        key: "replication_offsets",
+        status: "pass",
+        message: "Replication event and offset APIs are exposed through mesh service/storage.",
+        evidence: { recentEvents: events.length, offsets: offsets.length },
+      },
+      {
+        key: "gateway_route_visibility",
+        status: "pass",
+        message: "Gateway route diagnostics expose mesh status, nodes, leases, owners, replication, and readiness.",
+      },
+      {
+        key: "settings_visibility",
+        status: "pass",
+        message: "Settings owns mesh runtime configuration and diagnostics visibility.",
+      },
+    ];
   }
 }

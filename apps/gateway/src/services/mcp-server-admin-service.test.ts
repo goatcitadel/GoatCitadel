@@ -58,18 +58,44 @@ describe("mcp-server-admin-service", () => {
     });
   });
 
-  it("rejects unsupported remote transports before mutating storage", () => {
+  it("rejects unsupported remote auth before mutating storage", () => {
     const host = createHost();
 
     expect(() =>
       createMcpServer(host, {
-        label: "Remote SSE",
-        transport: "sse",
+        label: "Remote OAuth",
+        transport: "http",
         url: "https://remote.example/mcp",
+        authType: "oauth2",
       }),
-    ).toThrow("MCP transport sse is not part of the 1.0 runtime-invokable surface");
+    ).toThrow("MCP transport http requires local stdio");
     expect(host.writeMcpServers).not.toHaveBeenCalled();
     expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("creates supported remote server records with explicit token env policy", () => {
+    const host = createHost();
+
+    const created = createMcpServer(host, {
+      label: "Remote SSE",
+      transport: "sse",
+      url: "https://remote.example/mcp",
+      authType: "token",
+      policy: {
+        allowedEnvKeys: ["REMOTE_MCP_TOKEN", "invalid=value"],
+      },
+    });
+
+    expect(created).toMatchObject({
+      label: "Remote SSE",
+      transport: "sse",
+      url: "https://remote.example/mcp",
+      authType: "token",
+      policy: {
+        allowedEnvKeys: ["REMOTE_MCP_TOKEN"],
+      },
+    });
+    expect(host.writeMcpServers).toHaveBeenCalledWith([created]);
   });
 
   it("updates server fields and merges policy without replacing existing defaults", () => {
@@ -173,20 +199,19 @@ describe("mcp-server-admin-service", () => {
     });
   });
 
-  it("refuses to connect unsupported remote records before mutating connection state", async () => {
+  it("refuses to connect unsupported remote auth before mutating connection state", async () => {
     const remote = createServer({
       serverId: "remote-1",
-      transport: "sse",
+      transport: "http",
       command: undefined,
       args: undefined,
       url: "https://remote.example.test/mcp",
+      authType: "oauth2",
       status: "disconnected",
     });
     const host = createHost({ servers: [remote] });
 
-    await expect(connectMcpServer(host, "remote-1")).rejects.toThrow(
-      "MCP transport sse is not part of the 1.0 runtime-invokable surface",
-    );
+    await expect(connectMcpServer(host, "remote-1")).rejects.toThrow("MCP transport http requires local stdio");
 
     expect(host.servers[0]).toEqual(remote);
     expect(host.patchMcpServerState).not.toHaveBeenCalled();
@@ -218,13 +243,31 @@ describe("mcp-server-admin-service", () => {
 
   it("stores OAuth handshake state and completes it through the connect path", async () => {
     const host = createHost({
-      servers: [createServer({ serverId: "server-1", authType: "oauth2", url: "https://mcp.example/oauth" })],
+      servers: [
+        createServer({
+          serverId: "server-1",
+          authType: "oauth2",
+          url: "https://mcp.example/events",
+          oauth: {
+            authorizationUrl: "https://mcp.example/oauth/authorize",
+            tokenUrl: "https://mcp.example/oauth/token",
+          },
+        }),
+      ],
       resolveConnectedMcpTools: vi.fn(async () => []),
+      exchangeMcpOAuthCode: vi.fn(async (_server, code, authRow) => ({
+        ...authRow,
+        accessTokenRef: "keychain:goatcitadel:mcp:server-1:access-token",
+        refreshTokenRef: "keychain:goatcitadel:mcp:server-1:refresh-token",
+        oauthState: undefined,
+        updatedAt: "2026-06-02T00:00:00.000Z",
+        lastCodePreview: code.slice(0, 8),
+      })),
     });
 
     const started = startMcpOAuth(host, "server-1");
 
-    expect(started.authorizeUrl).toContain("https://mcp.example/oauth");
+    expect(started.authorizeUrl).toContain("https://mcp.example/oauth/authorize");
     expect(started.authorizeUrl).toContain(`state=${encodeURIComponent(started.state)}`);
     expect(started.authorizeUrl).toContain(
       "redirect_uri=http%3A%2F%2F127.0.0.1%3A8787%2Fapi%2Fv1%2Fmcp%2Foauth%2Fcallback",
@@ -278,6 +321,7 @@ function createHost(input?: {
   tools?: McpToolRecord[];
   authState?: Record<string, { oauthState?: string; updatedAt: string }>;
   resolveConnectedMcpTools?: McpServerAdminHost["resolveConnectedMcpTools"];
+  exchangeMcpOAuthCode?: McpServerAdminHost["exchangeMcpOAuthCode"];
 }): McpServerAdminHost & {
   servers: McpServerRecord[];
   tools: McpToolRecord[];
@@ -288,6 +332,7 @@ function createHost(input?: {
   patchMcpServerState: ReturnType<typeof vi.fn>;
   requireMcpServer: ReturnType<typeof vi.fn>;
   resolveConnectedMcpTools: ReturnType<typeof vi.fn>;
+  exchangeMcpOAuthCode: ReturnType<typeof vi.fn>;
   publishRealtime: ReturnType<typeof vi.fn>;
 } {
   const host = {
@@ -337,6 +382,7 @@ function createHost(input?: {
     writeMcpAuthState: vi.fn((state: Record<string, { oauthState?: string; updatedAt: string }>) => {
       host.authState = state;
     }),
+    exchangeMcpOAuthCode: vi.fn(input?.exchangeMcpOAuthCode),
     publishRealtime: vi.fn(),
   };
   return host;

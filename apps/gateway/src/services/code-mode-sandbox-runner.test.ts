@@ -171,9 +171,13 @@ describe("code-mode-sandbox-runner", () => {
       ]),
     );
     expect(prepared.launch.executable).toBe("/usr/bin/firejail");
-    expect(prepared.launch.args).toEqual(expect.arrayContaining(["--net=none", "--seccomp", "--caps.drop=all"]));
+    expect(prepared.launch.args).toEqual(
+      expect.arrayContaining(["--net=none", "--seccomp", "--rlimit-nproc=1", "--caps.drop=all"]),
+    );
     expect(prepared.launch.advisoryUnsandboxed).toBe(false);
-    await expect(fs.stat(path.join(root, "run", "code-mode-firejail.profile"))).resolves.toBeTruthy();
+    const profilePath = path.join(root, "run", "code-mode-firejail.profile");
+    await expect(fs.stat(profilePath)).resolves.toBeTruthy();
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toEqual(expect.stringContaining("rlimit-nproc 1"));
   });
 
   it("selects the macOS seatbelt adapter and reports sandbox-exec caveats", async () => {
@@ -208,9 +212,12 @@ describe("code-mode-sandbox-runner", () => {
     );
     expect(prepared.launch.executable).toBe("/usr/bin/sandbox-exec");
     expect(prepared.launch.args.slice(0, 2)).toEqual(["-f", path.join(root, "run", "code-mode-seatbelt.sb")]);
+    await expect(fs.readFile(path.join(root, "run", "code-mode-seatbelt.sb"), "utf8")).resolves.not.toContain(
+      "(allow process*)",
+    );
   });
 
-  it("selects the Windows AppContainer adapter but fails closed while Node IPC is not preserved", async () => {
+  it("selects the Windows AppContainer adapter and prepares a stdio JSON-RPC launch", async () => {
     const root = await createTempRoot();
     const options: HostSandboxAdapterSelectionOptions = {
       platform: "win32",
@@ -224,29 +231,36 @@ describe("code-mode-sandbox-runner", () => {
       baseConfig({ required: true, bestEffortHostEnabled: true }),
       options,
     );
-    expect(metadata).toMatchObject({ platform: "win32", available: false });
+    expect(metadata).toMatchObject({ platform: "win32", available: true });
     expect(metadata.checksPassed).toEqual(
-      expect.arrayContaining(["win32_powershell_present", "win32_appcontainer_prerequisites_available"]),
-    );
-    expect(metadata.checksFailed).toEqual(
       expect.arrayContaining([
-        "win32_node_ipc_not_preserved",
-        "network_isolation_not_enforced",
-        "temp_workspace_not_enforced",
-        "privilege_reduction_not_enforced",
-        "windows_job_limits_not_enforced",
+        "win32_powershell_present",
+        "win32_appcontainer_prerequisites_available",
+        "win32_stdio_jsonrpc_transport_intended",
+        "network_isolation_intended",
+        "temp_workspace_acl_intended",
+        "privilege_reduction_intended",
+        "windows_job_limits_intended",
       ]),
     );
-    await expect(
-      prepareCodeModeSandboxLaunch(baseConfig({ required: true, bestEffortHostEnabled: true }), launchInput(root), {
+    expect(metadata.checksFailed).toEqual([]);
+    await fs.writeFile(path.join(root, "harness.mjs"), "process.exit(0);\n", "utf8");
+    const prepared = await prepareCodeModeSandboxLaunch(
+      baseConfig({ required: true, bestEffortHostEnabled: true }),
+      launchInput(root),
+      {
         ...options,
         metadata,
-      }),
-    ).rejects.toThrow("win32_node_ipc_not_preserved");
-    await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
+      },
+    );
+    expect(prepared.launch.transport).toBe("stdio_jsonrpc");
+    expect(prepared.launch.env.GOATCITADEL_CODE_MODE_TRANSPORT).toBe("stdio_jsonrpc");
+    const launcherPath = path.join(root, "run", "code-mode-appcontainer-launcher.ps1");
+    await expect(fs.stat(launcherPath)).resolves.toBeTruthy();
+    await expect(fs.readFile(launcherPath, "utf8")).resolves.toEqual(expect.stringContaining("GetStdHandle"));
   });
 
-  it("falls back to advisory unsandboxed Windows launch only when sandbox is not required", async () => {
+  it("uses the Windows AppContainer launcher even when sandbox is advisory and prerequisites exist", async () => {
     const root = await createTempRoot();
     const options: HostSandboxAdapterSelectionOptions = {
       platform: "win32",
@@ -256,26 +270,19 @@ describe("code-mode-sandbox-runner", () => {
       }),
     };
 
+    await fs.writeFile(path.join(root, "harness.mjs"), "process.exit(0);\n", "utf8");
     const prepared = await prepareCodeModeSandboxLaunch(
       baseConfig({ required: false, bestEffortHostEnabled: true }),
       launchInput(root),
       options,
     );
 
-    expect(prepared.metadata).toMatchObject({ platform: "win32", available: false, required: false });
-    expect(prepared.metadata.checksFailed).toEqual(
-      expect.arrayContaining([
-        "win32_node_ipc_not_preserved",
-        "network_isolation_not_enforced",
-        "temp_workspace_not_enforced",
-        "privilege_reduction_not_enforced",
-        "windows_job_limits_not_enforced",
-      ]),
-    );
+    expect(prepared.metadata).toMatchObject({ platform: "win32", available: true, required: false });
     expect(prepared.launch).toMatchObject({
-      executable: process.execPath,
-      advisoryUnsandboxed: true,
+      executable: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      advisoryUnsandboxed: false,
       enforcedWorkspaceRoot: path.join(root, "run"),
+      transport: "stdio_jsonrpc",
     });
   });
 

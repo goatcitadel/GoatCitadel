@@ -55,6 +55,32 @@ export interface MeshStatus {
   ownedSessions: number;
 }
 
+export type MeshReadinessStatus = "ready" | "blocked" | "not_enabled";
+
+export interface MeshReadinessCheck {
+  key:
+    | "local_node"
+    | "join_token_lifecycle"
+    | "mtls_tailnet_posture"
+    | "lease_lifecycle"
+    | "session_owner_failover"
+    | "replication_offsets"
+    | "gateway_route_visibility"
+    | "settings_visibility";
+  status: "pass" | "warn" | "fail";
+  message: string;
+  evidence?: Record<string, unknown>;
+}
+
+export interface MeshReadinessDiagnostics {
+  generatedAt: string;
+  status: MeshReadinessStatus;
+  statusSnapshot: MeshStatus;
+  checks: MeshReadinessCheck[];
+  blockers: string[];
+  evidenceLane: "verify:mesh:readiness";
+}
+
 export interface MeshJoinRequest {
   token: string;
   nodeId: string;

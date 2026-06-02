@@ -433,6 +433,7 @@ import * as settingsAuthService from "./settings-auth-service.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import { buildPublicMcpAuthState, McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
@@ -760,6 +761,7 @@ export class GatewayService {
   private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
+  private readonly mcpOAuthTokenService: McpOAuthTokenService;
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
   private readonly guidanceService: GuidanceService;
@@ -865,6 +867,10 @@ export class GatewayService {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
     });
     const secretStore = new SecretStoreService();
+    this.mcpOAuthTokenService = new McpOAuthTokenService({
+      secretStore,
+      networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
+    });
     this.skillsService = new SkillsService([
       { source: "extra", dir: path.join(config.rootDir, "skills", "extra") },
       { source: "extra", dir: path.join(config.rootDir, "skills", "genie-npu-ir20") },
@@ -1269,7 +1275,15 @@ export class GatewayService {
       listMcpTools: (serverId) => this.listMcpTools(serverId),
       matchesWildcard: (value, pattern) => wildcardMatch(value, pattern),
       isMcpToolApproved: (serverId, toolName) => this.isMcpToolApproved(serverId, toolName),
-      invokeMcpRuntimeTool: (server, input) => invokeMcpRuntimeTool(server, input),
+      invokeMcpRuntimeTool: (server, input) =>
+        invokeMcpRuntimeTool(server, input, undefined, {
+          networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
+          oauthAccessTokenResolver: (mcpServer) => this.resolveMcpOAuthAccessToken(mcpServer),
+        }),
+      evaluateAutonomousActivationGrant: (input) =>
+        this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
+      recordAutonomousActivationGrantUse: (grantId, estimatedCostUsd) =>
+        this.capabilitySystemService.recordAutonomousActivationGrantUse(grantId, estimatedCostUsd),
       resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
       applyMcpRedaction: (output, mode) => applyMcpRedaction(output, mode),
       recordEvidenceEnvelope: (input) => {
@@ -6929,6 +6943,7 @@ export class GatewayService {
     if (!Array.isArray(stored)) {
       return [];
     }
+    const authRows = this.readMcpAuthState();
     return stored
       .filter((item): item is McpServerRecord => Boolean(item?.serverId))
       .map((item) => ({
@@ -6937,11 +6952,19 @@ export class GatewayService {
         trustTier: item.trustTier ?? "restricted",
         costTier: item.costTier ?? "unknown",
         policy: normalizeMcpPolicy(item.policy),
+        authState: buildPublicMcpAuthState(item, authRows[item.serverId]),
       }));
   }
 
   /** @internal */ public writeMcpServers(servers: McpServerRecord[]): void {
-    this.storage.systemSettings.set(MCP_SERVERS_SETTING_KEY, servers);
+    this.storage.systemSettings.set(
+      MCP_SERVERS_SETTING_KEY,
+      servers.map((server) => {
+        const persisted = { ...server };
+        delete persisted.authState;
+        return persisted;
+      }),
+    );
   }
 
   /** @internal */ public requireMcpServer(serverId: string): McpServerRecord {
@@ -6994,6 +7017,15 @@ export class GatewayService {
         return discovered;
       }
     }
+    if (server.transport === "http" || server.transport === "sse") {
+      const discovered = await discoverMcpTools(server, undefined, {
+        networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
+        oauthAccessTokenResolver: (mcpServer) => this.resolveMcpOAuthAccessToken(mcpServer),
+      });
+      if (discovered.length > 0) {
+        return discovered;
+      }
+    }
     return inferMcpToolsForServer(server, existingTools);
   }
 
@@ -7015,6 +7047,47 @@ export class GatewayService {
 
   /** @internal */ public writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
     this.storage.systemSettings.set("mcp_auth_state_v1", state);
+  }
+
+  /** @internal */ public async exchangeMcpOAuthCode(
+    server: McpServerRecord,
+    code: string,
+    stateRecord: McpAuthStateRecord,
+  ): Promise<McpAuthStateRecord> {
+    try {
+      return await this.mcpOAuthTokenService.exchangeAuthorizationCode(server, code, stateRecord);
+    } catch (error) {
+      const message = sanitizeMcpAuthError((error as Error).message);
+      const authRows = this.readMcpAuthState();
+      authRows[server.serverId] = {
+        ...(authRows[server.serverId] ?? stateRecord),
+        error: message,
+        updatedAt: new Date().toISOString(),
+      };
+      this.writeMcpAuthState(authRows);
+      throw new Error(message, { cause: error });
+    }
+  }
+
+  /** @internal */ public async resolveMcpOAuthAccessToken(server: McpServerRecord): Promise<string | undefined> {
+    if (server.authType !== "oauth2") {
+      return undefined;
+    }
+    const authRows = this.readMcpAuthState();
+    try {
+      const resolved = await this.mcpOAuthTokenService.resolveAccessToken(server, authRows[server.serverId]);
+      authRows[server.serverId] = resolved.state;
+      this.writeMcpAuthState(authRows);
+      return resolved.accessToken;
+    } catch (error) {
+      authRows[server.serverId] = {
+        ...(authRows[server.serverId] ?? { updatedAt: new Date().toISOString() }),
+        error: sanitizeMcpAuthError((error as Error).message),
+        updatedAt: new Date().toISOString(),
+      };
+      this.writeMcpAuthState(authRows);
+      throw error;
+    }
   }
 
   private readMcpFirstApprovals(): Record<string, string[]> {
@@ -8010,6 +8083,8 @@ interface McpAuthStateRecord {
   oauthState?: string;
   scopes?: string[];
   updatedAt: string;
+  lastRefreshedAt?: string;
+  error?: string;
   lastCodePreview?: string;
 }
 
@@ -9030,6 +9105,17 @@ function readRequiredString(value: unknown, label: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function sanitizeMcpAuthError(message: string): string {
+  return message
+    .replace(
+      /\b(Bearer|token|api[-_]?key|authorization|client_secret)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi,
+      "$1=[REDACTED]",
+    )
+    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
+    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
+    .slice(0, 1024);
 }
 
 function toSkillStateRows(value: unknown): SkillStateRecord[] {

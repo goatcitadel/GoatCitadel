@@ -380,6 +380,155 @@ export async function runCodeModeSandboxRequiredLane(context) {
   );
 }
 
+export async function runCodeModeHostileSandboxLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "code-mode.hostile-sandbox.promotion-gate",
+      lane: "code-mode-hostile-sandbox",
+      title: "Code Mode hostile-code sandbox claim stays gated by native adversarial canaries",
+      subsystem: "gateway",
+    },
+    async () => {
+      const requiredCanaries = [
+        "outside_root_read_denied",
+        "outside_root_write_denied",
+        "network_denied",
+        "env_secret_absent",
+        "symlink_path_traversal_denied",
+        "process_job_limits_enforced",
+        "artifact_hash_integrity",
+        "fail_closed_required_mode",
+      ];
+      const files = {
+        contracts: path.join(repoRoot, "packages", "contracts", "src", "capabilities.ts"),
+        sandboxTypes: path.join(repoRoot, "apps", "gateway", "src", "services", "code-mode-sandbox", "types.ts"),
+        linux: path.join(repoRoot, "apps", "gateway", "src", "services", "code-mode-sandbox", "linux-firejail-adapter.ts"),
+        darwin: path.join(repoRoot, "apps", "gateway", "src", "services", "code-mode-sandbox", "darwin-seatbelt-adapter.ts"),
+        win32: path.join(repoRoot, "apps", "gateway", "src", "services", "code-mode-sandbox", "windows-appcontainer-adapter.ts"),
+      };
+      const contents = Object.fromEntries(
+        await Promise.all(Object.entries(files).map(async ([key, filePath]) => [key, await fs.readFile(filePath, "utf8")])),
+      );
+      const issues = [];
+      const proofPath = path.join(context.artifactRoot, "diagnostics", "code-mode-hostile-sandbox-proof.json");
+      const result = await runCommand(
+        pnpmCommand(),
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "tsx",
+          "src/code-mode-hostile-sandbox-proof.ts",
+          "--output",
+          proofPath,
+        ],
+        {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: "code-mode-hostile-sandbox.proof",
+          env: {
+            GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+            GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "true",
+            GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED: "true",
+            GOATCITADEL_ROOT_DIR: repoRoot,
+          },
+        },
+      );
+      const proof = await readJson(proofPath).catch(() => undefined);
+      for (const canary of requiredCanaries) {
+        if (!contents.contracts.includes(canary) || !contents.sandboxTypes.includes(canary)) {
+          issues.push(`Missing hostile sandbox canary metadata: ${canary}`);
+        }
+      }
+      if (!contents.sandboxTypes.includes("buildHostileSandboxClaimMetadata") || !contents.sandboxTypes.includes("publicClaimAllowed")) {
+        issues.push("Hostile sandbox claim metadata must keep explicit proof aggregation and public-claim gating.");
+      }
+      for (const [platform, needle] of [
+        ["linux", "firejail"],
+        ["darwin", "sandbox-exec"],
+        ["win32", "AppContainer"],
+      ]) {
+        if (!contents[platform].toLowerCase().includes(String(needle).toLowerCase())) {
+          issues.push(`Missing native ${platform} sandbox adapter evidence for ${needle}.`);
+        }
+      }
+      if (!contents.linux.includes("--rlimit-nproc=1") || !contents.linux.includes("rlimit-nproc 1")) {
+        issues.push("Linux Firejail hostile proof must include process limit enforcement.");
+      }
+      if (contents.darwin.includes("(allow process*)")) {
+        issues.push("macOS Seatbelt hostile proof must not allow broad process operations.");
+      }
+      if (!contents.win32.includes("GetStdHandle") || !contents.win32.includes("STARTF_USESTDHANDLES")) {
+        issues.push("Windows AppContainer stdio JSON-RPC launcher must preserve inherited std handles.");
+      }
+      if (!proof) {
+        issues.push("Hostile sandbox proof CLI did not write a proof artifact.");
+      } else {
+        for (const canary of requiredCanaries) {
+          if (!proof.claim?.requiredCanaries?.includes(canary)) {
+            issues.push(`Hostile sandbox proof omitted required canary: ${canary}`);
+          }
+        }
+        if (proof.claim?.publicClaimAllowed === true) {
+          const allPlatformProofsPass = proof.claim.platformProof?.every(
+            (item) =>
+              item.status === "pass" &&
+              requiredCanaries.every((canary) => item.checksPassed?.includes(canary)) &&
+              (item.checksFailed?.length ?? 0) === 0,
+          );
+          if (!allPlatformProofsPass) {
+            issues.push("Hostile sandbox public claim was allowed without a complete green platform matrix.");
+          }
+        }
+        if (proof.sandboxAvailable && proof.currentPlatformProof?.status !== "pass") {
+          issues.push(
+            `Available native hostile sandbox failed canaries: ${
+              proof.currentPlatformProof?.checksFailed?.join(", ") || "unknown"
+            }`,
+          );
+        }
+      }
+      if (result.code !== 0 && (!proof || proof.sandboxAvailable)) {
+        issues.push(clampString(result.stderr || result.stdout, 1200));
+      }
+      const artifactPath = path.join(context.artifactRoot, "diagnostics", "code-mode-hostile-sandbox.json");
+      await writeJson(artifactPath, {
+        checkedAt: new Date().toISOString(),
+        claimStatus: proof?.claim?.claimStatus ?? "not_promoted",
+        requiredCanaries,
+        files,
+        issues,
+        proofRef: proof ? relativeToRun(context, proofPath) : undefined,
+        currentPlatform: proof?.platform,
+        currentPlatformProofStatus: proof?.currentPlatformProof?.status,
+        publicClaimAllowed: proof?.claim?.publicClaimAllowed ?? false,
+      });
+      return {
+        status: issues.length ? "failed" : "passed",
+        error: issues.length ? issues.join("\n") : undefined,
+        metrics: {
+          canaries: requiredCanaries.length,
+          issues: issues.length,
+          exitCode: result.code,
+          currentPlatform: proof?.platform,
+          currentPlatformProofStatus: proof?.currentPlatformProof?.status,
+          checksPassed: proof?.currentPlatformProof?.checksPassed?.length,
+          checksFailed: proof?.currentPlatformProof?.checksFailed?.length,
+          publicClaimAllowed: proof?.claim?.publicClaimAllowed ?? false,
+        },
+        artifacts: emptyArtifacts({
+          diagnostics: [
+            relativeToRun(context, artifactPath),
+            ...(proof ? [relativeToRun(context, proofPath)] : []),
+          ],
+          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+        }),
+      };
+    },
+  );
+}
+
 export async function runAgenticContractsLane(context) {
   await runAgenticProofScenario(context, {
     profile: "contracts",
@@ -446,6 +595,192 @@ export async function runAgenticGovernanceLane(context) {
     title: "Self-improvement and curator review-first behavior",
     subsystem: "agentic",
   });
+  await runAutonomousActivationGrantGovernanceScenario(context);
+}
+
+async function runAutonomousActivationGrantGovernanceScenario(context) {
+  const stack = await startVerificationStack(context, { includeUi: false });
+  try {
+    await runScenario(
+      context,
+      {
+        id: "agentic.governance.autonomous-activation-grants",
+        lane: "agentic-governance",
+        title: "Autonomous activation requires an expiring matching operator grant and revokes cleanly",
+        subsystem: "agentic",
+      },
+      async () => {
+        const server = await requestJson(stack.gatewayUrl, "/api/v1/mcp/servers", {
+          method: "POST",
+          body: {
+            label: "Verification approval inbox",
+            transport: "http",
+            url: "goatcitadel://approval-inbox",
+            authType: "none",
+            enabled: true,
+            trustTier: "trusted",
+            costTier: "free",
+            policy: {
+              requireFirstToolApproval: false,
+              redactionMode: "off",
+              allowedToolPatterns: [],
+              blockedToolPatterns: [],
+            },
+          },
+        });
+        assertOk(server, "create verification MCP approval inbox server");
+        const connected = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/mcp/servers/${encodeURIComponent(server.body.serverId)}/connect`,
+          { method: "POST", body: {} },
+        );
+        assertOk(connected, "connect verification MCP approval inbox server");
+        const deniedBeforeGrant = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
+          method: "POST",
+          body: {
+            serverId: server.body.serverId,
+            toolName: "goatcitadel.approval.remote_action_inbox.list",
+            workspaceId: "default",
+            surface: "mcp",
+            autonomousActivation: true,
+            estimatedCostUsd: 0.05,
+            arguments: { limit: 1 },
+          },
+        });
+        assertOk(deniedBeforeGrant, "autonomous MCP invoke denied before grant");
+        if (deniedBeforeGrant.body?.ok !== false || deniedBeforeGrant.body?.autonomousActivation?.allowed !== false) {
+          throw new Error("autonomous MCP runtime invocation was not denied before a matching grant existed");
+        }
+        const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+        const created = await requestJson(stack.gatewayUrl, "/api/v1/capabilities/autonomy-grants", {
+          method: "POST",
+          body: {
+            workspaceId: "default",
+            surfaces: ["cowork", "code", "mcp"],
+            maxRiskLevel: "danger",
+            capabilityPatterns: ["capability.*"],
+            toolPatterns: ["mcp.*", "code.*"],
+            activationKinds: ["capability", "tool", "mcp_tool", "code_mode"],
+            maxActivations: 2,
+            budgetUsd: 1,
+            grantor: "verification",
+            reason: "verify governed autonomous activation grant matching and revocation",
+            expiresAt,
+          },
+        });
+        assertOk(created, "create autonomous activation grant");
+        const allowed = await requestJson(stack.gatewayUrl, "/api/v1/capabilities/autonomy-grants/evaluate", {
+          method: "POST",
+          body: {
+            workspaceId: "default",
+            surface: "cowork",
+            riskLevel: "danger",
+            activationKind: "tool",
+            toolName: "mcp.remote.fetch",
+          },
+        });
+        assertOk(allowed, "evaluate autonomous activation grant allowed");
+        if (!allowed.body?.allowed || allowed.body?.matchedGrantId !== created.body?.grantId) {
+          throw new Error("autonomous activation grant did not match the governed request");
+        }
+        const allowedInvoke = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
+          method: "POST",
+          body: {
+            serverId: server.body.serverId,
+            toolName: "goatcitadel.approval.remote_action_inbox.list",
+            workspaceId: "default",
+            surface: "mcp",
+            autonomousActivation: true,
+            estimatedCostUsd: 0.05,
+            arguments: { limit: 1 },
+          },
+        });
+        assertOk(allowedInvoke, "autonomous MCP invoke allowed with matching grant");
+        const allowedInvokeMatchedGrant =
+          allowedInvoke.body?.autonomousActivation?.matchedGrantId === created.body?.grantId;
+        const allowedInvokeRespectedPolicy =
+          allowedInvoke.body?.ok === true ||
+          (allowedInvoke.body?.approvalRequired === true &&
+            String(allowedInvoke.body?.policyReason ?? "").includes("approval"));
+        if (!allowedInvokeMatchedGrant || !allowedInvokeRespectedPolicy) {
+          throw new Error(
+            `autonomous MCP runtime invocation did not carry matching grant or policy evidence: ${JSON.stringify(
+              allowedInvoke.body,
+            )}`,
+          );
+        }
+        const revoked = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/capabilities/autonomy-grants/${encodeURIComponent(created.body.grantId)}/revoke`,
+          {
+            method: "POST",
+            body: { revokedBy: "verification", reason: "governance lane cleanup" },
+          },
+        );
+        assertOk(revoked, "revoke autonomous activation grant");
+        const denied = await requestJson(stack.gatewayUrl, "/api/v1/capabilities/autonomy-grants/evaluate", {
+          method: "POST",
+          body: {
+            workspaceId: "default",
+            surface: "cowork",
+            riskLevel: "danger",
+            activationKind: "tool",
+            toolName: "mcp.remote.fetch",
+          },
+        });
+        assertOk(denied, "evaluate revoked autonomous activation grant");
+        const deniedAfterRevoke = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
+          method: "POST",
+          body: {
+            serverId: server.body.serverId,
+            toolName: "goatcitadel.approval.remote_action_inbox.list",
+            workspaceId: "default",
+            surface: "mcp",
+            autonomousActivation: true,
+            estimatedCostUsd: 0.05,
+            arguments: { limit: 1 },
+          },
+        });
+        assertOk(deniedAfterRevoke, "autonomous MCP invoke denied after grant revoke");
+        if (deniedAfterRevoke.body?.ok !== false || deniedAfterRevoke.body?.autonomousActivation?.allowed !== false) {
+          throw new Error("autonomous MCP runtime invocation was not denied after grant revocation");
+        }
+        const artifactPath = path.join(context.artifactRoot, "diagnostics", "agentic-governance-autonomy-grants.json");
+        await writeJson(artifactPath, {
+          checkedAt: new Date().toISOString(),
+          server: server.body,
+          deniedBeforeGrant: deniedBeforeGrant.body,
+          created: created.body,
+          allowed: allowed.body,
+          allowedInvoke: allowedInvoke.body,
+          revoked: revoked.body,
+          denied: denied.body,
+          deniedAfterRevoke: deniedAfterRevoke.body,
+        });
+        return {
+          status: denied.body?.allowed || deniedAfterRevoke.body?.ok ? "failed" : "passed",
+          error:
+            denied.body?.allowed || deniedAfterRevoke.body?.ok
+              ? "Revoked grant still allowed autonomous activation."
+              : undefined,
+          metrics: {
+            matchedGrantId: allowed.body?.matchedGrantId,
+            runtimeGrantId: allowedInvoke.body?.autonomousActivation?.matchedGrantId,
+            revokedStatus: revoked.body?.status,
+            deniedBlockers: Array.isArray(denied.body?.blockers) ? denied.body.blockers.length : 0,
+            deniedRuntimeReasonCodes: Array.isArray(deniedAfterRevoke.body?.reasonCodes)
+              ? deniedAfterRevoke.body.reasonCodes.length
+              : 0,
+          },
+          artifacts: emptyArtifacts({
+            diagnostics: [relativeToRun(context, artifactPath)],
+          }),
+        };
+      },
+    );
+  } finally {
+    await stopVerificationStack(stack);
+  }
 }
 
 export async function runAgenticPluginsMarketplaceLane(context) {
@@ -2421,6 +2756,7 @@ export async function runApiCompatibilityLane(context, options = {}) {
           rest: snapshotRestContract(openApi.body),
           sse: await snapshotRealtimeContract(),
         };
+        const currentShellFacts = await snapshotApiCompatibilityCurrentShellFacts(stack.gatewayUrl);
         const baseline = await readJson(API_COMPAT_BASELINE_PATH);
         const allowlist = await readJson(API_COMPAT_ALLOWLIST_PATH).catch(() => ({
           removedRestPaths: [],
@@ -2439,6 +2775,7 @@ export async function runApiCompatibilityLane(context, options = {}) {
           baselinePath: API_COMPAT_BASELINE_PATH,
           allowlistPath: API_COMPAT_ALLOWLIST_PATH,
           current,
+          currentShellFacts,
           issues,
         });
         return {
@@ -2448,9 +2785,220 @@ export async function runApiCompatibilityLane(context, options = {}) {
             restPathCount: Object.keys(current.rest).length,
             sseEventTypeCount: current.sse.eventTypes.length,
             sseEnvelopeFieldCount: current.sse.envelopeFields.length,
+            currentShellFactCount: Object.keys(currentShellFacts.routes).length,
           },
           artifacts: emptyArtifacts({
             diagnostics: [relativeToRun(context, artifactPath)],
+          }),
+        };
+      },
+    );
+  } finally {
+    await stopVerificationStack(stack);
+  }
+}
+
+async function snapshotApiCompatibilityCurrentShellFacts(gatewayUrl) {
+  const fixture = await seedMissionControlNextFixture(gatewayUrl);
+  const routeSpecs = [
+    {
+      key: "approvals",
+      path: "/api/v1/approvals?status=pending&limit=20",
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "events",
+      path: "/api/v1/events?limit=20",
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "runtimeLifecycle",
+      path: `/api/v1/runtime/lifecycle?sessionId=${encodeURIComponent(fixture.sessionId)}`,
+      assertBody: (body) => Boolean(body && typeof body === "object"),
+    },
+    {
+      key: "codeRecoveryRuns",
+      path: `/api/v1/code-mode/runs?limit=5&workspaceId=${encodeURIComponent(fixture.workspaceId)}&sessionId=${encodeURIComponent(fixture.sessionId)}`,
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "coworkRecoveryRuns",
+      path: `/api/v1/agentic/runs?workspaceId=${encodeURIComponent(fixture.workspaceId)}&surface=cowork&limit=5`,
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "codeBackends",
+      path: "/api/v1/code-mode/execution-backends",
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "mcpServers",
+      path: "/api/v1/mcp/servers",
+      assertBody: (body) => Array.isArray(body?.items),
+    },
+    {
+      key: "mcpRemotePreview",
+      path: "/api/v1/mcp/remote-preview",
+      assertBody: (body) =>
+        Boolean(body?.summary) &&
+        typeof body.summary.needsAuth === "number" &&
+        (Array.isArray(body?.items) ? body.items.every((item) => typeof item.authReadiness === "string") : true),
+    },
+    {
+      key: "meshReadiness",
+      path: "/api/v1/mesh/readiness",
+      assertBody: (body) => body?.evidenceLane === "verify:mesh:readiness",
+    },
+    {
+      key: "diagnosticsSnapshot",
+      path: "/api/v1/dev/verification/diagnostics-snapshot",
+      assertBody: (body) => Boolean(body && typeof body === "object"),
+    },
+  ];
+  const routes = {};
+  for (const spec of routeSpecs) {
+    const response = await requestJson(gatewayUrl, spec.path);
+    assertOk(response, `api compatibility current-shell fact ${spec.key}`);
+    if (!spec.assertBody(response.body)) {
+      throw new Error(`api compatibility current-shell fact ${spec.key} returned an unexpected body shape`);
+    }
+    routes[spec.key] = {
+      path: spec.path,
+      status: response.status,
+      shape: describeApiCompatibilityBody(response.body),
+    };
+  }
+  return {
+    fixture: {
+      workspaceId: fixture.workspaceId,
+      sessionId: fixture.sessionId,
+      approvalId: fixture.approvalId,
+    },
+    routes,
+  };
+}
+
+function describeApiCompatibilityBody(body) {
+  if (!body || typeof body !== "object") {
+    return { type: typeof body };
+  }
+  return {
+    keys: Object.keys(body).sort(),
+    itemCount: Array.isArray(body.items) ? body.items.length : undefined,
+    summaryKeys: body.summary && typeof body.summary === "object" ? Object.keys(body.summary).sort() : undefined,
+    evidenceLane: typeof body.evidenceLane === "string" ? body.evidenceLane : undefined,
+  };
+}
+
+export async function runMeshReadinessLane(context, options = {}) {
+  const joinToken = `verify-mesh-${context.runId}`;
+  const stack = await startVerificationStack(context, {
+    includeUi: false,
+    gatewayEnv: {
+      GOATCITADEL_MESH_ENABLED: "true",
+      GOATCITADEL_MESH_JOIN_TOKEN: joinToken,
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+    },
+  });
+  try {
+    await runScenario(
+      context,
+      {
+        id: "mesh.readiness.gateway-route-proof",
+        lane: "mesh-readiness",
+        title: "Mesh readiness route covers join, lease, owner, replication, and diagnostics posture",
+        subsystem: "mesh-core",
+      },
+      async () => {
+        const nodeId = `verify-node-${randomUUID()}`;
+        const leaseKey = `verify-lease-${randomUUID()}`;
+        const sessionId = `verify-session-${randomUUID()}`;
+        const initialReadiness = await requestJson(stack.gatewayUrl, "/api/v1/mesh/readiness");
+        assertOk(initialReadiness, "mesh readiness before route exercise");
+        const join = await requestJson(stack.gatewayUrl, "/api/v1/mesh/join", {
+          method: "POST",
+          body: {
+            token: joinToken,
+            nodeId,
+            label: "Verification mesh node",
+            transport: "lan",
+            capabilities: ["verification"],
+            tlsFingerprint: `sha256:${randomUUID().replaceAll("-", "")}`,
+          },
+        });
+        assertOk(join, "mesh join");
+        const acquired = await requestJson(stack.gatewayUrl, "/api/v1/mesh/leases/acquire", {
+          method: "POST",
+          body: { leaseKey, holderNodeId: nodeId, ttlSeconds: 60 },
+        });
+        assertOk(acquired, "mesh lease acquire");
+        const renewed = await requestJson(stack.gatewayUrl, "/api/v1/mesh/leases/renew", {
+          method: "POST",
+          body: {
+            leaseKey,
+            holderNodeId: nodeId,
+            fencingToken: acquired.body?.fencingToken,
+            ttlSeconds: 60,
+          },
+        });
+        assertOk(renewed, "mesh lease renew");
+        const owner = await requestJson(stack.gatewayUrl, `/api/v1/mesh/sessions/${encodeURIComponent(sessionId)}/claim`, {
+          method: "POST",
+          body: { ownerNodeId: nodeId },
+        });
+        assertOk(owner, "mesh session owner claim");
+        const takeover = await requestJson(stack.gatewayUrl, `/api/v1/mesh/sessions/${encodeURIComponent(sessionId)}/claim`, {
+          method: "POST",
+          body: { ownerNodeId: nodeId, expectedEpoch: owner.body?.epoch, force: true },
+        });
+        assertOk(takeover, "mesh session owner takeover");
+        const replication = await requestJson(stack.gatewayUrl, "/api/v1/mesh/replication/events", {
+          method: "POST",
+          body: {
+            sourceNodeId: nodeId,
+            eventType: "verification.mesh.readiness",
+            payload: { ok: true },
+            idempotencyKey: `verify-${randomUUID()}`,
+          },
+        });
+        assertOk(replication, "mesh replication event");
+        const released = await requestJson(stack.gatewayUrl, "/api/v1/mesh/leases/release", {
+          method: "POST",
+          body: {
+            leaseKey,
+            holderNodeId: nodeId,
+            fencingToken: renewed.body?.fencingToken,
+          },
+        });
+        assertOk(released, "mesh lease release");
+        const finalReadiness = await requestJson(stack.gatewayUrl, "/api/v1/mesh/readiness");
+        assertOk(finalReadiness, "mesh readiness after route exercise");
+        const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", "mesh-readiness.json");
+        await writeJson(diagnosticsPath, {
+          checkedAt: new Date().toISOString(),
+          initialReadiness: initialReadiness.body,
+          finalReadiness: finalReadiness.body,
+          join: join.body,
+          acquired: acquired.body,
+          renewed: renewed.body,
+          owner: owner.body,
+          takeover: takeover.body,
+          replication: replication.body,
+          released: released.body,
+        });
+        return {
+          status: finalReadiness.body?.status === "ready" ? "passed" : "failed",
+          error:
+            finalReadiness.body?.status === "ready"
+              ? undefined
+              : `Mesh readiness status is ${finalReadiness.body?.status}: ${(finalReadiness.body?.blockers ?? []).join("; ")}`,
+          metrics: {
+            readinessStatus: finalReadiness.body?.status,
+            checks: Array.isArray(finalReadiness.body?.checks) ? finalReadiness.body.checks.length : 0,
+            blockers: Array.isArray(finalReadiness.body?.blockers) ? finalReadiness.body.blockers.length : 0,
+          },
+          artifacts: emptyArtifacts({
+            diagnostics: [relativeToRun(context, diagnosticsPath)],
           }),
         };
       },
@@ -3824,6 +4372,16 @@ export async function runUiParityLane(context, options = {}) {
               sessionId: fixture.sessionId,
               needle: "Daemon",
             }),
+            diagnostics: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: "/ops/diagnostics",
+              route: { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: "System vitals",
+            }),
             activity: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
@@ -3844,13 +4402,25 @@ export async function runUiParityLane(context, options = {}) {
               sessionId: fixture.sessionId,
               needle: memoryNeedle,
             }),
+            mcpSettings: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: "/settings/mcp",
+              route: { expectedArea: "settings", expectedSection: "mcp", readyText: "MCP servers" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: "Remote MCP preview",
+            }),
           };
 
           const labelledChecks = [
             ["approvals", parity.approvals],
             ["runtime", parity.runtime],
+            ["diagnostics", parity.diagnostics],
             ["activity", parity.activity],
             ["memory", parity.memory],
+            ["mcp-settings", parity.mcpSettings],
           ];
           for (const [label, nextResult] of labelledChecks) {
             if (!nextResult.ready) {
@@ -3881,8 +4451,10 @@ export async function runUiParityLane(context, options = {}) {
             status: "passed",
             metrics: {
               approvalReady: Number(parity.approvals.needleVisible),
+              diagnosticsReady: Number(parity.diagnostics.needleVisible),
               activityReady: Number(parity.activity.needleVisible),
               memoryReady: Number(parity.memory.needleVisible),
+              mcpSettingsReady: Number(parity.mcpSettings.needleVisible),
             },
             artifacts: {
               diagnostics: [...nextArtifacts.diagnostics, relativeToRun(context, outPath)],

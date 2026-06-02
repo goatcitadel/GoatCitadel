@@ -15,6 +15,7 @@ import {
   runApiCompatibilityLane,
   runBackupRoundtripLane,
   runCatalogParityLane,
+  runCodeModeHostileSandboxLane,
   runCodeModeSandboxRequiredLane,
   runDeepCoreLane,
   runDeepEcosystemLane,
@@ -22,6 +23,7 @@ import {
   runFastLane,
   runSkillsCatalogLane,
   runMemoryTruthLane,
+  runMeshReadinessLane,
   runOperatorProofLane,
   runRealtimeTruthLane,
   runRuntimeTruthLane,
@@ -64,6 +66,8 @@ const VALID_LANES = new Set([
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
+  "code-mode-hostile-sandbox",
+  "mesh-readiness",
   "agentic-contracts",
   "agentic-governance",
   "agentic-harnesses",
@@ -98,6 +102,8 @@ const REVIEW_LANES = new Set([
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
+  "code-mode-hostile-sandbox",
+  "mesh-readiness",
   "agentic-contracts",
   "agentic-governance",
   "agentic-harnesses",
@@ -192,6 +198,10 @@ async function main() {
       await runArchitectureMetricsLane(context);
     } else if (lane === "code-mode-sandbox") {
       await runCodeModeSandboxRequiredLane(context);
+    } else if (lane === "code-mode-hostile-sandbox") {
+      await runCodeModeHostileSandboxLane(context);
+    } else if (lane === "mesh-readiness") {
+      await runMeshReadinessLane(context, { profile });
     } else if (lane === "agentic-contracts") {
       await runAgenticContractsLane(context);
     } else if (lane === "agentic-governance") {
@@ -213,6 +223,8 @@ async function main() {
     } else if (lane === "all") {
       await runFastLane(context);
       await runCodeModeSandboxRequiredLane(context);
+      await runCodeModeHostileSandboxLane(context);
+      await runMeshReadinessLane(context, { profile });
       await runAgenticProofSuite(context);
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });

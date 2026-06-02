@@ -38,7 +38,7 @@ describe("WindowsAppContainerSandboxAdapter", () => {
     );
   });
 
-  it("reports AppContainer unavailable until the launcher can preserve Node IPC", async () => {
+  it("prepares an AppContainer stdio JSON-RPC launcher when Windows prerequisites are available", async () => {
     const root = await createTempRoot();
     const adapter = new WindowsAppContainerSandboxAdapter({
       platform: "win32",
@@ -49,22 +49,35 @@ describe("WindowsAppContainerSandboxAdapter", () => {
     const metadata = adapter.probe(baseConfig());
 
     expect(metadata).toMatchObject({
-      available: false,
+      available: true,
       required: true,
     });
     expect(metadata.checksPassed).toEqual(
-      expect.arrayContaining(["win32_powershell_present", "win32_appcontainer_prerequisites_available"]),
-    );
-    expect(metadata.checksFailed).toEqual(
       expect.arrayContaining([
-        "win32_node_ipc_not_preserved",
-        "network_isolation_not_enforced",
-        "temp_workspace_not_enforced",
-        "privilege_reduction_not_enforced",
-        "windows_job_limits_not_enforced",
+        "win32_powershell_present",
+        "win32_appcontainer_prerequisites_available",
+        "win32_stdio_jsonrpc_transport_intended",
+        "network_isolation_intended",
+        "temp_workspace_acl_intended",
+        "privilege_reduction_intended",
+        "windows_job_limits_intended",
       ]),
     );
-    await expect(adapter.prepareLaunch(launchInput(root))).rejects.toThrow("win32_node_ipc_not_preserved");
+    expect(metadata.checksFailed).toEqual([]);
+
+    await fs.writeFile(path.join(root, "harness.mjs"), "process.exit(0);\n", "utf8");
+    const launch = await adapter.prepareLaunch(launchInput(root));
+    expect(launch).toMatchObject({
+      transport: "stdio_jsonrpc",
+      executable: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      cwd: path.join(root, "run"),
+      advisoryUnsandboxed: false,
+    });
+    expect(launch.env.GOATCITADEL_CODE_MODE_TRANSPORT).toBe("stdio_jsonrpc");
+    const launcherPath = path.join(root, "run", "code-mode-appcontainer-launcher.ps1");
+    await expect(fs.stat(launcherPath)).resolves.toBeTruthy();
+    await expect(fs.readFile(launcherPath, "utf8")).resolves.toEqual(expect.stringContaining("GetStdHandle"));
+    await expect(fs.readFile(launcherPath, "utf8")).resolves.toEqual(expect.stringContaining("STARTF_USESTDHANDLES"));
   });
 
   it("rejects launcher paths with unsafe profile characters before writing launch artifacts", async () => {
@@ -80,7 +93,7 @@ describe("WindowsAppContainerSandboxAdapter", () => {
         ...launchInput(root),
         nodePath: `${process.execPath}\nunsafe`,
       }),
-    ).rejects.toThrow("win32_node_ipc_not_preserved");
+    ).rejects.toThrow("Code Mode sandbox path contains unsafe profile characters.");
     await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 

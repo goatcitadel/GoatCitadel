@@ -49,6 +49,22 @@ const mocks = vi.hoisted(() => ({
     controllable: true,
     controlMessage: "Source checkout controls the gateway.",
   })),
+  fetchMeshReadiness: vi.fn(async () => ({
+    generatedAt: "2026-05-30T18:00:00.000Z",
+    status: "ready" as const,
+    statusSnapshot: {
+      enabled: true,
+      mode: "lan" as const,
+      localNodeId: "local-node",
+      nodesOnline: 1,
+      leasesActive: 0,
+      replicationLagSeconds: 0,
+      lastHeartbeatAt: "2026-05-30T18:00:00.000Z",
+    },
+    checks: [],
+    blockers: [],
+    evidenceLane: "verify:mesh:readiness" as const,
+  })),
   fetchToolCatalog: vi.fn(async () => ({
     items: [
       {
@@ -194,6 +210,7 @@ const mocks = vi.hoisted(() => ({
   fetchActiveLocalOperatorOverrides: vi.fn(
     async (): Promise<{ items: LocalOperatorOverrideRecord[] }> => ({ items: [] }),
   ),
+  fetchAutonomousActivationGrants: vi.fn(async () => ({ items: [] })),
   fetchEffectivePermissionProfile: vi.fn(async () => ({
     permissionProfileId: "safe",
     permissionProfileLabel: "Safe",
@@ -243,6 +260,12 @@ const mocks = vi.hoisted(() => ({
     status: "revoked",
     revokedAt: "2026-05-02T18:05:00.000Z",
     revokedBy: "operator",
+  })),
+  revokeAutonomousActivationGrant: vi.fn(async (grantId: string, input) => ({
+    grantId,
+    status: "revoked",
+    revokedAt: "2026-05-02T18:05:00.000Z",
+    ...input,
   })),
   revokeDeviceAccessGrant: vi.fn(async (grantId: string) => ({
     grant: {
@@ -601,10 +624,10 @@ const mocks = vi.hoisted(() => ({
     summary: {
       remoteServers: 1,
       remoteTemplates: 1,
-      runtimeSupported: 0,
-      blocked: 1,
-      configuredOnly: 1,
-      notCallable: 1,
+      runtimeSupported: 1,
+      blocked: 0,
+      configuredOnly: 0,
+      notCallable: 0,
       experimentalRecords: 0,
       quarantined: 0,
       needsAuth: 0,
@@ -618,22 +641,26 @@ const mocks = vi.hoisted(() => ({
         url: "https://mcp.example.test",
         authType: "none",
         trustTier: "restricted",
-        status: "disconnected",
-        enabled: false,
-        posture: "configured_only",
-        callableState: "not_callable",
-        invocationState: "configured_not_callable",
+        status: "connected",
+        enabled: true,
+        posture: "runtime_supported",
+        callableState: "runtime_invokable",
+        invocationState: "runtime_invokable",
         runtimePath: "generic_remote_http_sse",
-        createAllowed: false,
-        transportRuntimeSupported: false,
-        runtimeSupported: false,
+        createAllowed: true,
+        transportRuntimeSupported: true,
+        runtimeSupported: true,
         operatorNextAction:
-          "Keep configured for review, or replace it with local stdio or the built-in Approval Inbox path.",
-        blockers: ["Generic remote http/sse MCP runtime invocation is not supported in this shell."],
+          "Connect and invoke through the governed MCP runtime path; Gateway policy, approvals, network allowlists, and audit still apply.",
+        blockers: [],
         governance: ["Deny-wins tool policy and MCP approval gates still apply before invocation."],
         evidence: {},
       },
     ],
+  })),
+  startMcpOAuth: vi.fn(async () => ({
+    authorizeUrl: "https://auth.example.test/oauth",
+    state: "state-1",
   })),
   fetchMcpServerModeManifest: vi.fn(async () => ({
     generatedAt: "2026-05-30T00:00:00.000Z",
@@ -800,8 +827,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     revokeToolGrant: mocks.revokeToolGrant,
     fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
     fetchDaemonStatus: mocks.fetchDaemonStatus,
+    fetchMeshReadiness: mocks.fetchMeshReadiness,
     fetchPermissionProfiles: mocks.fetchPermissionProfiles,
     fetchActiveLocalOperatorOverrides: mocks.fetchActiveLocalOperatorOverrides,
+    fetchAutonomousActivationGrants: mocks.fetchAutonomousActivationGrants,
     fetchEffectivePermissionProfile: mocks.fetchEffectivePermissionProfile,
     createLocalOperatorOverride: mocks.createLocalOperatorOverride,
     createPermissionProfile: mocks.createPermissionProfile,
@@ -809,6 +838,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     activatePermissionProfile: mocks.activatePermissionProfile,
     archivePermissionProfile: mocks.archivePermissionProfile,
     revokeLocalOperatorOverride: mocks.revokeLocalOperatorOverride,
+    revokeAutonomousActivationGrant: mocks.revokeAutonomousActivationGrant,
     revokeDeviceAccessGrant: mocks.revokeDeviceAccessGrant,
     resolveGatewayInstallToken: mocks.resolveGatewayInstallToken,
     bootstrapOnboarding: mocks.bootstrapOnboarding,
@@ -845,6 +875,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     disconnectMcpServer: mocks.disconnectMcpServer,
     runMcpServerHealthCheck: mocks.runMcpServerHealthCheck,
     deleteMcpServer: mocks.deleteMcpServer,
+    startMcpOAuth: mocks.startMcpOAuth,
     startOpenAICodexOAuthDeviceFlow: mocks.startOpenAICodexOAuthDeviceFlow,
     pollOpenAICodexOAuthDeviceFlow: mocks.pollOpenAICodexOAuthDeviceFlow,
     deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
@@ -4277,7 +4308,7 @@ describe("SettingsNativePage integrations", () => {
 });
 
 describe("SettingsNativePage MCP", () => {
-  it("keeps generic MCP creation on stdio and disables runtime actions for unsupported URL servers", async () => {
+  it("surfaces governed remote MCP runtime support without exposing transport creation controls", async () => {
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -4289,18 +4320,18 @@ describe("SettingsNativePage MCP", () => {
     expect(optionValues).not.toContain("sse");
 
     const text = collectText(renderer!.root);
-    expect(text).toContain("Configured only; runtime actions are disabled.");
-    expect(text).toContain("Generic remote http/sse MCP runtime invocation is not supported");
+    expect(text).toContain("Server can be used by the operator.");
+    expect(text).toContain("governed remote http/sse servers");
     expect(text).toContain("Remote MCP preview");
-    expect(text).toContain("Generic remote http/sse MCP remains not callable here.");
+    expect(text).toContain("Remote http/sse MCP can invoke through the governed Gateway bridge");
     expect(text).toContain("Remote HTTP");
-    expect(text).toContain("configured not callable");
-    expect(text).toContain("Preview only");
-    expect(text).toContain("Keep configured for review");
+    expect(text).toContain("runtime invokable");
+    expect(text).toContain("Runtime path");
+    expect(text).toContain("Connect and invoke through the governed MCP runtime path");
     expect(text).toContain("Server mode preview");
     expect(text).toContain("Read-only, closed-world descriptors can re-enter Gateway policy");
     expect(text).toContain("goatcitadel.fs.read");
-    expect(findButton(renderer!.root, "Connect").props.disabled).toBe(true);
-    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Connect").props.disabled).toBe(false);
+    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(false);
   });
 });

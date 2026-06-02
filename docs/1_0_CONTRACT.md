@@ -63,10 +63,10 @@ The repo may make these claims at `1.0`:
 
 The repo must not claim these at `1.0` unless separately proven and documented:
 
-- hostile-code sandboxing
+- public hostile-code sandboxing for Code Mode unless `hostileSandboxClaim.publicClaimAllowed` is true and `verify:code-mode:hostile-sandbox` has green native Windows, macOS, and Linux proof
 - Docker or Aider Code Mode execution parity beyond the documented configured-Docker path and audit-only Aider adapter
-- silent or autonomous high-risk tool activation
-- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it only has targeted service coverage rather than full release evidence
+- silent or ungoverned autonomous high-risk tool activation
+- `packages/mesh-core` readiness unless `verify:mesh:readiness` is green for join-token lifecycle, mTLS/tailnet posture, lease lifecycle, owner failover, replication offsets, Settings visibility, and Gateway diagnostics
 - `apps/npu-sidecar` as a maturity signal for local inference completeness while it remains optional experimental infrastructure
 - `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` or `no_agent` cron execution as a `1.0` guarantee; that path is experimental, local-only, disabled by default, and outside the 1.0 merge promise unless separately proven and promoted here
 
@@ -100,11 +100,11 @@ That means:
 - no visible provider may skip runtime connectivity, model discovery, readable auth/proxy/TLS errors, or usage reporting expectations without being called out here
 - no visible built-in channel may remain `planned` or parity-incomplete
 - no visible `beta` or `native` non-channel integration may advertise read/write/search/capture capabilities without matching operator actions in the shipped runtime
-- no visible MCP transport may remain unsupported for runtime invocation
+- no visible MCP transport may remain unsupported for runtime invocation or omit auth readiness when OAuth is required
 - the public extension author story must stay aligned to the published `@goatcitadel/extensions-sdk` package contract, the reference scaffolds, and the tested starter-pack export path
 - Settings Add-ons remains an experimental local/operator-reviewed surface in `1.0`, not a public marketplace claim. Capability packs may be previewed, staged as durable review evidence, listed, and exported as read-only manifests; graduation still requires real asset activation, per-add-on permission grants, durable operator logs, rollback/version proof, runtime health, and explicit local-vs-marketplace boundaries.
 - Desktop/mobile continuity claims must remain anchored in gateway auth, signed device grants, desktop daemon/runtime state, and gateway-owned sessions/projects/artifacts/approvals. The product may show mobile companion readiness, but it must not imply an ungoverned mobile control plane.
-- MCP server-mode may be described as a limited `goatcitadel mcp-server` stdio proxy plus operator-authenticated Gateway routes for read-only, closed-world callable descriptors. It is not proof that GoatCitadel exposes a standalone Gateway-free MCP server or generic remote MCP transport invocation.
+- MCP server-mode may be described as a limited `goatcitadel mcp-server` stdio proxy plus operator-authenticated Gateway routes for read-only, closed-world callable descriptors. Remote HTTP/SSE MCP invocation is a separate governed Gateway bridge for no-auth servers, token-auth servers with explicit env-key policy, or OAuth2 servers with configured OAuth metadata and ready OS-secret token refs in `mcp_auth_state_v1`. Missing, expired, or unrefreshable OAuth tokens must be reported as `needs_auth`, and none of these paths prove a standalone Gateway-free MCP server.
 
 ## Release Gates
 
@@ -120,6 +120,8 @@ GoatCitadel may not claim `1.0` until all of these are true:
 - `verify:runtime:truth` is green as a bespoke end-to-end proof lane for the canonical wait/resume/restart/recovery operator story in the current shell
 - `verify:auth:matrix` is green as a bespoke end-to-end proof lane for the privileged control-plane route set
 - `verify:code-mode:sandbox` is green and proves Code Mode sandbox metadata and fail-closed posture remain truthful; wrapper/artifact integrity stays covered by the focused Code Mode service and storage tests cited in release evidence
+- `verify:code-mode:hostile-sandbox` is green as a hostile-sandbox promotion gate that runs current-platform native canary proof when available and keeps public hostile-code claims disallowed until every Linux, macOS, and Windows proof is present and passing
+- `verify:mesh:readiness` is green as the mesh release evidence lane for join-token lifecycle, mTLS/tailnet posture, lease acquire/renew/takeover/fencing, session-owner failover, replication event/offset behavior, Settings updates, and Gateway route/diagnostic visibility
 - `verify:agentic:governance` is green as targeted contract and behavior proof for policy/profile/override governance anchors across Chat, Cowork, Code, tools, approvals, and durable ownership
 - `verify:agentic:proof` is green as aggregate targeted contract and behavior proof for retained agentic evidence, orchestration lineage anchors, and the governance/harness proof families; it is not a live end-to-end product proof
 - `verify:ui:parity` is green as current-shell seeded-fact proof against Mission Control Next surfaces; legacy comparison is retired with the archived `apps/mission-control` source

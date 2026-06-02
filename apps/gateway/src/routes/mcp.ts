@@ -17,6 +17,7 @@ import {
   isAllowedMcpDefinitionForCreate,
   isRuntimeSupportedMcpDefinition,
 } from "../services/mcp-template-visibility.js";
+import { MCP_APPROVAL_INBOX_URL } from "../services/mcp-approval-inbox.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -39,7 +40,17 @@ const policySchema = z.object({
   redactionMode: z.enum(["off", "basic", "strict"]).optional(),
   allowedToolPatterns: z.array(z.string()).optional(),
   blockedToolPatterns: z.array(z.string()).optional(),
+  allowedEnvKeys: z.array(z.string()).optional(),
   notes: z.string().optional(),
+});
+const oauthSchema = z.object({
+  authorizationUrl: z.string().url().optional(),
+  tokenUrl: z.string().url().optional(),
+  clientIdEnv: z.string().trim().min(1).optional(),
+  clientSecretEnv: z.string().trim().min(1).optional(),
+  scopes: z.array(z.string().trim().min(1)).optional(),
+  redirectUri: z.string().url().optional(),
+  tokenRefreshSkewSeconds: z.number().int().nonnegative().optional(),
 });
 
 const createServerSchema = z.object({
@@ -49,6 +60,7 @@ const createServerSchema = z.object({
   args: z.array(z.string()).optional(),
   url: z.string().url().optional(),
   authType: z.enum(["none", "token", "oauth2"]).optional(),
+  oauth: oauthSchema.optional(),
   enabled: z.boolean().optional(),
   category: categorySchema.optional(),
   trustTier: trustTierSchema.optional(),
@@ -63,6 +75,7 @@ const updateServerSchema = z.object({
   args: z.array(z.string()).optional(),
   url: z.string().url().optional(),
   authType: z.enum(["none", "token", "oauth2"]).optional(),
+  oauth: oauthSchema.optional(),
   enabled: z.boolean().optional(),
   category: categorySchema.optional(),
   trustTier: trustTierSchema.optional(),
@@ -88,6 +101,8 @@ const invokeSchema = z.object({
   permissionProfileId: z.string().optional(),
   localOperatorOverrideId: z.string().optional(),
   surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),
+  autonomousActivation: z.boolean().optional(),
+  estimatedCostUsd: z.number().nonnegative().optional(),
 });
 
 const serverModeCallSchema = z.object({
@@ -447,6 +462,7 @@ export function buildMcpRemotePreview(input: {
         verifiedAt: server.verifiedAt,
         lastConnectedAt: server.lastConnectedAt,
         lastError: server.lastError,
+        authState: server.authState,
       },
     };
   });
@@ -465,12 +481,19 @@ export function buildMcpRemotePreview(input: {
   const items = [...serverItems, ...templateItems].sort((left, right) =>
     `${left.source}:${left.label}`.localeCompare(`${right.source}:${right.label}`),
   );
+  const remoteBridgeSupported = items.some(
+    (item) => item.runtimeSupported && item.runtimePath === "generic_remote_http_sse",
+  );
   return {
     generatedAt: new Date().toISOString(),
     readOnly: true,
     mutationSemantics: "none",
     experimentalRemoteRecordsAllowed,
-    runtimeSupport: experimentalRemoteRecordsAllowed ? "experimental_records_only" : "internal_approval_inbox_only",
+    runtimeSupport: remoteBridgeSupported
+      ? "remote_http_sse_bridge"
+      : experimentalRemoteRecordsAllowed
+        ? "experimental_records_only"
+        : "internal_approval_inbox_only",
     summary: {
       remoteServers: serverItems.length,
       remoteTemplates: templateItems.length,
@@ -480,7 +503,7 @@ export function buildMcpRemotePreview(input: {
       notCallable: items.filter((item) => item.callableState === "not_callable").length,
       experimentalRecords: items.filter((item) => item.invocationState === "experimental_record_only").length,
       quarantined: items.filter((item) => item.invocationState === "quarantined").length,
-      needsAuth: items.filter((item) => item.authType !== "none").length,
+      needsAuth: items.filter((item) => item.authReadiness !== "not_required" && item.authReadiness !== "ready").length,
     },
     items,
   };
@@ -495,6 +518,10 @@ function buildRemotePreviewBase(
   const createAllowed = isAllowedMcpDefinitionForCreate(item);
   const quarantined = item.trustTier === "quarantined";
   const runtimeSupported = transportRuntimeSupported && !quarantined;
+  const authReadiness = resolveRemoteMcpAuthReadiness(item);
+  const authBlocksRuntime = authReadiness !== "not_required" && authReadiness !== "ready";
+  const runtimePath =
+    item.url?.trim().toLowerCase() === MCP_APPROVAL_INBOX_URL ? "internal_approval_inbox" : "generic_remote_http_sse";
   const posture = transportRuntimeSupported
     ? runtimeSupported
       ? "runtime_supported"
@@ -508,10 +535,11 @@ function buildRemotePreviewBase(
     transportRuntimeSupported,
     createAllowed,
     quarantined,
+    authReadiness,
     source,
   });
   const invocationState = buildMcpRemotePreviewInvocationState({
-    runtimeSupported,
+    runtimeSupported: runtimeSupported && !authBlocksRuntime,
     transportRuntimeSupported,
     experimentalRemoteRecordsAllowed,
     source,
@@ -519,9 +547,11 @@ function buildRemotePreviewBase(
   });
   const governance = [
     "Deny-wins tool policy and MCP approval gates still apply before invocation.",
-    item.authType === "none"
+    authReadiness === "not_required"
       ? "No remote auth configured."
-      : `${item.authType} credentials are required before connect.`,
+      : authReadiness === "ready"
+        ? "OAuth/token credentials are resolved through Gateway-owned secret handling."
+        : `${item.authType} credentials are required before connect.`,
     item.trustTier === "quarantined" ? "Quarantined servers remain non-callable." : `Trust tier is ${item.trustTier}.`,
   ];
   return {
@@ -529,19 +559,21 @@ function buildRemotePreviewBase(
     transport: item.transport as Extract<McpServerRecord["transport"], "http" | "sse">,
     url: item.url,
     authType: item.authType,
+    authReadiness,
     trustTier: item.trustTier,
     posture,
-    callableState: runtimeSupported ? "runtime_invokable" : "not_callable",
+    callableState: runtimeSupported && !authBlocksRuntime ? "runtime_invokable" : "not_callable",
     invocationState,
-    runtimePath: transportRuntimeSupported ? "internal_approval_inbox" : "generic_remote_http_sse",
+    runtimePath,
     createAllowed,
     transportRuntimeSupported,
-    runtimeSupported,
+    runtimeSupported: runtimeSupported && !authBlocksRuntime,
     operatorNextAction: buildMcpRemotePreviewNextAction({
       invocationState,
       source,
       transportRuntimeSupported,
       createAllowed,
+      authReadiness,
     }),
     blockers,
     governance,
@@ -552,6 +584,7 @@ function buildMcpRemotePreviewBlockers(input: {
   transportRuntimeSupported: boolean;
   createAllowed: boolean;
   quarantined: boolean;
+  authReadiness: McpRemotePreviewItem["authReadiness"];
   source: "server" | "template";
 }): string[] {
   const blockers: string[] = [];
@@ -559,7 +592,13 @@ function buildMcpRemotePreviewBlockers(input: {
     blockers.push("MCP trust tier is quarantined; deny-wins trust posture keeps this record non-callable.");
   }
   if (!input.transportRuntimeSupported) {
-    blockers.push("Generic remote http/sse MCP runtime invocation is not supported in this shell.");
+    blockers.push("This remote MCP auth/transport combination is not runtime-invokable in this shell.");
+  }
+  if (input.authReadiness === "needs_auth" || input.authReadiness === "expired") {
+    blockers.push("MCP OAuth credentials must be connected or refreshed before runtime invocation.");
+  }
+  if (input.authReadiness === "missing_oauth_config") {
+    blockers.push("MCP OAuth metadata must include authorizationUrl and tokenUrl before runtime invocation.");
   }
   if (input.source === "template" && !input.createAllowed) {
     blockers.push("Creating generic remote MCP records is disabled unless experimental remote records are enabled.");
@@ -591,9 +630,18 @@ function buildMcpRemotePreviewNextAction(input: {
   source: "server" | "template";
   transportRuntimeSupported: boolean;
   createAllowed: boolean;
+  authReadiness: McpRemotePreviewItem["authReadiness"];
 }): string {
+  if (input.authReadiness === "needs_auth" || input.authReadiness === "expired") {
+    return "Connect or reconnect OAuth in Settings before invoking this remote MCP server.";
+  }
+  if (input.authReadiness === "missing_oauth_config") {
+    return "Add OAuth authorizationUrl and tokenUrl metadata before treating this remote MCP server as invokable.";
+  }
   if (input.invocationState === "runtime_invokable") {
-    return "Use the built-in Approval Inbox path; Gateway policy, approvals, and audit still apply.";
+    return input.transportRuntimeSupported
+      ? "Connect and invoke through the governed MCP runtime path; Gateway policy, approvals, network allowlists, and audit still apply."
+      : "Use the built-in Approval Inbox path; Gateway policy, approvals, and audit still apply.";
   }
   if (input.invocationState === "quarantined") {
     return "Review trust posture before treating this MCP record as callable.";
@@ -608,6 +656,21 @@ function buildMcpRemotePreviewNextAction(input: {
     return "Use local stdio or Approval Inbox templates for runtime work; this remote template is not installable by default.";
   }
   return "Creating the record is allowed only as experimental metadata, not runtime invocation.";
+}
+
+function resolveRemoteMcpAuthReadiness(
+  item: McpServerRecord | McpServerTemplateRecord,
+): McpRemotePreviewItem["authReadiness"] {
+  if (item.authType === "none" || item.authType === "token") {
+    return "not_required";
+  }
+  if (!item.oauth?.authorizationUrl?.trim() || !item.oauth.tokenUrl?.trim()) {
+    return "missing_oauth_config";
+  }
+  if ("authState" in item && item.authState?.readiness) {
+    return item.authState.readiness;
+  }
+  return "needs_auth";
 }
 
 function isRemoteMcpDefinition(

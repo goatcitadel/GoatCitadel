@@ -9,6 +9,9 @@ import * as ts from "typescript";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
+  AutonomousActivationGrantCreateInput,
+  AutonomousActivationGrantEvaluationInput,
+  AutonomousActivationGrantRevokeInput,
   CandidateLifecycleActionResult,
   CandidateSkillDetailRecord,
   CandidateSkillVersionRecord,
@@ -20,6 +23,7 @@ import type {
   CapabilityProposalKind,
   CapabilityProposalRecord,
   ChatTurnTraceRecord,
+  CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
   CodeModeSandboxMetadata,
   CodeModeRunArtifactKind,
@@ -58,13 +62,30 @@ import {
   buildCodeModeRunExecutionBackendRef,
 } from "./code-mode-execution-backends.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
+import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
-const CODE_MODE_ENV_PASSTHROUGH_KEYS = ["SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR", "TEMP", "TMP"];
+const CODE_MODE_ENV_PASSTHROUGH_KEYS = [
+  "SystemRoot",
+  "SYSTEMROOT",
+  "ComSpec",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ALLUSERSPROFILE",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "CommonProgramFiles",
+  "CommonProgramFiles(x86)",
+];
 const DEFAULT_WORKSPACE_ID = "default";
 
 type LateCodeModeApprovalCleanupResult = {
@@ -154,6 +175,7 @@ export class CapabilitySystemService {
   private readonly resolveSandboxMetadata: (
     config: CapabilityRuntimeConfig["codeModeSandbox"],
   ) => CodeModeSandboxMetadata;
+  private readonly autonomousActivationGrants: AutonomousActivationGrantService;
 
   public constructor(private readonly options: CapabilitySystemServiceOptions) {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
@@ -162,6 +184,10 @@ export class CapabilitySystemService {
     this.harnessPath = path.join(this.tempRoot, "code-mode-harness.mjs");
     this.resolveSandboxMetadata =
       options.resolveSandboxMetadata ?? ((config) => resolveCodeModeSandboxMetadata(config));
+    this.autonomousActivationGrants = new AutonomousActivationGrantService(
+      options.storage.systemSettings,
+      (eventType, source, payload) => options.publishRealtime(eventType, source, payload),
+    );
   }
 
   private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
@@ -215,6 +241,26 @@ export class CapabilitySystemService {
       dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
       aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
     });
+  }
+
+  public listAutonomousActivationGrants(includeExpired = false) {
+    return this.autonomousActivationGrants.listGrants({ includeExpired });
+  }
+
+  public createAutonomousActivationGrant(input: AutonomousActivationGrantCreateInput) {
+    return this.autonomousActivationGrants.createGrant(input);
+  }
+
+  public revokeAutonomousActivationGrant(grantId: string, input: AutonomousActivationGrantRevokeInput) {
+    return this.autonomousActivationGrants.revokeGrant(grantId, input);
+  }
+
+  public evaluateAutonomousActivationGrant(input: AutonomousActivationGrantEvaluationInput) {
+    return this.autonomousActivationGrants.evaluateGrant(input);
+  }
+
+  public recordAutonomousActivationGrantUse(grantId: string, estimatedCostUsd?: number) {
+    return this.autonomousActivationGrants.recordGrantUse(grantId, estimatedCostUsd);
   }
 
   public freezeCatalogSnapshot(): CapabilityCatalogSnapshotRecord {
@@ -725,11 +771,19 @@ export class CapabilitySystemService {
         message: `Local Operator Override ${request.localOperatorOverrideId} is not active for this Code Mode run.`,
       });
     }
+    const autonomousActivation = request.autonomousActivation
+      ? this.prepareCodeModeAutonomousActivation({
+          workspaceId,
+          surface: originSurface ?? "code",
+          estimatedCostUsd: request.estimatedCostUsd,
+        })
+      : undefined;
     const policySnapshot = {
       ...this.options.readPolicySnapshot(),
       codeModePermissionContext: serializePolicyContext(policyContext),
       codeModeInput: runInput,
       codeModeInputHash: runInputHash,
+      codeModeAutonomousActivation: autonomousActivation,
     };
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
 
@@ -773,6 +827,7 @@ export class CapabilitySystemService {
       permissionProfileLabel: policyContext?.permissionProfile?.label,
       localOperatorOverrideId: policyContext?.localOperatorOverrideId,
       executionBackend,
+      autonomousActivation,
     });
     const approvalLinkage = buildCodeModeApprovalLinkage({
       workspaceId,
@@ -815,6 +870,7 @@ export class CapabilitySystemService {
         turnId,
         sandbox,
         executionBackend,
+        autonomousActivation,
         codeArtifact,
         wrapperManifestArtifact,
         policySnapshotArtifact,
@@ -842,6 +898,7 @@ export class CapabilitySystemService {
         sandbox,
         permissionProfileId: record.permissionProfileId,
         localOperatorOverrideId: record.localOperatorOverrideId,
+        autonomousActivation: record.autonomousActivation,
         errorCode: record.errorCode,
         error: record.error,
         errorDetails: record.errorDetails,
@@ -889,6 +946,7 @@ export class CapabilitySystemService {
       turnId,
       sandbox,
       executionBackend,
+      autonomousActivation,
       codeArtifact,
       wrapperManifestArtifact,
       policySnapshotArtifact,
@@ -911,6 +969,7 @@ export class CapabilitySystemService {
           workspaceId,
           operatorId: request.operatorId,
           policyContext: serializePolicyContext(policyContext),
+          autonomousActivation,
         },
         createdAt,
         expiresAt: approval.expiresAt,
@@ -925,6 +984,7 @@ export class CapabilitySystemService {
           originSurface,
           permissionProfileId: stored.permissionProfileId,
           localOperatorOverrideId: stored.localOperatorOverrideId,
+          autonomousActivation: stored.autonomousActivation,
         },
       });
 
@@ -997,8 +1057,40 @@ export class CapabilitySystemService {
       executionBackend,
       permissionProfileId: stored.permissionProfileId,
       localOperatorOverrideId: stored.localOperatorOverrideId,
+      autonomousActivation: stored.autonomousActivation,
     });
     return this.hydrateCodeModeRunForRead(stored);
+  }
+
+  private prepareCodeModeAutonomousActivation(input: {
+    workspaceId?: string;
+    surface: CodeModeOriginSurface;
+    estimatedCostUsd?: number;
+  }): CodeModeAutonomousActivationEvidence {
+    const result = this.autonomousActivationGrants.evaluateGrant({
+      workspaceId: input.workspaceId,
+      surface: input.surface,
+      riskLevel: "danger",
+      activationKind: "code_mode",
+      capabilityId: "code-mode",
+      toolName: "code.mode.run",
+      estimatedCostUsd: input.estimatedCostUsd,
+    });
+    const evidence: CodeModeAutonomousActivationEvidence = {
+      requested: true,
+      allowed: result.allowed,
+      matchedGrantId: result.matchedGrantId,
+      riskLevel: "danger",
+      governance: result.governance,
+      blockers: result.blockers,
+    };
+    if (!result.allowed || !result.matchedGrantId) {
+      throw new ValidationError({
+        message: `Autonomous Code Mode activation requires an active matching operator grant. ${result.blockers.join(" ")}`,
+      });
+    }
+    this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
+    return evidence;
   }
 
   public async executeApprovedCodeModeRun(
@@ -3488,6 +3580,7 @@ function buildCodeModeApprovalPayload(input: {
   originSurface?: CodeModeOriginSurface;
   sandbox: CodeModeSandboxMetadata;
   executionBackend: CodeModeRunExecutionBackendRef;
+  autonomousActivation?: CodeModeAutonomousActivationEvidence;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
   localOperatorOverrideId?: string;
@@ -3512,6 +3605,7 @@ function buildCodeModeApprovalPayload(input: {
     saveCandidateOnSuccess: input.saveCandidateOnSuccess,
     sandbox: input.sandbox,
     executionBackend: input.executionBackend,
+    autonomousActivation: input.autonomousActivation,
     permissionProfileId: input.permissionProfileId,
     permissionProfileLabel: input.permissionProfileLabel,
     localOperatorOverrideId: input.localOperatorOverrideId,

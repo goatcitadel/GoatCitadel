@@ -87,7 +87,6 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     "(version 1)",
     "(deny default)",
     "(deny network*)",
-    "(allow process*)",
     "(allow signal)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",

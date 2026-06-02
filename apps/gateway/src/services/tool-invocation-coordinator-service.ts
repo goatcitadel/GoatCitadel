@@ -1,6 +1,11 @@
+/* eslint-disable max-lines -- Tool invocation coordination keeps policy, MCP, audit, and grant evidence in one reviewable runtime seam. */
 import { randomUUID } from "node:crypto";
 import type {
   ApprovalRequest,
+  AutonomousActivationGrantEvaluationInput,
+  AutonomousActivationGrantEvaluationResult,
+  AutonomousActivationRiskLevel,
+  AutonomousActivationRuntimeEvidence,
   McpInvokeRequest,
   McpInvokeResponse,
   McpNormalizedContentItem,
@@ -187,6 +192,10 @@ export interface ToolInvocationCoordinatorHost {
     request: ToolInvokeRequest;
     result: ToolInvokeResult;
   }): void;
+  evaluateAutonomousActivationGrant?(
+    input: AutonomousActivationGrantEvaluationInput,
+  ): AutonomousActivationGrantEvaluationResult;
+  recordAutonomousActivationGrantUse?(grantId: string, estimatedCostUsd?: number): void;
   publishRealtime(
     eventType: string,
     source: string,
@@ -284,13 +293,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     };
   }
 
-  private buildMcpPolicyFailure(evaluation: McpPolicyEvaluation): {
+  private buildMcpPolicyFailure(
+    evaluation: McpPolicyEvaluation,
+    autonomousActivation?: AutonomousActivationRuntimeEvidence,
+  ): {
     ok: false;
     error: string;
     approvalRequired?: boolean;
     approvalId?: string;
     policyReason?: string;
     reasonCodes?: string[];
+    autonomousActivation?: AutonomousActivationRuntimeEvidence;
   } | null {
     if (evaluation.decision.outcome === "approval_required") {
       return {
@@ -300,6 +313,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         approvalId: evaluation.decision.approvalId,
         policyReason: evaluation.decision.policyReason,
         reasonCodes: evaluation.access.reasonCodes,
+        autonomousActivation,
       };
     }
     if (evaluation.decision.outcome === "blocked") {
@@ -308,6 +322,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: evaluation.decision.policyReason,
         policyReason: evaluation.decision.policyReason,
         reasonCodes: evaluation.access.reasonCodes,
+        autonomousActivation,
       };
     }
     return null;
@@ -733,19 +748,90 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return server;
     }
 
+    const autonomyGate = this.evaluateMcpAutonomousActivation(input, server);
+    if ("ok" in autonomyGate) {
+      return autonomyGate;
+    }
+
     const previewEvaluation = await this.evaluateMcpPolicy(input);
-    const previewFailure = this.buildMcpPolicyFailure(previewEvaluation);
+    const previewFailure = this.buildMcpPolicyFailure(previewEvaluation, autonomyGate.evidence);
     if (previewFailure) {
       return previewFailure;
     }
 
     const runtimeEvaluation = await this.evaluateMcpPolicy(input, { externalRuntime: true });
-    const runtimeFailure = this.buildMcpPolicyFailure(runtimeEvaluation);
+    const runtimeFailure = this.buildMcpPolicyFailure(runtimeEvaluation, autonomyGate.evidence);
     if (runtimeFailure) {
       return runtimeFailure;
     }
 
-    return this.executeMcpRuntime(input, server, runtimeStartedAt);
+    const grantUseFailure = this.recordMcpAutonomousGrantUse(input, autonomyGate.evidence);
+    if (grantUseFailure) {
+      return grantUseFailure;
+    }
+
+    return this.executeMcpRuntime(input, server, runtimeStartedAt, autonomyGate.evidence);
+  }
+
+  private evaluateMcpAutonomousActivation(
+    input: McpInvokeRequest,
+    server: McpServerRecord,
+  ): { evidence?: AutonomousActivationRuntimeEvidence } | McpInvokeResponse {
+    if (input.autonomousActivation !== true) {
+      return {};
+    }
+    if (!this.host.evaluateAutonomousActivationGrant || !this.host.recordAutonomousActivationGrantUse) {
+      return buildMcpAutonomousActivationFailure({
+        allowed: false,
+        blockers: ["Gateway runtime has no autonomous activation grant service wired for MCP execution."],
+        governance: [
+          "Agentic activation is disabled unless an active expiring operator grant matches the request.",
+          "Missing grant enforcement wiring is treated as fail-closed.",
+        ],
+      });
+    }
+    const grantInput = buildMcpAutonomousActivationGrantInput(input, server);
+    const result = this.host.evaluateAutonomousActivationGrant(grantInput);
+    const evidence: AutonomousActivationRuntimeEvidence = {
+      requested: true,
+      allowed: result.allowed,
+      matchedGrantId: result.matchedGrantId,
+      riskLevel: grantInput.riskLevel,
+      governance: result.governance,
+      blockers: result.blockers,
+    };
+    if (!result.allowed) {
+      return buildMcpAutonomousActivationFailure(evidence);
+    }
+    return { evidence };
+  }
+
+  private recordMcpAutonomousGrantUse(
+    input: McpInvokeRequest,
+    evidence: AutonomousActivationRuntimeEvidence | undefined,
+  ): McpInvokeResponse | null {
+    if (!evidence?.matchedGrantId) {
+      return null;
+    }
+    try {
+      this.host.recordAutonomousActivationGrantUse?.(evidence.matchedGrantId, input.estimatedCostUsd ?? 0);
+      return null;
+    } catch (error) {
+      return {
+        ok: false,
+        autonomousActivation: {
+          ...evidence,
+          allowed: false,
+          blockers: [
+            ...evidence.blockers,
+            "Autonomous activation grant use could not be recorded before runtime execution.",
+          ],
+        },
+        error: "Autonomous MCP activation could not record grant use; refusing runtime execution.",
+        policyReason: error instanceof Error ? error.message : String(error),
+        reasonCodes: ["autonomous_activation_grant_record_failed"],
+      };
+    }
   }
 
   private resolveMcpRuntimeTarget(input: McpInvokeRequest): McpServerRecord | McpInvokeResponse {
@@ -800,6 +886,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     input: McpInvokeRequest,
     server: McpServerRecord,
     runtimeStartedAt: number,
+    autonomousActivation?: AutonomousActivationRuntimeEvidence,
   ): Promise<McpInvokeResponse> {
     const runtime = isInternalMcpApprovalInboxServer(server)
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
@@ -862,6 +949,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         permissionProfileId: input.policyContext?.permissionProfileId ?? input.permissionProfileId,
         localOperatorOverrideId: input.policyContext?.localOperatorOverrideId ?? input.localOperatorOverrideId,
         trustTier: server.trustTier,
+        autonomousActivation,
       },
       buildMcpInvocationRealtimeOptions({
         sessionId: input.sessionId,
@@ -885,6 +973,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         permissionProfileId: input.policyContext?.permissionProfileId ?? input.permissionProfileId,
         localOperatorOverrideId: input.policyContext?.localOperatorOverrideId ?? input.localOperatorOverrideId,
         trustTier: server.trustTier,
+        autonomousActivation,
         ok: runtime.ok,
         error: runtime.ok ? undefined : runtime.error,
       },
@@ -901,6 +990,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           retryCount: runtimeRetryCount,
           sanitizedError: runtime.error,
         },
+        autonomousActivation,
         error: runtime.error ?? `MCP tool ${input.toolName} failed.`,
       };
     }
@@ -914,8 +1004,54 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         degraded: runtimeDegraded,
         retryCount: runtimeRetryCount,
       },
+      autonomousActivation,
     };
   }
+}
+
+function buildMcpAutonomousActivationGrantInput(
+  input: McpInvokeRequest,
+  server: McpServerRecord,
+): AutonomousActivationGrantEvaluationInput {
+  return {
+    workspaceId: input.workspaceId,
+    surface: input.surface ?? "mcp",
+    riskLevel: classifyMcpAutonomousActivationRisk(server),
+    activationKind: "mcp_tool",
+    capabilityId: `mcp:${server.serverId}`,
+    toolName: `mcp.${server.serverId}.${input.toolName}`,
+    estimatedCostUsd: input.estimatedCostUsd,
+  };
+}
+
+function classifyMcpAutonomousActivationRisk(server: McpServerRecord): AutonomousActivationRiskLevel {
+  if (server.costTier === "paid") {
+    return "danger";
+  }
+  if (server.trustTier === "trusted" && server.costTier === "free") {
+    return "caution";
+  }
+  return "danger";
+}
+
+function buildMcpAutonomousActivationFailure(
+  evidence: Omit<AutonomousActivationRuntimeEvidence, "requested" | "riskLevel"> &
+    Partial<Pick<AutonomousActivationRuntimeEvidence, "requested" | "riskLevel">>,
+): McpInvokeResponse {
+  return {
+    ok: false,
+    autonomousActivation: {
+      requested: true,
+      allowed: evidence.allowed,
+      matchedGrantId: evidence.matchedGrantId,
+      riskLevel: evidence.riskLevel,
+      governance: evidence.governance,
+      blockers: evidence.blockers,
+    },
+    error: "Autonomous MCP activation requires an active matching operator grant.",
+    policyReason: evidence.blockers.join(" "),
+    reasonCodes: ["autonomous_activation_grant_required"],
+  };
 }
 
 function extractApprovalReplayId(request: ToolInvokeRequest): string | undefined {

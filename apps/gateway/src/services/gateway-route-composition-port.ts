@@ -173,6 +173,7 @@ export interface GatewayRouteCompositionPort {
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
   patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
+  exchangeMcpOAuthCode: NonNullable<mcpServerAdminService.McpServerAdminHost["exchangeMcpOAuthCode"]>;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
   persistAssistantConfig: settingsAuthService.SettingsRuntimeDependencies["persistAssistantConfig"];
   persistBudgetsConfig: settingsAuthService.SettingsRuntimeDependencies["persistBudgetsConfig"];
@@ -372,6 +373,7 @@ export function createGatewayRouteCompositionPort(
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
     patchMcpServerState: gateway.patchMcpServerState.bind(gateway),
+    exchangeMcpOAuthCode: gateway.exchangeMcpOAuthCode.bind(gateway),
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
     persistAssistantConfig: gateway.persistAssistantConfig.bind(gateway),
     persistBudgetsConfig: gateway.persistBudgetsConfig.bind(gateway),

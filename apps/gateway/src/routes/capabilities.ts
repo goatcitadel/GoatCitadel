@@ -24,6 +24,40 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const proposalsQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(500).optional(),
   });
+  const autonomyRiskSchema = z.enum(["safe", "caution", "danger", "nuclear"]);
+  const autonomyActivationKindSchema = z.enum(["capability", "tool", "mcp_tool", "code_mode"]);
+  const autonomyGrantQuerySchema = z.object({
+    includeExpired: z.enum(["true", "false"]).optional(),
+  });
+  const autonomyGrantParamsSchema = z.object({
+    grantId: z.string().min(1),
+  });
+  const autonomyGrantCreateSchema = z.object({
+    workspaceId: z.string().trim().min(1).optional(),
+    surfaces: z.array(z.enum(["chat", "cowork", "code", "tools", "mcp", "all"])).optional(),
+    maxRiskLevel: autonomyRiskSchema,
+    capabilityPatterns: z.array(z.string().trim().min(1)).optional(),
+    toolPatterns: z.array(z.string().trim().min(1)).optional(),
+    activationKinds: z.array(autonomyActivationKindSchema).optional(),
+    maxActivations: z.number().int().positive().optional(),
+    budgetUsd: z.number().nonnegative().optional(),
+    grantor: z.string().trim().min(1),
+    reason: z.string().trim().min(1),
+    expiresAt: z.string().trim().min(1),
+  });
+  const autonomyGrantRevokeSchema = z.object({
+    revokedBy: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
+  });
+  const autonomyGrantEvaluateSchema = z.object({
+    workspaceId: z.string().trim().min(1).optional(),
+    surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]),
+    riskLevel: autonomyRiskSchema,
+    activationKind: autonomyActivationKindSchema,
+    capabilityId: z.string().trim().min(1).optional(),
+    toolName: z.string().trim().min(1).optional(),
+    estimatedCostUsd: z.number().nonnegative().optional(),
+  });
   const proposalParamsSchema = z.object({
     proposalId: z.string().min(1),
   });
@@ -48,6 +82,8 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     workspaceId: z.string().trim().min(1).optional(),
     permissionProfileId: z.string().trim().min(1).optional(),
     localOperatorOverrideId: z.string().trim().min(1).optional(),
+    autonomousActivation: z.boolean().optional(),
+    estimatedCostUsd: z.number().nonnegative().optional(),
     sessionId: z.string().trim().min(1).optional(),
     turnId: z.string().trim().min(1).optional(),
     aider: z
@@ -140,6 +176,54 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(201).send(fastify.services.capabilities.createCapabilityProposal(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/capabilities/autonomy-grants", async (request, reply) => {
+    const parsed = autonomyGrantQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.services.capabilities.listAutonomousActivationGrants(parsed.data.includeExpired === "true"),
+    });
+  });
+
+  fastify.post("/api/v1/capabilities/autonomy-grants", async (request, reply) => {
+    const parsed = autonomyGrantCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.services.capabilities.createAutonomousActivationGrant(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capabilities/autonomy-grants/evaluate", async (request, reply) => {
+    const parsed = autonomyGrantEvaluateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.capabilities.evaluateAutonomousActivationGrant(parsed.data));
+  });
+
+  fastify.post("/api/v1/capabilities/autonomy-grants/:grantId/revoke", async (request, reply) => {
+    const params = autonomyGrantParamsSchema.safeParse(request.params);
+    const body = autonomyGrantRevokeSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.services.capabilities.revokeAutonomousActivationGrant(params.data.grantId, body.data));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
     }
   });
 

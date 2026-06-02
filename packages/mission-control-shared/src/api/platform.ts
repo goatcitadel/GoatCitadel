@@ -44,6 +44,7 @@ import type {
   LlamaCppAdvisorRequest,
   LlamaCppModelsResponse,
   LlamaCppRuntimeStatus,
+  MeshReadinessDiagnostics,
   ImageGenerationRequest,
   ImageGenerationResponse,
   MemoryContextPack,
@@ -547,6 +548,10 @@ export async function deleteOpenAICodexOAuthCredential(): Promise<OpenAICodexOAu
 
 export async function fetchMeshStatus(): Promise<MeshStatusResponse> {
   return request<MeshStatusResponse>("/api/v1/mesh/status");
+}
+
+export async function fetchMeshReadiness(): Promise<MeshReadinessDiagnostics> {
+  return request<MeshReadinessDiagnostics>("/api/v1/mesh/readiness");
 }
 
 export async function fetchMeshNodes(limit = 200): Promise<{ items: MeshNodeRecord[] }> {

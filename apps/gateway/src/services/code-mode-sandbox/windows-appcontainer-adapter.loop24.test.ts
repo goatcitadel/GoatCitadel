@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("WindowsAppContainerSandboxAdapter loop24 tails", () => {
-  it("keeps the Windows AppContainer floor visible while reporting IPC as unavailable", () => {
+  it("keeps the Windows AppContainer floor visible when prerequisites are available", () => {
     const adapter = new WindowsAppContainerSandboxAdapter({
       platform: "win32",
       osRelease: "6.2.9200",
@@ -25,7 +25,7 @@ describe("WindowsAppContainerSandboxAdapter loop24 tails", () => {
     expect(metadata).toMatchObject({
       platform: "win32",
       required: false,
-      available: false,
+      available: true,
     });
     expect(metadata.checksPassed).toEqual(
       expect.arrayContaining([
@@ -36,13 +36,10 @@ describe("WindowsAppContainerSandboxAdapter loop24 tails", () => {
         "win32_appcontainer_prerequisites_available",
       ]),
     );
-    expect(metadata.checksFailed).toEqual([
-      "win32_node_ipc_not_preserved",
-      "network_isolation_not_enforced",
-      "temp_workspace_not_enforced",
-      "privilege_reduction_not_enforced",
-      "windows_job_limits_not_enforced",
-    ]);
+    expect(metadata.checksFailed).toEqual([]);
+    expect(metadata.checksPassed).toEqual(
+      expect.arrayContaining(["win32_stdio_jsonrpc_transport_intended", "windows_job_limits_intended"]),
+    );
   });
 
   it("rejects unsupported Windows launches before writing generated artifacts", async () => {
@@ -67,26 +64,31 @@ describe("WindowsAppContainerSandboxAdapter loop24 tails", () => {
     await expect(fs.stat(runTempRoot)).rejects.toThrow();
   });
 
-  it("blocks launch before writing a launcher while Windows IPC preservation is unavailable", async () => {
+  it("writes the launcher once AppContainer prerequisites are available", async () => {
     const root = await createTempRoot();
     const runTempRoot = path.join(root, "run");
+    const nodePath = path.join(root, "node.exe");
+    const harnessPath = path.join(root, "path with space", "harness", "tail.mjs");
+    await fs.writeFile(nodePath, "test node", "utf8");
+    await fs.mkdir(path.dirname(harnessPath), { recursive: true });
+    await fs.writeFile(harnessPath, "process.exit(0);\n", "utf8");
     const adapter = new WindowsAppContainerSandboxAdapter({
       platform: "win32",
       osRelease: "10.0.22631",
       resolveCommand: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     });
 
-    await expect(
-      adapter.prepareLaunch({
-        runId: "quote-tail",
-        nodePath: path.join(root, "node.exe"),
-        harnessPath: path.join(root, "path with space", "harness\\tail.mjs"),
-        runTempRoot,
-        heapMb: 0,
-        env: {},
-      }),
-    ).rejects.toThrow("win32_node_ipc_not_preserved");
-    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
+    const launch = await adapter.prepareLaunch({
+      runId: "quote-tail",
+      nodePath,
+      harnessPath,
+      runTempRoot,
+      heapMb: 0,
+      env: {},
+    });
+
+    expect(launch.transport).toBe("stdio_jsonrpc");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).resolves.toBeTruthy();
   });
 });
 

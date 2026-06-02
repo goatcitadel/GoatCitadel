@@ -146,8 +146,40 @@ export interface CodeModeSandboxMetadata {
   available: boolean;
   checksPassed: string[];
   checksFailed: string[];
+  hostileSandboxClaim?: CodeModeHostileSandboxClaimMetadata;
   failClosedReason?: string;
   advisoryUnsandboxedReason?: string;
+}
+
+export type CodeModeHostileSandboxCanary =
+  | "outside_root_read_denied"
+  | "outside_root_write_denied"
+  | "network_denied"
+  | "env_secret_absent"
+  | "symlink_path_traversal_denied"
+  | "process_job_limits_enforced"
+  | "artifact_hash_integrity"
+  | "fail_closed_required_mode";
+
+export type CodeModeHostileSandboxClaimStatus = "not_promoted" | "blocked" | "promoted";
+export type CodeModeHostileSandboxPlatformProofStatus = "pass" | "fail" | "missing" | "not_applicable";
+
+export interface CodeModeHostileSandboxPlatformProof {
+  platform: CodeModeSandboxMetadata["platform"];
+  status: CodeModeHostileSandboxPlatformProofStatus;
+  checksPassed: CodeModeHostileSandboxCanary[];
+  checksFailed: CodeModeHostileSandboxCanary[];
+  evidenceRef?: string;
+  checkedAt?: string;
+}
+
+export interface CodeModeHostileSandboxClaimMetadata {
+  claimStatus: CodeModeHostileSandboxClaimStatus;
+  publicClaimAllowed: boolean;
+  requiredCanaries: CodeModeHostileSandboxCanary[];
+  platformProof: CodeModeHostileSandboxPlatformProof[];
+  blockers: string[];
+  governance: string[];
 }
 
 export type CodeModeExecutionBackendKind = "host" | "docker" | "aider_adapter";
@@ -250,6 +282,7 @@ export interface CodeModeRunRecord {
   turnId?: string;
   sandbox?: CodeModeSandboxMetadata;
   executionBackend?: CodeModeRunExecutionBackendRef;
+  autonomousActivation?: CodeModeAutonomousActivationEvidence;
   codeArtifact: CapabilityArtifactRecord;
   wrapperManifestArtifact: CapabilityArtifactRecord;
   policySnapshotArtifact: CapabilityArtifactRecord;
@@ -337,6 +370,8 @@ export interface CodeModeRunRequest {
   operatorId?: string;
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
+  autonomousActivation?: boolean;
+  estimatedCostUsd?: number;
   input?: Record<string, unknown>;
   requestedOutputIntent?: string;
   saveCandidateOnSuccess?: boolean;
@@ -347,6 +382,15 @@ export interface CodeModeRunRequest {
     repositoryRootRelPath?: string;
     model?: string;
   };
+}
+
+export interface CodeModeAutonomousActivationEvidence {
+  requested: boolean;
+  allowed: boolean;
+  matchedGrantId?: string;
+  riskLevel: import("./autonomy.js").AutonomousActivationRiskLevel;
+  governance: string[];
+  blockers: string[];
 }
 
 export interface CodeModeRunListOptions {

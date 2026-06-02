@@ -90,9 +90,10 @@ Operator truth:
 
 - Linux uses a firejail-based best-effort host adapter when available
 - macOS uses `sandbox-exec` while the adapter remains available on the host
-- Windows currently fails closed when required host isolation cannot preserve the Node IPC contract; AppContainer-style launcher support remains a constrained adapter path, not a general hostile-code sandbox claim
+- Windows uses a constrained AppContainer launcher with stdio JSON-RPC transport when prerequisites are available
 - if required host isolation is unavailable, Code Mode fails closed
 - if isolation is advisory only, the run may proceed but must surface unsandboxed/advisory metadata to the operator
+- hostile-code promotion is separate and remains blocked until `verify:code-mode:hostile-sandbox` has green native Linux, macOS, and Windows adversarial canary proof
 
 ### Launch Contract
 
@@ -102,7 +103,7 @@ Production runs launch a child-process harness with:
 - `shell: false`
 - fixed `cwd`
 - minimal synthetic env only
-- explicit stdio plus `ipc`
+- either Node IPC or stdio JSON-RPC transport, depending on the selected native adapter
 
 Guest source is never loaded as a normal CommonJS or ESM module inside the child process. The harness evaluates submitted source only through a restricted host API.
 
