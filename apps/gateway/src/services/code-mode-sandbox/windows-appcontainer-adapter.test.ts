@@ -52,6 +52,9 @@ describe("WindowsAppContainerSandboxAdapter", () => {
       available: true,
       required: true,
     });
+    // Truth-first: Windows availability rests on intended (not adversarially-verified)
+    // controls, so enforcement must NOT be reported as verified even though it launches.
+    expect(metadata.enforcementVerified).toBe(false);
     expect(metadata.checksPassed).toEqual(
       expect.arrayContaining([
         "win32_powershell_present",
