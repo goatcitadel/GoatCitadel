@@ -305,9 +305,16 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.a2a.previewTaskExport(parsed.data, { checkedAt }));
   });
 
+  const a2aJsonRpcRouteAccess = withRouteAccess(fastify, "a2a-peer");
   fastify.post(
     "/api/v1/a2a/jsonrpc",
-    withRouteAccess(fastify, "a2a-peer", { config: { rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX } } }),
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX },
+      },
+    },
     async (request, reply) => {
       const auth = fastify.services.a2a.authenticatePeerRequest(request);
       if ("statusCode" in auth) {
