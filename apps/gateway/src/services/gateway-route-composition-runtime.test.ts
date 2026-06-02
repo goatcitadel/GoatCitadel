@@ -55,26 +55,24 @@ const mocks = vi.hoisted(() => ({
       timeline: (sessionId: string) => deps.listSessionTimeline(sessionId, 2),
     }),
   ),
-  WorkflowRecipeService: vi
-    .fn()
-    .mockImplementation(
-      (deps: {
-        listSkills: () => unknown[];
-        listToolNames: () => string[];
-        createOrchestrationPlan: (plan: unknown) => unknown;
-      }) => ({
-        createPlanFromRecipe: (input: unknown) =>
-          deps.createOrchestrationPlan({
-            goal: "recipe",
-            input,
-            tools: deps.listToolNames(),
-            skills: deps.listSkills(),
-          }),
-        exportActivepiecesTemplate: (input: unknown) => ({ input, format: "activepieces" }),
-        listTemplates: () => [{ templateId: "template-1" }],
-        previewRecipe: (input: unknown) => ({ input, tools: deps.listToolNames(), skills: deps.listSkills() }),
-      }),
-    ),
+  WorkflowRecipeService: vi.fn().mockImplementation(function (deps: {
+    listSkills: () => unknown[];
+    listToolNames: () => string[];
+    createOrchestrationPlan: (plan: unknown) => unknown;
+  }) {
+    return {
+      createPlanFromRecipe: (input: unknown) =>
+        deps.createOrchestrationPlan({
+          goal: "recipe",
+          input,
+          tools: deps.listToolNames(),
+          skills: deps.listSkills(),
+        }),
+      exportActivepiecesTemplate: (input: unknown) => ({ input, format: "activepieces" }),
+      listTemplates: () => [{ templateId: "template-1" }],
+      previewRecipe: (input: unknown) => ({ input, tools: deps.listToolNames(), skills: deps.listSkills() }),
+    };
+  }),
   bootstrapOnboarding: vi.fn((gateway: unknown, input: unknown) => ({ gateway, input, bootstrapped: true })),
   getOnboardingStartupState: vi.fn(() => ({ startup: true })),
   getOnboardingState: vi.fn(() => ({ complete: false })),
