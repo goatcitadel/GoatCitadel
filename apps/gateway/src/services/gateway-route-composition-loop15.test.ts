@@ -85,21 +85,25 @@ const mocks = vi.hoisted(() => ({
       serverId,
     };
   }),
-  KnowledgeFacadeService: vi.fn().mockImplementation((deps: any) => ({
-    deps,
-    knowledgeDocsIngest: (input: unknown) =>
-      deps.invokeAndUnwrap({ toolName: "knowledge.docs.ingest", input }, "knowledge"),
-  })),
-  SkillEvaluationService: vi.fn().mockImplementation((deps: any) => ({
-    createSkillEvaluationProposal: (runId: string) => deps.createCapabilityProposal({ runId }),
-    getSkillEvaluationRun: (runId: string) => ({ runId, storage: deps.storage }),
-    listSkillEvaluationRuns: (skillId: string) => [{ skillId, skills: deps.listSkills() }],
-    previewSkillEvaluation: (skillId: string, input: unknown) => ({ skillId, input, preview: true }),
-    runSkillEvaluation: (skillId: string, input: unknown) => {
-      deps.recordSkillEvaluationSignal({ skillId, input });
-      return { skillId, input, run: true };
-    },
-  })),
+  KnowledgeFacadeService: vi.fn().mockImplementation(function (deps: any) {
+    return {
+      deps,
+      knowledgeDocsIngest: (input: unknown) =>
+        deps.invokeAndUnwrap({ toolName: "knowledge.docs.ingest", input }, "knowledge"),
+    };
+  }),
+  SkillEvaluationService: vi.fn().mockImplementation(function (deps: any) {
+    return {
+      createSkillEvaluationProposal: (runId: string) => deps.createCapabilityProposal({ runId }),
+      getSkillEvaluationRun: (runId: string) => ({ runId, storage: deps.storage }),
+      listSkillEvaluationRuns: (skillId: string) => [{ skillId, skills: deps.listSkills() }],
+      previewSkillEvaluation: (skillId: string, input: unknown) => ({ skillId, input, preview: true }),
+      runSkillEvaluation: (skillId: string, input: unknown) => {
+        deps.recordSkillEvaluationSignal({ skillId, input });
+        return { skillId, input, run: true };
+      },
+    };
+  }),
 }));
 
 vi.mock("./addons-route-service.js", () => ({ createAddonsRoutePort: mocks.createAddonsRoutePort }));
