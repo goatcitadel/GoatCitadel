@@ -54,6 +54,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchMcpServers: fn(),
     fetchMcpTemplates: fn(),
     fetchMcpTools: fn(),
+    fetchMeshReadiness: fn({ status: "ready", blockers: [] }),
     fetchNpuModels: fn(),
     fetchOnboardingState: fn(),
     fetchOpenAICodexOAuthStatus: fn(),
@@ -181,6 +182,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMcpServers: settingsMocks.fetchMcpServers,
   fetchMcpTemplates: settingsMocks.fetchMcpTemplates,
   fetchMcpTools: settingsMocks.fetchMcpTools,
+  fetchMeshReadiness: settingsMocks.fetchMeshReadiness,
   fetchNpuModels: settingsMocks.fetchNpuModels,
   fetchOnboardingState: settingsMocks.fetchOnboardingState,
   fetchOpenAICodexOAuthStatus: settingsMocks.fetchOpenAICodexOAuthStatus,
@@ -1659,6 +1661,8 @@ describe("SettingsNativePage broad native sections", () => {
       command: "npx template-server --stdio",
       url: undefined,
       enabled: false,
+      authType: "none",
+      oauth: undefined,
     });
     expect(collectText(mcp.root)).toContain("MCP server Template stdio created.");
 

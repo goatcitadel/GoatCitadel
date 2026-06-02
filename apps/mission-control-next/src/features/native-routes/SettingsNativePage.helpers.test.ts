@@ -497,7 +497,12 @@ describe("SettingsNativePage helpers", () => {
     expect(describeToolGrantAvailability({ grantType: "one_time", usesRemaining: 0 } as any)).toBe("exhausted");
     expect(isRuntimeInvokableMcpServer({ transport: "stdio" })).toBe(true);
     expect(isRuntimeInvokableMcpServer({ transport: "http", url: " goatcitadel://approval-inbox " })).toBe(true);
-    expect(isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test" })).toBe(false);
+    // Remote HTTP/SSE MCP is runtime-supported since the readiness promotion (eaf023075);
+    // a no-auth-required remote server is invokable (egress is gated separately by the allowlist).
+    expect(isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test" })).toBe(true);
+    expect(
+      isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test", authType: "token", policy: {} }),
+    ).toBe(false);
 
     const schema = {
       fields: [
