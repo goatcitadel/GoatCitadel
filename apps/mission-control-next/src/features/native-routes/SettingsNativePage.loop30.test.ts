@@ -67,7 +67,9 @@ describe("SettingsNativePage loop 30 branch matrices", () => {
     expect(matchesToolGrant({ toolPattern: "browser.open" } as any, "browser.search")).toBe(false);
     expect(isRuntimeInvokableMcpServer({ transport: "stdio" })).toBe(true);
     expect(isRuntimeInvokableMcpServer({ transport: "http", url: " goatcitadel://approval-inbox " })).toBe(true);
-    expect(isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test" })).toBe(false);
+    // Remote HTTP/SSE MCP is runtime-supported since the readiness promotion (eaf023075):
+    // a no-auth-required remote server is invokable; egress stays gated by the allowlist.
+    expect(isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test" })).toBe(true);
 
     expect(
       preferredChannelDefinition([{ catalog: { catalogId: "x" }, wizard: { steps: [] } }] as any)?.catalog.catalogId,
