@@ -583,6 +583,7 @@ export {
   fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats,
+  fetchMemoryQualityIssues,
   fetchMemoryRelations,
   fetchTraceMemoryCandidates,
   fetchStructuredMemoryHistory,
@@ -596,6 +597,7 @@ export {
   knowledgeMemorySearch,
   knowledgeMemoryWrite,
   patchMemoryItem,
+  patchMemoryQualityIssue,
   patchMemoryMaintenancePolicy,
   promoteTraceMemoryCandidate,
   proposeTraceMemoryCandidate,
@@ -603,6 +605,7 @@ export {
   rejectMemoryMaintenanceRecommendation,
   recordMemoryFeedback,
   runMemoryMaintenanceNow,
+  runMemoryQualityScan,
   runMemoryRetrievalBenchmark,
 } from "./memory.js";
 export {

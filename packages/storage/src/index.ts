@@ -78,6 +78,7 @@ import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
 import { HookRunRepository } from "./hook-run-repo.js";
 import { LearnedMemoryRepository } from "./learned-memory-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
+import { MemoryQualityIssueRepository } from "./memory-quality-issue-repo.js";
 import { TranscriptOutboxRepository } from "./transcript-outbox-repo.js";
 import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
 import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapshot-repo.js";
@@ -180,6 +181,7 @@ export class Storage {
   public readonly hookRuns: HookRunRepository;
   public readonly learnedMemory: LearnedMemoryRepository;
   public readonly memoryMaintenance: MemoryMaintenanceRepository;
+  public readonly memoryQualityIssues: MemoryQualityIssueRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
   public readonly assembly: AssemblyRepository;
@@ -285,6 +287,7 @@ export class Storage {
     this.hookRuns = new HookRunRepository(this.db);
     this.learnedMemory = new LearnedMemoryRepository(this.db);
     this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
+    this.memoryQualityIssues = new MemoryQualityIssueRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);

@@ -22,6 +22,8 @@ const memorySnapshot = vi.hoisted(() => ({
   setPolicyDirty: vi.fn(),
   saveItemPatch: vi.fn(),
   forgetSelectedItem: vi.fn(),
+  scanMemoryQuality: vi.fn(),
+  patchQualityIssue: vi.fn(),
   runMaintenance: vi.fn(),
   savePolicy: vi.fn(),
   resolveRecommendation: vi.fn(),
@@ -89,6 +91,9 @@ const memorySnapshot = vi.hoisted(() => ({
     memoryEntities: [],
     memoryRelations: [],
     memoryDecisions: [],
+    memoryFeedback: [],
+    memoryQualityIssues: [],
+    traceMemoryCandidates: [],
     memoryHistory: [],
     maintenanceStatus: null,
     maintenanceRuns: [],
@@ -108,6 +113,9 @@ const memorySnapshot = vi.hoisted(() => ({
       memoryEntities: null,
       memoryRelations: null,
       memoryDecisions: null,
+      memoryFeedback: null,
+      memoryQualityIssues: null,
+      traceMemoryCandidates: null,
       memoryHistory: null,
       maintenanceStatus: null,
       maintenanceRuns: null,
@@ -121,10 +129,12 @@ const memorySnapshot = vi.hoisted(() => ({
 
 const evidenceApiMocks = vi.hoisted(() => ({
   fetchEvidenceEnvelopes: vi.fn(),
+  runMemoryRetrievalBenchmark: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchEvidenceEnvelopes: evidenceApiMocks.fetchEvidenceEnvelopes,
+  runMemoryRetrievalBenchmark: evidenceApiMocks.runMemoryRetrievalBenchmark,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot", () => ({

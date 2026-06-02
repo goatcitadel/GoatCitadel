@@ -179,6 +179,9 @@ describe("memory routes", () => {
     const recall = vi.fn(async () => ({ mode: "summary", feedback: [], traceCandidates: [] }));
     const listFeedback = vi.fn(() => [{ feedbackId: "fb-1" }]);
     const recordFeedback = vi.fn(() => ({ feedbackId: "fb-2" }));
+    const listQualityIssues = vi.fn(() => [{ issueId: "quality-1" }]);
+    const runQualityScan = vi.fn(() => ({ issueCount: 1, issues: [{ issueId: "quality-1" }] }));
+    const patchQualityIssue = vi.fn(() => ({ issueId: "quality-1", status: "resolved" }));
     const listTraceCandidates = vi.fn(() => [{ candidateId: "trace-1" }]);
     const proposeTraceCandidate = vi.fn(() => ({ candidateId: "trace-2", status: "proposed" }));
     const promoteTraceCandidate = vi.fn(() => ({ learningId: "learn-1" }));
@@ -186,6 +189,9 @@ describe("memory routes", () => {
       recall,
       listFeedback,
       recordFeedback,
+      listQualityIssues,
+      runQualityScan,
+      patchQualityIssue,
       listTraceCandidates,
       proposeTraceCandidate,
       promoteTraceCandidate,
@@ -214,6 +220,26 @@ describe("memory routes", () => {
       method: "GET",
       url: "/api/v1/memory/feedback?status=open",
     });
+    const qualityScanResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/quality/scan",
+      payload: {
+        workspaceId: "default",
+        dryRun: true,
+      },
+    });
+    const qualityListResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory/quality/issues?status=open&kind=source_drift",
+    });
+    const qualityPatchResponse = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/memory/quality/issues/quality-1",
+      payload: {
+        status: "resolved",
+        resolutionNote: "Checked by route test.",
+      },
+    });
     const candidateResponse = await app.inject({
       method: "POST",
       url: "/api/v1/memory/trace-candidates",
@@ -235,11 +261,30 @@ describe("memory routes", () => {
     expect(recallResponse.statusCode).toBe(200);
     expect(feedbackResponse.statusCode).toBe(201);
     expect(feedbackListResponse.statusCode).toBe(200);
+    expect(qualityScanResponse.statusCode).toBe(200);
+    expect(qualityListResponse.statusCode).toBe(200);
+    expect(qualityPatchResponse.statusCode).toBe(200);
     expect(candidateResponse.statusCode).toBe(202);
     expect(candidateListResponse.statusCode).toBe(200);
     expect(promoteResponse.statusCode).toBe(200);
     expect(recall).toHaveBeenCalledWith({ mode: "summary", workspaceId: "default" });
     expect(listFeedback).toHaveBeenCalledWith({ limit: 100, status: "open" });
+    expect(runQualityScan).toHaveBeenCalledWith(
+      {
+        workspaceId: "default",
+        dryRun: true,
+      },
+      expect.stringMatching(/^ip:/),
+    );
+    expect(listQualityIssues).toHaveBeenCalledWith({ limit: 100, status: "open", kind: "source_drift" });
+    expect(patchQualityIssue).toHaveBeenCalledWith(
+      "quality-1",
+      {
+        status: "resolved",
+        resolutionNote: "Checked by route test.",
+      },
+      expect.stringMatching(/^ip:/),
+    );
     expect(recordFeedback).toHaveBeenCalledWith(
       {
         kind: "useful",

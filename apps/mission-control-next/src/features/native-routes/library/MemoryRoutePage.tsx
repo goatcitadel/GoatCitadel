@@ -1,8 +1,14 @@
 /* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in local decomposition notes). */
 import { useEffect, useId, useMemo, useState } from "react";
-import { RefreshCw, ShieldCheck, Waypoints } from "lucide-react";
-import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";
-import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
+import { RefreshCw, SearchCheck, ShieldCheck, Waypoints } from "lucide-react";
+import type {
+  EvidenceEnvelope,
+  MemoryDecisionRecord,
+  MemoryItemRecord,
+  MemoryQualityIssueRecord,
+  MemoryRetrievalBenchmarkResponse,
+} from "@goatcitadel/contracts";
+import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
 import { EmptyState, FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
 import {
   describeQmdImpact,
@@ -45,6 +51,29 @@ export {
  * Lives outside the component so it is stable across renders.
  */
 const NAMESPACE_FILTER_ALL = "__all__";
+
+const RECALL_BENCHMARK_PROMPTS = [
+  {
+    label: "Continuity",
+    prompt: "What prior workspace context should be reused before this task continues?",
+  },
+  {
+    label: "Decision",
+    prompt: "What recent decisions affect current GoatCitadel memory work?",
+  },
+  {
+    label: "Tooling",
+    prompt: "Which repo or tooling facts should guide implementation?",
+  },
+  {
+    label: "Preference",
+    prompt: "What operator preferences constrain memory writes and recall?",
+  },
+  {
+    label: "Resume",
+    prompt: "What context should be used after compaction to resume safely?",
+  },
+];
 
 /**
  * Extract the top-level group of a memory namespace (the part before the first
@@ -90,6 +119,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     error: null,
     items: [],
   });
+  const [recallPrompt, setRecallPrompt] = useState(RECALL_BENCHMARK_PROMPTS[0]?.prompt ?? "");
+  const [recallBenchmark, setRecallBenchmark] = useState<{
+    loading: boolean;
+    error: string | null;
+    result: MemoryRetrievalBenchmarkResponse | null;
+  }>({
+    loading: false,
+    error: null,
+    result: null,
+  });
   const isMounted = useIsMounted();
 
   // Stable, collision-safe IDs for label/input pairing (a11y H-8). Each id is
@@ -106,9 +145,11 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const policyProviderId = useId();
   const policyModelId = useId();
   const memoryListCountId = useId();
+  const recallPromptId = useId();
 
   const memoryItems = memory.data?.memoryItems ?? [];
   const memoryFeedback = memory.data?.memoryFeedback ?? [];
+  const memoryQualityIssues = memory.data?.memoryQualityIssues ?? [];
   const traceMemoryCandidates = memory.data?.traceMemoryCandidates ?? [];
 
   const namespacePillOptions = useMemo<FilterPillOption[]>(() => {
@@ -216,6 +257,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const recentCitationCount = recentContextPacks.reduce((sum, pack) => sum + pack.citations.length, 0);
   const usefulFeedbackCount = memoryFeedback.filter((item) => item.kind === "useful").length;
   const openFeedbackCount = memoryFeedback.filter((item) => item.status === "open").length;
+  const openQualityIssueCount = memoryQualityIssues.filter((item) => item.status === "open").length;
+  const highQualityIssueCount = memoryQualityIssues.filter(
+    (item) => item.status === "open" && item.severity === "high",
+  ).length;
   const proposedTraceCandidateCount = traceMemoryCandidates.filter((item) => item.status === "proposed").length;
   const provenanceCoverage = useMemo(
     () =>
@@ -263,6 +308,31 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       cancelled = true;
     };
   }, [activeWorkspaceId]);
+
+  const runRecallProbe = () => {
+    const prompt = recallPrompt.trim();
+    if (!prompt) {
+      setRecallBenchmark({ loading: false, error: "Recall prompt is required.", result: null });
+      return;
+    }
+    setRecallBenchmark({ loading: true, error: null, result: recallBenchmark.result });
+    void runMemoryRetrievalBenchmark({
+      prompts: [prompt],
+      workspace: activeWorkspaceId,
+      relationScope: "self",
+      maxContextTokens: 4_000,
+    })
+      .then((result) => {
+        if (isMounted()) {
+          setRecallBenchmark({ loading: false, error: null, result });
+        }
+      })
+      .catch((error: Error) => {
+        if (isMounted()) {
+          setRecallBenchmark({ loading: false, error: error.message, result: null });
+        }
+      });
+  };
 
   return (
     <NativePageFrame
@@ -651,6 +721,173 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             </ul>
           ) : (
             <EmptyState size="compact" title="No recall feedback has been recorded yet." />
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Quality queue"
+          subtitle="Open memory quality findings from lifecycle scans, feedback, and learning staleness checks."
+          stats={[
+            { label: "Issues", value: String(memoryQualityIssues.length) },
+            { label: "Open", value: String(openQualityIssueCount) },
+            { label: "High", value: String(highQualityIssueCount) },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.memoryQualityIssues ?? null} />
+          <div className="mc-next-runtime-actions" role="group" aria-label="Memory quality actions">
+            <button
+              type="button"
+              className="mc-next-button"
+              disabled={!memoryCanMutate || memory.busyKey === "memory-quality:scan"}
+              aria-label="Run memory quality scan"
+              onClick={() => void memory.scanMemoryQuality()}
+            >
+              <SearchCheck className="h-4 w-4" aria-hidden="true" />
+              Scan quality
+            </button>
+            <button
+              type="button"
+              className="mc-next-button-secondary"
+              aria-label="Refresh memory quality issues"
+              onClick={() => void memory.reload()}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Refresh
+            </button>
+          </div>
+          <div className="mc-next-approvals-risk-strip">
+            <StatusChip tone={highQualityIssueCount > 0 ? "critical" : "muted"}>
+              High {highQualityIssueCount}
+            </StatusChip>
+            <StatusChip tone={openQualityIssueCount > 0 ? "warning" : "success"}>
+              Open {openQualityIssueCount}
+            </StatusChip>
+            <StatusChip tone="muted">
+              Closed {memoryQualityIssues.filter((item) => item.status !== "open").length}
+            </StatusChip>
+          </div>
+          {memoryQualityIssues.length > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memoryQualityIssues.slice(0, 6).map((issue) => (
+                <li key={issue.issueId}>
+                  <strong>{formatMemoryQualityIssueKind(issue.kind)}</strong>
+                  {" · "}
+                  {issue.status}
+                  {" · "}
+                  {issue.severity}
+                  {" · "}
+                  {formatFeedbackTarget(issue.targetKind, issue.targetRef)}
+                  <p>{issue.summary}</p>
+                  <div
+                    className="mc-next-runtime-actions"
+                    role="group"
+                    aria-label={`Resolve memory quality issue ${issue.summary}`}
+                  >
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      disabled={!memoryCanMutate || issue.status === "resolved"}
+                      aria-label={`Resolve memory quality issue ${issue.summary}`}
+                      onClick={() =>
+                        void memory.patchQualityIssue(issue.issueId, "resolved", "Resolved from Library memory queue.")
+                      }
+                    >
+                      Resolve
+                    </button>
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      disabled={!memoryCanMutate || issue.status === "dismissed"}
+                      aria-label={`Dismiss memory quality issue ${issue.summary}`}
+                      onClick={() =>
+                        void memory.patchQualityIssue(
+                          issue.issueId,
+                          "dismissed",
+                          "Dismissed from Library memory queue.",
+                        )
+                      }
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState size="compact" title="No memory quality issues are queued." />
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Recall workbench"
+          subtitle="Prompt-level retrieval benchmark for explicit memory recall."
+          stats={[
+            { label: "Runs", value: String(recallBenchmark.result?.itemCount ?? 0) },
+            {
+              label: "Overlap",
+              value: recallBenchmark.result ? recallBenchmark.result.avgOverlapScore.toFixed(2) : "n/a",
+            },
+          ]}
+        >
+          <div className="mc-next-settings-field-grid" role="group" aria-label="Recall benchmark prompt">
+            <label className="mc-next-settings-field span-2" htmlFor={recallPromptId}>
+              <span>Probe</span>
+              <select
+                id={recallPromptId}
+                className="mc-next-settings-input"
+                value={recallPrompt}
+                onChange={(event) => setRecallPrompt(event.target.value)}
+                aria-label="Recall benchmark prompt"
+              >
+                {RECALL_BENCHMARK_PROMPTS.map((item) => (
+                  <option key={item.label} value={item.prompt}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mc-next-runtime-actions" role="group" aria-label="Recall benchmark actions">
+            <button
+              type="button"
+              className="mc-next-button"
+              disabled={recallBenchmark.loading}
+              aria-label="Run recall benchmark"
+              onClick={runRecallProbe}
+            >
+              Run probe
+            </button>
+          </div>
+          <SectionTruthNotice message={recallBenchmark.error} />
+          {recallBenchmark.result ? (
+            <>
+              <div className="mc-next-runtime-metric-grid">
+                <div className="mc-next-runtime-metric">
+                  <span>Latency</span>
+                  <strong>{Math.round(recallBenchmark.result.avgLatencyMs)}ms</strong>
+                  <p>{recallBenchmark.result.retrievalStrategies.join(", ") || "no strategy"}</p>
+                </div>
+                <div className="mc-next-runtime-metric">
+                  <span>Citations</span>
+                  <strong>{String(recallBenchmark.result.items[0]?.citationsCount ?? 0)}</strong>
+                  <p>{recallBenchmark.result.items[0]?.qmdStatus ?? "no qmd"}</p>
+                </div>
+              </div>
+              <NativeList
+                density="compact"
+                items={recallBenchmark.result.items.map((item) => ({
+                  title: item.status,
+                  meta: `${item.citationsCount} citations · ${item.overlapScore.toFixed(2)} overlap`,
+                  body: item.semanticCoverageNote ?? item.error ?? item.prompt,
+                }))}
+                emptyLabel="No recall probe results."
+                maxHeight="min(28vh, 16rem)"
+                ariaLabel="Recall benchmark results"
+              />
+            </>
+          ) : (
+            <EmptyState
+              size="compact"
+              title={recallBenchmark.loading ? "Running recall probe." : "No recall probe has run yet."}
+            />
           )}
         </NativeCard>
         <NativeCard
@@ -1245,6 +1482,13 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
 
 function formatFeedbackTarget(kind: string, ref: string | undefined): string {
   return ref ? `${kind}:${shortId(ref)}` : kind;
+}
+
+function formatMemoryQualityIssueKind(kind: MemoryQualityIssueRecord["kind"]): string {
+  return kind
+    .split("_")
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function formatSourceRefCount(count: number): string {

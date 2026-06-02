@@ -1596,4 +1596,36 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON external_side_effect_runs(connection_id, created_at DESC);
     `,
   },
+  {
+    version: 58,
+    name: "memory_quality_issues",
+    sql: `
+      CREATE TABLE IF NOT EXISTS memory_quality_issues (
+        issue_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        dedup_key TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_ref TEXT NOT NULL,
+        related_refs_json TEXT NOT NULL DEFAULT '[]',
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        summary TEXT NOT NULL,
+        rationale TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution_note TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_quality_issues_workspace_status
+        ON memory_quality_issues(workspace_id, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_quality_issues_kind_status
+        ON memory_quality_issues(kind, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_quality_issues_target
+        ON memory_quality_issues(target_kind, target_ref, updated_at DESC);
+    `,
+  },
 ];

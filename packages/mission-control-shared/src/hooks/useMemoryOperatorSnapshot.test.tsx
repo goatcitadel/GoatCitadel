@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMemoryMaintenanceRunProvenance: vi.fn(),
   fetchMemoryMaintenanceRuns: vi.fn(),
   fetchMemoryMaintenanceStatus: vi.fn(),
+  fetchMemoryQualityIssues: vi.fn(),
   fetchMemoryQmdStats: vi.fn(),
   fetchMemoryRelations: vi.fn(),
   fetchTraceMemoryCandidates: vi.fn(),
@@ -24,8 +25,10 @@ const apiMocks = vi.hoisted(() => ({
   forgetMemoryItem: vi.fn(),
   patchMemoryItem: vi.fn(),
   patchMemoryMaintenancePolicy: vi.fn(),
+  patchMemoryQualityIssue: vi.fn(),
   rejectMemoryMaintenanceRecommendation: vi.fn(),
   runMemoryMaintenanceNow: vi.fn(),
+  runMemoryQualityScan: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
@@ -43,6 +46,7 @@ vi.mock("../api/client", () => ({
   fetchMemoryMaintenanceRunProvenance: apiMocks.fetchMemoryMaintenanceRunProvenance,
   fetchMemoryMaintenanceRuns: apiMocks.fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus: apiMocks.fetchMemoryMaintenanceStatus,
+  fetchMemoryQualityIssues: apiMocks.fetchMemoryQualityIssues,
   fetchMemoryQmdStats: apiMocks.fetchMemoryQmdStats,
   fetchMemoryRelations: apiMocks.fetchMemoryRelations,
   fetchTraceMemoryCandidates: apiMocks.fetchTraceMemoryCandidates,
@@ -50,8 +54,10 @@ vi.mock("../api/client", () => ({
   forgetMemoryItem: apiMocks.forgetMemoryItem,
   patchMemoryItem: apiMocks.patchMemoryItem,
   patchMemoryMaintenancePolicy: apiMocks.patchMemoryMaintenancePolicy,
+  patchMemoryQualityIssue: apiMocks.patchMemoryQualityIssue,
   rejectMemoryMaintenanceRecommendation: apiMocks.rejectMemoryMaintenanceRecommendation,
   runMemoryMaintenanceNow: apiMocks.runMemoryMaintenanceNow,
+  runMemoryQualityScan: apiMocks.runMemoryQualityScan,
 }));
 
 type HookValue = ReturnType<typeof useMemoryOperatorSnapshot>;
@@ -223,6 +229,27 @@ describe("useMemoryOperatorSnapshot", () => {
         },
       ],
     });
+    apiMocks.fetchMemoryQualityIssues.mockResolvedValue({
+      items: [
+        {
+          issueId: "quality-1",
+          workspaceId: "default",
+          kind: "source_drift",
+          status: "open",
+          severity: "high",
+          targetKind: "learning",
+          targetRef: "learning-1",
+          relatedRefs: [],
+          evidenceRefs: [{ sourceType: "artifact", sourceRef: "docs/plan.md", title: "Learning staleness check" }],
+          summary: "Referenced file docs/plan.md changed since the learning was recorded.",
+          rationale: "Learning staleness checks compare recorded source refs.",
+          metadata: {},
+          dedupKey: "default|source_drift|learning|learning-1|changed_hash",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
     apiMocks.fetchTraceMemoryCandidates.mockResolvedValue({
       items: [
         {
@@ -329,6 +356,35 @@ describe("useMemoryOperatorSnapshot", () => {
       expiresAt: null,
     });
     apiMocks.runMemoryMaintenanceNow.mockResolvedValue({ queued: true, runId: "run-queued" });
+    apiMocks.runMemoryQualityScan.mockResolvedValue({
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      workspaceId: "default",
+      scannedCount: 3,
+      issueCount: 1,
+      createdCount: 1,
+      updatedCount: 0,
+      dryRun: false,
+      issues: [],
+      warnings: [],
+    });
+    apiMocks.patchMemoryQualityIssue.mockResolvedValue({
+      issueId: "quality-1",
+      workspaceId: "default",
+      kind: "source_drift",
+      status: "resolved",
+      severity: "high",
+      targetKind: "learning",
+      targetRef: "learning-1",
+      relatedRefs: [],
+      evidenceRefs: [],
+      summary: "Referenced file docs/plan.md changed since the learning was recorded.",
+      metadata: {},
+      dedupKey: "default|source_drift|learning|learning-1|changed_hash",
+      createdAt: "2026-04-22T00:00:00.000Z",
+      updatedAt: "2026-04-22T00:05:00.000Z",
+      resolvedAt: "2026-04-22T00:05:00.000Z",
+      resolutionNote: "Resolved from test.",
+    });
     apiMocks.patchMemoryMaintenancePolicy.mockResolvedValue({
       workspaceId: "default",
       enabled: true,
@@ -371,6 +427,7 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.memoryRelations.map((item) => item.relationType)).toEqual(["uses"]);
     expect(latest?.data?.memoryDecisions.map((item) => item.title)).toEqual(["Keep automation advisory"]);
     expect(latest?.data?.memoryFeedback.map((item) => item.kind)).toEqual(["useful"]);
+    expect(latest?.data?.memoryQualityIssues.map((item) => item.kind)).toEqual(["source_drift"]);
     expect(latest?.data?.traceMemoryCandidates.map((item) => item.status)).toEqual(["proposed"]);
     expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
@@ -380,6 +437,11 @@ describe("useMemoryOperatorSnapshot", () => {
       workspaceId: "default",
       status: "all",
       limit: 80,
+    });
+    expect(apiMocks.fetchMemoryQualityIssues).toHaveBeenCalledWith({
+      workspaceId: "default",
+      status: "all",
+      limit: 40,
     });
     expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
   });
@@ -399,6 +461,7 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.maintenanceEnabled).toBe(false);
     expect(latest?.data?.sectionErrors.settings).toBe("settings unavailable");
     expect(apiMocks.fetchMemoryItems).not.toHaveBeenCalled();
+    expect(apiMocks.fetchMemoryQualityIssues).not.toHaveBeenCalled();
 
     await act(async () => {
       await latest?.saveItemPatch("mem-1", { title: "Should not save" });
@@ -446,6 +509,24 @@ describe("useMemoryOperatorSnapshot", () => {
     await flush();
     expect(apiMocks.runMemoryMaintenanceNow).toHaveBeenCalledWith({ workspaceId: "default", triggerSource: "manual" });
     expect(latest?.notice).toEqual({ tone: "success", message: "Memory maintenance queued." });
+
+    await act(async () => {
+      await latest?.scanMemoryQuality();
+    });
+    await flush();
+    expect(apiMocks.runMemoryQualityScan).toHaveBeenCalledWith({ workspaceId: "default" });
+    expect(latest?.notice).toEqual({ tone: "success", message: "Memory quality scan recorded 1 issue." });
+
+    await act(async () => {
+      await latest?.patchQualityIssue("quality-1", "resolved", "Resolved from test.");
+    });
+    await flush();
+    expect(apiMocks.patchMemoryQualityIssue).toHaveBeenCalledWith("quality-1", {
+      status: "resolved",
+      resolutionNote: "Resolved from test.",
+    });
+    expect(latest?.data?.memoryQualityIssues[0]?.status).toBe("resolved");
+    expect(latest?.notice).toEqual({ tone: "success", message: "Memory quality issue resolved." });
 
     await act(async () => {
       latest?.setPolicyDraft({
@@ -501,6 +582,7 @@ describe("useMemoryOperatorSnapshot", () => {
     apiMocks.fetchMemoryMaintenanceStatus.mockRejectedValue(new Error("status unavailable"));
     apiMocks.fetchMemoryMaintenanceRecommendations.mockRejectedValue(new Error("recommendations unavailable"));
     apiMocks.fetchMemoryFeedback.mockRejectedValue(new Error("feedback unavailable"));
+    apiMocks.fetchMemoryQualityIssues.mockRejectedValue(new Error("quality unavailable"));
     apiMocks.fetchTraceMemoryCandidates.mockRejectedValue(new Error("trace unavailable"));
     apiMocks.fetchMemoryMaintenanceRunProvenance.mockRejectedValue(new Error("provenance unavailable"));
     apiMocks.fetchDurableRun.mockRejectedValue(new Error("durable unavailable"));
@@ -518,6 +600,7 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.sectionErrors.maintenanceStatus).toBe("status unavailable");
     expect(latest?.data?.sectionErrors.maintenanceRecommendations).toBe("recommendations unavailable");
     expect(latest?.data?.sectionErrors.memoryFeedback).toBe("feedback unavailable");
+    expect(latest?.data?.sectionErrors.memoryQualityIssues).toBe("quality unavailable");
     expect(latest?.data?.sectionErrors.traceMemoryCandidates).toBe("trace unavailable");
     expect(latest?.data?.sectionErrors.selectedRunProvenance).toBe("provenance unavailable");
     expect(latest?.data?.sectionErrors.selectedDurableRun).toBe("durable unavailable");

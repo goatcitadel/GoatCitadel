@@ -28,7 +28,9 @@ type MemoryRoutePort = Pick<
   | "listMemoryLearnings"
   | "createMemoryLearning"
   | "listMemoryFeedback"
+  | "listMemoryQualityIssues"
   | "recordMemoryFeedback"
+  | "patchMemoryQualityIssue"
   | "listTraceMemoryCandidates"
   | "proposeTraceMemoryCandidate"
   | "promoteTraceMemoryCandidate"
@@ -42,6 +44,7 @@ type MemoryRoutePort = Pick<
   | "patchMemoryItem"
   | "rejectMaintenanceRecommendation"
   | "runMaintenanceNow"
+  | "runMemoryQualityScan"
   | "runRetrievalBenchmark"
 >;
 
@@ -117,6 +120,22 @@ export class MemoryRouteService {
 
   public recordFeedback(input: Parameters<MemoryRoutePort["recordMemoryFeedback"]>[0], actorId: string) {
     return this.memory.recordMemoryFeedback(input, actorId);
+  }
+
+  public listQualityIssues(input: Parameters<MemoryRoutePort["listMemoryQualityIssues"]>[0]) {
+    return this.memory.listMemoryQualityIssues(input);
+  }
+
+  public runQualityScan(input: Parameters<MemoryRoutePort["runMemoryQualityScan"]>[0], actorId: string) {
+    return this.memory.runMemoryQualityScan(input, actorId);
+  }
+
+  public patchQualityIssue(
+    issueId: string,
+    input: Parameters<MemoryRoutePort["patchMemoryQualityIssue"]>[1],
+    actorId: string,
+  ) {
+    return this.memory.patchMemoryQualityIssue(issueId, input, actorId);
   }
 
   public listTraceCandidates(input: Parameters<MemoryRoutePort["listTraceMemoryCandidates"]>[0]) {

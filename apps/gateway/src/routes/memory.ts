@@ -203,6 +203,39 @@ const feedbackCreateSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+const memoryQualityIssueKindSchema = z.enum([
+  "stale_low_value",
+  "near_duplicate",
+  "likely_contradiction",
+  "source_drift",
+  "retrieval_gap",
+]);
+const memoryQualityIssueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
+const memoryQualityIssueStatusQuerySchema = z.union([memoryQualityIssueStatusSchema, z.literal("all")]);
+
+const memoryQualityIssueListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  kind: z.union([memoryQualityIssueKindSchema, z.literal("all")]).optional(),
+  status: memoryQualityIssueStatusQuerySchema.optional(),
+  targetKind: memoryFeedbackTargetKindSchema.optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const memoryQualityScanSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  limit: z.number().int().positive().max(500).optional(),
+  dryRun: z.boolean().optional(),
+});
+
+const memoryQualityIssueParamsSchema = z.object({
+  issueId: z.string().trim().min(1),
+});
+
+const memoryQualityIssuePatchSchema = z.object({
+  status: memoryQualityIssueStatusSchema,
+  resolutionNote: z.string().trim().min(1).optional(),
+});
+
 const traceCandidateListQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
   status: traceCandidateStatusQuerySchema.optional(),
@@ -556,6 +589,48 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.code(201).send(memory.recordFeedback(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/quality/issues", operatorOnly, async (request, reply) => {
+    const parsed = memoryQualityIssueListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listQualityIssues(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/quality/scan", operatorOnly, async (request, reply) => {
+    const parsed = memoryQualityScanSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.runQualityScan(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.patch("/api/v1/memory/quality/issues/:issueId", operatorOnly, async (request, reply) => {
+    const params = memoryQualityIssueParamsSchema.safeParse(request.params);
+    const body = memoryQualityIssuePatchSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(memory.patchQualityIssue(params.data.issueId, body.data, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

@@ -374,6 +374,79 @@ export interface MemoryFeedbackRecord extends MemoryFeedbackInput {
   updatedAt: string;
 }
 
+export type MemoryQualityIssueKind =
+  | "stale_low_value"
+  | "near_duplicate"
+  | "likely_contradiction"
+  | "source_drift"
+  | "retrieval_gap";
+export type MemoryQualityIssueStatus = "open" | "resolved" | "dismissed";
+export type MemoryQualityIssueSeverity = "low" | "medium" | "high";
+
+export interface MemoryQualityIssueInput {
+  workspaceId?: string;
+  kind: MemoryQualityIssueKind;
+  severity?: MemoryQualityIssueSeverity;
+  targetKind: MemoryFeedbackTargetKind;
+  targetRef: string;
+  relatedRefs?: string[];
+  evidenceRefs?: StructuredMemorySourceRef[];
+  summary: string;
+  rationale?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryQualityIssueRecord {
+  issueId: string;
+  workspaceId: string;
+  kind: MemoryQualityIssueKind;
+  status: MemoryQualityIssueStatus;
+  severity: MemoryQualityIssueSeverity;
+  targetKind: MemoryFeedbackTargetKind;
+  targetRef: string;
+  relatedRefs: string[];
+  evidenceRefs: StructuredMemorySourceRef[];
+  summary: string;
+  rationale?: string;
+  metadata: Record<string, unknown>;
+  dedupKey: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+}
+
+export interface MemoryQualityIssueListRequest {
+  workspaceId?: string;
+  kind?: MemoryQualityIssueKind | "all";
+  status?: MemoryQualityIssueStatus | "all";
+  targetKind?: MemoryFeedbackTargetKind;
+  limit?: number;
+}
+
+export interface MemoryQualityIssuePatchInput {
+  status: MemoryQualityIssueStatus;
+  resolutionNote?: string;
+}
+
+export interface MemoryQualityScanRequest {
+  workspaceId?: string;
+  limit?: number;
+  dryRun?: boolean;
+}
+
+export interface MemoryQualityScanResponse {
+  generatedAt: string;
+  workspaceId: string;
+  scannedCount: number;
+  issueCount: number;
+  createdCount: number;
+  updatedCount: number;
+  dryRun: boolean;
+  issues: MemoryQualityIssueRecord[];
+  warnings: string[];
+}
+
 export type TraceMemoryCandidateType =
   | "fact"
   | "decision"
@@ -438,6 +511,7 @@ export interface MemoryRecallResponse {
   recentContexts: MemoryContextPack[];
   feedback: MemoryFeedbackRecord[];
   traceCandidates: TraceMemoryCandidateRecord[];
+  qualityIssues: MemoryQualityIssueRecord[];
   warnings: string[];
 }
 

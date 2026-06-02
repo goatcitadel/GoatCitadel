@@ -1356,6 +1356,7 @@ export class GatewayService {
       maintenance: this.memoryMaintenanceService,
       admin: {
         gatewaySql: this.gatewaySql,
+        memoryQualityIssues: this.storage.memoryQualityIssues,
         tryParseJson: (raw, fallback) => this.tryParseJson(raw, fallback),
         requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
         publishRealtime: (channel, topic, payload) => {

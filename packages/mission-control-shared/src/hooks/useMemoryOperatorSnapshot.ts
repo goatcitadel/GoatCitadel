@@ -14,6 +14,7 @@ import {
   fetchMemoryMaintenanceRunProvenance,
   fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus,
+  fetchMemoryQualityIssues,
   fetchMemoryRelations,
   fetchMemoryQmdStats,
   fetchTraceMemoryCandidates,
@@ -21,8 +22,10 @@ import {
   forgetMemoryItem,
   patchMemoryItem,
   patchMemoryMaintenancePolicy,
+  patchMemoryQualityIssue,
   rejectMemoryMaintenanceRecommendation,
   runMemoryMaintenanceNow,
+  runMemoryQualityScan,
 } from "../api/client";
 import {
   buildMemoryMaintenancePolicyPatch,
@@ -46,6 +49,7 @@ type MemoryOperatorSectionErrors = {
   memoryRelations: string | null;
   memoryDecisions: string | null;
   memoryFeedback: string | null;
+  memoryQualityIssues: string | null;
   traceMemoryCandidates: string | null;
   memoryHistory: string | null;
   maintenanceStatus: string | null;
@@ -64,6 +68,7 @@ type MemoryOperatorSnapshot = {
   memoryRelations: Awaited<ReturnType<typeof fetchMemoryRelations>>["items"];
   memoryDecisions: Awaited<ReturnType<typeof fetchMemoryDecisions>>["items"];
   memoryFeedback: Awaited<ReturnType<typeof fetchMemoryFeedback>>["items"];
+  memoryQualityIssues: Awaited<ReturnType<typeof fetchMemoryQualityIssues>>["items"];
   traceMemoryCandidates: Awaited<ReturnType<typeof fetchTraceMemoryCandidates>>["items"];
   memoryHistory: Awaited<ReturnType<typeof fetchMemoryItemHistory>>["items"];
   maintenanceStatus: Awaited<ReturnType<typeof fetchMemoryMaintenanceStatus>> | null;
@@ -120,34 +125,39 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     const maintenanceEnabled = settings?.features.memoryMaintenanceV1Enabled ?? false;
     const maintenanceDurableReady = settings?.features.durableKernelV1Enabled ?? false;
 
-    const [itemsRes, entitiesRes, relationsRes, decisionsRes, feedbackRes, traceCandidatesRes] = memoryAdminEnabled
-      ? await Promise.all([
-          fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
-            sectionErrors.memoryItems = getErrorMessage(itemsError);
-            return { items: [] };
-          }),
-          fetchMemoryEntities({ workspaceId, status: "all", limit: 80 }).catch((entitiesError) => {
-            sectionErrors.memoryEntities = getErrorMessage(entitiesError);
-            return { items: [] };
-          }),
-          fetchMemoryRelations({ workspaceId, status: "all", limit: 80 }).catch((relationsError) => {
-            sectionErrors.memoryRelations = getErrorMessage(relationsError);
-            return { items: [] };
-          }),
-          fetchMemoryDecisions({ workspaceId, status: "all", limit: 80 }).catch((decisionsError) => {
-            sectionErrors.memoryDecisions = getErrorMessage(decisionsError);
-            return { items: [] };
-          }),
-          fetchMemoryFeedback({ workspaceId, status: "all", limit: 40 }).catch((feedbackError) => {
-            sectionErrors.memoryFeedback = getErrorMessage(feedbackError);
-            return { items: [] };
-          }),
-          fetchTraceMemoryCandidates({ workspaceId, status: "all", limit: 40 }).catch((traceError) => {
-            sectionErrors.traceMemoryCandidates = getErrorMessage(traceError);
-            return { items: [] };
-          }),
-        ])
-      : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }];
+    const [itemsRes, entitiesRes, relationsRes, decisionsRes, feedbackRes, qualityIssuesRes, traceCandidatesRes] =
+      memoryAdminEnabled
+        ? await Promise.all([
+            fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
+              sectionErrors.memoryItems = getErrorMessage(itemsError);
+              return { items: [] };
+            }),
+            fetchMemoryEntities({ workspaceId, status: "all", limit: 80 }).catch((entitiesError) => {
+              sectionErrors.memoryEntities = getErrorMessage(entitiesError);
+              return { items: [] };
+            }),
+            fetchMemoryRelations({ workspaceId, status: "all", limit: 80 }).catch((relationsError) => {
+              sectionErrors.memoryRelations = getErrorMessage(relationsError);
+              return { items: [] };
+            }),
+            fetchMemoryDecisions({ workspaceId, status: "all", limit: 80 }).catch((decisionsError) => {
+              sectionErrors.memoryDecisions = getErrorMessage(decisionsError);
+              return { items: [] };
+            }),
+            fetchMemoryFeedback({ workspaceId, status: "all", limit: 40 }).catch((feedbackError) => {
+              sectionErrors.memoryFeedback = getErrorMessage(feedbackError);
+              return { items: [] };
+            }),
+            fetchMemoryQualityIssues({ workspaceId, status: "all", limit: 40 }).catch((qualityError) => {
+              sectionErrors.memoryQualityIssues = getErrorMessage(qualityError);
+              return { items: [] };
+            }),
+            fetchTraceMemoryCandidates({ workspaceId, status: "all", limit: 40 }).catch((traceError) => {
+              sectionErrors.traceMemoryCandidates = getErrorMessage(traceError);
+              return { items: [] };
+            }),
+          ])
+        : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }];
 
     const [maintenanceStatusRes, maintenanceRunsRes, maintenanceRecommendationsRes] =
       maintenanceEnabled && maintenanceDurableReady
@@ -175,6 +185,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       memoryRelations: memoryAdminEnabled ? relationsRes.items : [],
       memoryDecisions: memoryAdminEnabled ? decisionsRes.items : [],
       memoryFeedback: memoryAdminEnabled ? feedbackRes.items : [],
+      memoryQualityIssues: memoryAdminEnabled ? qualityIssuesRes.items : [],
       traceMemoryCandidates: memoryAdminEnabled ? traceCandidatesRes.items : [],
       memoryHistory: [],
       maintenanceStatus: maintenanceStatusRes,
@@ -443,6 +454,66 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     }
   }, [data?.maintenanceDurableReady, data?.maintenanceEnabled, reload, workspaceId]);
 
+  const scanMemoryQuality = useCallback(async () => {
+    if (data?.memoryAdminState !== "enabled") {
+      setNotice({
+        tone: "warning",
+        message: "Memory admin settings are not confirmed, so quality scans are locked.",
+      });
+      return;
+    }
+    setBusyKey("memory-quality:scan");
+    setNotice(null);
+    try {
+      const result = await runMemoryQualityScan({ workspaceId });
+      setNotice({
+        tone: "success",
+        message: `Memory quality scan recorded ${result.issueCount} issue${result.issueCount === 1 ? "" : "s"}.`,
+      });
+      await reload();
+    } catch (scanError) {
+      setNotice({ tone: "error", message: getErrorMessage(scanError) });
+    } finally {
+      setBusyKey(null);
+    }
+  }, [data?.memoryAdminState, reload, workspaceId]);
+
+  const patchQualityIssue = useCallback(
+    async (issueId: string, status: "open" | "resolved" | "dismissed", resolutionNote?: string) => {
+      if (data?.memoryAdminState !== "enabled") {
+        setNotice({
+          tone: "warning",
+          message: "Memory admin settings are not confirmed, so quality issue changes are locked.",
+        });
+        return;
+      }
+      setBusyKey(`memory-quality:${issueId}:${status}`);
+      setNotice(null);
+      try {
+        const updated = await patchMemoryQualityIssue(issueId, { status, resolutionNote });
+        setData((current) =>
+          current
+            ? {
+                ...current,
+                memoryQualityIssues: current.memoryQualityIssues.map((issue) =>
+                  issue.issueId === issueId ? updated : issue,
+                ),
+              }
+            : current,
+        );
+        setNotice({
+          tone: "success",
+          message: status === "open" ? "Memory quality issue reopened." : `Memory quality issue ${status}.`,
+        });
+      } catch (patchError) {
+        setNotice({ tone: "error", message: getErrorMessage(patchError) });
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [data?.memoryAdminState],
+  );
+
   const savePolicy = useCallback(async () => {
     if (!policyDraft) {
       return;
@@ -553,6 +624,8 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     reload,
     saveItemPatch,
     forgetSelectedItem,
+    scanMemoryQuality,
+    patchQualityIssue,
     runMaintenance,
     savePolicy,
     resolveRecommendation,
@@ -570,6 +643,7 @@ function createEmptySectionErrors(): MemoryOperatorSectionErrors {
     memoryRelations: null,
     memoryDecisions: null,
     memoryFeedback: null,
+    memoryQualityIssues: null,
     traceMemoryCandidates: null,
     memoryHistory: null,
     maintenanceStatus: null,

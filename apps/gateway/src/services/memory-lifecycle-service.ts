@@ -39,6 +39,15 @@ import type {
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceStatusRecord,
+  MemoryQualityIssueInput,
+  MemoryQualityIssueKind,
+  MemoryQualityIssueListRequest,
+  MemoryQualityIssuePatchInput,
+  MemoryQualityIssueRecord,
+  MemoryQualityIssueSeverity,
+  MemoryQualityIssueStatus,
+  MemoryQualityScanRequest,
+  MemoryQualityScanResponse,
   MemoryRelationInput,
   MemoryRelationRecord,
   MemoryQmdStatsResponse,
@@ -82,6 +91,14 @@ export interface MemoryFileEntry {
 }
 
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
+  memoryQualityIssues: {
+    list(input?: MemoryQualityIssueListRequest): MemoryQualityIssueRecord[];
+    upsertOpenIssue(input: MemoryQualityIssueInput & { dedupKey?: string }): {
+      record: MemoryQualityIssueRecord;
+      created: boolean;
+    };
+    patchStatus(issueId: string, input: MemoryQualityIssuePatchInput): MemoryQualityIssueRecord;
+  };
   requireFeatureEnabled(flag: string): void;
   publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
 }
@@ -1268,6 +1285,221 @@ export class MemoryLifecycleService {
     return feedback;
   }
 
+  public listMemoryQualityIssues(input: MemoryQualityIssueListRequest = {}): MemoryQualityIssueRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    return this.deps.admin.memoryQualityIssues.list({
+      ...input,
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    });
+  }
+
+  public runMemoryQualityScan(input: MemoryQualityScanRequest = {}, actorId = "operator"): MemoryQualityScanResponse {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureFeedbackSchema();
+    this.ensureLearningSchema();
+    const generatedAt = new Date().toISOString();
+    const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId);
+    const limit = normalizeStructuredLimit(input.limit);
+    const warnings: string[] = [];
+    const candidateIssues = new Map<string, MemoryQualityIssueInput & { dedupKey: string }>();
+    const rememberIssue = (candidate: MemoryQualityIssueInput & { dedupKey: string }) => {
+      const contentForGuard = JSON.stringify({
+        summary: candidate.summary,
+        rationale: candidate.rationale,
+        metadata: candidate.metadata ?? {},
+      });
+      this.assertMemoryFeedbackContentAllowed(contentForGuard);
+      candidateIssues.set(candidate.dedupKey, candidate);
+    };
+
+    const memoryItems = this.listMemoryItems({ status: "all", limit }).filter((item) =>
+      memoryItemMatchesWorkspace(item, workspaceId),
+    );
+    const learnings = this.listMemoryLearnings({ workspaceId, status: "all", limit });
+    const feedback = this.listMemoryFeedback({ workspaceId, status: "open", limit });
+
+    for (const item of memoryItems) {
+      if (item.lifecycleState === "expired" && !item.pinned) {
+        rememberIssue({
+          workspaceId,
+          kind: "stale_low_value",
+          severity: "medium",
+          targetKind: "memory_item",
+          targetRef: item.itemId,
+          relatedRefs: [],
+          evidenceRefs: [{ sourceType: "memory_item", sourceRef: item.itemId, title: item.title }],
+          summary: `Memory item "${item.title}" is expired and unpinned.`,
+          rationale: "Expired unpinned memory is likely lower-value unless an operator refreshes or pins it.",
+          metadata: {
+            namespace: item.namespace,
+            expiresAt: item.expiresAt,
+            lifecycleState: item.lifecycleState,
+            scannedBy: actorId,
+          },
+          dedupKey: buildMemoryQualityDedupKey(workspaceId, "stale_low_value", "memory_item", item.itemId),
+        });
+      }
+    }
+
+    for (const issue of this.checkMemoryLearningStaleness({ workspaceId, limit }).issues) {
+      const kind = mapLearningStalenessToQualityKind(issue.issue);
+      rememberIssue({
+        workspaceId,
+        kind,
+        severity: mapLearningStalenessToQualitySeverity(issue.issue),
+        targetKind: "learning",
+        targetRef: issue.learningId,
+        relatedRefs: issue.path ? [issue.path] : [],
+        evidenceRefs: [
+          {
+            sourceType: issue.path ? "artifact" : "external",
+            sourceRef: issue.path ?? issue.learningId,
+            title: "Learning staleness check",
+          },
+        ],
+        summary: issue.message,
+        rationale: "Learning staleness checks compare recorded source refs, confidence, and sibling learning keys.",
+        metadata: {
+          stalenessIssue: issue.issue,
+          path: issue.path,
+          scannedBy: actorId,
+        },
+        dedupKey: buildMemoryQualityDedupKey(
+          workspaceId,
+          kind,
+          "learning",
+          issue.learningId,
+          issue.path ? [issue.issue, issue.path] : [issue.issue],
+        ),
+      });
+    }
+
+    for (const duplicate of detectNearDuplicateMemoryItems(memoryItems)) {
+      rememberIssue({
+        workspaceId,
+        kind: "near_duplicate",
+        severity: "medium",
+        targetKind: "memory_item",
+        targetRef: duplicate.primary.itemId,
+        relatedRefs: duplicate.related.map((item) => `memory_item:${item.itemId}`),
+        evidenceRefs: [
+          { sourceType: "memory_item", sourceRef: duplicate.primary.itemId, title: duplicate.primary.title },
+          ...duplicate.related.map((item) => ({
+            sourceType: "memory_item" as const,
+            sourceRef: item.itemId,
+            title: item.title,
+          })),
+        ],
+        summary: `Memory item "${duplicate.primary.title}" has ${duplicate.related.length} near-duplicate record(s).`,
+        rationale: "Duplicate memory can inflate recall and make why-used provenance harder to audit.",
+        metadata: {
+          namespace: duplicate.primary.namespace,
+          duplicateScore: duplicate.score,
+          scannedBy: actorId,
+        },
+        dedupKey: buildMemoryQualityDedupKey(
+          workspaceId,
+          "near_duplicate",
+          "memory_item",
+          duplicate.primary.itemId,
+          duplicate.related.map((item) => item.itemId),
+        ),
+      });
+    }
+
+    for (const retrievalGap of detectRetrievalGaps(feedback)) {
+      rememberIssue({
+        workspaceId,
+        kind: "retrieval_gap",
+        severity: retrievalGap.feedback.length > 1 ? "high" : "medium",
+        targetKind: retrievalGap.targetKind,
+        targetRef: retrievalGap.targetRef,
+        relatedRefs: retrievalGap.feedback.map((item) => `feedback:${item.feedbackId}`),
+        evidenceRefs: retrievalGap.feedback.map((item) => ({
+          sourceType: "external" as const,
+          sourceRef: item.feedbackId,
+          title: item.note ?? item.kind,
+        })),
+        summary: `Open missing-memory feedback for ${retrievalGap.targetKind}:${shortMemoryRef(retrievalGap.targetRef)}.`,
+        rationale: "Missing-memory feedback means recall did not surface context the operator expected.",
+        metadata: {
+          feedbackIds: retrievalGap.feedback.map((item) => item.feedbackId),
+          notes: retrievalGap.feedback.map((item) => item.note).filter(Boolean),
+          scannedBy: actorId,
+        },
+        dedupKey: buildMemoryQualityDedupKey(
+          workspaceId,
+          "retrieval_gap",
+          retrievalGap.targetKind,
+          retrievalGap.targetRef,
+          retrievalGap.feedback.map((item) => item.feedbackId),
+        ),
+      });
+    }
+
+    if (learnings.length === 0 && memoryItems.length === 0 && feedback.length === 0) {
+      warnings.push("No memory items, learnings, or open feedback were available to scan.");
+    }
+
+    const issueInputs = [...candidateIssues.values()].slice(0, limit);
+    let createdCount = 0;
+    let updatedCount = 0;
+    const issues = input.dryRun
+      ? issueInputs.map((candidate, index) => dryRunQualityIssue(candidate, generatedAt, index))
+      : issueInputs.map((candidate) => {
+          const result = this.deps.admin.memoryQualityIssues.upsertOpenIssue(candidate);
+          if (result.created) {
+            createdCount += 1;
+          } else {
+            updatedCount += 1;
+          }
+          return result.record;
+        });
+
+    if (!input.dryRun) {
+      this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_quality_scan_completed",
+        workspaceId,
+        issueCount: issues.length,
+        createdCount,
+        updatedCount,
+      });
+    }
+
+    return {
+      generatedAt,
+      workspaceId,
+      scannedCount: memoryItems.length + learnings.length + feedback.length,
+      issueCount: issues.length,
+      createdCount,
+      updatedCount,
+      dryRun: input.dryRun ?? false,
+      issues,
+      warnings,
+    };
+  }
+
+  public patchMemoryQualityIssue(
+    issueId: string,
+    input: MemoryQualityIssuePatchInput,
+    actorId = "operator",
+  ): MemoryQualityIssueRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const record = this.deps.admin.memoryQualityIssues.patchStatus(issueId, {
+      status: normalizeMemoryQualityIssueStatus(input.status),
+      resolutionNote: optionalTrimmedText(input.resolutionNote),
+    });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_quality_issue_updated",
+      issueId: record.issueId,
+      status: record.status,
+      actorId,
+      workspaceId: record.workspaceId,
+    });
+    return record;
+  }
+
   public listTraceMemoryCandidates(
     input: {
       workspaceId?: string;
@@ -1427,6 +1659,7 @@ export class MemoryLifecycleService {
     const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId ?? input.workspace);
     const feedback = this.listMemoryFeedback({ workspaceId, limit: 12 });
     const traceCandidates = this.listTraceMemoryCandidates({ workspaceId, status: "proposed", limit: 12 });
+    const qualityIssues = this.listMemoryQualityIssues({ workspaceId, status: "open", limit: 12 });
     const recentContexts = this.listRecentContexts(limit);
     const warnings: string[] = [];
     if (input.mode === "targeted") {
@@ -1454,6 +1687,7 @@ export class MemoryLifecycleService {
         ),
         feedback,
         traceCandidates,
+        qualityIssues,
         warnings,
       };
     }
@@ -1465,10 +1699,11 @@ export class MemoryLifecycleService {
     return {
       mode: input.mode,
       generatedAt: new Date().toISOString(),
-      summary: buildRecallSummary(input.mode, recentContexts, feedback, traceCandidates),
+      summary: buildRecallSummary(input.mode, recentContexts, feedback, traceCandidates, qualityIssues),
       recentContexts,
       feedback,
       traceCandidates,
+      qualityIssues,
       warnings,
     };
   }
@@ -2456,6 +2691,196 @@ function normalizeMemoryFeedbackTargetKind(value: string | undefined): MemoryFee
     : "context";
 }
 
+function normalizeMemoryQualityIssueStatus(value: string | undefined): MemoryQualityIssueStatus {
+  return value === "resolved" || value === "dismissed" ? value : "open";
+}
+
+function normalizeMemoryQualityIssueSeverity(value: string | undefined): MemoryQualityIssueSeverity {
+  return value === "low" || value === "high" ? value : "medium";
+}
+
+function mapLearningStalenessToQualityKind(issue: MemoryLearningStalenessIssue["issue"]): MemoryQualityIssueKind {
+  if (issue === "low_confidence") {
+    return "stale_low_value";
+  }
+  if (issue === "likely_contradiction") {
+    return "likely_contradiction";
+  }
+  return "source_drift";
+}
+
+function mapLearningStalenessToQualitySeverity(
+  issue: MemoryLearningStalenessIssue["issue"],
+): MemoryQualityIssueSeverity {
+  if (issue === "likely_contradiction" || issue === "missing_file") {
+    return "high";
+  }
+  if (issue === "low_confidence") {
+    return "low";
+  }
+  return "medium";
+}
+
+function memoryItemMatchesWorkspace(item: MemoryItemRecord, workspaceId: string): boolean {
+  if (workspaceId === "default") {
+    return true;
+  }
+  const metadataWorkspace =
+    readRecordString(item.metadata, "workspaceId") ??
+    readRecordString(item.metadata, "workspace") ??
+    readRecordString(item.metadata, "workspace_id");
+  return (
+    metadataWorkspace === workspaceId ||
+    item.namespace.startsWith(`${workspaceId}/`) ||
+    item.namespace.startsWith(`${workspaceId}.`)
+  );
+}
+
+interface NearDuplicateMemoryItems {
+  primary: MemoryItemRecord;
+  related: MemoryItemRecord[];
+  score: number;
+}
+
+function detectNearDuplicateMemoryItems(items: MemoryItemRecord[]): NearDuplicateMemoryItems[] {
+  const activeItems = items.filter((item) => item.status === "active").slice(0, 125);
+  const groups = new Map<string, NearDuplicateMemoryItems>();
+  for (let leftIndex = 0; leftIndex < activeItems.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < activeItems.length; rightIndex += 1) {
+      const left = activeItems[leftIndex];
+      const right = activeItems[rightIndex];
+      if (!left || !right) {
+        continue;
+      }
+      const score = calculateMemoryDuplicateScore(left, right);
+      if (score < 0.82) {
+        continue;
+      }
+      const primary = Date.parse(left.updatedAt) >= Date.parse(right.updatedAt) ? left : right;
+      const related = primary.itemId === left.itemId ? right : left;
+      const group = groups.get(primary.itemId) ?? { primary, related: [] as MemoryItemRecord[], score };
+      if (!group.related.some((item) => item.itemId === related.itemId)) {
+        group.related.push(related);
+      }
+      group.score = Math.max(group.score, score);
+      groups.set(primary.itemId, group);
+    }
+  }
+  return [...groups.values()].filter((group) => group.related.length > 0).slice(0, 25);
+}
+
+function calculateMemoryDuplicateScore(left: MemoryItemRecord, right: MemoryItemRecord): number {
+  const leftTitle = normalizeQualityText(left.title);
+  const rightTitle = normalizeQualityText(right.title);
+  const titleMatch = leftTitle.length >= 6 && leftTitle === rightTitle;
+  const leftContent = normalizeQualityText(left.content);
+  const rightContent = normalizeQualityText(right.content);
+  if (leftContent.length >= 80 && leftContent.slice(0, 240) === rightContent.slice(0, 240)) {
+    return 0.94;
+  }
+  const leftTerms = significantTerms(`${left.title} ${left.content}`);
+  const rightTerms = significantTerms(`${right.title} ${right.content}`);
+  const overlap = calculateSetOverlap(leftTerms, rightTerms);
+  if (titleMatch && overlap >= 0.5) {
+    return Number(Math.max(0.86, overlap).toFixed(3));
+  }
+  return Number(overlap.toFixed(3));
+}
+
+function calculateSetOverlap(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let intersections = 0;
+  for (const term of left) {
+    if (right.has(term)) {
+      intersections += 1;
+    }
+  }
+  return intersections / Math.min(left.size, right.size);
+}
+
+interface RetrievalGapIssueGroup {
+  targetKind: MemoryFeedbackTargetKind;
+  targetRef: string;
+  feedback: MemoryFeedbackRecord[];
+}
+
+function detectRetrievalGaps(feedback: MemoryFeedbackRecord[]): RetrievalGapIssueGroup[] {
+  const groups = new Map<string, RetrievalGapIssueGroup>();
+  for (const item of feedback) {
+    if (item.kind !== "missing" || item.status !== "open") {
+      continue;
+    }
+    const targetRef = item.targetRef ?? item.contextId ?? item.citationId ?? item.feedbackId;
+    const noteKey = normalizeQualityText(item.note ?? "missing").slice(0, 80);
+    const key = `${item.targetKind}|${targetRef}|${noteKey}`;
+    const group = groups.get(key) ?? {
+      targetKind: item.targetKind,
+      targetRef,
+      feedback: [],
+    };
+    group.feedback.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()].slice(0, 25);
+}
+
+function buildMemoryQualityDedupKey(
+  workspaceId: string,
+  kind: MemoryQualityIssueKind,
+  targetKind: MemoryFeedbackTargetKind,
+  targetRef: string,
+  relatedRefs: string[] = [],
+): string {
+  return [
+    workspaceId,
+    kind,
+    targetKind,
+    targetRef,
+    ...relatedRefs
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .sort(),
+  ].join("|");
+}
+
+function dryRunQualityIssue(
+  input: MemoryQualityIssueInput & { dedupKey: string },
+  generatedAt: string,
+  index: number,
+): MemoryQualityIssueRecord {
+  return {
+    issueId: `dry-run-${index + 1}`,
+    workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+    kind: input.kind,
+    status: "open",
+    severity: normalizeMemoryQualityIssueSeverity(input.severity),
+    targetKind: input.targetKind,
+    targetRef: input.targetRef,
+    relatedRefs: input.relatedRefs ?? [],
+    evidenceRefs: input.evidenceRefs ?? [],
+    summary: input.summary,
+    rationale: input.rationale,
+    metadata: input.metadata ?? {},
+    dedupKey: input.dedupKey,
+    createdAt: generatedAt,
+    updatedAt: generatedAt,
+  };
+}
+
+function normalizeQualityText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function shortMemoryRef(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 12)}...` : value;
+}
+
 function normalizeTraceCandidateType(value: string | undefined): TraceMemoryCandidateType {
   return value === "decision" ||
     value === "tool_outcome" ||
@@ -2711,14 +3136,15 @@ function buildRecallSummary(
   recentContexts: MemoryContextPack[],
   feedback: MemoryFeedbackRecord[],
   traceCandidates: TraceMemoryCandidateRecord[],
+  qualityIssues: MemoryQualityIssueRecord[],
 ): string {
   const citationCount = recentContexts.reduce((sum, context) => sum + context.citations.length, 0);
   const usefulCount = feedback.filter((item) => item.kind === "useful").length;
-  const issueCount = feedback.length - usefulCount;
+  const feedbackIssueCount = feedback.length - usefulCount;
   if (mode === "post_compaction_resume") {
-    return `${recentContexts.length} recent context packs with ${citationCount} citations are available for explicit resume context. ${traceCandidates.length} trace-derived candidates remain proposed.`;
+    return `${recentContexts.length} recent context packs with ${citationCount} citations are available for explicit resume context. ${traceCandidates.length} trace-derived candidates remain proposed, and ${qualityIssues.length} open quality issues are queued for review.`;
   }
-  return `${recentContexts.length} recent context packs, ${citationCount} citations, ${usefulCount} useful feedback records, and ${issueCount} quality issues are available for explicit summary recall.`;
+  return `${recentContexts.length} recent context packs, ${citationCount} citations, ${usefulCount} useful feedback records, ${feedbackIssueCount} feedback issues, and ${qualityIssues.length} open quality issues are available for explicit summary recall.`;
 }
 
 function requireTrimmedText(value: string | undefined, field: string): string {

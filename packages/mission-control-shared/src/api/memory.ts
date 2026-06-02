@@ -24,6 +24,11 @@ import type {
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceStatusRecord,
+  MemoryQualityIssueListRequest,
+  MemoryQualityIssuePatchInput,
+  MemoryQualityIssueRecord,
+  MemoryQualityScanRequest,
+  MemoryQualityScanResponse,
   MemoryRelationInput,
   MemoryRelationRecord,
   MemoryQmdStatsResponse,
@@ -164,6 +169,35 @@ export async function fetchMemoryFeedback(input?: {
 export async function recordMemoryFeedback(input: MemoryFeedbackInput): Promise<MemoryFeedbackRecord> {
   return request<MemoryFeedbackRecord>("/api/v1/memory/feedback", {
     method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMemoryQualityIssues(
+  input: MemoryQualityIssueListRequest = {},
+): Promise<{ items: MemoryQualityIssueRecord[] }> {
+  const params = new URLSearchParams();
+  if (input.workspaceId) params.set("workspaceId", input.workspaceId);
+  if (input.kind) params.set("kind", input.kind);
+  if (input.status) params.set("status", input.status);
+  if (input.targetKind) params.set("targetKind", input.targetKind);
+  params.set("limit", String(Math.max(1, Math.min(input.limit ?? 100, 500))));
+  return request<{ items: MemoryQualityIssueRecord[] }>(`/api/v1/memory/quality/issues?${params.toString()}`);
+}
+
+export async function runMemoryQualityScan(input: MemoryQualityScanRequest): Promise<MemoryQualityScanResponse> {
+  return request<MemoryQualityScanResponse>("/api/v1/memory/quality/scan", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function patchMemoryQualityIssue(
+  issueId: string,
+  input: MemoryQualityIssuePatchInput,
+): Promise<MemoryQualityIssueRecord> {
+  return request<MemoryQualityIssueRecord>(`/api/v1/memory/quality/issues/${encodeURIComponent(issueId)}`, {
+    method: "PATCH",
     body: JSON.stringify(input),
   });
 }

@@ -68,6 +68,8 @@ const memorySnapshot = vi.hoisted(() => ({
   setPolicyDirty: vi.fn(),
   saveItemPatch: vi.fn(),
   forgetSelectedItem: vi.fn(),
+  scanMemoryQuality: vi.fn(),
+  patchQualityIssue: vi.fn(),
   runMaintenance: vi.fn(),
   savePolicy: vi.fn(),
   resolveRecommendation: vi.fn(),
@@ -230,6 +232,25 @@ const memorySnapshot = vi.hoisted(() => ({
         updatedAt: "2026-04-22T00:00:00.000Z",
       },
     ],
+    memoryQualityIssues: [
+      {
+        issueId: "quality-1",
+        workspaceId: "default",
+        kind: "source_drift",
+        status: "open",
+        severity: "high",
+        targetKind: "learning",
+        targetRef: "learning-1",
+        relatedRefs: [],
+        evidenceRefs: [{ sourceType: "artifact", sourceRef: "docs/plan.md", title: "Learning staleness check" }],
+        summary: "Referenced file docs/plan.md changed since the learning was recorded.",
+        rationale: "Learning staleness checks compare recorded source refs.",
+        metadata: {},
+        dedupKey: "default|source_drift|learning|learning-1|changed_hash",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+    ],
     memoryHistory: [
       { changeId: "chg-1", changeType: "updated", createdAt: "2026-04-22T00:00:00.000Z", actorId: "operator:test" },
     ],
@@ -297,6 +318,7 @@ const memorySnapshot = vi.hoisted(() => ({
       memoryRelations: null,
       memoryDecisions: null,
       memoryFeedback: null,
+      memoryQualityIssues: null,
       traceMemoryCandidates: null,
       memoryHistory: null,
       maintenanceStatus: null,
@@ -311,10 +333,12 @@ const memorySnapshot = vi.hoisted(() => ({
 
 const evidenceApiMocks = vi.hoisted(() => ({
   fetchEvidenceEnvelopes: vi.fn(),
+  runMemoryRetrievalBenchmark: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchEvidenceEnvelopes: evidenceApiMocks.fetchEvidenceEnvelopes,
+  runMemoryRetrievalBenchmark: evidenceApiMocks.runMemoryRetrievalBenchmark,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot", () => ({
@@ -358,6 +382,30 @@ describe("MemoryRoutePage", () => {
           metadata: { decision: { decision: "approved" } },
         },
       ],
+    });
+    evidenceApiMocks.runMemoryRetrievalBenchmark.mockResolvedValue({
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      itemCount: 1,
+      avgLatencyMs: 12,
+      avgOverlapScore: 0.72,
+      retrievalStrategies: ["hybrid_rank"],
+      semanticCoverageNote: "Hybrid retrieval benchmark.",
+      items: [
+        {
+          prompt: "What recent decisions affect current GoatCitadel memory work?",
+          status: "completed",
+          latencyMs: 12,
+          contextId: "ctx-1",
+          citationsCount: 2,
+          originalTokenEstimate: 100,
+          distilledTokenEstimate: 80,
+          overlapScore: 0.72,
+          retrievalStrategy: "hybrid_rank",
+          semanticCoverageNote: "Hybrid retrieval benchmark.",
+          qmdStatus: "generated",
+        },
+      ],
+      warnings: [],
     });
   });
 
