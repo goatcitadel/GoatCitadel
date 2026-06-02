@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-06-01T02:55:52.489Z",
-  "gatewayLineCount": 9047,
+  "generatedAt": "2026-06-02T05:47:42.515Z",
+  "gatewayLineCount": 9089,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
@@ -14,8 +14,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 9047,
-      "bytes": 348024
+      "lineCount": 9089,
+      "bytes": 349961
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
@@ -24,8 +24,8 @@
     },
     {
       "path": "apps/gateway/src/services/capability-system-service.ts",
-      "lineCount": 3816,
-      "bytes": 138816
+      "lineCount": 3910,
+      "bytes": 142258
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
@@ -34,8 +34,8 @@
     },
     {
       "path": "apps/gateway/src/services/memory-lifecycle-service.ts",
-      "lineCount": 2776,
-      "bytes": 99382
+      "lineCount": 3202,
+      "bytes": 114840
     },
     {
       "path": "apps/gateway/src/services/skill-import-service.ts",
@@ -105,10 +105,10 @@
   "gatewayRouteCompositionVariadicAnyMethodCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumerCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumers": [],
-  "gatewayRouteCompositionPortMemberCount": 155,
+  "gatewayRouteCompositionPortMemberCount": 156,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 816,
+  "totalHostCallbacks": 825,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
@@ -138,7 +138,7 @@
     "apps/gateway/src/services/llm-completion-service.ts": 50,
     "apps/gateway/src/services/llm-service.ts": 9,
     "apps/gateway/src/services/mcp-diagnostics-service.ts": 6,
-    "apps/gateway/src/services/mcp-server-admin-service.ts": 24,
+    "apps/gateway/src/services/mcp-server-admin-service.ts": 29,
     "apps/gateway/src/services/memory-item-helpers.ts": 3,
     "apps/gateway/src/services/memory-lifecycle-service.ts": 1,
     "apps/gateway/src/services/onboarding-marker-helpers.ts": 7,
@@ -148,13 +148,14 @@
     "apps/gateway/src/services/runtime-lifecycle-read-service.ts": 24,
     "apps/gateway/src/services/skill-evaluation-service.ts": 10,
     "apps/gateway/src/services/skill-import-service.ts": 4,
-    "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 43,
+    "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 47,
     "apps/gateway/src/services/workflow-recipe-service.ts": 4
   },
   "settingsHostCallbackCount": 0,
   "chatHostCallbackCount": 261,
-  "routeFacingServiceCount": 57,
+  "routeFacingServiceCount": 58,
   "routeFacingServiceFiles": [
+    "apps/gateway/src/services/a2a-route-service.ts",
     "apps/gateway/src/services/addons-route-service.ts",
     "apps/gateway/src/services/agents-route-service.ts",
     "apps/gateway/src/services/approvals-route-service.ts",

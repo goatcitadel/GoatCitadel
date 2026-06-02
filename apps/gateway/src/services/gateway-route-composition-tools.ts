@@ -27,7 +27,8 @@ export function composeToolsMcpRouteDependencies(
     readMcpTools: () => gateway.readMcpTools(),
     writeMcpTools: (tools) => gateway.writeMcpTools(tools),
     resolveConnectedMcpTools: (server, existing) => gateway.resolveConnectedMcpTools(server, existing),
-    exchangeMcpOAuthCode: (server, code, stateRecord) => gateway.exchangeMcpOAuthCode(server, code, stateRecord),
+    exchangeMcpOAuthCode: (server, code, stateRecord) =>
+      gateway.mcpOAuth.exchangeAuthorizationCode(server, code, stateRecord),
     requireMcpServer: (serverId) => gateway.requireMcpServer(serverId),
     readMcpAuthState: () => gateway.readMcpAuthState(),
     writeMcpAuthState: (state) => gateway.writeMcpAuthState(state),
