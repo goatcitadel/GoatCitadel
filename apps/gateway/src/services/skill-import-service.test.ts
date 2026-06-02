@@ -408,6 +408,53 @@ describe("SkillImportService validation", () => {
     });
   });
 
+  it("surfaces Agent Skills and AGENTS.md compatibility as review-only metadata", async () => {
+    const skillDir = path.join(rootDir, "agent-skills-compat");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Agent Skills Compat",
+        "description: Valid fixture for Agent Skills and AGENTS.md compatibility metadata review.",
+        "---",
+        "",
+        "Use this skill to validate compatibility metadata without activating scripts.",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(path.join(skillDir, "AGENTS.md"), "Keep this guidance review-only.\n");
+    fs.writeFileSync(path.join(skillDir, "skill.json"), '{"name":"agent-skills-compat"}\n');
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+    fs.writeFileSync(path.join(skillDir, "scripts.mjs"), "console.log('review only');\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "agentskill",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.compatibility).toMatchObject({
+      sources: expect.arrayContaining(["skill_md", "agent_skills", "agents_md"]),
+      callability: "review_only",
+      warnings: expect.arrayContaining([
+        expect.stringContaining("Agent Skills compatibility metadata detected"),
+        expect.stringContaining("AGENTS.md guidance detected as provenance only"),
+        expect.stringContaining("Imported scripts remain non-callable"),
+      ]),
+    });
+    expect(result.candidate.compatibility).toEqual(result.compatibility);
+    expect(result.warnings).toEqual(expect.arrayContaining(result.compatibility?.warnings ?? []));
+    expect(service.listHistory(1)[0]?.details).toMatchObject({
+      compatibility: expect.objectContaining({
+        callability: "review_only",
+        sources: expect.arrayContaining(["agent_skills", "agents_md"]),
+      }),
+    });
+  });
+
   it("hard-blocks imports that overlap GoatCitadel native capability families", async () => {
     const skillDir = path.join(rootDir, "self-improving-agent-skill");
     fs.mkdirSync(skillDir, { recursive: true });

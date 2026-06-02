@@ -254,6 +254,68 @@ limits:
       },
     });
   });
+
+  it("exports n8n templates as disabled read-only planning artifacts", () => {
+    const createOrchestrationPlan = vi.fn();
+    const service = createService(createOrchestrationPlan);
+
+    const exported = service.exportN8nTemplate(
+      {
+        workflowName: "GoatCitadel provider spend review",
+        webhookPath: "goatcitadel/provider-spend-review",
+        recipe: {
+          name: "Provider spend review",
+          goal: "Review provider spend and draft an operator note.",
+          process: "sequential",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [
+            {
+              id: "review-spend",
+              title: "Review spend",
+              agent: "analyst",
+              prompt: "Review provider spend evidence.",
+              requiresApproval: true,
+            },
+          ],
+          scheduleIntent: "weekday 9am",
+        },
+      },
+      "2026-05-31T12:00:00.000Z",
+    );
+
+    expect(createOrchestrationPlan).not.toHaveBeenCalled();
+    expect(exported.version).toBe("workflow_recipe.n8n_template_export.v1");
+    expect(exported.target).toBe("n8n");
+    expect(exported.n8nWorkflow).toMatchObject({
+      name: "GoatCitadel provider spend review",
+      active: false,
+      meta: {
+        source: "goatcitadel.workflow_recipe",
+        approvalMode: "human_in_the_loop",
+        scheduleIntent: "weekday 9am",
+      },
+    });
+    expect(exported.n8nWorkflow.nodes[0]).toMatchObject({
+      type: "n8n-nodes-base.webhook",
+      parameters: { httpMethod: "POST", path: "goatcitadel/provider-spend-review" },
+    });
+    expect(exported.validation).toMatchObject({
+      status: "ready_for_operator_import_review",
+      nativeImportCompatibility: "not_verified",
+      checks: expect.arrayContaining([
+        expect.objectContaining({ id: "webhook-trigger", status: "passed" }),
+        expect.objectContaining({ id: "step-graph", status: "passed" }),
+        expect.objectContaining({ id: "execution-posture", status: "passed" }),
+        expect.objectContaining({ id: "native-n8n-import", status: "warning" }),
+      ]),
+    });
+    expect(JSON.parse(exported.content)).toMatchObject({
+      version: "workflow_recipe.n8n_template_export.v1",
+      target: "n8n",
+      posture: { sideEffectPosture: "not_executed" },
+    });
+    expect(exported.warnings.join(" ")).toContain("does not create a workflow");
+  });
 });
 
 function createService(createOrchestrationPlan = vi.fn()) {

@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => ({
           skills: deps.listSkills(),
         }),
       exportActivepiecesTemplate: (input: unknown) => ({ input, format: "activepieces" }),
+      exportN8nTemplate: (input: unknown) => ({ input, format: "n8n" }),
       listTemplates: () => [{ templateId: "template-1" }],
       previewRecipe: (input: unknown) => ({ input, tools: deps.listToolNames(), skills: deps.listSkills() }),
     };
@@ -248,6 +249,10 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.orchestration.exportActivepiecesTemplate({ templateId: "template-1" })).toEqual({
       input: { templateId: "template-1" },
       format: "activepieces",
+    });
+    expect(deps.orchestration.exportN8nTemplate({ templateId: "template-1" })).toEqual({
+      input: { templateId: "template-1" },
+      format: "n8n",
     });
     expect(deps.orchestration.runOrchestrationPlan("plan-1")).toEqual({ runId: "run-1" });
     expect(deps.orchestration.approvePhase("run-1", "phase-1", "operator", 0.5, "workspace-1")).toEqual({

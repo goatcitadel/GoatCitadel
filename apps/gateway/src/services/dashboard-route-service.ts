@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import os from "node:os";
 import type {
   ApprovalRequest,
@@ -10,6 +11,8 @@ import type {
   MemoryContextPack,
   OpsDesignQualitySnapshot,
   OpsQualitySecurityExecutionItem,
+  OpsQualityOtelExportResponse,
+  OpsQualityOtelSpan,
   OpsQualitySnapshotResponse,
   PromptPackSecurityEvalPackRecord,
   PromptPackSecurityQualityGateRecord,
@@ -35,6 +38,7 @@ export const dashboardRouteMethods = [
   "getMemoryQmdStats",
   "getObserveRunTrace",
   "getObserveRunTraceExport",
+  "getOpsQualityExport",
   "getOpsQualitySnapshot",
   "getSystemVitals",
   "isFeatureEnabled",
@@ -209,6 +213,10 @@ export interface OpsQualitySnapshotInput {
   evalLimit: number;
 }
 
+export interface OpsQualityExportInput extends OpsQualitySnapshotInput {
+  format: "otel_json";
+}
+
 export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): DashboardRoutePort {
   return {
     costSummary: (scope, from, to) => deps.storage.costLedger.summary(scope, from, to),
@@ -240,6 +248,7 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     getMemoryQmdStats: (from, to) => deps.memoryLifecycleService.getContextStats(from, to),
     getObserveRunTrace: (runId) => buildObserveRunTrace(deps, String(runId)),
     getObserveRunTraceExport: (runId) => buildObserveRunTraceExport(deps, String(runId)),
+    getOpsQualityExport: (input) => buildOpsQualityExport(deps, input as OpsQualityExportInput),
     getOpsQualitySnapshot: (input) => buildOpsQualitySnapshot(deps, input),
     getSystemVitals: () => {
       const total = os.totalmem();
@@ -406,6 +415,129 @@ function buildOpsQualitySnapshot(
       },
     ],
   };
+}
+
+function buildOpsQualityExport(
+  deps: DashboardRoutePortDependencies,
+  input: OpsQualityExportInput,
+): OpsQualityOtelExportResponse {
+  const snapshot = buildOpsQualitySnapshot(deps, input);
+  const spans = buildOpsQualityOtelSpans(snapshot);
+  const payload = {
+    version: "ops.quality_export.otel_json.v1" as const,
+    generatedAt: snapshot.generatedAt,
+    format: input.format,
+    resource: {
+      serviceName: "goatcitadel" as const,
+      source: "ops_quality" as const,
+    },
+    metricScope: snapshot.metricScope,
+    spans,
+  };
+  const content = JSON.stringify(payload, null, 2);
+  return {
+    version: "ops.quality_export.otel_json.v1",
+    generatedAt: snapshot.generatedAt,
+    format: "otel_json",
+    contentType: "application/json",
+    filename: "goatcitadel-ops-quality-otel.json",
+    sourceEndpoint: "/api/v1/ops/quality",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      note: "OTel JSON is an export transport for stored Ops quality evidence. Gateway diagnostics, durable logs, Ops Quality, and evidence records remain the source of truth.",
+    },
+    resource: payload.resource,
+    metricScope: snapshot.metricScope,
+    spans,
+    content,
+  };
+}
+
+function buildOpsQualityOtelSpans(snapshot: OpsQualitySnapshotResponse): OpsQualityOtelSpan[] {
+  const rootTraceId = stableTraceId(["ops_quality", snapshot.generatedAt]);
+  const spans: OpsQualityOtelSpan[] = [
+    buildOpsQualitySpan(rootTraceId, "ops.quality.snapshot", snapshot.generatedAt, {
+      "goatcitadel.source_endpoint": snapshot.sourceEndpoint,
+      "goatcitadel.prompt_pack_count": snapshot.metrics.promptPackCount,
+      "goatcitadel.eval_run_count": snapshot.metrics.evalRunCount,
+      "goatcitadel.security_gate_count": snapshot.metrics.securityGateCount,
+      "goatcitadel.design_quality_check_count": snapshot.metrics.designQualityCheckCount,
+      "goatcitadel.read_only": true,
+    }),
+  ];
+  for (const pack of snapshot.promptPacks.items) {
+    spans.push(
+      buildOpsQualitySpan(rootTraceId, "ops.quality.prompt_pack", snapshot.generatedAt, {
+        "goatcitadel.pack_id": pack.packId,
+        "goatcitadel.pack_name": pack.name,
+        "goatcitadel.test_count": pack.testCount ?? 0,
+      }),
+    );
+  }
+  for (const run of snapshot.evalProof.items) {
+    spans.push(
+      buildOpsQualitySpan(rootTraceId, "ops.quality.eval_proof", snapshot.generatedAt, {
+        "goatcitadel.eval_run_id": run.runId,
+        "goatcitadel.result_count": run.results.length,
+        "goatcitadel.pareto_count": run.results.filter((result) => result.paretoOptimal).length,
+      }),
+    );
+  }
+  for (const gate of snapshot.securityQualityGates.items) {
+    spans.push(
+      buildOpsQualitySpan(rootTraceId, "ops.quality.security_gate", snapshot.generatedAt, {
+        "goatcitadel.gate_id": gate.gateId,
+        "goatcitadel.pack_key": gate.packKey,
+        "goatcitadel.status": gate.status,
+        "goatcitadel.release_gate": gate.releaseGate,
+      }),
+    );
+  }
+  for (const check of snapshot.designQuality.checks) {
+    spans.push(
+      buildOpsQualitySpan(rootTraceId, "ops.quality.design_check", snapshot.generatedAt, {
+        "goatcitadel.check_id": check.id,
+        "goatcitadel.severity": check.severity,
+        "goatcitadel.status": check.status,
+        "goatcitadel.owner": check.owner,
+      }),
+    );
+  }
+  return spans;
+}
+
+function buildOpsQualitySpan(
+  traceId: string,
+  name: string,
+  generatedAt: string,
+  attributes: OpsQualityOtelSpan["attributes"],
+): OpsQualityOtelSpan {
+  return {
+    traceId,
+    spanId: stableSpanId([traceId, name, JSON.stringify(attributes)]),
+    name,
+    kind: "internal",
+    startTimeUnixNano: isoToUnixNano(generatedAt),
+    endTimeUnixNano: isoToUnixNano(generatedAt),
+    attributes,
+  };
+}
+
+function stableTraceId(parts: string[]): string {
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 32);
+}
+
+function stableSpanId(parts: string[]): string {
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+}
+
+function isoToUnixNano(value: string): string | undefined {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+  return `${BigInt(parsed) * 1_000_000n}`;
 }
 
 function buildUnknownDesignQualitySnapshot(error: Error | undefined): OpsDesignQualitySnapshot {

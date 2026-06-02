@@ -4,6 +4,7 @@ import { PromptPacksRouteService, type PromptPacksRoutePort } from "./prompt-pac
 function createPromptPacksPort() {
   return {
     importPromptPack: vi.fn((input: unknown) => ({ op: "import", input })),
+    previewPromptPackImport: vi.fn((input: unknown) => ({ op: "preview", input })),
     importBuiltinPromptPack: vi.fn((packKey: string) => ({ op: "builtin-import", packKey })),
     listSecurityEvalPacks: vi.fn(() => ({ op: "security-eval-packs" })),
     listSecurityQualityGates: vi.fn(() => ({ op: "security-quality-gates" })),
@@ -30,8 +31,8 @@ function createPromptPacksPort() {
     })),
     getPromptPackReplayRegressionStatus: vi.fn((runId: string) => ({ op: "replay-status", runId })),
     getPromptPackCapabilityTrends: vi.fn((packId: string) => ({ op: "trends", packId })),
-    getPromptPackExport: vi.fn((packId: string) => ({ op: "get-export", packId })),
-    exportPromptPack: vi.fn((packId: string) => ({ op: "export", packId })),
+    getPromptPackExport: vi.fn((packId: string, format?: string) => ({ op: "get-export", packId, format })),
+    exportPromptPack: vi.fn((packId: string, options?: unknown) => ({ op: "export", packId, options })),
     resetPromptPackRunsAndScores: vi.fn((packId: string, options?: unknown) => ({
       op: "reset",
       packId,
@@ -48,6 +49,10 @@ describe("PromptPacksRouteService", () => {
     expect(service.importPromptPack({ content: "# Pack", sourceLabel: "fixture.md" })).toEqual({
       op: "import",
       input: { content: "# Pack", sourceLabel: "fixture.md" },
+    });
+    expect(service.previewPromptPackImport({ content: "prompts: []", format: "promptfoo" })).toEqual({
+      op: "preview",
+      input: { content: "prompts: []", format: "promptfoo" },
     });
     expect(service.importBuiltinPromptPack("security-red-team-v6")).toEqual({
       op: "builtin-import",
@@ -107,8 +112,16 @@ describe("PromptPacksRouteService", () => {
       runId: "replay-1",
     });
     expect(service.getPromptPackCapabilityTrends("pack-1")).toEqual({ op: "trends", packId: "pack-1" });
-    expect(service.getPromptPackExport("pack-1")).toEqual({ op: "get-export", packId: "pack-1" });
-    expect(service.exportPromptPack("pack-1")).toEqual({ op: "export", packId: "pack-1" });
+    expect(service.getPromptPackExport("pack-1", "promptfoo")).toEqual({
+      op: "get-export",
+      packId: "pack-1",
+      format: "promptfoo",
+    });
+    expect(service.exportPromptPack("pack-1", { format: "promptfoo" })).toEqual({
+      op: "export",
+      packId: "pack-1",
+      options: { format: "promptfoo" },
+    });
     expect(service.resetPromptPackRunsAndScores("pack-1", { clearRuns: true })).toEqual({
       op: "reset",
       packId: "pack-1",

@@ -274,6 +274,95 @@ describe("prompt-pack parser, import, export, and reports", () => {
     }
   });
 
+  it("exports prompt packs as Promptfoo-compatible read-only JSON without provider calls", () => {
+    const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-promptfoo-${randomUUID()}`);
+    try {
+      const pack = {
+        ...createPack("pack-promptfoo"),
+        name: "goatcitadel_prompt_pack_promptfoo",
+      };
+      const tests = [
+        { ...createTest("test-promptfoo-1", "TEST-PF-1"), packId: pack.packId },
+        { ...createTest("test-promptfoo-2", "TEST-PF-2"), packId: pack.packId },
+      ];
+      const service = createPromptPackExportService({ rootDir, pack, tests, runs: [] });
+
+      const exported = service.exportPromptPack(pack.packId, { format: "promptfoo" });
+      const payload = JSON.parse(fs.readFileSync(exported.path, "utf8"));
+      const preview = service.previewPromptPackImport({
+        content: JSON.stringify(payload),
+        format: "promptfoo",
+      });
+
+      expect(exported).toMatchObject({
+        format: "promptfoo",
+        contentType: "application/json",
+        exists: true,
+        interop: {
+          promptfoo: {
+            compatible: true,
+            configVersion: "promptfoo.config.v1",
+            testCount: 2,
+          },
+        },
+      });
+      expect(exported.path).toMatch(/goatcitadel_prompt_pack_promptfoo-pack-promptfoo-promptfoo-latest\.json$/);
+      expect(payload).toMatchObject({
+        version: "promptfoo.config.v1",
+        providers: ["goatcitadel://operator-provided-provider"],
+        metadata: {
+          readOnly: true,
+          sideEffectPosture: "export_only",
+          providerExecution: "operator_config_required",
+        },
+      });
+      expect(payload.tests).toHaveLength(2);
+      expect(preview).toMatchObject({
+        valid: true,
+        format: "promptfoo",
+        promptCount: 1,
+        providerCount: 1,
+        testCount: 2,
+        posture: {
+          readOnly: true,
+          sideEffectPosture: "preview_only",
+          callsProviders: false,
+          mutationPerformed: false,
+        },
+      });
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns Promptfoo import-preview errors without mutating prompt packs", () => {
+    const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-preview-${randomUUID()}`);
+    try {
+      const service = createPromptPackExportService({
+        rootDir,
+        pack: createPack("pack-preview"),
+        tests: [],
+        runs: [],
+      });
+
+      const preview = service.previewPromptPackImport({ content: '{"providers":[]}', format: "promptfoo" });
+
+      expect(preview.valid).toBe(false);
+      expect(preview.errors).toEqual([
+        "Promptfoo preview could not find prompts.",
+        "Promptfoo preview could not find tests.",
+      ]);
+      expect(preview.posture).toMatchObject({
+        readOnly: true,
+        sideEffectPosture: "preview_only",
+        callsProviders: false,
+        mutationPerformed: false,
+      });
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps immutable snapshots when prompt-pack reset clears current runs", () => {
     const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-reset-${randomUUID()}`);
     try {

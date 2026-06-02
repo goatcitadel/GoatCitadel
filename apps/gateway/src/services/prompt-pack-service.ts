@@ -39,6 +39,7 @@ import type {
   PromptPackFailureAttributionCode,
   PromptPackFailureAttributionRecordV3,
   PromptPackExportRecord,
+  PromptPackExportFormat,
   PromptPackHumanReviewRecordV2,
   PromptPackJudgeStatusV2,
   PromptPackJudgeRecord,
@@ -63,6 +64,7 @@ import type {
   PromptPackSecurityQualityGateRecord,
   PromptPackSecurityQualityGatesResponse,
   PromptPackTestRecord,
+  PromptPackPromptfooImportPreviewResponse,
   PromptPackToolTier,
   PromptPackVerdict,
   RealtimeEvent,
@@ -1561,14 +1563,48 @@ export class PromptPackService {
     };
   }
 
-  getPromptPackExport(packId: string): PromptPackExportRecord {
+  previewPromptPackImport(input: {
+    content: string;
+    format: Extract<PromptPackExportFormat, "promptfoo">;
+  }): PromptPackPromptfooImportPreviewResponse {
+    const preview = parsePromptfooLikeConfig(input.content);
+    return {
+      valid: preview.errors.length === 0,
+      format: "promptfoo",
+      generatedAt: new Date().toISOString(),
+      testCount: preview.testCount,
+      promptCount: preview.promptCount,
+      providerCount: preview.providerCount,
+      warnings: preview.warnings,
+      errors: preview.errors,
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "preview_only",
+        callsProviders: false,
+        mutationPerformed: false,
+        note: "Promptfoo import preview validates config shape only. It does not run providers, import tests, mutate prompt packs, or activate tools.",
+      },
+    };
+  }
+
+  getPromptPackExport(packId: string, format: PromptPackExportFormat = "goatcitadel"): PromptPackExportRecord {
     const pack = this.ctx.storage.promptPacks.getPack(packId);
+    if (format === "promptfoo") {
+      return this.readPromptPackPromptfooExportRecord(pack);
+    }
     return this.readPromptPackExportRecord(pack);
   }
 
-  exportPromptPack(packId: string): PromptPackExportRecord {
+  exportPromptPack(
+    packId: string,
+    options: PromptPackExportFormat | { format?: PromptPackExportFormat; createSnapshot?: boolean } = {},
+  ): PromptPackExportRecord {
     this.ctx.storage.promptPacks.getPack(packId);
-    return this.refreshPromptPackExportFile(packId, { createSnapshot: true });
+    const normalized = typeof options === "string" ? { format: options } : options;
+    if (normalized.format === "promptfoo") {
+      return this.refreshPromptPackPromptfooExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
+    }
+    return this.refreshPromptPackExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
   }
 
   resetPromptPackRunsAndScores(
@@ -2117,6 +2153,37 @@ export class PromptPackService {
     };
   }
 
+  private refreshPromptPackPromptfooExportFile(
+    packId: string,
+    options: { createSnapshot?: boolean } = {},
+  ): PromptPackExportRecord {
+    const report = this.getPromptPackReport(packId);
+    const filePath = this.resolvePromptPackPromptfooExportPath(report.pack);
+    const generatedAt = new Date().toISOString();
+    const body = JSON.stringify(buildPromptfooExportPayload(report, generatedAt), null, 2);
+    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+    fsSync.writeFileSync(filePath, body, "utf8");
+    let createdSnapshotPath: string | undefined;
+    if (options.createSnapshot) {
+      const snapshotPath = this.resolvePromptPackPromptfooSnapshotPath(report.pack, generatedAt);
+      fsSync.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+      fsSync.writeFileSync(snapshotPath, body, "utf8");
+      createdSnapshotPath = snapshotPath;
+    }
+    const record = this.readPromptPackPromptfooExportRecord(report.pack);
+    if (!createdSnapshotPath) {
+      return record;
+    }
+    const snapshotStat = fsSync.statSync(createdSnapshotPath);
+    return {
+      ...record,
+      latestSnapshotPath: createdSnapshotPath,
+      latestSnapshotExists: true,
+      latestSnapshotSizeBytes: snapshotStat.size,
+      latestSnapshotUpdatedAt: new Date(snapshotStat.mtimeMs).toISOString(),
+    };
+  }
+
   private refreshPromptPackExportFileBestEffort(packId: string, reason: string): void {
     try {
       this.refreshPromptPackExportFile(packId);
@@ -2221,7 +2288,9 @@ export class PromptPackService {
       const stat = fsSync.statSync(filePath);
       return {
         packId: pack.packId,
+        format: "goatcitadel",
         path: filePath,
+        contentType: "text/markdown",
         latestPath: filePath,
         archiveDir,
         exists: true,
@@ -2233,7 +2302,9 @@ export class PromptPackService {
     } catch {
       return {
         packId: pack.packId,
+        format: "goatcitadel",
         path: filePath,
+        contentType: "text/markdown",
         latestPath: filePath,
         archiveDir,
         exists: false,
@@ -2244,11 +2315,69 @@ export class PromptPackService {
     }
   }
 
+  private readPromptPackPromptfooExportRecord(pack: PromptPackRecord): PromptPackExportRecord {
+    const filePath = this.resolvePromptPackPromptfooExportPath(pack);
+    const archiveDir = this.resolvePromptPackExportArchiveDir();
+    const snapshotPrefix = `${sanitizeFileName(pack.name || pack.packId || "prompt-pack")}_`;
+    const latestSnapshot = this.readLatestPromptPackSnapshot(archiveDir, snapshotPrefix, ".json", "_promptfoo");
+    const snapshotCount = this.countPromptPackSnapshots(archiveDir, snapshotPrefix, ".json", "_promptfoo");
+    const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+    const interop = buildPromptfooExportInterop(tests);
+    const snapshotFields = latestSnapshot
+      ? {
+          latestSnapshotPath: latestSnapshot.path,
+          latestSnapshotExists: true,
+          latestSnapshotSizeBytes: latestSnapshot.sizeBytes,
+          latestSnapshotUpdatedAt: latestSnapshot.updatedAt,
+        }
+      : {
+          latestSnapshotExists: false,
+        };
+    try {
+      const stat = fsSync.statSync(filePath);
+      return {
+        packId: pack.packId,
+        format: "promptfoo",
+        path: filePath,
+        contentType: "application/json",
+        latestPath: filePath,
+        archiveDir,
+        exists: true,
+        sizeBytes: stat.size,
+        updatedAt: new Date(stat.mtimeMs).toISOString(),
+        snapshotCount,
+        interop,
+        ...snapshotFields,
+      };
+    } catch {
+      return {
+        packId: pack.packId,
+        format: "promptfoo",
+        path: filePath,
+        contentType: "application/json",
+        latestPath: filePath,
+        archiveDir,
+        exists: false,
+        sizeBytes: 0,
+        snapshotCount,
+        interop,
+        ...snapshotFields,
+      };
+    }
+  }
+
   private resolvePromptPackExportPath(pack: PromptPackRecord): string {
     const dir = path.join(this.ctx.config.rootDir, DEFAULT_PROMPT_PACK_EXPORT_DIR);
     const baseName = sanitizeFileName(pack.name || pack.packId || "prompt-pack");
     const packSuffix = sanitizeFileName(pack.packId).slice(0, 18);
     return path.join(dir, `${baseName}-${packSuffix}-latest.md`);
+  }
+
+  private resolvePromptPackPromptfooExportPath(pack: PromptPackRecord): string {
+    const dir = path.join(this.ctx.config.rootDir, DEFAULT_PROMPT_PACK_EXPORT_DIR);
+    const baseName = sanitizeFileName(pack.name || pack.packId || "prompt-pack");
+    const packSuffix = sanitizeFileName(pack.packId).slice(0, 18);
+    return path.join(dir, `${baseName}-${packSuffix}-promptfoo-latest.json`);
   }
 
   private resolvePromptPackExportArchiveDir(): string {
@@ -2265,16 +2394,29 @@ export class PromptPackService {
     return resolveUniquePromptPackSnapshotPath(requested);
   }
 
+  private resolvePromptPackPromptfooSnapshotPath(pack: PromptPackRecord, generatedAt: string): string {
+    const archiveDir = this.resolvePromptPackExportArchiveDir();
+    const baseName = sanitizeFileName(pack.name || pack.packId || "prompt-pack");
+    const timestamp = formatPromptPackSnapshotTimestamp(generatedAt);
+    const requested = path.join(archiveDir, `${baseName}_${timestamp}_promptfoo.json`);
+    return resolveUniquePromptPackSnapshotPath(requested);
+  }
+
   private readLatestPromptPackSnapshot(
     archiveDir: string,
     snapshotPrefix: string,
+    extension = ".md",
+    nameIncludes?: string,
   ): { path: string; sizeBytes: number; updatedAt: string } | undefined {
     try {
       const entries = fsSync
         .readdirSync(archiveDir, { withFileTypes: true })
         .filter(
           (entry) =>
-            entry.isFile() && entry.name.startsWith(snapshotPrefix) && entry.name.toLowerCase().endsWith(".md"),
+            entry.isFile() &&
+            entry.name.startsWith(snapshotPrefix) &&
+            entry.name.toLowerCase().endsWith(extension) &&
+            (!nameIncludes || entry.name.includes(nameIncludes)),
         )
         .map((entry) => {
           const filePath = path.join(archiveDir, entry.name);
@@ -2293,13 +2435,21 @@ export class PromptPackService {
     }
   }
 
-  private countPromptPackSnapshots(archiveDir: string, snapshotPrefix: string): number {
+  private countPromptPackSnapshots(
+    archiveDir: string,
+    snapshotPrefix: string,
+    extension = ".md",
+    nameIncludes?: string,
+  ): number {
     try {
       return fsSync
         .readdirSync(archiveDir, { withFileTypes: true })
         .filter(
           (entry) =>
-            entry.isFile() && entry.name.startsWith(snapshotPrefix) && entry.name.toLowerCase().endsWith(".md"),
+            entry.isFile() &&
+            entry.name.startsWith(snapshotPrefix) &&
+            entry.name.toLowerCase().endsWith(extension) &&
+            (!nameIncludes || entry.name.includes(nameIncludes)),
         ).length;
     } catch {
       return 0;
@@ -2997,6 +3147,182 @@ function sanitizeFileName(input: string): string {
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   return cleaned || "prompt-pack";
+}
+
+interface PromptfooLikeConfigPreview {
+  promptCount: number;
+  providerCount: number;
+  testCount: number;
+  warnings: string[];
+  errors: string[];
+}
+
+function buildPromptfooExportPayload(report: PromptPackReportRecord, generatedAt: string) {
+  const provider = "goatcitadel://operator-provided-provider";
+  return {
+    version: "promptfoo.config.v1",
+    description: `GoatCitadel read-only Promptfoo export for ${report.pack.name}`,
+    prompts: [
+      {
+        id: "goatcitadel_prompt_pack_prompt",
+        raw: "{{prompt}}",
+      },
+    ],
+    providers: [provider],
+    tests: report.tests.map((test) => ({
+      description: `${test.code}: ${test.title}`,
+      vars: {
+        prompt: test.prompt,
+      },
+      metadata: {
+        source: "goatcitadel.prompt_pack",
+        packId: report.pack.packId,
+        testId: test.testId,
+        testCode: test.code,
+        mode: test.mode,
+        toolTier: test.toolTier,
+      },
+    })),
+    metadata: {
+      source: "goatcitadel.prompt_pack",
+      packId: report.pack.packId,
+      packName: report.pack.name,
+      generatedAt,
+      readOnly: true,
+      sideEffectPosture: "export_only",
+      providerExecution: "operator_config_required",
+      note: "This export is a Promptfoo-compatible planning artifact. GoatCitadel does not run providers or mutate prompt packs when generating it.",
+    },
+  };
+}
+
+function buildPromptfooExportInterop(tests: PromptPackTestRecord[]): PromptPackExportRecord["interop"] {
+  return {
+    promptfoo: {
+      compatible: true,
+      configVersion: "promptfoo.config.v1",
+      promptCount: 1,
+      providerCount: 1,
+      testCount: tests.length,
+      notes: [
+        "Export is read-only JSON and uses an operator-provided provider placeholder.",
+        "GoatCitadel does not run Promptfoo or call providers while exporting.",
+      ],
+    },
+  };
+}
+
+function parsePromptfooLikeConfig(content: string): PromptfooLikeConfigPreview {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return {
+      promptCount: 0,
+      providerCount: 0,
+      testCount: 0,
+      warnings: [],
+      errors: ["Promptfoo import preview requires non-empty content."],
+    };
+  }
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return parsePromptfooJsonPreview(trimmed);
+  }
+  return parsePromptfooYamlPreview(trimmed);
+}
+
+function parsePromptfooJsonPreview(content: string): PromptfooLikeConfigPreview {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!isRecord(parsed)) {
+      return {
+        promptCount: 0,
+        providerCount: 0,
+        testCount: 0,
+        warnings: [],
+        errors: ["Promptfoo preview expected a JSON object."],
+      };
+    }
+    const promptCount = countPromptfooCollection(parsed.prompts);
+    const providerCount = countPromptfooCollection(parsed.providers);
+    const testCount = countPromptfooCollection(parsed.tests);
+    const errors = [];
+    if (promptCount === 0) {
+      errors.push("Promptfoo preview could not find prompts.");
+    }
+    if (testCount === 0) {
+      errors.push("Promptfoo preview could not find tests.");
+    }
+    return {
+      promptCount,
+      providerCount,
+      testCount,
+      warnings:
+        providerCount === 0
+          ? [
+              "No providers were declared. Preview remains valid for shape review but cannot run without operator config.",
+            ]
+          : [],
+      errors,
+    };
+  } catch (error) {
+    return {
+      promptCount: 0,
+      providerCount: 0,
+      testCount: 0,
+      warnings: [],
+      errors: [`Invalid JSON Promptfoo preview: ${(error as Error).message}`],
+    };
+  }
+}
+
+function parsePromptfooYamlPreview(content: string): PromptfooLikeConfigPreview {
+  const promptSection = readSimpleYamlCollectionCount(content, "prompts");
+  const providerSection = readSimpleYamlCollectionCount(content, "providers");
+  const testSection = readSimpleYamlCollectionCount(content, "tests");
+  const errors = [];
+  if (promptSection === 0) {
+    errors.push("Promptfoo preview could not find prompts.");
+  }
+  if (testSection === 0) {
+    errors.push("Promptfoo preview could not find tests.");
+  }
+  return {
+    promptCount: promptSection,
+    providerCount: providerSection,
+    testCount: testSection,
+    warnings: [
+      "YAML preview uses a dependency-free structural scan. Import before execution should be reviewed by the operator.",
+      ...(providerSection === 0 ? ["No providers were declared."] : []),
+    ],
+    errors,
+  };
+}
+
+function countPromptfooCollection(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  if (isRecord(value)) {
+    return Object.keys(value).length;
+  }
+  return typeof value === "string" && value.trim() ? 1 : 0;
+}
+
+function readSimpleYamlCollectionCount(content: string, key: string): number {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex((line) => new RegExp(`^${key}:\\s*$`, "i").test(line.trim()));
+  if (start < 0) {
+    return 0;
+  }
+  let count = 0;
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S[^:]*:\s*$/.test(line)) {
+      break;
+    }
+    if (/^\s*-\s+/.test(line)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function formatPromptPackSnapshotTimestamp(value: string): string {

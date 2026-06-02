@@ -24,6 +24,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
   createCronJob: vi.fn(),
   draftAutomationRecipe: vi.fn(),
   exportActivepiecesWorkflowTemplate: vi.fn(),
+  exportN8nWorkflowTemplate: vi.fn(),
 }));
 
 const reviewReadinessApiMocks = vi.hoisted(() => ({
@@ -62,6 +63,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createCronJob: runtimeApiMocks.createCronJob,
   draftAutomationRecipe: runtimeApiMocks.draftAutomationRecipe,
   exportActivepiecesWorkflowTemplate: runtimeApiMocks.exportActivepiecesWorkflowTemplate,
+  exportN8nWorkflowTemplate: runtimeApiMocks.exportN8nWorkflowTemplate,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
@@ -385,6 +387,7 @@ describe("RuntimeRoutePage", () => {
     runtimeApiMocks.createCronJob.mockReset();
     runtimeApiMocks.draftAutomationRecipe.mockReset();
     runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockReset();
+    runtimeApiMocks.exportN8nWorkflowTemplate.mockReset();
     reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
@@ -634,6 +637,64 @@ describe("RuntimeRoutePage", () => {
         execution: "operator_import_required",
       },
     });
+    runtimeApiMocks.exportN8nWorkflowTemplate.mockResolvedValue({
+      version: "workflow_recipe.n8n_template_export.v1",
+      generatedAt: "2026-05-31T12:00:00.000Z",
+      filename: "provider-spend-review-n8n-template.json",
+      contentType: "application/json",
+      target: "n8n",
+      content: '{"version":"workflow_recipe.n8n_template_export.v1"}',
+      recipe: {
+        name: "Provider spend review automation",
+        goal: "Review provider spend and prepare an operator note.",
+        process: "sequential",
+        agents: [],
+        steps: [],
+      },
+      plan: { planId: "recipe-provider-spend-review" },
+      warnings: [],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1 },
+      n8nWorkflow: {
+        name: "Provider spend review automation - GoatCitadel review",
+        active: false,
+        nodes: [],
+        connections: {},
+        settings: {},
+        meta: {
+          source: "goatcitadel.workflow_recipe",
+          planId: "recipe-provider-spend-review",
+          approvalMode: "none",
+        },
+      },
+      validation: {
+        status: "ready_for_operator_import_review",
+        nativeImportCompatibility: "not_verified",
+        checks: [
+          {
+            id: "webhook-trigger",
+            label: "Webhook trigger",
+            status: "passed",
+            detail: "Workflow declares a webhook path for operator import review.",
+          },
+          {
+            id: "native-n8n-import",
+            label: "Native n8n import",
+            status: "warning",
+            detail: "Native n8n import-schema compatibility has not been verified by GoatCitadel.",
+          },
+        ],
+        notes: ["Validate inside n8n before enabling a workflow."],
+      },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "not_executed",
+        importRequired: true,
+        execution: "operator_import_required",
+      },
+    });
     Object.defineProperty(globalThis.navigator, "clipboard", {
       configurable: true,
       value: {
@@ -689,6 +750,7 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Automation recipe drafted. No cron job was created.");
     expect(collectText(renderer!.root)).toContain("Provider spend review automation");
     expect(collectText(renderer!.root)).toContain("Confirm no cron job was created");
+    expect(collectText(renderer!.root)).toContain("Copy n8n template");
 
     await act(async () => {
       findButton(renderer!.root, "Copy Activepieces template").props.onClick();
@@ -703,9 +765,23 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain(
       "Copied Activepieces template export provider-spend-review-activepieces-template.json.",
     );
-    expect(collectText(renderer!.root)).toContain("Template checks");
+    expect(collectText(renderer!.root)).toContain("Activepieces");
     expect(collectText(renderer!.root)).toContain("ready_for_operator_import_review");
-    expect(collectText(renderer!.root)).toContain("Native import");
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy n8n template").props.onClick();
+    });
+
+    expect(runtimeApiMocks.exportN8nWorkflowTemplate).toHaveBeenCalledWith({
+      recipe: expect.objectContaining({ name: "Provider spend review automation" }),
+    });
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('{"version":"workflow_recipe.n8n_template_export.v1"}');
+    expect(collectText(renderer!.root)).toContain(
+      "Copied n8n template export provider-spend-review-n8n-template.json.",
+    );
+    expect(collectText(renderer!.root)).toContain("n8n");
+    expect(collectText(renderer!.root)).toContain("ready_for_operator_import_review");
+    expect(collectText(renderer!.root)).toContain("native import");
     expect(collectText(renderer!.root)).toContain("not verified");
     expect(collectText(renderer!.root)).toContain("No webhook trigger");
   });

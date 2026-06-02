@@ -97,6 +97,15 @@ export type SkillImportSourceType = "local_path" | "local_zip" | "git_url" | "re
 export type SkillSourceKind = "marketplace_listing" | "upstream_repo" | "reference" | "local";
 export type SkillSourceInstallability = "direct" | "review_only" | "not_installable";
 
+export type SkillImportCompatibilitySource = "goatcitadel_skill_bundle" | "agent_skills" | "agents_md" | "skill_md";
+export type SkillImportCompatibilityCallability = "review_only" | "governed_candidate" | "callable";
+
+export interface SkillImportCompatibility {
+  sources: SkillImportCompatibilitySource[];
+  warnings: string[];
+  callability: SkillImportCompatibilityCallability;
+}
+
 export interface SkillImportCandidate {
   sourceProvider: SkillSourceProvider;
   sourceType: SkillImportSourceType;
@@ -109,6 +118,7 @@ export interface SkillImportCandidate {
   externalToolMappings?: SkillImportExternalToolMapping[];
   scriptDisposition?: SkillImportScriptDisposition;
   bundleManifest?: SkillBundleManifestValidation;
+  compatibility?: SkillImportCompatibility;
 }
 
 export interface SkillImportProvenance {
@@ -257,6 +267,7 @@ export interface SkillImportValidationResult {
   scriptDisposition?: SkillImportScriptDisposition;
   provenance?: SkillImportProvenance;
   bundleManifest?: SkillBundleManifestValidation;
+  compatibility?: SkillImportCompatibility;
   nativeOverlaps?: Array<{
     overlapFamily: string;
     nativeAlternativeName: string;

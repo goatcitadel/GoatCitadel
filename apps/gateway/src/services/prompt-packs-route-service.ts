@@ -2,6 +2,7 @@ import type { PromptPackService } from "./prompt-pack-service.js";
 
 export interface PromptPacksRoutePort {
   importPromptPack: PromptPackService["importPromptPack"];
+  previewPromptPackImport: PromptPackService["previewPromptPackImport"];
   importBuiltinPromptPack: PromptPackService["importBuiltinPromptPack"];
   listSecurityEvalPacks: PromptPackService["listSecurityEvalPacks"];
   listSecurityQualityGates: PromptPackService["listSecurityQualityGates"];
@@ -29,6 +30,10 @@ export class PromptPacksRouteService {
 
   public importPromptPack(input: Parameters<PromptPacksRoutePort["importPromptPack"]>[0]) {
     return this.promptPacks.importPromptPack(input);
+  }
+
+  public previewPromptPackImport(input: Parameters<PromptPacksRoutePort["previewPromptPackImport"]>[0]) {
+    return this.promptPacks.previewPromptPackImport(input);
   }
 
   public importBuiltinPromptPack(packKey: string) {
@@ -110,12 +115,12 @@ export class PromptPacksRouteService {
     return this.promptPacks.getPromptPackCapabilityTrends(packId);
   }
 
-  public getPromptPackExport(packId: string) {
-    return this.promptPacks.getPromptPackExport(packId);
+  public getPromptPackExport(packId: string, format?: Parameters<PromptPacksRoutePort["getPromptPackExport"]>[1]) {
+    return this.promptPacks.getPromptPackExport(packId, format);
   }
 
-  public exportPromptPack(packId: string) {
-    return this.promptPacks.exportPromptPack(packId);
+  public exportPromptPack(packId: string, options?: Parameters<PromptPacksRoutePort["exportPromptPack"]>[1]) {
+    return this.promptPacks.exportPromptPack(packId, options);
   }
 
   public resetPromptPackRunsAndScores(

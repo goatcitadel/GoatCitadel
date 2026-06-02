@@ -7,6 +7,8 @@ import type {
   AutomationRecipeDraftResponse,
   WorkflowRecipeActivepiecesTemplateExportRequest,
   WorkflowRecipeActivepiecesTemplateExportResponse,
+  WorkflowRecipeN8nTemplateExportRequest,
+  WorkflowRecipeN8nTemplateExportResponse,
   WorkflowRecipePlanCreateRequest,
   WorkflowRecipePlanCreateResponse,
   WorkflowRecipePreviewRequest,
@@ -28,6 +30,7 @@ export interface OrchestrationRoutePort {
   exportActivepiecesTemplate(
     input: WorkflowRecipeActivepiecesTemplateExportRequest,
   ): WorkflowRecipeActivepiecesTemplateExportResponse;
+  exportN8nTemplate(input: WorkflowRecipeN8nTemplateExportRequest): WorkflowRecipeN8nTemplateExportResponse;
   listRecipeTemplates(): WorkflowRecipeTemplatesResponse;
   previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse;
   runOrchestrationPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun>;
@@ -85,6 +88,10 @@ export class OrchestrationRouteService {
     input: WorkflowRecipeActivepiecesTemplateExportRequest,
   ): WorkflowRecipeActivepiecesTemplateExportResponse {
     return this.orchestration.exportActivepiecesTemplate(input);
+  }
+
+  public exportN8nTemplate(input: WorkflowRecipeN8nTemplateExportRequest): WorkflowRecipeN8nTemplateExportResponse {
+    return this.orchestration.exportN8nTemplate(input);
   }
 
   public async runPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun> {

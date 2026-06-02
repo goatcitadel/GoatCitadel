@@ -206,6 +206,7 @@ describe("route service facades", () => {
       "createOrchestrationPlan",
       "createPlanFromRecipe",
       "exportActivepiecesTemplate",
+      "exportN8nTemplate",
       "getRun",
       "listRecipeTemplates",
       "listRunCheckpoints",
@@ -229,6 +230,10 @@ describe("route service facades", () => {
     });
     expect(service.exportActivepiecesTemplate({ recipeId: "recipe-1" } as never)).toEqual({
       method: "exportActivepiecesTemplate",
+      args: [{ recipeId: "recipe-1" }],
+    });
+    expect(service.exportN8nTemplate({ recipeId: "recipe-1" } as never)).toEqual({
+      method: "exportN8nTemplate",
       args: [{ recipeId: "recipe-1" }],
     });
     expect(service.listRecipeTemplates()).toEqual({ method: "listRecipeTemplates", args: [] });

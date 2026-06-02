@@ -26,6 +26,21 @@ export type ProvenanceCoverageRow = {
   detail: string;
 };
 
+export type MemoryGraphProjection = {
+  readiness: "empty" | "partial" | "connected";
+  entityCount: number;
+  activeEntityCount: number;
+  relationCount: number;
+  activeRelationCount: number;
+  degradedRelationCount: number;
+  decisionCount: number;
+  orphanEntityCount: number;
+  connectedEntityCount: number;
+  provenanceSourceCount: number;
+  topRelationTypes: Array<{ relationType: string; count: number }>;
+  summary: string;
+};
+
 const PROVENANCE_KINDS = [
   { id: "project", label: "Project" },
   { id: "task", label: "Task" },
@@ -80,6 +95,69 @@ export function buildProvenanceCoverage(input: {
           : `${kind.label} records have not been captured in structured memory yet.`,
     };
   });
+}
+
+export function buildMemoryGraphProjection(input: {
+  entities: MemoryEntityRecord[];
+  relations: MemoryRelationRecord[];
+  decisions: MemoryDecisionRecord[];
+}): MemoryGraphProjection {
+  const activeEntities = input.entities.filter((item) => item.status === "active");
+  const activeRelations = input.relations.filter((item) => item.status === "active");
+  const linkedEntityIds = new Set<string>();
+  const relationTypeCounts = new Map<string, number>();
+  for (const relation of input.relations) {
+    linkedEntityIds.add(relation.fromEntityId);
+    linkedEntityIds.add(relation.toEntityId);
+    relationTypeCounts.set(relation.relationType, (relationTypeCounts.get(relation.relationType) ?? 0) + 1);
+  }
+  for (const decision of input.decisions) {
+    for (const entityId of decision.linkedEntityIds) {
+      linkedEntityIds.add(entityId);
+    }
+  }
+  const entityIds = new Set(input.entities.map((item) => item.id));
+  const orphanEntityCount = input.entities.filter((entity) => !linkedEntityIds.has(entity.id)).length;
+  const connectedEntityCount = input.entities.filter((entity) => linkedEntityIds.has(entity.id)).length;
+  const danglingRelationCount = input.relations.filter(
+    (relation) => !entityIds.has(relation.fromEntityId) || !entityIds.has(relation.toEntityId),
+  ).length;
+  const degradedRelationCount =
+    input.relations.filter((relation) => relation.status !== "active").length + danglingRelationCount;
+  const provenanceSourceCount = countUniqueSourceRefs([
+    ...input.entities.flatMap((item) => item.sourceRefs),
+    ...input.relations.flatMap((item) => item.sourceRefs),
+    ...input.decisions.flatMap((item) => item.sourceRefs),
+  ]);
+  const readiness =
+    input.entities.length === 0 && input.relations.length === 0
+      ? "empty"
+      : activeRelations.length > 0 && connectedEntityCount > 0
+        ? "connected"
+        : "partial";
+  const topRelationTypes = [...relationTypeCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 5)
+    .map(([relationType, count]) => ({ relationType, count }));
+  return {
+    readiness,
+    entityCount: input.entities.length,
+    activeEntityCount: activeEntities.length,
+    relationCount: input.relations.length,
+    activeRelationCount: activeRelations.length,
+    degradedRelationCount,
+    decisionCount: input.decisions.length,
+    orphanEntityCount,
+    connectedEntityCount,
+    provenanceSourceCount,
+    topRelationTypes,
+    summary: formatMemoryGraphProjectionSummary(readiness, {
+      connectedEntityCount,
+      entityCount: input.entities.length,
+      activeRelationCount: activeRelations.length,
+      decisionCount: input.decisions.length,
+    }),
+  };
 }
 
 export function formatEntityProvenanceSummary(entity: MemoryEntityRecord): string {
@@ -191,6 +269,24 @@ function formatLineage(lineage: MemoryEntityRecord["lineage"]): string {
     lineage.sourceSummaryRef ? `summary ${shortId(lineage.sourceSummaryRef)}` : undefined,
   ].filter(Boolean);
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
+function formatMemoryGraphProjectionSummary(
+  readiness: MemoryGraphProjection["readiness"],
+  counts: {
+    connectedEntityCount: number;
+    entityCount: number;
+    activeRelationCount: number;
+    decisionCount: number;
+  },
+): string {
+  if (readiness === "empty") {
+    return "No typed memory graph records are available yet.";
+  }
+  if (readiness === "connected") {
+    return `${counts.connectedEntityCount}/${counts.entityCount} entities are linked through ${counts.activeRelationCount} active relations and ${counts.decisionCount} decisions.`;
+  }
+  return `${counts.entityCount} entities are visible, but relation coverage is still partial.`;
 }
 
 export function formatConfidence(confidence: number): string {

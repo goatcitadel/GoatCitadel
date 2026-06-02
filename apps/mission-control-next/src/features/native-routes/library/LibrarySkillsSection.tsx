@@ -848,7 +848,13 @@ function formatSkillImportPosture(details: unknown) {
   const mappedCount = mappings.filter((item) => readRecord(item).disposition === "mapped").length;
   const provenance = readRecord(record.provenance);
   const nonCallable = provenance.nonCallableUntilActivated === true ? "non-callable" : "provenance pending";
-  return `${nonCallable}; scripts ${scriptAction}; tools ${mappedCount}/${mappings.length} mapped`;
+  const compatibility = readRecord(record.compatibility);
+  const compatibilitySources = Array.isArray(compatibility.sources)
+    ? compatibility.sources.filter((item): item is string => typeof item === "string")
+    : [];
+  const callability = typeof compatibility.callability === "string" ? compatibility.callability : "review_only";
+  const compatibilityLabel = compatibilitySources.length ? compatibilitySources.join(", ") : "skill_md";
+  return `${nonCallable}; scripts ${scriptAction}; tools ${mappedCount}/${mappings.length} mapped; compatibility ${callability} (${compatibilityLabel})`;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {

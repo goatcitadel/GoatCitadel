@@ -154,3 +154,36 @@ export interface OpsQualitySnapshotResponse {
     reason: string;
   }>;
 }
+
+export type OpsQualityExportFormat = "otel_json";
+
+export interface OpsQualityOtelSpan {
+  traceId: string;
+  spanId: string;
+  name: string;
+  kind: "internal";
+  startTimeUnixNano?: string;
+  endTimeUnixNano?: string;
+  attributes: Record<string, string | number | boolean>;
+}
+
+export interface OpsQualityOtelExportResponse {
+  version: "ops.quality_export.otel_json.v1";
+  generatedAt: string;
+  format: "otel_json";
+  contentType: "application/json";
+  filename: string;
+  sourceEndpoint: "/api/v1/ops/quality";
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    note: string;
+  };
+  resource: {
+    serviceName: "goatcitadel";
+    source: "ops_quality";
+  };
+  metricScope: OpsQualitySnapshotResponse["metricScope"];
+  spans: OpsQualityOtelSpan[];
+  content: string;
+}

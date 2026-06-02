@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BarChart3, ClipboardCopy } from "lucide-react";
 import type {
   LlmEvalProofRunRecord,
@@ -11,6 +11,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   exportLlmEvalProofRuns,
+  exportOpsQualityEvidence,
   fetchOpsQualitySnapshot,
   fetchPromptPackExport,
   fetchPromptPackReport,
@@ -31,6 +32,7 @@ import type { NativeRoutePagesProps } from "../types";
 
 export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route }: NativeRoutePagesProps) {
   const [exporting, setExporting] = useState(false);
+  const [otelExporting, setOtelExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
@@ -129,7 +131,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     };
   }, []);
 
-  const packs = data?.packs ?? [];
+  const packs = useMemo(() => data?.packs ?? [], [data?.packs]);
   const evalRuns = data?.evalRuns ?? [];
   const securityEvalPacks = data?.securityEvalPacks ?? [];
   const securityGates = data?.securityGates ?? [];
@@ -199,6 +201,26 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       setExportError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const copyOtelQualityExport = async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setExportError("Clipboard export is not available in this environment.");
+      setExportNotice(null);
+      return;
+    }
+    setOtelExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const exported = await exportOpsQualityEvidence({ packLimit: 200, evalLimit: 25, format: "otel_json" });
+      await navigator.clipboard.writeText(exported.content);
+      setExportNotice(`Copied Ops Quality OTel export ${exported.filename}.`);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOtelExporting(false);
     }
   };
 
@@ -701,6 +723,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             <StatusChip tone="success">Prompt-pack report export</StatusChip>
             <StatusChip tone="success">Run trace JSON export</StatusChip>
             <StatusChip tone="success">Eval proof JSON export</StatusChip>
+            <StatusChip tone="success">OTel JSON evidence export</StatusChip>
             <StatusChip tone="muted">Audit-only</StatusChip>
           </div>
           <NativeList
@@ -721,9 +744,25 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 meta: "Ops · Run Detail",
                 body: "Copies the observe trace export payload from the selected durable run.",
               },
+              {
+                title: "OTel JSON evidence",
+                meta: "Ops · Quality",
+                body: "Copies stored quality evidence as an OpenTelemetry-style transport payload without changing runtime truth.",
+              },
             ]}
             emptyLabel="No export surfaces are registered."
           />
+          <div className="mc-next-approvals-inline-actions">
+            <button
+              type="button"
+              className="mc-next-secondary-button"
+              onClick={() => void copyOtelQualityExport()}
+              disabled={otelExporting}
+            >
+              <ClipboardCopy className="h-4 w-4" />
+              {otelExporting ? "Exporting..." : "Copy OTel evidence"}
+            </button>
+          </div>
           <button
             type="button"
             className="mc-next-directory-action"

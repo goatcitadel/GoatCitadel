@@ -368,6 +368,90 @@ describe("orchestration routes", () => {
     });
   });
 
+  it("exports n8n recipe templates without creating plans or webhooks", async () => {
+    const exportN8nTemplate = vi.fn(() => ({
+      version: "workflow_recipe.n8n_template_export.v1",
+      generatedAt: "2026-05-31T12:00:00.000Z",
+      filename: "weekly-review-n8n-template.json",
+      contentType: "application/json",
+      target: "n8n",
+      recipe: {
+        name: "Weekly review",
+        goal: "Review weekly signals.",
+        process: "sequential",
+        agents: [{ id: "analyst", role: "Analyst" }],
+        steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+      },
+      plan: { planId: "recipe-weekly-review-abc" },
+      warnings: ["read-only export"],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
+      n8nWorkflow: {
+        name: "Weekly review workflow",
+        active: false,
+        nodes: [],
+        connections: {},
+        settings: {},
+        meta: {
+          source: "goatcitadel.workflow_recipe",
+          planId: "recipe-weekly-review-abc",
+          approvalMode: "none",
+        },
+      },
+      validation: {
+        status: "ready_for_operator_import_review",
+        nativeImportCompatibility: "not_verified",
+        checks: [],
+        notes: [],
+      },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "not_executed",
+        importRequired: true,
+        execution: "operator_import_required",
+      },
+      content: '{"version":"workflow_recipe.n8n_template_export.v1"}',
+    }));
+    const createPlanFromRecipe = vi.fn();
+    app = Fastify();
+    app.decorate("services", { orchestration: { createPlanFromRecipe, exportN8nTemplate } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/recipes/n8n-template/export",
+      payload: {
+        workflowName: "Weekly review workflow",
+        webhookPath: "goatcitadel/weekly-review",
+        recipe: {
+          name: "Weekly review",
+          goal: "Review weekly signals.",
+          process: "sequential",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(exportN8nTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowName: "Weekly review workflow",
+        webhookPath: "goatcitadel/weekly-review",
+        recipe: expect.objectContaining({ name: "Weekly review" }),
+      }),
+    );
+    expect(createPlanFromRecipe).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      version: "workflow_recipe.n8n_template_export.v1",
+      target: "n8n",
+      posture: { sideEffectPosture: "not_executed", importRequired: true },
+    });
+  });
+
   it("creates recipe plans through the existing plan creation route service", async () => {
     const createPlanFromRecipe = vi.fn(async () => ({
       recipe: {

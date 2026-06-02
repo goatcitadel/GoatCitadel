@@ -5,11 +5,13 @@ import type {
   AutomationRecipeDraftResponse,
   ReviewReadinessSummary,
   WorkflowRecipeActivepiecesTemplateExportResponse,
+  WorkflowRecipeN8nTemplateExportResponse,
 } from "@goatcitadel/contracts";
 import {
   createCronJob,
   draftAutomationRecipe,
   exportActivepiecesWorkflowTemplate,
+  exportN8nWorkflowTemplate,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
 import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
@@ -82,7 +84,10 @@ export function RuntimeRoutePage({
   const [automationPreview, setAutomationPreview] = useState<AutomationRecipeDraftResponse | null>(null);
   const [automationTemplateExport, setAutomationTemplateExport] =
     useState<WorkflowRecipeActivepiecesTemplateExportResponse | null>(null);
+  const [automationN8nTemplateExport, setAutomationN8nTemplateExport] =
+    useState<WorkflowRecipeN8nTemplateExportResponse | null>(null);
   const [automationTemplateExporting, setAutomationTemplateExporting] = useState(false);
+  const [automationN8nTemplateExporting, setAutomationN8nTemplateExporting] = useState(false);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationNotice, setAutomationNotice] = useState<string | null>(null);
   const [reviewReadiness, setReviewReadiness] = useState<ReviewReadinessSummary | null>(null);
@@ -116,7 +121,7 @@ export function RuntimeRoutePage({
     }
   }, [loadReviewReadiness, section]);
 
-  const handleCreateSchedule = async () => {
+  const handleCreateSchedule = useCallback(async () => {
     const name = scheduleDraft.name.trim();
     const schedule = scheduleDraft.schedule.trim();
     if (!name || !schedule) {
@@ -152,9 +157,9 @@ export function RuntimeRoutePage({
         setScheduleCreating(false);
       }
     }
-  };
+  }, [isMounted, runtime, scheduleDraft.action, scheduleDraft.name, scheduleDraft.schedule]);
 
-  const handleDraftAutomation = async () => {
+  const handleDraftAutomation = useCallback(async () => {
     const taskDescription = automationDraft.taskDescription.trim();
     if (!taskDescription) {
       setAutomationNotice("Task description is required.");
@@ -176,6 +181,7 @@ export function RuntimeRoutePage({
       }
       setAutomationPreview(preview);
       setAutomationTemplateExport(null);
+      setAutomationN8nTemplateExport(null);
       setAutomationNotice("Automation recipe drafted. No cron job was created.");
     } catch (error) {
       if (isMounted()) {
@@ -186,9 +192,17 @@ export function RuntimeRoutePage({
         setAutomationBusy(false);
       }
     }
-  };
+  }, [
+    activeWorkspaceId,
+    automationDraft.constraints,
+    automationDraft.frequency,
+    automationDraft.successCriteria,
+    automationDraft.taskDescription,
+    automationDraft.trigger,
+    isMounted,
+  ]);
 
-  const handleExportActivepiecesTemplate = async () => {
+  const handleExportActivepiecesTemplate = useCallback(async () => {
     if (!automationPreview) {
       setAutomationNotice("Draft a recipe before exporting an Activepieces template.");
       return;
@@ -218,7 +232,39 @@ export function RuntimeRoutePage({
         setAutomationTemplateExporting(false);
       }
     }
-  };
+  }, [automationPreview, isMounted]);
+
+  const handleExportN8nTemplate = useCallback(async () => {
+    if (!automationPreview) {
+      setAutomationNotice("Draft a recipe before exporting an n8n template.");
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setAutomationNotice("Clipboard is unavailable in this browser.");
+      return;
+    }
+    setAutomationN8nTemplateExporting(true);
+    setAutomationNotice(null);
+    try {
+      const exported = await exportN8nWorkflowTemplate({
+        recipe: automationPreview.recipe,
+      });
+      await navigator.clipboard.writeText(exported.content);
+      if (!isMounted()) {
+        return;
+      }
+      setAutomationN8nTemplateExport(exported);
+      setAutomationNotice(`Copied n8n template export ${exported.filename}.`);
+    } catch (error) {
+      if (isMounted()) {
+        setAutomationNotice(error instanceof Error ? error.message : "Could not export n8n template.");
+      }
+    } finally {
+      if (isMounted()) {
+        setAutomationN8nTemplateExporting(false);
+      }
+    }
+  }, [automationPreview, isMounted]);
 
   const content = useMemo(() => {
     if (!data) {
@@ -547,29 +593,60 @@ export function RuntimeRoutePage({
                     >
                       <span>{automationTemplateExporting ? "Exporting..." : "Copy Activepieces template"}</span>
                     </button>
+                    <button
+                      type="button"
+                      className="mc-next-directory-action"
+                      onClick={() => void handleExportN8nTemplate()}
+                      disabled={automationN8nTemplateExporting}
+                    >
+                      <span>{automationN8nTemplateExporting ? "Exporting..." : "Copy n8n template"}</span>
+                    </button>
                   </div>
-                  {automationTemplateExport ? (
+                  {automationTemplateExport || automationN8nTemplateExport ? (
                     <div className="mc-next-approvals-chip-row">
                       <StatusChip tone="success">Read-only export</StatusChip>
-                      <StatusChip
-                        tone={
-                          automationTemplateExport.validation.status === "blocked"
-                            ? "critical"
-                            : automationTemplateExport.validation.checks.some((check) => check.status === "warning")
-                              ? "warning"
-                              : "success"
-                        }
-                      >
-                        Template checks {automationTemplateExport.validation.status}
-                      </StatusChip>
+                      {automationTemplateExport ? (
+                        <StatusChip
+                          tone={
+                            automationTemplateExport.validation.status === "blocked"
+                              ? "critical"
+                              : automationTemplateExport.validation.checks.some((check) => check.status === "warning")
+                                ? "warning"
+                                : "success"
+                          }
+                        >
+                          Activepieces {automationTemplateExport.validation.status}
+                        </StatusChip>
+                      ) : null}
+                      {automationN8nTemplateExport ? (
+                        <StatusChip
+                          tone={
+                            automationN8nTemplateExport.validation.status === "blocked"
+                              ? "critical"
+                              : automationN8nTemplateExport.validation.checks.some(
+                                    (check) => check.status === "warning",
+                                  )
+                                ? "warning"
+                                : "success"
+                          }
+                        >
+                          n8n {automationN8nTemplateExport.validation.status}
+                        </StatusChip>
+                      ) : null}
                       <StatusChip tone="muted">No webhook trigger</StatusChip>
                       <StatusChip tone="warning">Operator import required</StatusChip>
-                      <StatusChip tone="warning">
-                        Native import {automationTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
-                      </StatusChip>
-                      <StatusChip tone="muted">
-                        {automationTemplateExport.activepiecesTemplate.trigger.method}
-                      </StatusChip>
+                      {automationTemplateExport ? (
+                        <StatusChip tone="warning">
+                          Activepieces native import{" "}
+                          {automationTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
+                        </StatusChip>
+                      ) : null}
+                      {automationN8nTemplateExport ? (
+                        <StatusChip tone="warning">
+                          n8n native import{" "}
+                          {automationN8nTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
+                        </StatusChip>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -1174,16 +1251,21 @@ export function RuntimeRoutePage({
         );
     }
   }, [
-    activeWorkspaceId,
     activeWorkspaceName,
     activityFilter,
     automationBusy,
     automationDraft,
     automationNotice,
+    automationN8nTemplateExport,
+    automationN8nTemplateExporting,
     automationPreview,
     automationTemplateExport,
     automationTemplateExporting,
     data,
+    handleCreateSchedule,
+    handleDraftAutomation,
+    handleExportActivepiecesTemplate,
+    handleExportN8nTemplate,
     navigate,
     pendingApprovals,
     route.theme,

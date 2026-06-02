@@ -4,6 +4,7 @@ import type {
   PromptPackAutoScoreResult,
   PromptPackBenchmarkStatusRecord,
   PromptPackExecutionStyle,
+  PromptPackExportFormat,
   PromptPackExportRecord,
   PromptPackHumanReviewRecordV2,
   PromptPackRecord,
@@ -12,6 +13,7 @@ import type {
   PromptPackSecurityEvalPacksResponse,
   PromptPackSecurityQualityGatesResponse,
   PromptPackTestRecord,
+  PromptPackPromptfooImportPreviewResponse,
   ReplayRegressionResult,
   ReplayRegressionRun,
 } from "@goatcitadel/contracts";
@@ -27,6 +29,16 @@ export async function importPromptPack(input: {
   tests: PromptPackTestRecord[];
 }> {
   return request("/api/v1/prompt-packs/import", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function previewPromptPackImport(input: {
+  content: string;
+  format: Extract<PromptPackExportFormat, "promptfoo">;
+}): Promise<PromptPackPromptfooImportPreviewResponse> {
+  return request<PromptPackPromptfooImportPreviewResponse>("/api/v1/prompt-packs/import/preview", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -213,13 +225,17 @@ export async function fetchPromptPackTrends(packId: string): Promise<{ items: Ca
   return request<{ items: CapabilityTrendSeries[] }>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/trends`);
 }
 
-export async function fetchPromptPackExport(packId: string): Promise<PromptPackExportRecord> {
-  return request<PromptPackExportRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/export`);
+export async function fetchPromptPackExport(
+  packId: string,
+  input: { format?: PromptPackExportFormat } = {},
+): Promise<PromptPackExportRecord> {
+  const query = input.format ? `?format=${encodeURIComponent(input.format)}` : "";
+  return request<PromptPackExportRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/export${query}`);
 }
 
 export async function exportPromptPackReport(
   packId: string,
-  input?: { includeHistory?: boolean },
+  input?: { includeHistory?: boolean; format?: PromptPackExportFormat },
 ): Promise<PromptPackExportRecord> {
   return request<PromptPackExportRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/export`, {
     method: "POST",

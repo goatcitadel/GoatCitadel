@@ -145,6 +145,52 @@ describe("dashboard observe aggregate routes", () => {
     });
   });
 
+  it("returns read-only Ops quality OTel export evidence", async () => {
+    const getOpsQualityExport = vi.fn(() => ({
+      version: "ops.quality_export.otel_json.v1",
+      generatedAt: "2026-05-31T00:00:00.000Z",
+      format: "otel_json",
+      contentType: "application/json",
+      filename: "goatcitadel-ops-quality-otel.json",
+      sourceEndpoint: "/api/v1/ops/quality",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        note: "stored evidence only",
+      },
+      resource: { serviceName: "goatcitadel", source: "ops_quality" },
+      metricScope: {
+        scope: "bounded_read",
+        promptPackLimit: 10,
+        evalRunLimit: 3,
+        note: "bounded read",
+      },
+      spans: [{ traceId: "a".repeat(32), spanId: "b".repeat(16), name: "ops.quality.snapshot", kind: "internal" }],
+      content: "{}",
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      dashboard: {
+        getOpsQualityExport,
+      },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/ops/quality/export?packLimit=10&evalLimit=3&format=otel_json",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getOpsQualityExport).toHaveBeenCalledWith({ packLimit: 10, evalLimit: 3, format: "otel_json" });
+    expect(response.json()).toMatchObject({
+      version: "ops.quality_export.otel_json.v1",
+      format: "otel_json",
+      posture: { readOnly: true, sideEffectPosture: "audit_only" },
+      spans: [expect.objectContaining({ name: "ops.quality.snapshot" })],
+    });
+  });
+
   it("returns the unified health aggregate", async () => {
     app = Fastify();
     app.decorate("services", {

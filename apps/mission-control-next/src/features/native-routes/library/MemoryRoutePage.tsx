@@ -26,6 +26,7 @@ import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from ".
 import type { NativeRoutePagesProps } from "../types";
 import {
   buildProvenanceCoverage,
+  buildMemoryGraphProjection,
   formatConfidence,
   formatDecisionProvenanceSummary,
   formatEntityProvenanceSummary,
@@ -38,6 +39,7 @@ import "../native-routes.css";
 
 export {
   asRecord,
+  buildMemoryGraphProjection,
   buildProvenanceCoverage,
   formatDecisionProvenanceSummary,
   formatRelationProvenanceSummary,
@@ -147,7 +149,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryListCountId = useId();
   const recallPromptId = useId();
 
-  const memoryItems = memory.data?.memoryItems ?? [];
+  const memoryItems = useMemo(() => memory.data?.memoryItems ?? [], [memory.data?.memoryItems]);
   const memoryFeedback = memory.data?.memoryFeedback ?? [];
   const memoryQualityIssues = memory.data?.memoryQualityIssues ?? [];
   const traceMemoryCandidates = memory.data?.traceMemoryCandidates ?? [];
@@ -242,7 +244,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryCanMutate = memoryAdminState === "enabled";
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
-  const recentContextPacks = memory.data?.qmdStats?.recent ?? [];
+  const recentContextPacks = useMemo(() => memory.data?.qmdStats?.recent ?? [], [memory.data?.qmdStats?.recent]);
   const whyUsedRows = useMemo(
     () =>
       recentContextPacks
@@ -268,16 +270,25 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         entities: memory.data?.memoryEntities ?? [],
         relations: memory.data?.memoryRelations ?? [],
         decisions: memory.data?.memoryDecisions ?? [],
-        memoryItems: memory.data?.memoryItems ?? [],
+        memoryItems,
         evidence: evidence.items,
       }),
     [
       evidence.items,
       memory.data?.memoryDecisions,
       memory.data?.memoryEntities,
-      memory.data?.memoryItems,
       memory.data?.memoryRelations,
+      memoryItems,
     ],
+  );
+  const graphProjection = useMemo(
+    () =>
+      buildMemoryGraphProjection({
+        entities: memory.data?.memoryEntities ?? [],
+        relations: memory.data?.memoryRelations ?? [],
+        decisions: memory.data?.memoryDecisions ?? [],
+      }),
+    [memory.data?.memoryDecisions, memory.data?.memoryEntities, memory.data?.memoryRelations],
   );
   const reviewableDecisions = useMemo(() => {
     const now = Date.now();
@@ -919,6 +930,39 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         </NativeCard>
       </NativeGrid>
       <NativeGrid>
+        <NativeCard
+          title="Graph projection"
+          subtitle="Read-only entity and relation projection from MemoryLifecycleService; no external graph store."
+          stats={[
+            { label: "Readiness", value: graphProjection.readiness },
+            { label: "Connected", value: String(graphProjection.connectedEntityCount) },
+            { label: "Orphans", value: String(graphProjection.orphanEntityCount) },
+            { label: "Degraded", value: String(graphProjection.degradedRelationCount) },
+          ]}
+        >
+          <SectionTruthNotice
+            message={
+              sectionErrors?.memoryEntities ?? sectionErrors?.memoryRelations ?? sectionErrors?.memoryDecisions ?? null
+            }
+          />
+          <p className="mc-next-runtime-card-copy">{graphProjection.summary}</p>
+          <div className="mc-next-approvals-chip-row">
+            <StatusChip tone={graphProjection.readiness === "connected" ? "success" : "warning"}>
+              {graphProjection.activeRelationCount} active relations
+            </StatusChip>
+            <StatusChip tone="muted">{graphProjection.decisionCount} linked decisions</StatusChip>
+            <StatusChip tone="muted">{graphProjection.provenanceSourceCount} provenance sources</StatusChip>
+          </div>
+          <NativeList
+            density="compact"
+            items={graphProjection.topRelationTypes.map((item) => ({
+              title: item.relationType,
+              meta: `${item.count} relation${item.count === 1 ? "" : "s"}`,
+              body: "Relationship type projected from stored memory relation records.",
+            }))}
+            emptyLabel="No relation types are available for graph projection."
+          />
+        </NativeCard>
         <NativeCard
           title="Provenance map"
           subtitle="Typed relationship coverage from MemoryLifecycleService snapshots; no separate graph store."

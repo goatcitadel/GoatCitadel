@@ -6,6 +6,8 @@ import type {
   WorkflowRecipeTemplatesResponse,
   WorkflowRecipeActivepiecesTemplateExportRequest,
   WorkflowRecipeActivepiecesTemplateExportResponse,
+  WorkflowRecipeN8nTemplateExportRequest,
+  WorkflowRecipeN8nTemplateExportResponse,
   AutomationRecipeDraftRequest,
   AutomationRecipeDraftResponse,
 } from "@goatcitadel/contracts";
@@ -52,4 +54,13 @@ export async function exportActivepiecesWorkflowTemplate(
       body: JSON.stringify(input),
     },
   );
+}
+
+export async function exportN8nWorkflowTemplate(
+  input: WorkflowRecipeN8nTemplateExportRequest,
+): Promise<WorkflowRecipeN8nTemplateExportResponse> {
+  return request<WorkflowRecipeN8nTemplateExportResponse>("/api/v1/orchestration/recipes/n8n-template/export", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }

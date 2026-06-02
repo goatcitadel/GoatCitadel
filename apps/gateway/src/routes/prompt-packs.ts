@@ -8,6 +8,11 @@ const promptPackImportSchema = z.object({
   packId: z.string().optional(),
 });
 
+const promptPackImportPreviewSchema = z.object({
+  content: z.string().min(1),
+  format: z.literal("promptfoo").default("promptfoo"),
+});
+
 const promptPackListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(2000).default(200),
 });
@@ -75,6 +80,11 @@ const promptPackAutoScoreBatchBodySchema = z.object({
 
 const promptPackExportBodySchema = z.object({
   includeHistory: z.boolean().optional(),
+  format: z.enum(["goatcitadel", "promptfoo"]).optional(),
+});
+
+const promptPackExportQuerySchema = z.object({
+  format: z.enum(["goatcitadel", "promptfoo"]).default("goatcitadel"),
 });
 
 const promptPackResetBodySchema = z.object({
@@ -123,6 +133,14 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
+  });
+
+  fastify.post("/api/v1/prompt-packs/import/preview", async (request, reply) => {
+    const body = promptPackImportPreviewSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    return reply.send(promptPacks.previewPromptPackImport(body.data));
   });
 
   fastify.get("/api/v1/prompt-packs", async (request, reply) => {
@@ -441,11 +459,17 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/prompt-packs/:packId/export", async (request, reply) => {
     const params = promptPackParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const query = promptPackExportQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(promptPacks.getPromptPackExport(params.data.packId));
+      return reply.send(promptPacks.getPromptPackExport(params.data.packId, query.data.format));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -463,7 +487,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(promptPacks.exportPromptPack(params.data.packId));
+      return reply.send(promptPacks.exportPromptPack(params.data.packId, { format: body.data.format }));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

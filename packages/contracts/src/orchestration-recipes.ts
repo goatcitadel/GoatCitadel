@@ -109,6 +109,8 @@ export interface WorkflowRecipeActivepiecesTemplateExportRequest extends Workflo
   webhookPath?: string;
 }
 
+export type WorkflowRecipeTemplateExportTarget = "activepieces" | "n8n";
+
 export interface WorkflowRecipeActivepiecesTemplateStep {
   id: string;
   displayName: string;
@@ -159,6 +161,60 @@ export interface WorkflowRecipeActivepiecesTemplateExportResponse extends Workfl
   contentType: "application/json";
   activepiecesTemplate: WorkflowRecipeActivepiecesTemplate;
   validation: WorkflowRecipeActivepiecesTemplateValidation;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "not_executed";
+    importRequired: true;
+    execution: "operator_import_required";
+  };
+  content: string;
+}
+
+export interface WorkflowRecipeN8nTemplateExportRequest extends WorkflowRecipePreviewRequest {
+  workflowName?: string;
+  webhookPath?: string;
+}
+
+export interface WorkflowRecipeN8nWorkflowNode {
+  id: string;
+  name: string;
+  type: string;
+  typeVersion: number;
+  position: [number, number];
+  parameters: Record<string, unknown>;
+  notes?: string;
+}
+
+export interface WorkflowRecipeN8nWorkflowTemplate {
+  name: string;
+  active: false;
+  nodes: WorkflowRecipeN8nWorkflowNode[];
+  connections: Record<string, Record<string, Array<Array<{ node: string; type: "main"; index: number }>>>>;
+  settings: Record<string, unknown>;
+  meta: {
+    source: "goatcitadel.workflow_recipe";
+    planId: string;
+    approvalMode: "none" | "human_in_the_loop";
+    scheduleIntent?: string;
+    channelIntent?: string;
+  };
+}
+
+export interface WorkflowRecipeN8nTemplateValidation {
+  status: "ready_for_operator_import_review" | "blocked";
+  nativeImportCompatibility: "not_verified";
+  checks: WorkflowRecipeActivepiecesTemplateValidationCheck[];
+  notes: string[];
+}
+
+export interface WorkflowRecipeN8nTemplateExportResponse extends WorkflowRecipePreviewResponse {
+  version: "workflow_recipe.n8n_template_export.v1";
+  generatedAt: string;
+  filename: string;
+  contentType: "application/json";
+  target: "n8n";
+  n8nWorkflow: WorkflowRecipeN8nWorkflowTemplate;
+  validation: WorkflowRecipeN8nTemplateValidation;
   posture: {
     readOnly: true;
     sideEffectPosture: "not_executed";

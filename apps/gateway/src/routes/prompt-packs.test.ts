@@ -3,6 +3,75 @@ import { describe, expect, it, vi } from "vitest";
 import { promptPackRoutes } from "./prompt-packs.js";
 
 describe("prompt-pack routes", () => {
+  it("previews Promptfoo imports and exports Promptfoo records without changing default export", async () => {
+    const previewPromptPackImport = vi.fn(() => ({
+      valid: true,
+      format: "promptfoo",
+      generatedAt: "2026-06-02T00:00:00.000Z",
+      testCount: 1,
+      promptCount: 1,
+      providerCount: 0,
+      warnings: [],
+      errors: [],
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "preview_only",
+        callsProviders: false,
+        mutationPerformed: false,
+        note: "preview only",
+      },
+    }));
+    const getPromptPackExport = vi.fn((packId: string, format?: string) => ({
+      packId,
+      format: format ?? "goatcitadel",
+      path: "reports/prompt-packs/export.json",
+      exists: true,
+      sizeBytes: 2,
+    }));
+    const exportPromptPack = vi.fn((packId: string, input?: { format?: string }) => ({
+      packId,
+      format: input?.format ?? "goatcitadel",
+      path: "reports/prompt-packs/export.json",
+      exists: true,
+      sizeBytes: 2,
+    }));
+    const app = Fastify();
+    app.decorate("services", {
+      promptPacks: {
+        previewPromptPackImport,
+        getPromptPackExport,
+        exportPromptPack,
+      },
+    } as never);
+    await app.register(promptPackRoutes);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/v1/prompt-packs/import/preview",
+      payload: { content: "prompts:\n  - '{{prompt}}'\ntests:\n  - vars: {}", format: "promptfoo" },
+    });
+    const fetched = await app.inject({
+      method: "GET",
+      url: "/api/v1/prompt-packs/pack%2F1/export?format=promptfoo",
+    });
+    const refreshed = await app.inject({
+      method: "POST",
+      url: "/api/v1/prompt-packs/pack%2F1/export",
+      payload: { format: "promptfoo" },
+    });
+
+    expect(preview.statusCode).toBe(200);
+    expect(previewPromptPackImport).toHaveBeenCalledWith({
+      content: "prompts:\n  - '{{prompt}}'\ntests:\n  - vars: {}",
+      format: "promptfoo",
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(getPromptPackExport).toHaveBeenCalledWith("pack/1", "promptfoo");
+    expect(refreshed.statusCode).toBe(200);
+    expect(exportPromptPack).toHaveBeenCalledWith("pack/1", { format: "promptfoo" });
+    expect(refreshed.json()).toMatchObject({ format: "promptfoo" });
+  });
+
   it("exposes built-in security eval packs and imports them only on explicit request", async () => {
     const listSecurityEvalPacks = vi.fn(() => ({
       generatedAt: "2026-05-30T00:00:00.000Z",

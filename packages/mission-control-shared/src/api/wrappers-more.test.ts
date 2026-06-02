@@ -428,6 +428,13 @@ describe("additional shared API wrappers", () => {
         method: "POST",
       },
     );
+    await expectCall(
+      recipes.exportN8nWorkflowTemplate({ recipe: { name: "Review" } } as never),
+      "/api/v1/orchestration/recipes/n8n-template/export",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(recipes.fetchWorkflowRecipeTemplates(), "/api/v1/orchestration/recipes/templates");
     await expectCall(
       researchSearch.runResearchSearch({ query: "provider pricing", engines: ["google"] }),

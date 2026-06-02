@@ -522,6 +522,7 @@ export {
   fetchPromptPackTrends,
   importBuiltinPromptPack,
   importPromptPack,
+  previewPromptPackImport,
   resetPromptPack,
   runPromptPackBenchmark,
   runPromptPackReplayRegression,
@@ -686,6 +687,7 @@ export {
   createWorkflowRecipePlan,
   draftAutomationRecipe,
   exportActivepiecesWorkflowTemplate,
+  exportN8nWorkflowTemplate,
   fetchWorkflowRecipeTemplates,
   previewWorkflowRecipe,
 } from "./orchestration-recipes.js";
@@ -877,7 +879,7 @@ export {
   updateRetentionPolicy,
   verifyBackup,
 } from "./system.js";
-export { fetchOpsQualitySnapshot } from "./ops-quality.js";
+export { exportOpsQualityEvidence, fetchOpsQualitySnapshot } from "./ops-quality.js";
 
 export type EventStreamConnectionState = "connecting" | "open" | "retrying" | "error" | "closed";
 

@@ -77,6 +77,21 @@ describe("dashboard route service", () => {
         },
       },
     });
+    expect(await service.getOpsQualityExport({ packLimit: 10, evalLimit: 3, format: "otel_json" })).toMatchObject({
+      version: "ops.quality_export.otel_json.v1",
+      format: "otel_json",
+      contentType: "application/json",
+      sourceEndpoint: "/api/v1/ops/quality",
+      posture: { readOnly: true, sideEffectPosture: "audit_only" },
+      resource: { serviceName: "goatcitadel", source: "ops_quality" },
+      spans: expect.arrayContaining([
+        expect.objectContaining({ name: "ops.quality.snapshot" }),
+        expect.objectContaining({ name: "ops.quality.prompt_pack" }),
+        expect.objectContaining({ name: "ops.quality.eval_proof" }),
+        expect.objectContaining({ name: "ops.quality.security_gate" }),
+        expect.objectContaining({ name: "ops.quality.design_check" }),
+      ]),
+    });
 
     expect(deps.storage.costLedger.summary).toHaveBeenCalledWith("month", "from", "to");
     expect(deps.storage.costLedger.usageAvailability).toHaveBeenCalledWith("from", "to");

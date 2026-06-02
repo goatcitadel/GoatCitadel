@@ -195,6 +195,7 @@ export function composeRuntimeAdminRouteDependencies(
       createPlanFromRecipe: (input, policyContext) => workflowRecipes.createPlanFromRecipe(input, policyContext),
       draftAutomationRecipe: (input) => workflowRecipes.draftAutomationRecipe(input),
       exportActivepiecesTemplate: (input) => workflowRecipes.exportActivepiecesTemplate(input),
+      exportN8nTemplate: (input) => workflowRecipes.exportN8nTemplate(input),
       listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
       previewRecipe: (input) => workflowRecipes.previewRecipe(input),
       runOrchestrationPlan: (planId, policyContext) => gateway.runOrchestrationPlan(planId, policyContext),

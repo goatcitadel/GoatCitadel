@@ -18,6 +18,8 @@ import {
 } from "./skill-bundle-manifest.js";
 import type {
   SkillImportCandidate,
+  SkillImportCompatibility,
+  SkillImportCompatibilitySource,
   SkillImportExternalToolMapping,
   SkillImportHistoryRecord,
   SkillImportProvenance,
@@ -867,6 +869,7 @@ export class SkillImportService {
           externalToolMappings: validation.externalToolMappings,
           scriptDisposition: validation.scriptDisposition,
           bundleManifest: validation.bundleManifest,
+          compatibility: validation.compatibility,
         },
         createdAt: new Date().toISOString(),
       });
@@ -925,6 +928,7 @@ export class SkillImportService {
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
             bundleManifest: validation.bundleManifest,
+            compatibility: validation.compatibility,
           },
           createdAt: new Date().toISOString(),
         });
@@ -948,6 +952,7 @@ export class SkillImportService {
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
             bundleManifest: validation.bundleManifest,
+            compatibility: validation.compatibility,
           },
           createdAt: new Date().toISOString(),
         });
@@ -1013,6 +1018,7 @@ export class SkillImportService {
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
             bundleManifest: validation.bundleManifest,
+            compatibility: validation.compatibility,
           },
           null,
           2,
@@ -1037,6 +1043,7 @@ export class SkillImportService {
           externalToolMappings: validation.externalToolMappings,
           scriptDisposition: validation.scriptDisposition,
           bundleManifest: validation.bundleManifest,
+          compatibility: validation.compatibility,
         },
         createdAt: new Date().toISOString(),
       });
@@ -1491,6 +1498,17 @@ export class SkillImportService {
         );
       }
     }
+    const compatibility = buildSkillImportCompatibility(source, {
+      bundleManifestStatus: bundleManifest.status,
+      hasErrors: errors.length > 0,
+      nativeOverlapCount: nativeOverlaps?.length ?? 0,
+      scriptDispositionAction: scriptDisposition.action,
+    });
+    for (const warning of compatibility.warnings) {
+      if (!warnings.includes(warning)) {
+        warnings.push(warning);
+      }
+    }
     const riskLevel = deriveRiskLevel({
       suspiciousScripts,
       networkIndicators,
@@ -1519,6 +1537,7 @@ export class SkillImportService {
         externalToolMappings,
         scriptDisposition,
         bundleManifest,
+        compatibility,
       },
       inferredSkillName,
       inferredSkillId,
@@ -1532,10 +1551,84 @@ export class SkillImportService {
       externalToolMappings,
       scriptDisposition,
       bundleManifest,
+      compatibility,
       provenance,
       nativeOverlaps,
     };
   }
+}
+
+function buildSkillImportCompatibility(
+  source: MaterializedSkillSource,
+  input: {
+    bundleManifestStatus: "absent" | "valid" | "invalid";
+    hasErrors: boolean;
+    nativeOverlapCount: number;
+    scriptDispositionAction: SkillImportScriptDisposition["action"];
+  },
+): SkillImportCompatibility {
+  const sources: SkillImportCompatibilitySource[] = [];
+  if (fsSync.existsSync(source.skillFilePath)) {
+    sources.push("skill_md");
+  }
+  if (input.bundleManifestStatus !== "absent") {
+    sources.push("goatcitadel_skill_bundle");
+  }
+  if (isAgentSkillCompatibleSource(source)) {
+    sources.push("agent_skills");
+  }
+  if (hasAgentsMd(source)) {
+    sources.push("agents_md");
+  }
+  const warnings: string[] = [];
+  if (sources.includes("agent_skills")) {
+    warnings.push(
+      "Agent Skills compatibility metadata detected; imported material remains review-only until governed activation.",
+    );
+  }
+  if (sources.includes("agents_md")) {
+    warnings.push(
+      "AGENTS.md guidance detected as provenance only; it is not promoted into runtime authority by import validation.",
+    );
+  }
+  if (input.scriptDispositionAction !== "none") {
+    warnings.push(
+      "Imported scripts remain non-callable and are not exposed through callableCatalog by compatibility metadata.",
+    );
+  }
+  const reviewOnly =
+    input.hasErrors ||
+    input.nativeOverlapCount > 0 ||
+    input.scriptDispositionAction !== "none" ||
+    sources.includes("agents_md");
+  return {
+    sources: sources.length ? sources : ["skill_md"],
+    warnings,
+    callability: reviewOnly ? "review_only" : "governed_candidate",
+  };
+}
+
+function isAgentSkillCompatibleSource(source: MaterializedSkillSource): boolean {
+  const refs = [source.candidate.sourceRef, source.candidate.sourceUrl, source.candidate.repositoryUrl]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  return (
+    source.candidate.sourceProvider === "agentskill" ||
+    refs.includes("agentskill") ||
+    refs.includes("agentskills") ||
+    fsSync.existsSync(path.join(source.skillDir, "skill.json")) ||
+    fsSync.existsSync(path.join(source.sourceDir, "skill.json"))
+  );
+}
+
+function hasAgentsMd(source: MaterializedSkillSource): boolean {
+  return [
+    path.join(source.skillDir, "AGENTS.md"),
+    path.join(source.skillDir, "agents.md"),
+    path.join(source.sourceDir, "AGENTS.md"),
+    path.join(source.sourceDir, "agents.md"),
+  ].some((candidatePath) => fsSync.existsSync(candidatePath));
 }
 
 function defaultLookupProviders(): SkillSourceSearchRecord[] {

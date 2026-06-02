@@ -19,6 +19,12 @@ const activepiecesTemplateExportBodySchema = recipeBodySchema.and(
     webhookPath: z.string().trim().min(1).max(240).optional(),
   }),
 );
+const n8nTemplateExportBodySchema = recipeBodySchema.and(
+  z.object({
+    workflowName: z.string().trim().min(1).max(160).optional(),
+    webhookPath: z.string().trim().min(1).max(240).optional(),
+  }),
+);
 const automationDraftBodySchema = z.object({
   taskDescription: z.string().trim().min(1),
   trigger: z.string().trim().min(1).optional(),
@@ -107,6 +113,18 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(orchestration.exportActivepiecesTemplate(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/orchestration/recipes/n8n-template/export", operatorOnly, async (request, reply) => {
+    const parsed = n8nTemplateExportBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(orchestration.exportN8nTemplate(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

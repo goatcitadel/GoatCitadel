@@ -674,6 +674,10 @@ describe("shared API wrappers", () => {
       opsQuality.fetchOpsQualitySnapshot({ packLimit: 9999, evalLimit: 999 }),
       "/api/v1/ops/quality?packLimit=2000&evalLimit=200",
     );
+    await expectCall(
+      opsQuality.exportOpsQualityEvidence({ packLimit: 9999, evalLimit: 999, format: "otel_json" }),
+      "/api/v1/ops/quality/export?format=otel_json&packLimit=2000&evalLimit=200",
+    );
     await expectCall(platform.createLlmChatCompletion({ messages: [] }), "/api/v1/llm/chat-completions", {
       method: "POST",
     });

@@ -14,6 +14,8 @@ import type {
   WorkflowRecipeAgent,
   WorkflowRecipeApproval,
   WorkflowRecipeLimits,
+  WorkflowRecipeN8nTemplateExportRequest,
+  WorkflowRecipeN8nTemplateExportResponse,
   WorkflowRecipePlanCreateRequest,
   WorkflowRecipePlanCreateResponse,
   WorkflowRecipePreviewRequest,
@@ -24,6 +26,7 @@ import type {
   WorkflowRecipeTemplateRecord,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
+import { buildN8nWorkflowTemplate, validateN8nTemplateExport } from "./workflow-recipe-n8n-template";
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "name",
@@ -147,6 +150,55 @@ export class WorkflowRecipeService {
       filename,
       contentType: payload.contentType,
       activepiecesTemplate,
+      validation,
+      posture,
+      content: JSON.stringify(payload, null, 2),
+    };
+  }
+
+  public exportN8nTemplate(
+    input: WorkflowRecipeN8nTemplateExportRequest,
+    generatedAt = new Date().toISOString(),
+  ): WorkflowRecipeN8nTemplateExportResponse {
+    const preview = this.previewRecipe(input);
+    const n8nWorkflow = buildN8nWorkflowTemplate(preview, input);
+    const validation = validateN8nTemplateExport(n8nWorkflow);
+    const filename = `${slugify(n8nWorkflow.name)}-n8n-template.json`;
+    const posture = {
+      readOnly: true,
+      sideEffectPosture: "not_executed",
+      importRequired: true,
+      execution: "operator_import_required",
+    } as const;
+    const payload = {
+      version: "workflow_recipe.n8n_template_export.v1" as const,
+      generatedAt,
+      filename,
+      contentType: "application/json" as const,
+      target: "n8n" as const,
+      posture,
+      recipe: preview.recipe,
+      plan: preview.plan,
+      warnings: [
+        ...preview.warnings,
+        "n8n template export is a read-only planning artifact; it does not create a workflow, trigger a webhook, poll, or run tools.",
+      ],
+      requiredApprovals: preview.requiredApprovals,
+      missingTools: preview.missingTools,
+      missingSkills: preview.missingSkills,
+      estimatedLimits: preview.estimatedLimits,
+      n8nWorkflow,
+      validation,
+    };
+    return {
+      ...preview,
+      warnings: payload.warnings,
+      version: payload.version,
+      generatedAt,
+      filename,
+      contentType: payload.contentType,
+      target: payload.target,
+      n8nWorkflow,
       validation,
       posture,
       content: JSON.stringify(payload, null, 2),

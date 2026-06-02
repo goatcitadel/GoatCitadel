@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   asRecord,
+  buildMemoryGraphProjection,
   buildProvenanceCoverage,
   formatDecisionProvenanceSummary,
   formatRelationProvenanceSummary,
@@ -462,6 +463,28 @@ describe("MemoryRoutePage", () => {
     ).toContain("2 linked records");
   });
 
+  it("builds a read-only memory graph projection without adding a graph store", () => {
+    const projection = buildMemoryGraphProjection({
+      entities: memorySnapshot.data.memoryEntities as any,
+      relations: memorySnapshot.data.memoryRelations as any,
+      decisions: memorySnapshot.data.memoryDecisions as any,
+    });
+
+    expect(projection).toMatchObject({
+      readiness: "connected",
+      entityCount: 1,
+      activeEntityCount: 1,
+      relationCount: 1,
+      activeRelationCount: 1,
+      degradedRelationCount: 1,
+      decisionCount: 1,
+      connectedEntityCount: 1,
+      orphanEntityCount: 0,
+      topRelationTypes: [{ relationType: "uses", count: 1 }],
+    });
+    expect(projection.summary).toContain("entities are linked");
+  });
+
   it("renders lifecycle-aware memory operator truth", () => {
     const markup = renderToStaticMarkup(
       <MemoryRoutePage
@@ -488,6 +511,7 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Release checklist citation helped the operator.");
     expect(markup).toContain("Trace candidates");
     expect(markup).toContain("Docs check should stay attached to release verification memory.");
+    expect(markup).toContain("Graph projection");
     expect(markup).toContain("Provenance map");
     expect(markup).toContain("Memory entities");
     expect(markup).toContain("Relations");

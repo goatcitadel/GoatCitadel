@@ -554,10 +554,14 @@ export interface CapabilityTrendSeries {
   breached?: boolean;
 }
 
+export type PromptPackExportFormat = "goatcitadel" | "promptfoo";
+
 export interface PromptPackExportRecord {
   packId: string;
+  format?: PromptPackExportFormat;
   /** Stable current report path, kept for backward-compatible export consumers. */
   path: string;
+  contentType?: "text/markdown" | "application/json";
   exists: boolean;
   sizeBytes: number;
   updatedAt?: string;
@@ -568,6 +572,34 @@ export interface PromptPackExportRecord {
   latestSnapshotSizeBytes?: number;
   latestSnapshotUpdatedAt?: string;
   snapshotCount?: number;
+  interop?: {
+    promptfoo?: {
+      compatible: true;
+      configVersion: "promptfoo.config.v1";
+      promptCount: number;
+      providerCount: number;
+      testCount: number;
+      notes: string[];
+    };
+  };
+}
+
+export interface PromptPackPromptfooImportPreviewResponse {
+  valid: boolean;
+  format: "promptfoo";
+  generatedAt: string;
+  testCount: number;
+  promptCount: number;
+  providerCount: number;
+  warnings: string[];
+  errors: string[];
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "preview_only";
+    callsProviders: false;
+    mutationPerformed: false;
+    note: string;
+  };
 }
 
 export const DEFAULT_PROMPT_PACK_POLICY_V2: PromptPackPolicyV2 = {
