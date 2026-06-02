@@ -1,6 +1,7 @@
 import { AuthAdminRouteService, type AuthAdminRoutePort } from "./auth-admin-route-service.js";
 import { createAddonsRouteService, type AddonsRoutePort, type AddonsRouteService } from "./addons-route-service.js";
 import { createAgentsRouteService, type AgentsRoutePort, type AgentsRouteService } from "./agents-route-service.js";
+import { A2ARouteService, type A2ARouteServiceDependencies } from "./a2a-route-service.js";
 import {
   createAssemblyRouteService,
   type AssemblyRoutePort,
@@ -164,6 +165,7 @@ import {
   type WorkspacesRouteService,
 } from "./workspaces-route-service.js";
 export interface GatewayRouteServices {
+  a2a: A2ARouteService;
   addons: AddonsRouteService;
   agents: AgentsRouteService;
   assembly: AssemblyRouteService;
@@ -226,6 +228,7 @@ export interface GatewayRouteServices {
 }
 
 export interface GatewayRouteServiceDependencies {
+  a2a: A2ARouteServiceDependencies;
   addons: AddonsRoutePort;
   agents: AgentsRoutePort;
   assembly: AssemblyRoutePort;
@@ -289,6 +292,7 @@ export interface GatewayRouteServiceDependencies {
 
 export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies): GatewayRouteServices {
   return {
+    a2a: new A2ARouteService(deps.a2a),
     addons: createAddonsRouteService(deps.addons),
     agents: createAgentsRouteService(deps.agents),
     assembly: createAssemblyRouteService(deps.assembly),

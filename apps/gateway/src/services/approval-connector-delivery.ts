@@ -149,7 +149,7 @@ function buildApprovalDeliveryGovernance(approval: ApprovalRequest): {
   runId?: string;
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   originSurface?: string;
@@ -207,7 +207,7 @@ function readApprovalScopedString(value: unknown): string | undefined {
 
 function readApprovalAuthActorSource(
   value: unknown,
-): "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | undefined {
+): "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | undefined {
   return value === "none" ||
     value === "token" ||
     value === "basic" ||

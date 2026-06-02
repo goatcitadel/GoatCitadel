@@ -2,46 +2,79 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   A2ABridgeAgentCard,
   A2ABridgeGovernance,
+  A2ABridgeRuntimeConfig,
+  A2ABridgeStatus,
   A2ABridgeStatusResponse,
+  A2APeerCredentialConfig,
+  A2APeerCredentialHealth,
   A2ATaskExportPreviewRequest,
   A2ATaskExportPreviewResponse,
 } from "@goatcitadel/contracts";
 
-const A2A_BRIDGE_PROTOCOL_VERSION = "goatcitadel-a2a-bridge-preview-1";
-const A2A_PROTOCOL_VERSION = "1.0";
+const A2A_BRIDGE_PROTOCOL_VERSION = "goatcitadel-a2a-boundary-1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:8787";
 
-export function buildA2ABridgeStatus(input: { checkedAt: string; baseUrl?: string }): A2ABridgeStatusResponse {
-  const governance = buildA2ABridgeGovernance();
+export const DEFAULT_A2A_RUNTIME_CONFIG: A2ABridgeRuntimeConfig = {
+  enabled: false,
+  publicDiscoveryEnabled: false,
+  protocolVersion: "1.0",
+  bindings: ["JSONRPC"],
+  inbound: {
+    enabled: false,
+    peerCredentials: [],
+  },
+  outbound: {
+    enabled: false,
+    peers: [],
+  },
+};
+
+export function buildA2ABridgeStatus(input: {
+  checkedAt: string;
+  baseUrl?: string;
+  config?: A2ABridgeRuntimeConfig;
+}): A2ABridgeStatusResponse {
+  const config = normalizeA2AConfig(input.config);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const peerCredentials = buildPeerCredentialHealth(config.inbound.peerCredentials, input.checkedAt);
+  const governance = buildA2ABridgeGovernance(config, peerCredentials);
   return {
-    status: "preview_ready",
+    status: resolveA2ABridgeStatus(config, governance, peerCredentials),
     checkedAt: input.checkedAt,
-    agentCard: buildA2AAgentCard({ baseUrl, governance }),
+    agentCard: buildA2AAgentCard({ baseUrl, config, governance }),
     previewRoutes: {
       agentCard: `${baseUrl}/api/v1/a2a/agent-card`,
       taskPreview: `${baseUrl}/api/v1/a2a/task-preview`,
+      jsonRpc: `${baseUrl}/api/v1/a2a/jsonrpc`,
+      publicDiscovery: `${baseUrl}/.well-known/agent-card.json`,
+      outboundPreview: `${baseUrl}/api/v1/a2a/outbound/preview`,
+      outboundSend: `${baseUrl}/api/v1/a2a/outbound/send`,
     },
+    peerCredentials,
     governance,
   };
 }
 
 export function buildA2ATaskExportPreview(
   input: A2ATaskExportPreviewRequest,
-  options: { checkedAt: string },
+  options: { checkedAt: string; config?: A2ABridgeRuntimeConfig },
 ): A2ATaskExportPreviewResponse {
   const goal = input.goal.trim();
   const exportId = `a2a-preview-${randomUUID()}`;
   const contextId = input.sessionId?.trim() || input.taskId?.trim() || exportId;
   const artifactRefs = normalizeArtifactRefs(input.artifactRefs);
+  const config = normalizeA2AConfig(options.config);
   return {
     exportId,
     checkedAt: options.checkedAt,
     status: "preview",
-    governance: buildA2ABridgeGovernance(),
+    governance: buildA2ABridgeGovernance(
+      config,
+      buildPeerCredentialHealth(config.inbound.peerCredentials, options.checkedAt),
+    ),
     warnings: [
       "Preview only: no A2A client request, webhook, or remote task mutation was sent.",
-      "A replay-safe external side-effect runner is still required before A2A is callable.",
+      "Callable A2A traffic uses configured peer credentials, Gateway policy, durable task bindings, and audit.",
     ],
     task: {
       id: exportId,
@@ -89,75 +122,69 @@ export function buildA2ATaskExportPreview(
   };
 }
 
-function buildA2AAgentCard(input: { baseUrl?: string; governance: A2ABridgeGovernance }): A2ABridgeAgentCard {
-  const baseUrl = normalizeBaseUrl(input.baseUrl);
+export function normalizeA2AConfig(config: A2ABridgeRuntimeConfig | undefined): A2ABridgeRuntimeConfig {
   return {
-    name: "GoatCitadel Mission Control",
-    description:
-      "Draft operator-governed A2A bridge preview for mapping GoatCitadel tasks, artifacts, and runtime proof into an agent interoperability envelope.",
-    version: A2A_BRIDGE_PROTOCOL_VERSION,
-    publicationStatus: "draft_operator_preview",
-    discoveryPublished: false,
-    supportedInterfaces: [
-      {
-        url: `${baseUrl}/api/v1/a2a/jsonrpc`,
-        protocolBinding: "JSONRPC",
-        protocolVersion: A2A_PROTOCOL_VERSION,
-        enabled: false,
-        reason: "Inbound JSON-RPC is not enabled until policy, approvals, durable task lifecycle, and audit are wired.",
-      },
-    ],
-    capabilities: {
-      streaming: false,
-      pushNotifications: false,
-      stateTransitionHistory: true,
-      extendedAgentCard: false,
-      extensions: [],
+    enabled: config?.enabled ?? DEFAULT_A2A_RUNTIME_CONFIG.enabled,
+    publicDiscoveryEnabled: config?.publicDiscoveryEnabled ?? DEFAULT_A2A_RUNTIME_CONFIG.publicDiscoveryEnabled,
+    protocolVersion: "1.0",
+    bindings: normalizeProtocolBindings(config?.bindings),
+    inbound: {
+      enabled: config?.inbound?.enabled ?? DEFAULT_A2A_RUNTIME_CONFIG.inbound.enabled,
+      peerCredentials: config?.inbound?.peerCredentials ?? [],
     },
-    defaultInputModes: ["text/plain", "application/json"],
-    defaultOutputModes: ["application/json"],
-    skills: [
-      {
-        id: "goatcitadel.task_export_preview",
-        name: "Task Export Preview",
-        description:
-          "Builds a reviewable A2A-style task envelope from a GoatCitadel goal, session, project, task, and artifact references without sending it externally.",
-        tags: ["task-export", "artifacts", "operator-review", "governed-preview"],
-        inputModes: ["text/plain", "application/json"],
-        outputModes: ["application/json"],
-      },
-    ],
-    security: [{ operatorBearer: [] }],
-    governance: input.governance,
+    outbound: {
+      enabled: config?.outbound?.enabled ?? DEFAULT_A2A_RUNTIME_CONFIG.outbound.enabled,
+      peers: config?.outbound?.peers ?? [],
+    },
   };
 }
 
-function buildA2ABridgeGovernance(): A2ABridgeGovernance {
+export function buildPeerCredentialHealth(
+  credentials: A2APeerCredentialConfig[],
+  checkedAt: string,
+): A2APeerCredentialHealth[] {
+  return credentials.map((credential) => {
+    const token = readPeerCredentialSecret(credential);
+    return {
+      peerId: credential.peerId,
+      label: credential.label,
+      status: resolvePeerCredentialStatus(credential, token, checkedAt),
+      scopes: credential.scopes ?? ["a2a:jsonrpc"],
+      expiresAt: credential.expiresAt,
+      revokedAt: credential.revokedAt,
+      checkedAt,
+    };
+  });
+}
+
+export function buildA2ABridgeGovernance(
+  config: A2ABridgeRuntimeConfig,
+  peerCredentials: A2APeerCredentialHealth[],
+): A2ABridgeGovernance {
+  const inboundJsonRpcEnabled = Boolean(
+    config.enabled && config.inbound.enabled && config.bindings.includes("JSONRPC"),
+  );
+  const outboundNetworkEnabled = Boolean(config.enabled && config.outbound.enabled);
+  const configuredPeerCount = peerCredentials.filter((credential) => credential.status === "configured").length;
+  const callable = inboundJsonRpcEnabled && configuredPeerCount > 0;
+  const reasons = buildGovernanceReasons(config, {
+    inboundJsonRpcEnabled,
+    outboundNetworkEnabled,
+    configuredPeerCount,
+  });
   return {
-    exposure: "operator_api_only",
-    callable: false,
+    exposure: config.publicDiscoveryEnabled ? "public_discovery" : callable ? "a2a_peer_jsonrpc" : "operator_api_only",
+    callable,
     approvalRequired: true,
-    outboundNetworkEnabled: false,
-    inboundJsonRpcEnabled: false,
-    replayPolicy: "preview_only",
-    audit: "gateway_route",
-    reasons: [
-      "A2A bridge preview stays behind operator-authenticated gateway routes.",
-      "Outbound A2A client calls, inbound JSON-RPC handlers, streaming, and push notifications remain disabled.",
-      "Future callable A2A work must pass through gateway-owned policy, approvals, durable execution, and audit.",
-    ],
+    outboundNetworkEnabled,
+    inboundJsonRpcEnabled,
+    replayPolicy: callable ? "durable_task_binding" : "preview_only",
+    audit: callable || outboundNetworkEnabled ? "durable_gateway_audit" : "gateway_route",
+    reasons,
   };
 }
 
-function normalizeArtifactRefs(value: string[] | undefined): string[] {
-  return [...new Set((value ?? []).map((item) => item.trim()).filter(Boolean))].slice(0, 12);
-}
-
-function hashPreviewPayload(value: Record<string, unknown>): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function normalizeBaseUrl(value: string | undefined): string {
+export function normalizeBaseUrl(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return DEFAULT_BASE_URL;
@@ -174,4 +201,167 @@ function normalizeBaseUrl(value: string | undefined): string {
   } catch {
     return DEFAULT_BASE_URL;
   }
+}
+
+export function readPeerCredentialSecret(credential: A2APeerCredentialConfig): string | undefined {
+  if (credential.token?.trim()) {
+    return credential.token.trim();
+  }
+  if (credential.tokenEnv?.trim()) {
+    const value = process.env[credential.tokenEnv.trim()];
+    return value?.trim() || undefined;
+  }
+  return undefined;
+}
+
+function buildA2AAgentCard(input: {
+  baseUrl?: string;
+  config: A2ABridgeRuntimeConfig;
+  governance: A2ABridgeGovernance;
+}): A2ABridgeAgentCard {
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const jsonRpcCallable = input.governance.inboundJsonRpcEnabled && input.governance.callable;
+  const publicationStatus = input.config.publicDiscoveryEnabled
+    ? "public_discovery"
+    : input.config.enabled
+      ? "private_configured"
+      : "draft_operator_preview";
+  return {
+    name: "GoatCitadel Mission Control",
+    description:
+      "Gateway-governed A2A v1.0 boundary for external agent interoperability. GoatCitadel mesh remains native runtime coordination.",
+    version: A2A_BRIDGE_PROTOCOL_VERSION,
+    protocolVersion: "1.0",
+    publicationStatus,
+    discoveryPublished: input.config.enabled && input.config.publicDiscoveryEnabled,
+    supportedInterfaces: [
+      {
+        url: `${baseUrl}/api/v1/a2a/jsonrpc`,
+        protocolBinding: "JSONRPC",
+        protocolVersion: "1.0",
+        enabled: jsonRpcCallable,
+        reason: jsonRpcCallable
+          ? "Inbound JSON-RPC is callable for configured A2A peers."
+          : "Inbound JSON-RPC requires A2A, inbound mode, JSON-RPC binding, and configured peer credentials.",
+      },
+      {
+        url: `${baseUrl}/api/v1/a2a/grpc`,
+        protocolBinding: "GRPC",
+        protocolVersion: "1.0",
+        enabled: false,
+        reason: "gRPC transport is advertised as a non-callable future capability flag.",
+      },
+      {
+        url: `${baseUrl}/api/v1/a2a/http-json`,
+        protocolBinding: "HTTP_JSON",
+        protocolVersion: "1.0",
+        enabled: false,
+        reason: "HTTP+JSON transport is advertised as a non-callable future capability flag.",
+      },
+    ],
+    capabilities: {
+      streaming: jsonRpcCallable,
+      pushNotifications: false,
+      stateTransitionHistory: true,
+      extendedAgentCard: false,
+      extensions: [],
+    },
+    defaultInputModes: ["text/plain", "application/json"],
+    defaultOutputModes: ["application/json"],
+    skills: [
+      {
+        id: "goatcitadel.task_interop",
+        name: "Governed Task Interop",
+        description:
+          "Accepts peer-authenticated A2A messages through Gateway policy, durable task bindings, and visible chat/task lifecycle state.",
+        tags: ["a2a", "json-rpc", "durable-tasks", "operator-governed"],
+        inputModes: ["text/plain", "application/json"],
+        outputModes: ["application/json"],
+      },
+    ],
+    security: [{ a2aPeerBearer: [] }],
+    governance: input.governance,
+  };
+}
+
+function resolveA2ABridgeStatus(
+  config: A2ABridgeRuntimeConfig,
+  governance: A2ABridgeGovernance,
+  peerCredentials: A2APeerCredentialHealth[],
+): A2ABridgeStatus {
+  if (!config.enabled) {
+    return "preview_ready";
+  }
+  if (governance.callable) {
+    return "callable";
+  }
+  if (config.inbound.enabled && peerCredentials.length === 0) {
+    return "blocked";
+  }
+  if (config.inbound.enabled || config.outbound.enabled) {
+    return "configured";
+  }
+  return "not_configured";
+}
+
+function resolvePeerCredentialStatus(
+  credential: A2APeerCredentialConfig,
+  token: string | undefined,
+  checkedAt: string,
+): A2APeerCredentialHealth["status"] {
+  if (credential.revokedAt) {
+    return "revoked";
+  }
+  if (credential.expiresAt) {
+    const expiresAt = Date.parse(credential.expiresAt);
+    const now = Date.parse(checkedAt);
+    if (Number.isFinite(expiresAt) && Number.isFinite(now) && expiresAt <= now) {
+      return "expired";
+    }
+  }
+  return token ? "configured" : "missing_secret";
+}
+
+function buildGovernanceReasons(
+  config: A2ABridgeRuntimeConfig,
+  state: { inboundJsonRpcEnabled: boolean; outboundNetworkEnabled: boolean; configuredPeerCount: number },
+): string[] {
+  if (!config.enabled) {
+    return [
+      "A2A is disabled by default for local-first safety; operator diagnostics and task preview remain available.",
+      "Mesh remains GoatCitadel-native coordination for readiness, leases, ownership, replication, and runtime state.",
+    ];
+  }
+  const reasons = [
+    "A2A is the governed external agent-to-agent boundary at the Gateway.",
+    "Gateway policy, approvals, path jails, memory policy, capability activation, durable execution, audit, and network allowlists remain authoritative.",
+  ];
+  if (!state.inboundJsonRpcEnabled) {
+    reasons.push("Inbound JSON-RPC is not callable until A2A inbound mode and JSON-RPC binding are enabled.");
+  }
+  if (state.inboundJsonRpcEnabled && state.configuredPeerCount === 0) {
+    reasons.push("Inbound JSON-RPC requires at least one configured, unexpired, unrevoked peer credential.");
+  }
+  if (!state.outboundNetworkEnabled) {
+    reasons.push("Outbound A2A is disabled until explicitly configured and allowlisted.");
+  }
+  reasons.push("Push notifications, gRPC, and HTTP+JSON stay non-callable capability flags until implemented.");
+  return reasons;
+}
+
+function normalizeProtocolBindings(
+  value: A2ABridgeRuntimeConfig["bindings"] | undefined,
+): A2ABridgeRuntimeConfig["bindings"] {
+  const bindings = value?.length ? value : DEFAULT_A2A_RUNTIME_CONFIG.bindings;
+  return [...new Set(bindings)].filter(
+    (binding) => binding === "JSONRPC" || binding === "GRPC" || binding === "HTTP_JSON",
+  );
+}
+
+function normalizeArtifactRefs(value: string[] | undefined): string[] {
+  return [...new Set((value ?? []).map((item) => item.trim()).filter(Boolean))].slice(0, 12);
+}
+
+function hashPreviewPayload(value: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

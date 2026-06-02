@@ -1076,6 +1076,11 @@ describe("MemoryLifecycleService", () => {
             return fallback;
           }
         }),
+        memoryQualityIssues: {
+          list: vi.fn(() => []),
+          upsertOpenIssue: vi.fn(),
+          patchStatus: vi.fn(),
+        },
         requireFeatureEnabled: vi.fn(),
         publishRealtime,
       },

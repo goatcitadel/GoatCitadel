@@ -55,12 +55,12 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           callable: false,
           implementationStatus: "partial",
           summary:
-            "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
+            "A2A is present as a Gateway-owned external interoperability boundary but is not currently callable.",
           reasons: [
-            "Operator-authenticated preview routes expose an unpublished Agent Card draft and A2A-style task envelope mapping without sending external traffic.",
+            "Callable A2A requires enabled inbound JSON-RPC, configured peer credentials, durable task bindings, and audit.",
           ],
           evidence: [],
-          requiredNextSteps: ["Add gateway-owned A2A JSON-RPC server and client services before marking callable"],
+          requiredNextSteps: ["Keep broader A2A transports non-callable until implemented and tested"],
           checkedAt: "2026-01-01T00:00:00.000Z",
         },
       ],
@@ -189,8 +189,8 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("Scalability");
     expect(rendered).toContain("A2A protocol interoperability");
     expect(rendered).toContain("Protocol partial.");
-    expect(rendered).toContain("task-export preview routes");
-    expect(rendered).toContain("without sending external traffic");
+    expect(rendered).toContain("Gateway-owned external interoperability boundary");
+    expect(rendered).toContain("durable task bindings");
     expect(rendered).toContain("Sandbox posture is not satisfied.");
     expect(rendered).toContain("Executable pwsh.exe.");
     expect(rendered).toContain("Manual harness");

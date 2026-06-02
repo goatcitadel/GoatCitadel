@@ -28,11 +28,10 @@ describe("AgenticScalabilityTrackRecord", () => {
       status: "blocked",
       callable: false,
       implementationStatus: "partial",
-      summary:
-        "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
-      reasons: ["Callable JSON-RPC server and client services are still blocked."],
+      summary: "A2A is present as a Gateway-owned external interoperability boundary but is not currently callable.",
+      reasons: ["Callable JSON-RPC requires configured peer credentials and Gateway-owned durable task bindings."],
       evidence: [{ label: "A2A specification", url: "https://a2a-protocol.org/latest/specification/" }],
-      requiredNextSteps: ["Add gateway-owned A2A JSON-RPC server and client services before marking callable"],
+      requiredNextSteps: ["Keep broader A2A transports non-callable until implemented and tested"],
       checkedAt: "2026-05-30T00:00:00.000Z",
     };
 

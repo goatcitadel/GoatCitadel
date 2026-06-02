@@ -9,10 +9,21 @@ import {
 
 export function composeSystemRouteDependencies(
   gateway: GatewayRouteCompositionPort,
-): RouteDependencyDomain<"addons" | "assembly" | "costs" | "media" | "settings" | "tasks" | "voice" | "workspaces"> {
+): RouteDependencyDomain<
+  "a2a" | "addons" | "assembly" | "costs" | "media" | "settings" | "tasks" | "voice" | "workspaces"
+> {
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
 
   return {
+    a2a: {
+      config: gateway.config,
+      storage: gateway.storage,
+      tasks: gateway.taskLifecycleService,
+      createChatSession: (input) => gateway.createChatSession(input),
+      chatTurnRuntime: gateway.chatTurnRuntime,
+      mutationIdempotencyStore: gateway.mutationIdempotencyStore,
+      evidenceEnvelopeService: gateway.evidenceEnvelopeService,
+    },
     addons: createAddonsRoutePort({
       addonsService: gateway.addonsService,
       slotService: gateway.addonSlotService,

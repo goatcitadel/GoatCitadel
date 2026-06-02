@@ -2,7 +2,6 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
-import { buildA2ABridgeStatus, buildA2ATaskExportPreview } from "../services/a2a-bridge-service.js";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../services/task-artifact-verifier.js";
 import type { TaskWorkspaceAccessOptions } from "../services/task-lifecycle-service.js";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
 const DEFAULT_WORKSPACE_ID = "default";
@@ -42,6 +42,30 @@ const a2aTaskExportPreviewBodySchema = z.object({
   sessionId: z.string().min(1).max(240).optional(),
   taskId: z.string().min(1).max(240).optional(),
   artifactRefs: z.array(z.string().min(1).max(1000)).max(12).optional(),
+});
+
+const a2aJsonRpcMethodSchema = z.enum([
+  "SendMessage",
+  "SendStreamingMessage",
+  "GetTask",
+  "CancelTask",
+  "SubscribeToTask",
+  "SetTaskPushNotificationConfig",
+  "GetTaskPushNotificationConfig",
+  "ListTaskPushNotificationConfig",
+  "DeleteTaskPushNotificationConfig",
+  "GetAuthenticatedExtendedCard",
+]);
+
+const a2aOutboundBodySchema = z.object({
+  peerId: z.string().min(1),
+  method: a2aJsonRpcMethodSchema,
+  params: z.record(z.unknown()).default({}),
+  idempotencyKey: z.string().min(1).optional(),
+});
+
+const a2aBindingParamsSchema = z.object({
+  a2aTaskId: z.string().min(1),
 });
 
 const listQuerySchema = z.object({
@@ -250,23 +274,74 @@ const deleteTaskBodySchema = z
   .optional();
 
 export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/api/v1/a2a/agent-card", async (request, reply) => {
+  fastify.get("/.well-known/agent-card.json", async (request, reply) => {
+    const checkedAt = new Date().toISOString();
+    const agentCard = fastify.services.a2a.getPublicAgentCard({
+      checkedAt,
+      baseUrl: buildA2ARequestBaseUrl(request.headers),
+    });
+    if (!agentCard) {
+      return reply.code(404).send({ error: "A2A public discovery is disabled." });
+    }
+    return reply.send(agentCard);
+  });
+
+  fastify.get("/api/v1/a2a/agent-card", withRouteAccess(fastify, "operator"), async (request, reply) => {
     const checkedAt = new Date().toISOString();
     return reply.send(
-      buildA2ABridgeStatus({
+      fastify.services.a2a.getStatus({
         checkedAt,
         baseUrl: buildA2ARequestBaseUrl(request.headers),
       }),
     );
   });
 
-  fastify.post("/api/v1/a2a/task-preview", async (request, reply) => {
+  fastify.post("/api/v1/a2a/task-preview", withRouteAccess(fastify, "operator"), async (request, reply) => {
     const parsed = a2aTaskExportPreviewBodySchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const checkedAt = new Date().toISOString();
-    return reply.send(buildA2ATaskExportPreview(parsed.data, { checkedAt }));
+    return reply.send(fastify.services.a2a.previewTaskExport(parsed.data, { checkedAt }));
+  });
+
+  fastify.post("/api/v1/a2a/jsonrpc", withRouteAccess(fastify, "a2a-peer"), async (request, reply) => {
+    const auth = fastify.services.a2a.authenticatePeerRequest(request);
+    if ("statusCode" in auth) {
+      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+    }
+    const checkedAt = new Date().toISOString();
+    const response = await fastify.services.a2a.handleJsonRpc(auth, request.body, checkedAt);
+    return reply.send(response);
+  });
+
+  fastify.post("/api/v1/a2a/outbound/preview", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const parsed = a2aOutboundBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.a2a.previewOutbound(parsed.data));
+  });
+
+  fastify.post("/api/v1/a2a/outbound/send", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const parsed = a2aOutboundBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const actorId = resolveActorId(request);
+    return reply.send(await fastify.services.a2a.sendOutbound(parsed.data, actorId));
+  });
+
+  fastify.get("/api/v1/a2a/bindings/:a2aTaskId", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const parsed = a2aBindingParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const binding = fastify.services.a2a.getBinding(parsed.data.a2aTaskId);
+    if (!binding) {
+      return reply.code(404).send({ error: "A2A task binding not found." });
+    }
+    return reply.send(binding);
   });
 
   fastify.get("/api/v1/agentic/availability", async (_request, reply) => {
@@ -280,6 +355,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
           plugins: fastify.services.integrations.listIntegrationPlugins(),
           channelCatalog: fastify.services.integrations.listIntegrationCatalog("channel"),
           channelConnections: fastify.services.integrations.listIntegrationConnections("channel"),
+          a2a: fastify.services.a2a.getStatus({ checkedAt: generatedAt }),
         }),
       );
     } catch (error) {

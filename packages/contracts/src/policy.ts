@@ -120,7 +120,7 @@ export interface LocalOperatorOverrideCreateInput {
 export interface ToolPolicyActorContext {
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
   permissionProfileId?: string;
   permissionProfile?: PermissionProfileRecord;
   localOperatorOverrideId?: string;

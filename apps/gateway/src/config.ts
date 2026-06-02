@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
+  A2ABridgeRuntimeConfig,
   AuthMode,
   DeploymentProfile,
   LlmConfigFile,
@@ -44,6 +45,7 @@ export interface AssistantConfig {
   memory: MemoryConfig;
   web: WebRuntimeConfig;
   mesh: MeshConfig;
+  a2a: A2ABridgeRuntimeConfig;
   npu: NpuConfig;
   llamaCpp: LlamaCppConfig;
   database: DatabaseRuntimeConfig;
@@ -525,6 +527,26 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     assistant.mesh.nodeId = meshNodeId.trim();
   }
 
+  const a2aEnabled = process.env.GOATCITADEL_A2A_ENABLED;
+  if (a2aEnabled) {
+    assistant.a2a.enabled = a2aEnabled === "1" || a2aEnabled.toLowerCase() === "true";
+  }
+
+  const a2aPublicDiscovery = process.env.GOATCITADEL_A2A_PUBLIC_DISCOVERY_ENABLED;
+  if (a2aPublicDiscovery) {
+    assistant.a2a.publicDiscoveryEnabled = a2aPublicDiscovery === "1" || a2aPublicDiscovery.toLowerCase() === "true";
+  }
+
+  const a2aInbound = process.env.GOATCITADEL_A2A_INBOUND_ENABLED;
+  if (a2aInbound) {
+    assistant.a2a.inbound.enabled = a2aInbound === "1" || a2aInbound.toLowerCase() === "true";
+  }
+
+  const a2aOutbound = process.env.GOATCITADEL_A2A_OUTBOUND_ENABLED;
+  if (a2aOutbound) {
+    assistant.a2a.outbound.enabled = a2aOutbound === "1" || a2aOutbound.toLowerCase() === "true";
+  }
+
   const npuEnabled = process.env.GOATCITADEL_NPU_ENABLED;
   if (npuEnabled) {
     assistant.npu.enabled = npuEnabled === "1" || npuEnabled.toLowerCase() === "true";
@@ -850,6 +872,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const meshTailnet = (meshSecurity.tailnet ?? {}) as Partial<MeshConfig["security"]["tailnet"]>;
   const meshLeases = (meshInput.leases ?? {}) as Partial<MeshConfig["leases"]>;
   const meshReplication = (meshInput.replication ?? {}) as Partial<MeshConfig["replication"]>;
+  const a2aInput = (input.a2a ?? {}) as Partial<A2ABridgeRuntimeConfig>;
+  const a2aInboundInput = (a2aInput.inbound ?? {}) as Partial<A2ABridgeRuntimeConfig["inbound"]>;
+  const a2aOutboundInput = (a2aInput.outbound ?? {}) as Partial<A2ABridgeRuntimeConfig["outbound"]>;
   const npuInput = (input.npu ?? {}) as Partial<NpuConfig>;
   const npuSidecar = (npuInput.sidecar ?? {}) as Partial<NpuConfig["sidecar"]>;
   const npuRestart = (npuSidecar.restartBudget ?? {}) as Partial<NpuConfig["sidecar"]["restartBudget"]>;
@@ -1007,6 +1032,20 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       },
       replication: {
         batchSize: meshReplication.batchSize ?? 200,
+      },
+    },
+    a2a: {
+      enabled: a2aInput.enabled ?? false,
+      publicDiscoveryEnabled: a2aInput.publicDiscoveryEnabled ?? false,
+      protocolVersion: "1.0",
+      bindings: a2aInput.bindings ?? ["JSONRPC"],
+      inbound: {
+        enabled: a2aInboundInput.enabled ?? false,
+        peerCredentials: a2aInboundInput.peerCredentials ?? [],
+      },
+      outbound: {
+        enabled: a2aOutboundInput.enabled ?? false,
+        peers: a2aOutboundInput.peers ?? [],
       },
     },
     npu: {

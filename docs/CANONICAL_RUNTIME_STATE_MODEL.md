@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-04-12
+Last updated: 2026-06-02
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -70,6 +70,28 @@ Notes:
 - Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new mission-session LLM sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
+
+### A2A Task Binding
+
+Definition:
+A peer-scoped external A2A task identity mapped into GoatCitadel session, task, and durable-run truth.
+
+Authority:
+- Contract shape: `packages/contracts/src/a2a.ts`
+- Binding persistence: `a2a_task_bindings`
+- Inbound/outbound Gateway owner: `apps/gateway/src/services/a2a-route-service.ts`
+
+Implementation status:
+- A2A v1.0 is the external agent-to-agent standard at the Gateway boundary, not the internal mesh protocol.
+- JSON-RPC over HTTP/S is the only callable v1 binding. gRPC, HTTP+JSON, push notifications, and authenticated extended cards stay non-callable flags until implemented.
+- Public Agent Card discovery at `/.well-known/agent-card.json` is disabled by default; operator diagnostics remain available at `/api/v1/a2a/agent-card`.
+- Inbound A2A uses configured peer credentials through the `a2a-peer` route-access class. It must not reuse operator auth as peer auth.
+- Inbound `SendMessage` creates or reuses a peer-scoped hidden chat session, creates a visible TaskLifecycle task, dispatches through `agentSendChatMessage`, and stores an A2A-to-local binding with idempotency by peer/context/message identity.
+- Outbound A2A uses configured peers, Agent Card discovery, the network allowlist, the replay-safe external side-effect runner, and durable audit records.
+
+Notes:
+- A2A is external interoperability. GoatCitadel mesh remains native runtime coordination for readiness, leases, ownership, replication, failover, and LAN/WAN/tailnet state.
+- A2A events are projections from canonical session/task/durable state plus binding sequence state. They are resumable operator signals, not a replacement for task or run persistence.
 
 ### Approval
 

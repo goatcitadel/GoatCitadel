@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ValidationError } from "@goatcitadel/contracts";
+import { ValidationError, type A2ATaskExportPreviewRequest } from "@goatcitadel/contracts";
+import { buildA2ABridgeStatus, buildA2ATaskExportPreview } from "../services/a2a-bridge-service.js";
 import { tasksRoutes } from "./tasks.js";
 
 describe("tasks routes", () => {
@@ -170,20 +171,13 @@ describe("tasks routes", () => {
     });
 
     expect(card.statusCode).toBe(200);
-    expect(card.json()).toMatchObject({
+    const cardJson = card.json();
+    expect(cardJson).toMatchObject({
       status: "preview_ready",
       agentCard: {
         name: "GoatCitadel Mission Control",
         publicationStatus: "draft_operator_preview",
         discoveryPublished: false,
-        supportedInterfaces: [
-          {
-            url: "http://127.0.0.1:8787/api/v1/a2a/jsonrpc",
-            protocolBinding: "JSONRPC",
-            protocolVersion: "1.0",
-            enabled: false,
-          },
-        ],
         capabilities: {
           streaming: false,
           pushNotifications: false,
@@ -199,6 +193,24 @@ describe("tasks routes", () => {
         inboundJsonRpcEnabled: false,
       },
     });
+    expect(cardJson.agentCard.supportedInterfaces).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: "http://127.0.0.1:8787/api/v1/a2a/jsonrpc",
+          protocolBinding: "JSONRPC",
+          protocolVersion: "1.0",
+          enabled: false,
+        }),
+        expect.objectContaining({
+          protocolBinding: "GRPC",
+          enabled: false,
+        }),
+        expect.objectContaining({
+          protocolBinding: "HTTP_JSON",
+          enabled: false,
+        }),
+      ]),
+    );
     expect(preview.statusCode).toBe(200);
     expect(preview.json()).toMatchObject({
       status: "preview",
@@ -222,6 +234,60 @@ describe("tasks routes", () => {
       },
       warnings: expect.arrayContaining([expect.stringContaining("no A2A client request")]),
     });
+  });
+
+  it("keeps public A2A discovery disabled by default", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/.well-known/agent-card.json",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: "A2A public discovery is disabled." });
+  });
+
+  it("protects inbound A2A JSON-RPC with peer credentials", async () => {
+    const authenticatePeerRequest = vi
+      .fn()
+      .mockReturnValueOnce({ statusCode: 401, reason: "a2a_peer_token_required", message: "token required" })
+      .mockReturnValueOnce({ peerId: "peer-1", scopes: ["a2a:jsonrpc"] })
+      .mockReturnValueOnce({ peerId: "peer-1", scopes: ["a2a:jsonrpc"] });
+    const handleJsonRpc = vi.fn(async () => ({ jsonrpc: "2.0", id: "1", result: { ok: true } }));
+    app = buildApp(
+      {},
+      {
+        a2a: {
+          ...createDefaultA2AService(),
+          authenticatePeerRequest,
+          handleJsonRpc,
+        },
+      },
+    );
+    await app.register(tasksRoutes);
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/jsonrpc",
+      payload: { jsonrpc: "2.0", id: "1", method: "GetTask", params: { taskId: "task-1" } },
+    });
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/jsonrpc",
+      headers: { authorization: "Bearer peer-token" },
+      payload: { jsonrpc: "2.0", id: "1", method: "GetTask", params: { taskId: "task-1" } },
+    });
+
+    expect(rejected.statusCode).toBe(401);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ result: { ok: true } });
+    expect(handleJsonRpc).toHaveBeenCalledWith(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      expect.objectContaining({ method: "GetTask" }),
+      expect.any(String),
+    );
   });
 
   it("rejects malformed subagent metadata instead of persisting arbitrary payloads", async () => {
@@ -748,12 +814,16 @@ describe("tasks routes", () => {
   });
 });
 
-function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
+function buildApp(
+  taskOverrides: Record<string, unknown>,
+  serviceOverrides: { a2a?: ReturnType<typeof createDefaultA2AService> } = {},
+): FastifyInstance {
   const next = Fastify();
   next.decorate("requireOperatorAuth", async () => undefined);
   next.decorateRequest("authActorId", "operator-test");
   next.decorateRequest("authActorSource", "loopback");
   next.decorate("services", {
+    a2a: serviceOverrides.a2a ?? createDefaultA2AService(),
     tasks: {
       appendTaskActivity: vi.fn(),
       appendTaskDeliverable: vi.fn(),
@@ -845,4 +915,25 @@ function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
     },
   } as never);
   return next;
+}
+
+function createDefaultA2AService() {
+  return {
+    getStatus: vi.fn(({ checkedAt, baseUrl }: { checkedAt: string; baseUrl?: string }) =>
+      buildA2ABridgeStatus({ checkedAt, baseUrl }),
+    ),
+    getPublicAgentCard: vi.fn(() => undefined),
+    previewTaskExport: vi.fn((input: A2ATaskExportPreviewRequest, options: { checkedAt: string }) =>
+      buildA2ATaskExportPreview(input, options),
+    ),
+    authenticatePeerRequest: vi.fn(() => ({
+      statusCode: 503,
+      reason: "a2a_inbound_disabled",
+      message: "A2A inbound JSON-RPC is not enabled.",
+    })),
+    handleJsonRpc: vi.fn(),
+    previewOutbound: vi.fn(() => ({ checkedAt: "now", warnings: [], envelope: { jsonrpc: "2.0" } })),
+    sendOutbound: vi.fn(),
+    getBinding: vi.fn(),
+  };
 }

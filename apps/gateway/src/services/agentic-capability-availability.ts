@@ -4,6 +4,7 @@ import type {
   AgenticPluginProviderRuntimeStatus,
   AgenticRuntimeAvailabilityResponse,
   AgenticScalabilityTrackRecord,
+  A2ABridgeStatusResponse,
 } from "@goatcitadel/contracts";
 import type { IntegrationCatalogEntry, IntegrationConnection } from "@goatcitadel/contracts";
 import type { LlmProviderSummary } from "@goatcitadel/contracts";
@@ -38,6 +39,7 @@ export interface AgenticRuntimeAvailabilityBuildInput {
   plugins?: IntegrationPluginRecord[];
   channelCatalog?: IntegrationCatalogEntry[];
   channelConnections?: IntegrationConnection[];
+  a2a?: A2ABridgeStatusResponse;
 }
 
 export function normalizeAgenticCapabilityAvailability(
@@ -93,7 +95,7 @@ export function buildAgenticRuntimeAvailability(
   const providers = providerSummaries.map((provider) => providerSummaryToRuntimeStatus(provider, generatedAt));
   const plugins = (input.plugins ?? []).map((plugin) => integrationPluginToRuntimeStatus(plugin, generatedAt));
   const channels = buildChannelAvailability(input.channelCatalog ?? [], input.channelConnections ?? [], generatedAt);
-  const scalability = buildAgentScalabilityTracks(providerSummaries, generatedAt);
+  const scalability = buildAgentScalabilityTracks(providerSummaries, generatedAt, input.a2a);
   const items = [
     ...harnesses.map(harnessAvailabilityToCapabilityAvailability),
     ...providers.map(runtimeStatusToCapabilityAvailability),
@@ -274,6 +276,7 @@ function buildChannelAvailability(
 function buildAgentScalabilityTracks(
   providers: LlmProviderSummary[],
   checkedAt: string,
+  a2a?: A2ABridgeStatusResponse,
 ): AgenticScalabilityTrackRecord[] {
   const openAiProviders = providers.filter(isOpenAiFamilyProvider);
   const openAiResponsesProvider = openAiProviders.find((provider) =>
@@ -366,14 +369,15 @@ function buildAgentScalabilityTracks(
       trackId: "a2a_protocol",
       label: "A2A protocol interoperability",
       kind: "agent_protocol",
-      status: "blocked",
-      callable: false,
-      implementationStatus: "partial",
-      summary:
-        "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
-      reasons: [
-        "Operator-authenticated preview routes expose an unpublished Agent Card draft and A2A-style task envelope mapping without sending external traffic.",
-        "Inbound JSON-RPC handlers, outbound A2A client calls, streaming, push notifications, authenticated extended cards, and authorization scoping are not callable.",
+      status: a2a?.governance.callable ? "callable" : a2a?.status === "not_configured" ? "not_configured" : "blocked",
+      callable: Boolean(a2a?.governance.callable),
+      implementationStatus: a2a?.governance.callable ? "implemented" : "partial",
+      summary: a2a?.governance.callable
+        ? "A2A JSON-RPC is configured as a governed external agent-to-agent Gateway boundary."
+        : "A2A is present as a Gateway-owned external interoperability boundary but is not currently callable.",
+      reasons: a2a?.governance.reasons ?? [
+        "Operator-authenticated preview routes expose an Agent Card and A2A-style task envelope mapping.",
+        "Callable A2A requires enabled inbound JSON-RPC, configured peer credentials, durable task bindings, and audit.",
         "A2A must remain a first-class interoperability protocol, not a provider template or MCP alias.",
       ],
       evidence: [
@@ -407,9 +411,9 @@ function buildAgentScalabilityTracks(
         },
       ],
       requiredNextSteps: [
-        "Add gateway-owned A2A JSON-RPC server and client services before marking callable",
-        "Add auth scoping, SSRF-safe push webhooks, streaming, cancellation, and durable task lifecycle audit",
-        "Add storage only where replay-safe external task state requires durable recovery",
+        "Keep gRPC, HTTP+JSON, push notifications, and authenticated extended cards non-callable until implemented",
+        "Continue proving peer auth, network allowlists, durable task binding, and audit before reporting callable state",
+        "Keep mesh-native readiness, leases, ownership, and replication separate from A2A interop",
       ],
       checkedAt,
     },

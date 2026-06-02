@@ -23,10 +23,11 @@ declare module "fastify" {
 
   interface FastifyRequest {
     authActorId: string;
-    authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+    authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
     authDeviceId?: string;
     authGrantId?: string;
     authCompanionSessionId?: string;
+    a2aPeerId?: string;
   }
 }
 
@@ -51,6 +52,7 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authDeviceId", undefined);
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
+  fastify.decorateRequest("a2aPeerId", undefined);
 
   fastify.decorate(
     "issueSseToken",
@@ -86,6 +88,7 @@ export const authPlugin = fp(async (fastify) => {
     request.authDeviceId = undefined;
     request.authGrantId = undefined;
     request.authCompanionSessionId = undefined;
+    request.a2aPeerId = undefined;
     if (request.method === "OPTIONS") {
       return;
     }
@@ -573,10 +576,10 @@ function findOldestSseTokenKey(store: Map<string, SseTokenRecord>, actorId: stri
 function setAuthActor(
   request: {
     authActorId?: string;
-    authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+    authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
   },
   actorId: string,
-  source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion",
+  source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer",
 ): void {
   request.authActorId = actorId;
   request.authActorSource = source;

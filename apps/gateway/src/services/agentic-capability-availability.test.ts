@@ -393,7 +393,7 @@ describe("buildAgenticRuntimeAvailability", () => {
           "blocked",
           false,
           expect.arrayContaining([
-            "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
+            "A2A is present as a Gateway-owned external interoperability boundary but is not currently callable.",
           ]),
         ],
       ]),

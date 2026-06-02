@@ -1057,6 +1057,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "memory_quality_issues",
     up: createMemoryQualityIssueSchema,
   },
+  {
+    version: 106,
+    name: "a2a_task_bindings",
+    up: createA2ATaskBindingSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2387,6 +2392,33 @@ function createExternalSideEffectRunSchema(db: DatabaseSync): void {
       ON external_side_effect_runs(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_external_side_effect_runs_connection_created
       ON external_side_effect_runs(connection_id, created_at DESC);
+  `);
+}
+
+function createA2ATaskBindingSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS a2a_task_bindings (
+      a2a_task_id TEXT PRIMARY KEY,
+      context_id TEXT NOT NULL,
+      peer_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      session_id TEXT,
+      local_task_id TEXT,
+      durable_run_id TEXT,
+      state TEXT NOT NULL,
+      last_event_sequence INTEGER NOT NULL DEFAULT 0,
+      idempotency_key TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_a2a_task_bindings_idempotency
+      ON a2a_task_bindings(peer_id, idempotency_key);
+    CREATE INDEX IF NOT EXISTS idx_a2a_task_bindings_context_peer
+      ON a2a_task_bindings(peer_id, context_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_a2a_task_bindings_local_task
+      ON a2a_task_bindings(local_task_id);
   `);
 }
 

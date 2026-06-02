@@ -409,6 +409,56 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    a2a: z
+      .object({
+        enabled: z.boolean().optional(),
+        publicDiscoveryEnabled: z.boolean().optional(),
+        protocolVersion: z.literal("1.0").optional(),
+        bindings: z.array(z.enum(["JSONRPC", "GRPC", "HTTP_JSON"])).optional(),
+        inbound: z
+          .object({
+            enabled: z.boolean().optional(),
+            peerCredentials: z
+              .array(
+                z
+                  .object({
+                    peerId: z.string(),
+                    label: z.string().optional(),
+                    token: z.string().optional(),
+                    tokenEnv: z.string().optional(),
+                    scopes: z.array(z.string()).optional(),
+                    expiresAt: z.string().optional(),
+                    revokedAt: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        outbound: z
+          .object({
+            enabled: z.boolean().optional(),
+            peers: z
+              .array(
+                z
+                  .object({
+                    peerId: z.string(),
+                    label: z.string().optional(),
+                    agentCardUrl: z.string(),
+                    token: z.string().optional(),
+                    tokenEnv: z.string().optional(),
+                    enabled: z.boolean().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     npu: z
       .object({
         enabled: z.boolean().optional(),

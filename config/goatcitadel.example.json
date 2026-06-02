@@ -74,6 +74,20 @@
         "batchSize": 200
       }
     },
+    "a2a": {
+      "enabled": false,
+      "publicDiscoveryEnabled": false,
+      "protocolVersion": "1.0",
+      "bindings": ["JSONRPC"],
+      "inbound": {
+        "enabled": false,
+        "peerCredentials": []
+      },
+      "outbound": {
+        "enabled": false,
+        "peers": []
+      }
+    },
     "npu": {
       "enabled": false,
       "autoStart": false,

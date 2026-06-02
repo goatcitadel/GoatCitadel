@@ -15,6 +15,7 @@ export type RouteAccessClass =
   | "loopback"
   | "device"
   | "companion"
+  | "a2a-peer"
   | "sse-read"
   | "webhook";
 
@@ -148,6 +149,7 @@ function resolveAccessPreHandler(fastify: FastifyInstance, accessClass: RouteAcc
     case "loopback":
     case "device":
     case "companion":
+    case "a2a-peer":
     case "sse-read":
       return enforce;
     case "public":
@@ -179,6 +181,8 @@ async function enforceRouteAccessClass(
       return requireAuthActorSource(request, reply, "device", accessClass);
     case "companion":
       return requireAuthActorSource(request, reply, "companion", accessClass);
+    case "a2a-peer":
+      return requireA2APeerAccess(fastify, request, reply);
     case "sse-read": {
       const authMode = resolveConfiguredAuthMode(fastify);
       if (!authMode || authMode === "none") {
@@ -200,6 +204,31 @@ async function enforceRouteAccessClass(
     default:
       return;
   }
+}
+
+function requireA2APeerAccess(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): void | ReturnType<FastifyReply["send"]> {
+  const service = (fastify as unknown as { services?: { a2a?: { authenticatePeerRequest?: unknown } } }).services?.a2a;
+  if (typeof service?.authenticatePeerRequest !== "function") {
+    return reply.code(500).send({
+      error: "A2A peer authentication is not installed for this route.",
+    });
+  }
+  const result = service.authenticatePeerRequest(request) as
+    | { peerId: string; scopes?: string[] }
+    | { statusCode: number; reason: string; message: string };
+  if ("statusCode" in result) {
+    return reply.code(result.statusCode).send({
+      error: result.message,
+      reason: result.reason,
+    });
+  }
+  request.authActorId = `a2a:${result.peerId}`;
+  request.authActorSource = "a2a_peer";
+  request.a2aPeerId = result.peerId;
 }
 
 function requireAuthenticatedAccess(
