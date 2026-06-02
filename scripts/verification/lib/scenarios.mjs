@@ -5216,12 +5216,23 @@ function deriveProviderStatus(payload) {
     return "passed";
   }
   const error = String(payload?.error ?? "").toLowerCase();
+  // Genuinely absent: no credential is present at all. Reporting these as
+  // not_configured is correct (keyless CI has nothing to exercise).
   if (
-    /invalid api key|authentication failed|authentication_error|unauthorized|insufficient credits|payment required|no longer available to new users|provider is not configured|missing .*api key|authorized_error/.test(
+    /provider is not configured|missing .*api key|no longer available to new users/.test(error)
+  ) {
+    return "not_configured";
+  }
+  // Configured but rejected: a credential WAS supplied and the provider refused it
+  // (bad/expired key, auth error, billing). This must stay visible as degraded rather
+  // than being swallowed as not_configured, so the lane cannot read green when every
+  // configured provider is actually broken.
+  if (
+    /invalid api key|authentication failed|authentication_error|unauthorized|authorized_error|insufficient credits|payment required/.test(
       error,
     )
   ) {
-    return "not_configured";
+    return "degraded";
   }
   if (
     /unsupported|not supported|json_schema|tool_choice|tools are not available|response_format|unavailable now/.test(

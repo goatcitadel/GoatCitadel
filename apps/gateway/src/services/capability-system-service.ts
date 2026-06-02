@@ -1089,6 +1089,11 @@ export class CapabilitySystemService {
         message: `Autonomous Code Mode activation requires an active matching operator grant. ${result.blockers.join(" ")}`,
       });
     }
+    // Reserve the activation/budget against the grant at approval time, not after the run
+    // completes. This is deliberate for a danger-risk autonomy path: reserving up front
+    // prevents concurrently-prepared runs from collectively exceeding the operator's
+    // activation/budget ceiling. The trade-off is that a later-aborted run still consumes
+    // its reservation (conservative — it over-restricts, never over-permits).
     this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
     return evidence;
   }

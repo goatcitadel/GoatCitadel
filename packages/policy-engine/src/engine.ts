@@ -772,8 +772,13 @@ export class ToolPolicyEngine {
     if (codeModeRunPreapproved && riskLevel !== "nuclear" && !shellRisk?.risky && !outsideRootsReadRequiresApproval) {
       requiresApproval = false;
     }
+    // A remote A2A peer (lowest-trust inbound actor) must not ride the local
+    // operator's blanket bypass mode to auto-execute risky/danger tools. Approval
+    // (or an explicit scoped allow-grant, handled above) is still required.
+    const isRemoteA2APeer = request.policyContext?.authActorSource === "a2a_peer";
     if (
       policy.approvalMode === "bypass" &&
+      !isRemoteA2APeer &&
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
       !outsideRootsReadRequiresApproval

@@ -434,6 +434,7 @@ import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { buildPublicMcpAuthState, McpOAuthTokenService } from "./mcp-oauth-token-service.js";
+import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
@@ -762,6 +763,7 @@ export class GatewayService {
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
+  public readonly mcpOAuth: GatewayMcpOAuthService;
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
   private readonly guidanceService: GuidanceService;
@@ -870,6 +872,11 @@ export class GatewayService {
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
+    });
+    this.mcpOAuth = new GatewayMcpOAuthService({
+      tokenService: this.mcpOAuthTokenService,
+      readAuthState: () => this.readMcpAuthState(),
+      writeAuthState: (state) => this.writeMcpAuthState(state),
     });
     this.skillsService = new SkillsService([
       { source: "extra", dir: path.join(config.rootDir, "skills", "extra") },
@@ -1278,7 +1285,7 @@ export class GatewayService {
       invokeMcpRuntimeTool: (server, input) =>
         invokeMcpRuntimeTool(server, input, undefined, {
           networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
-          oauthAccessTokenResolver: (mcpServer) => this.resolveMcpOAuthAccessToken(mcpServer),
+          oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
         }),
       evaluateAutonomousActivationGrant: (input) =>
         this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
@@ -7020,7 +7027,7 @@ export class GatewayService {
     if (server.transport === "http" || server.transport === "sse") {
       const discovered = await discoverMcpTools(server, undefined, {
         networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
-        oauthAccessTokenResolver: (mcpServer) => this.resolveMcpOAuthAccessToken(mcpServer),
+        oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
       });
       if (discovered.length > 0) {
         return discovered;
@@ -7047,47 +7054,6 @@ export class GatewayService {
 
   /** @internal */ public writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
     this.storage.systemSettings.set("mcp_auth_state_v1", state);
-  }
-
-  /** @internal */ public async exchangeMcpOAuthCode(
-    server: McpServerRecord,
-    code: string,
-    stateRecord: McpAuthStateRecord,
-  ): Promise<McpAuthStateRecord> {
-    try {
-      return await this.mcpOAuthTokenService.exchangeAuthorizationCode(server, code, stateRecord);
-    } catch (error) {
-      const message = sanitizeMcpAuthError((error as Error).message);
-      const authRows = this.readMcpAuthState();
-      authRows[server.serverId] = {
-        ...(authRows[server.serverId] ?? stateRecord),
-        error: message,
-        updatedAt: new Date().toISOString(),
-      };
-      this.writeMcpAuthState(authRows);
-      throw new Error(message, { cause: error });
-    }
-  }
-
-  /** @internal */ public async resolveMcpOAuthAccessToken(server: McpServerRecord): Promise<string | undefined> {
-    if (server.authType !== "oauth2") {
-      return undefined;
-    }
-    const authRows = this.readMcpAuthState();
-    try {
-      const resolved = await this.mcpOAuthTokenService.resolveAccessToken(server, authRows[server.serverId]);
-      authRows[server.serverId] = resolved.state;
-      this.writeMcpAuthState(authRows);
-      return resolved.accessToken;
-    } catch (error) {
-      authRows[server.serverId] = {
-        ...(authRows[server.serverId] ?? { updatedAt: new Date().toISOString() }),
-        error: sanitizeMcpAuthError((error as Error).message),
-        updatedAt: new Date().toISOString(),
-      };
-      this.writeMcpAuthState(authRows);
-      throw error;
-    }
   }
 
   private readMcpFirstApprovals(): Record<string, string[]> {
@@ -9105,17 +9071,6 @@ function readRequiredString(value: unknown, label: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function sanitizeMcpAuthError(message: string): string {
-  return message
-    .replace(
-      /\b(Bearer|token|api[-_]?key|authorization|client_secret)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi,
-      "$1=[REDACTED]",
-    )
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
-    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
-    .slice(0, 1024);
 }
 
 function toSkillStateRows(value: unknown): SkillStateRecord[] {

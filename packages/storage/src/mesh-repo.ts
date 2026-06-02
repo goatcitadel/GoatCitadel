@@ -115,6 +115,9 @@ export class MeshRepository {
         @leaseKey, @holderNodeId, @fencingToken, @expiresAt, @updatedAt
       )
     `);
+    // Compare-and-swap on the fencing token observed at read time so a concurrent
+    // acquire/renew (async Postgres backend or multi-process) cannot clobber the lease
+    // between the read and the write. `changes === 0` signals a lost race.
     this.updateLeaseStmt = db.prepare(`
       UPDATE mesh_leases
       SET holder_node_id = @holderNodeId,
@@ -122,6 +125,7 @@ export class MeshRepository {
           expires_at = @expiresAt,
           updated_at = @updatedAt
       WHERE lease_key = @leaseKey
+        AND fencing_token = @expectedFencingToken
     `);
     this.releaseLeaseStmt = db.prepare(`
       DELETE FROM mesh_leases
@@ -296,13 +300,20 @@ export class MeshRepository {
 
     const nextToken = current.holder_node_id === holderNodeId ? current.fencing_token : current.fencing_token + 1;
 
-    this.updateLeaseStmt.run({
+    const changes = this.updateLeaseStmt.run({
       leaseKey,
       holderNodeId,
       fencingToken: nextToken,
+      expectedFencingToken: current.fencing_token,
       expiresAt,
       updatedAt: now,
-    });
+    }).changes;
+    if (changes === 0) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Lease ${leaseKey} was concurrently modified during acquisition`,
+      });
+    }
     return this.getLease(leaseKey);
   }
 
@@ -321,13 +332,17 @@ export class MeshRepository {
       throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} is expired` });
     }
 
-    this.updateLeaseStmt.run({
+    const changes = this.updateLeaseStmt.run({
       leaseKey,
       holderNodeId,
       fencingToken,
+      expectedFencingToken: fencingToken,
       expiresAt: addSeconds(now, ttlSeconds),
       updatedAt: now,
-    });
+    }).changes;
+    if (changes === 0) {
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} fencing token mismatch` });
+    }
     return this.getLease(leaseKey);
   }
 

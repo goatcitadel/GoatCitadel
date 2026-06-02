@@ -144,6 +144,17 @@ export interface CodeModeSandboxMetadata {
   isolationProfile: string;
   required: boolean;
   available: boolean;
+  /**
+   * True only when `available` rests on adversarially-verified enforcement rather than
+   * intended-but-unverified controls. Platforms whose passing checks include any
+   * `*_intended` marker (e.g. the Windows AppContainer launcher) report `available: true`
+   * with `enforcementVerified: false`, so callers must not imply verified isolation from
+   * `available` alone. The public hostile-code claim remains separately gated.
+   *
+   * Optional for back-compat with stored/legacy snapshots; treat a missing value as
+   * not-verified. Runtime metadata from `buildSandboxMetadata` always sets it.
+   */
+  enforcementVerified?: boolean;
   checksPassed: string[];
   checksFailed: string[];
   hostileSandboxClaim?: CodeModeHostileSandboxClaimMetadata;

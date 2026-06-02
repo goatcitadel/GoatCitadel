@@ -2661,7 +2661,7 @@ function summarizePathList(paths: string[], limit = 3): string {
   return `${preview}, +${paths.length - limit} more`;
 }
 
-function normalizeSkillId(name: string): string {
+export function normalizeSkillId(name: string): string {
   const trimmed = name.trim();
   if (path.isAbsolute(trimmed) || /[/\\]/.test(trimmed)) {
     throw new Error(`Skill name must not contain path separators: ${trimmed}`);

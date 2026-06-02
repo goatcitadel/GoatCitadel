@@ -60,6 +60,33 @@ describe("gateway-core logger", () => {
     expect(output).not.toContain("-secret");
   });
 
+  it("redacts high-confidence secret patterns embedded in benign string values", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    logger.info("outbound call", {
+      detail: "responded 401 for Bearer sk-LIVE1234567890abcdefABCDEF token",
+      note: "key=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      safe: "model claude-sonnet-4-5 returned ok",
+    });
+
+    const output = String(writeSpy.mock.calls.at(-1)?.[0] ?? "");
+    expect(output).not.toContain("sk-LIVE1234567890abcdefABCDEF");
+    expect(output).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    expect(output).toContain("[redacted]");
+    // Benign values (and short sk-like tokens) are preserved — no over-redaction.
+    expect(output).toContain("claude-sonnet-4-5");
+  });
+
+  it("redacts secrets embedded in error messages", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    logger.error("auth failed", new Error("rejected Bearer sk-SECRETtoken1234567890abcd by provider"));
+
+    const stderrOutput = stderrSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(stderrOutput).not.toContain("sk-SECRETtoken1234567890abcd");
+    expect(stderrOutput).toContain("[redacted]");
+  });
+
   it("does not redact usage, count, limit, or tokenizer fields", () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 

@@ -94,7 +94,9 @@ export class McpOAuthTokenService {
     });
     const state = this.persistTokenResponse(server.serverId, response, {
       ...stateRecord,
-      refreshTokenRef: response.refresh_token ? stateRecord.refreshTokenRef : stateRecord.refreshTokenRef,
+      // persistTokenResponse derives the new refreshTokenRef from response.refresh_token;
+      // here we only carry the existing ref forward as the previous value.
+      refreshTokenRef: stateRecord.refreshTokenRef,
       error: undefined,
     });
     const accessToken = this.readSecretRef(state.accessTokenRef);

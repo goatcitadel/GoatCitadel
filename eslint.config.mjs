@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
+import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
@@ -62,6 +63,21 @@ export default tseslint.config(
       "no-console": "off",
       "max-lines": "off",
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  // React Hooks correctness for the shipped Mission Control surfaces. Scoped to
+  // mission-control-next + mission-control-shared (the retired legacy app is excluded).
+  // rules-of-hooks is an error (it catches real bugs); exhaustive-deps is a warning so it
+  // surfaces the async-effect cluster without failing the CI lint gate.
+  {
+    files: [
+      "apps/mission-control-next/**/*.{ts,tsx}",
+      "packages/mission-control-shared/**/*.{ts,tsx}",
+    ],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
     },
   },
 );

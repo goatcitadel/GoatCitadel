@@ -72,6 +72,10 @@ export function buildSandboxMetadata(input: {
   const checksPassed = dedupe(input.checksPassed);
   const checksFailed = dedupe(input.checksFailed);
   const available = checksFailed.length === 0;
+  // `*_intended` checks (e.g. Windows AppContainer) assert intended-but-unverified
+  // controls. `available` may rest on them, but enforcement is only verified when no
+  // intended-only marker is among the passing checks.
+  const enforcementVerified = available && !checksPassed.some((check) => check.endsWith("_intended"));
   return {
     runnerId: CODE_MODE_SANDBOX_RUNNER_ID,
     runnerVersion: CODE_MODE_SANDBOX_RUNNER_VERSION,
@@ -79,6 +83,7 @@ export function buildSandboxMetadata(input: {
     isolationProfile: CODE_MODE_SANDBOX_ISOLATION_PROFILE,
     required: input.config.required,
     available,
+    enforcementVerified,
     checksPassed,
     checksFailed,
     hostileSandboxClaim: buildHostileSandboxClaimMetadata(input.platform),

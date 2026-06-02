@@ -92,7 +92,20 @@ The authoritative claim set is [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md), [
 
 ## Quickstart
 
-### Windows Source Bootstrap
+### Windows (recommended): packaged installer
+
+For most Windows users, install from the packaged `.exe` release assets
+(`GoatCitadel-Setup-windows-x64.exe` / `GoatCitadel-Setup-windows-arm64.exe`); see
+[docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md). Until public Authenticode
+signing is configured, those `.exe`s ship as clearly-labeled **unsigned convenience
+installers** — verify the published SHA-256 from the release proof bundle before running.
+
+### Windows source bootstrap (advanced)
+
+> **Security note:** the one-liner below pipes a remote script straight into PowerShell with
+> no signature or checksum verification, and clones the repo from `main` unpinned. Prefer the
+> packaged installer above, or use the download-and-inspect flow so you can review the script
+> (and pin a release tag) before executing it.
 
 Power-user one-liner:
 

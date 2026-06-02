@@ -9,6 +9,7 @@ import type * as chatSessionService from "./chat-session-service.js";
 import type * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import type * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import type { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import type * as onboardingStateService from "./onboarding-state-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
@@ -173,7 +174,7 @@ export interface GatewayRouteCompositionPort {
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
   patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
-  exchangeMcpOAuthCode: NonNullable<mcpServerAdminService.McpServerAdminHost["exchangeMcpOAuthCode"]>;
+  mcpOAuth: Pick<GatewayMcpOAuthService, "exchangeAuthorizationCode">;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
   persistAssistantConfig: settingsAuthService.SettingsRuntimeDependencies["persistAssistantConfig"];
   persistBudgetsConfig: settingsAuthService.SettingsRuntimeDependencies["persistBudgetsConfig"];
@@ -373,7 +374,7 @@ export function createGatewayRouteCompositionPort(
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
     patchMcpServerState: gateway.patchMcpServerState.bind(gateway),
-    exchangeMcpOAuthCode: gateway.exchangeMcpOAuthCode.bind(gateway),
+    mcpOAuth: gateway.mcpOAuth,
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
     persistAssistantConfig: gateway.persistAssistantConfig.bind(gateway),
     persistBudgetsConfig: gateway.persistBudgetsConfig.bind(gateway),
