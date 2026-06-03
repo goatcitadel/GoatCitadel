@@ -252,7 +252,8 @@ describe("useChatSessionData", () => {
     expect(fetchChatThreadMock).toHaveBeenCalledWith("session-1");
     expect(fetchChatSessionBindingMock).toHaveBeenCalledWith("session-1");
     expect(fetchChatSessionPrefsMock).toHaveBeenCalledWith("session-1");
-    expect(fetchChatSessionGeneratedArtifactsMock).toHaveBeenCalledWith("session-1");
+    expect(fetchChatSessionGeneratedArtifactsMock).not.toHaveBeenCalled();
+    expect(fetchThreadKnowledgeAttachmentsMock).toHaveBeenCalledTimes(1);
     expect(fetchThreadKnowledgeAttachmentsMock).toHaveBeenCalledWith("session-1");
     expect(fetchChatProactiveStatusMock).toHaveBeenCalledWith("session-1");
     expect(fetchChatProactiveRunsMock).toHaveBeenCalledWith("session-1", 30);

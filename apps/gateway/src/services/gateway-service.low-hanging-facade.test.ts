@@ -1286,10 +1286,20 @@ describe("GatewayService low-hanging facade delegation", () => {
   it("loads chat turn state maps from projected messages and hydrated traces", async () => {
     const gateway = createGatewayHarness();
     gateway.ensureChatMessageProjection = vi.fn(async () => undefined);
-    gateway.listHydratedChatTurnTraces = vi.fn(() => [
-      { turnId: "turn-parent" },
-      { turnId: "turn-child", parentTurnId: "turn-parent" },
-    ]);
+    const traces = [
+      {
+        turnId: "turn-parent",
+        userMessageId: "message-user-1",
+        startedAt: "2026-05-03T16:00:00.000Z",
+      },
+      {
+        turnId: "turn-child",
+        parentTurnId: "turn-parent",
+        userMessageId: "message-user-2",
+        assistantMessageId: "message-assistant-1",
+        startedAt: "2026-05-03T16:01:00.000Z",
+      },
+    ];
     gateway.buildChatTurnChildrenMap = vi.fn((traces: Array<{ turnId: string; parentTurnId?: string }>) => {
       const children = new Map<string, string[]>();
       for (const trace of traces) {
@@ -1301,27 +1311,57 @@ describe("GatewayService low-hanging facade delegation", () => {
     });
     gateway.resolveChatActiveLeafTurnId = vi.fn(() => "turn-child");
     gateway.storage = {
+      chatTurnTraces: {
+        listBySession: vi.fn(() => traces),
+        listSiblingsByParentTurnIds: vi.fn(
+          () =>
+            new Map([
+              ["__root__", [traces[0]]],
+              ["turn-parent", [traces[1]]],
+            ]),
+        ),
+      },
       chatMessages: {
-        list: vi.fn(() => [
-          { messageId: "message-user-1", turnId: "turn-parent" },
-          { messageId: "message-assistant-1", turnId: "turn-child" },
-        ]),
+        listByMessageIds: vi.fn(
+          () =>
+            new Map([
+              ["message-user-1", { messageId: "message-user-1", timestamp: "2026-05-03T16:00:00.000Z" }],
+              ["message-user-2", { messageId: "message-user-2", timestamp: "2026-05-03T16:01:00.000Z" }],
+              ["message-assistant-1", { messageId: "message-assistant-1", timestamp: "2026-05-03T16:01:01.000Z" }],
+            ]),
+        ),
+      },
+      chatToolRuns: {
+        listByTurnIds: vi.fn(() => new Map()),
+      },
+      chatExecutionPlans: {
+        get: vi.fn(),
       },
     };
 
     const state = await GatewayService.prototype.loadChatTurnSessionState.call(gateway, "session-1");
 
     expect(gateway.ensureChatMessageProjection).toHaveBeenCalledWith("session-1");
-    expect(gateway.listHydratedChatTurnTraces).toHaveBeenCalledWith("session-1", 2_000);
-    expect(gateway.storage.chatMessages.list).toHaveBeenCalledWith("session-1", 5_000);
-    expect(state.tracesById.get("turn-child")).toEqual({ turnId: "turn-child", parentTurnId: "turn-parent" });
+    expect(gateway.storage.chatTurnTraces.listBySession).toHaveBeenCalledWith("session-1", 2_000);
+    expect(gateway.storage.chatTurnTraces.listSiblingsByParentTurnIds).toHaveBeenCalledWith("session-1", [
+      undefined,
+      "turn-parent",
+    ]);
+    expect(gateway.storage.chatMessages.listByMessageIds).toHaveBeenCalledWith([
+      "message-user-1",
+      "message-user-2",
+      "message-assistant-1",
+    ]);
+    expect(state.tracesById.get("turn-child")).toEqual(
+      expect.objectContaining({ turnId: "turn-child", parentTurnId: "turn-parent" }),
+    );
     expect(state.turnLineageById.get("turn-child")).toEqual({
       turnId: "turn-child",
       parentTurnId: "turn-parent",
     });
     expect(state.messagesById.get("message-assistant-1")).toEqual({
       messageId: "message-assistant-1",
-      turnId: "turn-child",
+      timestamp: "2026-05-03T16:01:01.000Z",
     });
     expect(state.childrenByTurnId.get("turn-parent")).toEqual(["turn-child"]);
     expect(state.activeLeafTurnId).toBe("turn-child");

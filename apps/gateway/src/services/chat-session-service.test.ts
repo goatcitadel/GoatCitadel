@@ -696,9 +696,12 @@ describe("chat session service", () => {
         storage.chatSessionMeta.ensure(sessionId, NOW, "default");
         storage.chatSessionPrefs.ensure(sessionId, NOW);
       }
-      const listSpy = vi.spyOn(storage.sessions, "list");
+      const listCandidatesSpy = vi.spyOn(storage.chatSessionLists, "listCandidates");
+      const listBySessionIdsSpy = vi.spyOn(storage.sessions, "listBySessionIds");
       const getPrefsSpy = vi.spyOn(storage.chatSessionPrefs, "get");
       const listPrefsSpy = vi.spyOn(storage.chatSessionPrefs, "listBySessionIds");
+      const generatedArtifactsSpy = vi.spyOn(storage.chatGeneratedArtifacts, "listBySessionIds");
+      const delegationParentsSpy = vi.spyOn(storage.chatDelegationSteps, "listParentsByChildSessionIds");
 
       const records = listChatSessions(createDeps(storage), {
         scope: "all",
@@ -709,7 +712,23 @@ describe("chat session service", () => {
       });
 
       expect(records).toHaveLength(2);
-      expect(listSpy).toHaveBeenCalledWith(2, undefined);
+      expect(listCandidatesSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "default",
+          scope: "all",
+          view: "all",
+          includeHidden: true,
+          limit: 3,
+        }),
+      );
+      expect(listBySessionIdsSpy).toHaveBeenCalledWith(
+        expect.arrayContaining(records.map((record) => record.sessionId)),
+      );
+      expect(generatedArtifactsSpy).toHaveBeenCalledWith(records.map((record) => record.sessionId));
+      expect(delegationParentsSpy).toHaveBeenCalledWith(
+        records.map((record) => record.sessionId),
+        "default",
+      );
       expect(listPrefsSpy).toHaveBeenCalledTimes(1);
       expect(getPrefsSpy).not.toHaveBeenCalled();
     } finally {

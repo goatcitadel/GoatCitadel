@@ -64,20 +64,23 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
   const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-  const hasPostStorageFilters =
-    scope !== "all" ||
-    view !== "all" ||
-    !includeHidden ||
-    Boolean(query.projectId?.trim()) ||
-    Boolean(query.folderId?.trim()) ||
-    Boolean(query.tag?.trim()) ||
-    Boolean(query.q?.trim()) ||
-    Boolean(query.mode);
-  const storageLimit = hasPostStorageFilters ? Math.min(20000, Math.max(limit * 20, 1000)) : limit;
-  const allSessions = deps.storage.sessions.list(storageLimit, query.cursor);
+  const candidates = deps.storage.chatSessionLists.listCandidates({
+    workspaceId,
+    scope,
+    view,
+    includeHidden,
+    projectId: query.projectId,
+    folderId: query.folderId,
+    tag: query.tag,
+    mode: query.mode,
+    q: query.q,
+    cursor: query.cursor,
+    limit: limit + 1,
+  });
+  const sessionIds = candidates.slice(0, limit).map((candidate) => candidate.sessionId);
+  const sessionsById = deps.storage.sessions.listBySessionIds(sessionIds);
   const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
-  const sessionIds = allSessions.map((session) => session.sessionId);
   const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
   const prefsBySessionId = deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
   const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
@@ -87,7 +90,11 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     workspaceId,
   );
 
-  let records = allSessions.map((session) => {
+  let records = sessionIds.flatMap((sessionId) => {
+    const session = sessionsById.get(sessionId);
+    if (!session) {
+      return [];
+    }
     const meta = metaBySessionId.get(session.sessionId) ?? {
       workspaceId: MISSING_CHAT_SESSION_META_WORKSPACE_ID,
       includeInHistory: true,
@@ -140,6 +147,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
         deps,
         records.map((record) => record.sessionId),
         query.q.trim(),
+        Math.min(1000, Math.max(limit * 4, 160)),
       )
     : new Map<string, ChatSessionSearchHitRecord[]>();
   const searchScoreBySessionId = new Map<string, number>();

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildSuggestionSyncKey,
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   groupDelegatedSessionsForRail,
@@ -14,6 +15,42 @@ import {
 } from "./chat-page-pure-helpers";
 
 describe("chat-page-pure-helpers coverage", () => {
+  it("builds compact stable suggestion sync keys without full-object serialization", () => {
+    const capability = {
+      kind: "skill_import",
+      title: "Browser research",
+      summary: "Install browser support.",
+      reason: "The turn needs a page inspection.",
+      sourceProvider: "local",
+      sourceRef: "browser",
+      recommendedAction: "install_skill_enable",
+      requiresUserApproval: true,
+    } as const;
+    const specialist = {
+      candidateId: "candidate-1",
+      title: "QA reviewer",
+      role: "qa",
+      summary: "Review the change.",
+      reason: "The turn needs validation.",
+      source: "runtime_gap",
+      confidence: 0.8,
+      suggestedStatus: "suggested",
+      suggestedRoutingMode: "manual_only",
+      requiresApproval: true,
+      routingHints: {},
+      evidence: [],
+    } as const;
+
+    expect(buildSuggestionSyncKey("turn-1", [])).toBe("turn-1:empty");
+    expect(buildSuggestionSyncKey("turn-1", [capability])).toContain(
+      "turn-1:cap~~skill_import~local~browser~install_skill_enable~~Browser research",
+    );
+    expect(buildSuggestionSyncKey("turn-1", [specialist])).toBe(
+      "turn-1:spec~candidate-1~runtime_gap~suggested~manual_only~0.8~QA reviewer~qa",
+    );
+    expect(buildSuggestionSyncKey("turn-2", [capability])).not.toBe(buildSuggestionSyncKey("turn-1", [capability]));
+  });
+
   it("derives refresh plans from realtime signal categories", () => {
     expect(resolveChatRefreshPlan({ eventType: "fallback_poll", reason: "poll", source: "timer" })).toEqual({
       refreshSidebar: true,

@@ -72,6 +72,7 @@ export async function selectChatBranchTurn(
     state.childrenByTurnId,
   );
   runtime.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId);
+  const nextState = await runtime.loadChatTurnSessionState(sessionId);
   runtime.publishRealtime(
     "chat_thread_updated",
     "chat",
@@ -91,7 +92,7 @@ export async function selectChatBranchTurn(
     },
   );
   return buildChatThreadFromState(runtime, sessionId, {
-    ...state,
+    ...nextState,
     activeLeafTurnId: newestLeafTurnId,
   });
 }
@@ -267,13 +268,14 @@ function buildChatThreadFromState(
   sessionId: string,
   state: ChatTurnSessionState,
 ): ChatThreadResponse {
+  const renderableTraces = state.traces.filter((trace) => state.messagesById.has(trace.userMessageId));
   const generatedArtifactsByTurnId = runtime.storage.chatGeneratedArtifacts.listByTurnIds(
-    state.traces.map((trace) => trace.turnId),
+    renderableTraces.map((trace) => trace.turnId),
   );
   return buildChatThreadResponse({
     sessionId,
     activeLeafTurnId: state.activeLeafTurnId,
-    turns: state.traces.map((trace) => ({
+    turns: renderableTraces.map((trace) => ({
       trace,
       userMessage: state.messagesById.get(trace.userMessageId),
       assistantMessage: trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,

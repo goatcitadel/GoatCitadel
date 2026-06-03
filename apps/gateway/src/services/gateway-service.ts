@@ -2165,24 +2165,58 @@ export class GatewayService {
     activeLeafTurnId?: string;
   }> {
     await this.ensureChatMessageProjection(sessionId);
-    const traces = this.listHydratedChatTurnTraces(sessionId, 2_000);
-    const messages = this.storage.chatMessages.list(sessionId, 5_000);
+    const rawTraces = this.storage.chatTurnTraces.listBySession(sessionId, 2_000);
+    const turnLineageById = new Map(
+      rawTraces.map((trace) => [
+        trace.turnId,
+        {
+          turnId: trace.turnId,
+          parentTurnId: trace.parentTurnId,
+        },
+      ]),
+    );
+    const activeLeafTurnId = this.resolveChatActiveLeafTurnId(sessionId, rawTraces);
+    const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
+    const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
+    const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
+    const siblingTracesByParent = this.storage.chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
+    const visibleTurnIds = new Set(selectedPathTurnIds);
+    for (const siblings of siblingTracesByParent.values()) {
+      for (const sibling of siblings) {
+        visibleTurnIds.add(sibling.turnId);
+        if (!rawTraceById.has(sibling.turnId)) {
+          rawTraceById.set(sibling.turnId, sibling);
+        }
+      }
+    }
+    const visibleRawTraces = [...visibleTurnIds]
+      .map((turnId) => rawTraceById.get(turnId))
+      .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
+    const hydratedVisibleTracesById = new Map(
+      chatTurnTraceHydration.hydrateChatTurnTraces(this, visibleRawTraces).map((trace) => [trace.turnId, trace]),
+    );
+    const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
+    const messageIds = visibleRawTraces.flatMap((trace) => [
+      trace.userMessageId,
+      ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
+    ]);
+    const messagesById = this.storage.chatMessages.listByMessageIds(messageIds);
+    const messages = [...messagesById.values()].sort((left, right) => {
+      const leftTimestamp = Date.parse(left.timestamp) || 0;
+      const rightTimestamp = Date.parse(right.timestamp) || 0;
+      if (leftTimestamp !== rightTimestamp) {
+        return leftTimestamp - rightTimestamp;
+      }
+      return left.messageId.localeCompare(right.messageId);
+    });
     return {
       traces,
       tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
-      turnLineageById: new Map(
-        traces.map((trace) => [
-          trace.turnId,
-          {
-            turnId: trace.turnId,
-            parentTurnId: trace.parentTurnId,
-          },
-        ]),
-      ),
+      turnLineageById,
       messages,
-      messagesById: new Map(messages.map((message) => [message.messageId, message])),
+      messagesById,
       childrenByTurnId: this.buildChatTurnChildrenMap(traces),
-      activeLeafTurnId: this.resolveChatActiveLeafTurnId(sessionId, traces),
+      activeLeafTurnId,
     };
   }
 

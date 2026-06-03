@@ -35,6 +35,7 @@ export class ChatMessageRepository {
   private readonly listBeforeSeqStmt;
   private readonly getStmt;
   private readonly getCursorStmt;
+  private readonly listByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(
     private readonly db: DatabaseClient,
@@ -201,6 +202,26 @@ export class ChatMessageRepository {
     return row ? this.mapRow(row) : undefined;
   }
 
+  public listByMessageIds(messageIds: string[]): Map<string, ChatMessageRecord> {
+    const uniqueMessageIds = [...new Set(messageIds.map((item) => item.trim()).filter(Boolean))];
+    const messagesById = new Map<string, ChatMessageRecord>();
+    if (uniqueMessageIds.length === 0) {
+      return messagesById;
+    }
+
+    for (let index = 0; index < uniqueMessageIds.length; index += 400) {
+      const batch = uniqueMessageIds.slice(index, index + 400);
+      const stmt = this.getListByMessageIdsStmt(batch.length);
+      const rows = toChatMessageRows(stmt.all(...batch));
+      for (const row of rows) {
+        const message = this.mapRow(row);
+        messagesById.set(message.messageId, message);
+      }
+    }
+
+    return messagesById;
+  }
+
   public list(sessionId: string, limit = 200, cursor?: string): ChatMessageRecord[] {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
     const rows = cursor
@@ -300,6 +321,21 @@ export class ChatMessageRepository {
       })
       .filter((item): item is NonNullable<ChatMessageRecord["attachments"]>[number] => Boolean(item));
     return attachments.length > 0 ? attachments : undefined;
+  }
+
+  private getListByMessageIdsStmt(size: number) {
+    const cached = this.listByMessageIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM chat_messages
+      WHERE message_id IN (${placeholders})
+    `);
+    this.listByMessageIdsStmtCache.set(size, stmt);
+    return stmt;
   }
 }
 

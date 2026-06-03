@@ -15,6 +15,7 @@ import {
   type ChatSessionRecord,
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
+  type ChatSpecialistCandidateSuggestionRecord,
 } from "@goatcitadel/contracts";
 import type { ChatMessagesResponse } from "@goatcitadel/mission-control-shared/api/client";
 import type { RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
@@ -54,6 +55,8 @@ export interface FinalizedStreamMessageState {
   messageId?: string;
   content: string;
 }
+
+type SuggestionSyncItem = ChatCapabilityUpgradeSuggestion | ChatSpecialistCandidateSuggestionRecord;
 
 export interface RevealGeneratedArtifactInput {
   artifact: ChatGeneratedArtifactRecord;
@@ -135,6 +138,42 @@ export function resolveChatRefreshPlan(
     refreshSidebar,
     refreshSession,
   };
+}
+
+export function buildSuggestionSyncKey(
+  turnId: string | null | undefined,
+  suggestions: readonly SuggestionSyncItem[],
+): string {
+  const normalizedTurnId = turnId?.trim() || "none";
+  if (suggestions.length === 0) {
+    return `${normalizedTurnId}:empty`;
+  }
+  return `${normalizedTurnId}:${suggestions.map(describeSuggestionForSync).join("|")}`;
+}
+
+function describeSuggestionForSync(suggestion: SuggestionSyncItem): string {
+  if ("recommendedAction" in suggestion) {
+    return [
+      "cap",
+      suggestion.candidateId ?? "",
+      suggestion.kind,
+      suggestion.sourceProvider ?? "",
+      suggestion.sourceRef ?? "",
+      suggestion.recommendedAction,
+      suggestion.riskLevel ?? "",
+      suggestion.title,
+    ].join("~");
+  }
+  return [
+    "spec",
+    suggestion.candidateId,
+    suggestion.source,
+    suggestion.suggestedStatus,
+    suggestion.suggestedRoutingMode,
+    String(suggestion.confidence),
+    suggestion.title,
+    suggestion.role,
+  ].join("~");
 }
 
 export function groupDelegatedSessionsForRail<TSession extends DelegatedSessionRailItem>(

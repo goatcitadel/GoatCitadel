@@ -1,4 +1,6 @@
 import type { ChatMode, ChatStreamingPreview, ChatThreadResponse } from "@goatcitadel/contracts";
+import { useCallback, useMemo, useRef } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
 import {
@@ -7,7 +9,6 @@ import {
   ChatThreadTurnCard,
   type ChatThreadNotice,
 } from "./ChatThreadPrimitives";
-import { useScrollToBottom } from "./useScrollToBottom";
 
 export type { ChatThreadNotice } from "./ChatThreadPrimitives";
 
@@ -60,22 +61,78 @@ export function ChatThreadView({
   const threadTurnCount = thread?.turns.length ?? 0;
   const latestTurnId = thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
-
-  const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
-    followOutput,
-    onBottomStateChange,
-    signals: {
-      sessionId: thread?.sessionId ?? null,
-      threadTurnCount,
-      latestTurnId,
-      latestTraceStatus,
-      noticeCount: notices.length,
-      queuedCount,
-      streamStatus,
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const jumpToLatest = useCallback(() => {
+    if (threadTurnCount <= 0) {
+      return;
+    }
+    virtuosoRef.current?.scrollToIndex({
+      index: threadTurnCount - 1,
+      align: "end",
+      behavior: "smooth",
+    });
+  }, [threadTurnCount]);
+  const renderTurn = useCallback(
+    (_index: number, turn: NonNullable<ChatThreadResponse["turns"]>[number]) => (
+      <ChatThreadTurnCard
+        mode={mode}
+        turn={turn}
+        selected={selectedTurnId === turn.turnId}
+        streamingPreview={(activeStreamingTurnId ?? streamingPreview?.turnId) === turn.turnId ? streamingPreview : null}
+        onSelectTurn={onSelectTurn}
+        onSwitchBranch={onSwitchBranch}
+        onRetryTurn={onRetryTurn}
+        onEditTurn={onEditTurn}
+        onOpenRunDetails={onOpenRunDetails}
+        onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+        onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+        onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+      />
+    ),
+    [
+      activeStreamingTurnId,
+      mode,
+      onCreateGeneratedArtifact,
+      onCreateGeneratedArtifactVersion,
+      onEditTurn,
+      onOpenGeneratedArtifact,
+      onOpenRunDetails,
+      onRetryTurn,
+      onSelectTurn,
+      onSwitchBranch,
       selectedTurnId,
-      streamError,
-    },
-  });
+      streamingPreview,
+    ],
+  );
+  const virtuosoComponents = useMemo(
+    () => ({
+      Header: () => (
+        <ChatThreadDelegationSummary
+          delegationRun={delegationRun ?? null}
+          mode={mode}
+          onOpenRunDetails={onOpenRunDetails}
+        />
+      ),
+      Footer: () => (
+        <>
+          <ChatThreadNotices notices={notices} />
+          <div aria-hidden="true" />
+        </>
+      ),
+    }),
+    [delegationRun, mode, notices, onOpenRunDetails],
+  );
+  const threadSignalsKey = [
+    thread?.sessionId ?? "none",
+    threadTurnCount,
+    latestTurnId ?? "none",
+    latestTraceStatus ?? "none",
+    notices.length,
+    queuedCount,
+    streamStatus,
+    selectedTurnId ?? "none",
+    streamError ?? "none",
+  ].join(":");
 
   if (loading) {
     return <div className="chat-v11-thread-loading mc-next-thread-empty">Loading thread...</div>;
@@ -108,38 +165,20 @@ export function ChatThreadView({
         error={streamError}
         announce={true}
       />
-      <div
-        ref={scrollRef}
+      <Virtuoso
+        ref={virtuosoRef}
+        data={thread.turns}
+        computeItemKey={(_index, turn) => turn.turnId}
+        itemContent={renderTurn}
+        components={virtuosoComponents}
+        followOutput={followOutput ? "auto" : false}
+        atBottomStateChange={onBottomStateChange}
+        initialTopMostItemIndex={Math.max(0, thread.turns.length - 1)}
+        increaseViewportBy={{ top: 480, bottom: 720 }}
         className="chat-v11-thread-list chat-v11-thread-virtuoso mc-next-thread-list"
-        onScroll={handleThreadScroll}
-      >
-        <ChatThreadDelegationSummary
-          delegationRun={delegationRun ?? null}
-          mode={mode}
-          onOpenRunDetails={onOpenRunDetails}
-        />
-        {thread.turns.map((turn) => (
-          <ChatThreadTurnCard
-            key={turn.turnId}
-            mode={mode}
-            turn={turn}
-            selected={selectedTurnId === turn.turnId}
-            streamingPreview={
-              (activeStreamingTurnId ?? streamingPreview?.turnId) === turn.turnId ? streamingPreview : null
-            }
-            onSelectTurn={onSelectTurn}
-            onSwitchBranch={onSwitchBranch}
-            onRetryTurn={onRetryTurn}
-            onEditTurn={onEditTurn}
-            onOpenRunDetails={onOpenRunDetails}
-            onOpenGeneratedArtifact={onOpenGeneratedArtifact}
-            onCreateGeneratedArtifact={onCreateGeneratedArtifact}
-            onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
-          />
-        ))}
-        <ChatThreadNotices notices={notices} />
-        <div ref={threadEndRef} aria-hidden="true" />
-      </div>
+        style={{ height: "min(68dvh, 52rem)", minHeight: "18rem" }}
+        data-thread-signals={threadSignalsKey}
+      />
       {!followOutput && thread.turns.length > 0 ? (
         <button type="button" className="chat-v11-thread-jump-latest mc-next-thread-jump-latest" onClick={jumpToLatest}>
           Jump to latest

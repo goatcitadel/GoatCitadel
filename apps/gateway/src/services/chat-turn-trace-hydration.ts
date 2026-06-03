@@ -36,13 +36,22 @@ export function listHydratedChatTurnTraces(
   limit = 200,
 ): ChatTurnTraceRecord[] {
   const traces = deps.storage.chatTurnTraces.listBySession(sessionId, limit);
+  return hydrateChatTurnTraces(deps, traces);
+}
+
+export function hydrateChatTurnTraces(
+  deps: ChatTurnTraceHydrationDependencies,
+  traces: ChatTurnTraceRecord[],
+): ChatTurnTraceRecord[] {
   const toolRunsByTurnId = deps.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
+  const executionPlanIds = [
+    ...new Set(traces.map((trace) => trace.executionPlanId).filter((item): item is string => Boolean(item))),
+  ];
   const executionPlansById = new Map(
-    traces
-      .filter((trace) => trace.executionPlanId)
-      .map((trace) => {
+    executionPlanIds
+      .map((executionPlanId) => {
         try {
-          return [trace.executionPlanId!, deps.storage.chatExecutionPlans.get(trace.executionPlanId!)] as const;
+          return [executionPlanId, deps.storage.chatExecutionPlans.get(executionPlanId)] as const;
         } catch {
           return undefined;
         }

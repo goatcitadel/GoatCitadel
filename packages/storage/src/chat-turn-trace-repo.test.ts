@@ -153,6 +153,47 @@ function setRawField(db: DatabaseClient, turnId: string, field: string, value: u
 }
 
 describe("ChatTurnTraceRepository", () => {
+  it("lists root and parent siblings for bounded branch rendering", () => {
+    const { repo } = createStore();
+    repo.create(baseTrace({ turnId: "root-a", userMessageId: "user-root-a", startedAt: "2026-03-26T00:00:01.000Z" }));
+    repo.create(baseTrace({ turnId: "root-b", userMessageId: "user-root-b", startedAt: "2026-03-26T00:00:02.000Z" }));
+    repo.create(
+      baseTrace({
+        turnId: "child-a",
+        userMessageId: "user-child-a",
+        parentTurnId: "root-a",
+        startedAt: "2026-03-26T00:00:03.000Z",
+      }),
+    );
+    repo.create(
+      baseTrace({
+        turnId: "child-b",
+        userMessageId: "user-child-b",
+        parentTurnId: "root-a",
+        startedAt: "2026-03-26T00:00:04.000Z",
+      }),
+    );
+    repo.create(
+      baseTrace({
+        turnId: "other-session-child",
+        sessionId: "other-session",
+        userMessageId: "user-other",
+        parentTurnId: "root-a",
+      }),
+    );
+
+    const siblings = repo.listSiblingsByParentTurnIds("session-a", [undefined, "root-a"]);
+
+    assert.deepEqual(
+      siblings.get("__root__")?.map((trace) => trace.turnId),
+      ["root-a", "root-b"],
+    );
+    assert.deepEqual(
+      siblings.get("root-a")?.map((trace) => trace.turnId),
+      ["child-a", "child-b"],
+    );
+  });
+
   it("creates, patches, lists, and preserves operator routing metadata", () => {
     const { repo } = createStore();
     const created = repo.create(

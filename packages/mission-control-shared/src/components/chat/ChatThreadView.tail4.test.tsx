@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import { ChatThreadView } from "./ChatThreadView";
 
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({ className, components, computeItemKey, data = [], itemContent, style }: any) => {
+    const Header = components?.Header;
+    const Footer = components?.Footer;
+    return (
+      <div className={className} style={style} data-virtuoso="true">
+        {Header ? <Header /> : null}
+        {data.map((item: any, index: number) => (
+          <div key={computeItemKey?.(index, item) ?? item.turnId ?? index} data-virtuoso-item="true">
+            {itemContent(index, item)}
+          </div>
+        ))}
+        {Footer ? <Footer /> : null}
+      </div>
+    );
+  },
+}));
+
 function createThread(): ChatThreadResponse {
   return {
     sessionId: "sess-tail",

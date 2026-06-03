@@ -39,6 +39,18 @@ describe("chat-message-route-runtime", () => {
     expect(selected.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
   });
 
+  it("limits generated-artifact lookup to renderable thread turns", async () => {
+    const state = createThreadState();
+    state.messagesById.delete("user-b");
+    state.messagesById.delete("assistant-b");
+    const runtime = createRuntime({ state });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(thread.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-a"]);
+    expect(runtime.storage.chatGeneratedArtifacts.listByTurnIds).toHaveBeenCalledWith(["turn-root", "turn-child-a"]);
+  });
+
   it("validates context manifest session and turn identifiers", () => {
     const runtime = createRuntime({
       trace: createTrace({

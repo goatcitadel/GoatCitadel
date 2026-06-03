@@ -115,6 +115,7 @@ export class ChatTurnTraceRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
@@ -283,6 +284,91 @@ export class ChatTurnTraceRepository {
     );
     return rows.map(mapRow);
   }
+
+  public listSiblingsByParentTurnIds(
+    sessionId: string,
+    parentTurnIds: Array<string | undefined>,
+  ): Map<string, ChatTurnTraceRecord[]> {
+    const parentKeys = [...new Set(parentTurnIds.map(toParentKey))];
+    const siblingsByParent = new Map<string, ChatTurnTraceRecord[]>();
+    if (parentKeys.length === 0) {
+      return siblingsByParent;
+    }
+
+    const rootRequested = parentKeys.includes(ROOT_PARENT_KEY);
+    const concreteParentIds = parentKeys.filter((item) => item !== ROOT_PARENT_KEY);
+    const rows: ChatTurnTraceRow[] = [];
+
+    if (rootRequested) {
+      rows.push(
+        ...toChatTurnTraceRows(
+          this.db
+            .prepare(
+              `
+                SELECT *
+                FROM chat_turn_traces
+                WHERE session_id = ?
+                  AND parent_turn_id IS NULL
+                ORDER BY started_at ASC, turn_id ASC
+              `,
+            )
+            .all(sessionId),
+        ),
+      );
+    }
+
+    for (let index = 0; index < concreteParentIds.length; index += 400) {
+      const batch = concreteParentIds.slice(index, index + 400);
+      const stmt = this.getListSiblingsByParentTurnIdsStmt(batch.length);
+      rows.push(...toChatTurnTraceRows(stmt.all(sessionId, ...batch)));
+    }
+
+    for (const row of rows) {
+      const record = mapRow(row);
+      const key = toParentKey(record.parentTurnId);
+      const current = siblingsByParent.get(key) ?? [];
+      current.push(record);
+      siblingsByParent.set(key, current);
+    }
+
+    for (const siblings of siblingsByParent.values()) {
+      siblings.sort(compareTraceAscending);
+    }
+
+    return siblingsByParent;
+  }
+
+  private getListSiblingsByParentTurnIdsStmt(size: number) {
+    const cached = this.listSiblingsByParentTurnIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM chat_turn_traces
+      WHERE session_id = ?
+        AND parent_turn_id IN (${placeholders})
+      ORDER BY parent_turn_id ASC, started_at ASC, turn_id ASC
+    `);
+    this.listSiblingsByParentTurnIdsStmtCache.set(size, stmt);
+    return stmt;
+  }
+}
+
+const ROOT_PARENT_KEY = "__root__";
+
+function toParentKey(parentTurnId: string | undefined): string {
+  return parentTurnId ?? ROOT_PARENT_KEY;
+}
+
+function compareTraceAscending(left: ChatTurnTraceRecord, right: ChatTurnTraceRecord): number {
+  const leftStarted = Date.parse(left.startedAt) || 0;
+  const rightStarted = Date.parse(right.startedAt) || 0;
+  if (leftStarted !== rightStarted) {
+    return leftStarted - rightStarted;
+  }
+  return left.turnId.localeCompare(right.turnId);
 }
 
 function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {

@@ -93,6 +93,7 @@ import {
   resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
+  buildSuggestionSyncKey,
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
 } from "./chat/chat-page-pure-helpers";
@@ -1561,15 +1562,15 @@ export function MissionThreadedControllerHost({
     }
   }, [activeGeneratedArtifact, generatedArtifacts?.items]);
 
+  const serializedPendingAttachments = useMemo(() => JSON.stringify(pendingAttachments), [pendingAttachments]);
+  const serializedQueuedOutbound = useMemo(() => JSON.stringify(queuedOutbound), [queuedOutbound]);
+
   useDebouncedLocalStoragePersistence(createDraftStorageKey(workspaceId, selectedSessionId), draft);
   useDebouncedLocalStoragePersistence(
     createAttachmentStorageKey(workspaceId, selectedSessionId),
-    JSON.stringify(pendingAttachments),
+    serializedPendingAttachments,
   );
-  useDebouncedLocalStoragePersistence(
-    createQueueStorageKey(workspaceId, selectedSessionId),
-    JSON.stringify(queuedOutbound),
-  );
+  useDebouncedLocalStoragePersistence(createQueueStorageKey(workspaceId, selectedSessionId), serializedQueuedOutbound);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1595,7 +1596,18 @@ export function MissionThreadedControllerHost({
     setTagsValue((selectedSession?.tags ?? []).join(", "));
   }, [selectedSession?.folderName, selectedSession?.sessionId, selectedSession?.tags, selectedSession?.title]);
   const planningMode = prefs?.planningMode ?? "off";
-  const proactiveSuggestionCount = proactiveRuns.filter((run) => run.status === "suggested").length;
+  const proactiveSuggestionCount = useMemo(
+    () => proactiveRuns.filter((run) => run.status === "suggested").length,
+    [proactiveRuns],
+  );
+  const surfaceProjectSummaries = useMemo(
+    () => (projects?.items ?? []).map((item) => ({ projectId: item.projectId, name: item.name })),
+    [projects?.items],
+  );
+  const activeSpecialistCandidateCount = useMemo(
+    () => specialistCandidates.filter((item) => item.status !== "retired").length,
+    [specialistCandidates],
+  );
 
   const {
     messageMode,
@@ -1625,7 +1637,7 @@ export function MissionThreadedControllerHost({
     thread,
     selectedSession,
     selectedProjectId,
-    projects: (projects?.items ?? []).map((item) => ({ projectId: item.projectId, name: item.name })),
+    projects: surfaceProjectSummaries,
     projectsCount: projects?.items.length ?? 0,
     missionSessionCount: missionSessions.length,
     externalSessionCount: externalSessions.length,
@@ -1634,7 +1646,7 @@ export function MissionThreadedControllerHost({
     chatSubtitle: pageCopy.chat.subtitle ?? "Fast conversation, drafting, and lightweight help.",
     capabilitySuggestionCount: capabilitySuggestions.length,
     specialistSuggestionCount: specialistSuggestions.length,
-    specialistCandidateCount: specialistCandidates.filter((item) => item.status !== "retired").length,
+    specialistCandidateCount: activeSpecialistCandidateCount,
     proactiveSuggestionCount,
     hasDelegationSuggestion: Boolean(delegationSuggestion),
     learnedMemoryCount: learnedMemory.length,
@@ -1644,8 +1656,8 @@ export function MissionThreadedControllerHost({
   useEffect(() => {
     const capabilitySuggestions = selectedTurn?.trace.capabilityUpgradeSuggestions ?? [];
     const specialistSuggestions = selectedTurn?.trace.specialistCandidateSuggestions ?? [];
-    const capabilitySyncKey = `${selectedTurn?.turnId ?? "none"}:${JSON.stringify(capabilitySuggestions)}`;
-    const specialistSyncKey = `${selectedTurn?.turnId ?? "none"}:${JSON.stringify(specialistSuggestions)}`;
+    const capabilitySyncKey = buildSuggestionSyncKey(selectedTurn?.turnId, capabilitySuggestions);
+    const specialistSyncKey = buildSuggestionSyncKey(selectedTurn?.turnId, specialistSuggestions);
 
     if (lastCapabilitySuggestionSyncKeyRef.current !== capabilitySyncKey) {
       lastCapabilitySuggestionSyncKeyRef.current = capabilitySyncKey;
@@ -2894,6 +2906,52 @@ export function MissionThreadedControllerHost({
     composerSendHandlerRef.current = handleSendWithKnowledge;
   }, [handleSendWithKnowledge]);
 
+  const threadNotices = useMemo(() => [...lifecycleNotices, ...localNotices], [lifecycleNotices, localNotices]);
+  const queueItems = useMemo(
+    () =>
+      queuedOutbound.map((item) => ({
+        id: item.id,
+        action: item.action,
+        label: item.content.trim()
+          ? item.content.trim().slice(0, 96)
+          : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
+        createdAt: item.createdAt,
+        paused: Boolean(item.paused),
+      })),
+    [queuedOutbound],
+  );
+  const presetOptions = useMemo(
+    () =>
+      presetProfiles.map((item) => ({
+        value: item.agentId,
+        label: item.label,
+        summary: item.summary,
+        routeHint: item.routeHint,
+        toolsPosture: item.toolsPosture,
+      })),
+    [presetProfiles],
+  );
+  const activeCodeProjects = useMemo(
+    () =>
+      (projects?.items ?? [])
+        .filter((item) => item.lifecycleStatus === "active")
+        .map((project) => ({
+          projectId: project.projectId,
+          name: project.name,
+          workspacePath: project.workspacePath,
+        })),
+    [projects?.items],
+  );
+  const projectOptions = useMemo(
+    () => [
+      { value: "none", label: "Unassigned" },
+      ...(projects?.items ?? [])
+        .filter((item) => item.lifecycleStatus === "active")
+        .map((project) => ({ value: project.projectId, label: project.name })),
+    ],
+    [projects?.items],
+  );
+
   const workspaceSummaryText = selectedSession
     ? `${lockSurface ? "Current session" : isCodeSurface ? "Current code session" : `Active ${activeModePreset.label.toLowerCase()} session`}: ${selectedSession.title || visibleSessionLabelById.get(selectedSession.sessionId) || `Chat ${selectedSession.sessionId.slice(-6)}`}.`
     : lockSurface
@@ -2901,45 +2959,86 @@ export function MissionThreadedControllerHost({
       : isCodeSurface
         ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
         : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
-  const sessionRailData: MissionThreadedSessionRailData = {
-    mode: messageMode,
-    showProjectCreate,
-    creatingSession: Boolean(creatingSessionMode),
-    search,
-    projectName,
-    projectPath,
-    historyView,
-    selectedProjectId,
-    availableFolders,
-    selectedFolderId,
-    selectedTag,
-    missionSessions,
-    externalSessions,
-    selectedSessionId,
-    summaryTitle: selectedProject?.name ?? workspaceName,
-    summaryCopy: workspaceSummaryText,
-    workspaceSummaryCards,
-    archiveWorkspaceEnabled: isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0,
-    archiveWorkspaceCount: workspaceMissionSessionCount,
-    archiveWorkspacePending,
-    hasMoreSessions: !deferredSearch && Boolean(sidebarNextCursor),
-    loadingMoreSessions: sidebarLoadingMore,
-    onToggleProjectCreate: () => setShowProjectCreate((current) => !current),
-    onCreateSession: handleCreateCurrentModeSession,
-    onSearchChange: setSearch,
-    onProjectNameChange: setProjectName,
-    onProjectPathChange: setProjectPath,
-    onCreateProject: () => void handleCreateProject(),
-    onHistoryViewChange: setHistoryView,
-    onArchiveWorkspace: handleArchiveWorkspace,
-    onConfirmArchiveWorkspace: handleConfirmArchiveWorkspace,
-    onSelectProjectId: setSelectedProjectId,
-    onSelectFolderId: setSelectedFolderId,
-    onSelectTag: setSelectedTag,
-    onSelectSession: handleSelectSessionFromRail,
-    renderSessionLabel: (sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`,
-    onLoadMoreSessions: () => void loadSidebar(historyView, { append: true }),
-  };
+  const sessionRailData: MissionThreadedSessionRailData = useMemo(
+    () => ({
+      mode: messageMode,
+      showProjectCreate,
+      creatingSession: Boolean(creatingSessionMode),
+      search,
+      projectName,
+      projectPath,
+      historyView,
+      selectedProjectId,
+      availableFolders,
+      selectedFolderId,
+      selectedTag,
+      missionSessions,
+      externalSessions,
+      selectedSessionId,
+      summaryTitle: selectedProject?.name ?? workspaceName,
+      summaryCopy: workspaceSummaryText,
+      workspaceSummaryCards,
+      archiveWorkspaceEnabled: isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0,
+      archiveWorkspaceCount: workspaceMissionSessionCount,
+      archiveWorkspacePending,
+      hasMoreSessions: !deferredSearch && Boolean(sidebarNextCursor),
+      loadingMoreSessions: sidebarLoadingMore,
+      onToggleProjectCreate: () => setShowProjectCreate((current) => !current),
+      onCreateSession: handleCreateCurrentModeSession,
+      onSearchChange: setSearch,
+      onProjectNameChange: setProjectName,
+      onProjectPathChange: setProjectPath,
+      onCreateProject: () => void handleCreateProject(),
+      onHistoryViewChange: setHistoryView,
+      onArchiveWorkspace: handleArchiveWorkspace,
+      onConfirmArchiveWorkspace: handleConfirmArchiveWorkspace,
+      onSelectProjectId: setSelectedProjectId,
+      onSelectFolderId: setSelectedFolderId,
+      onSelectTag: setSelectedTag,
+      onSelectSession: handleSelectSessionFromRail,
+      renderSessionLabel: (sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`,
+      onLoadMoreSessions: () => void loadSidebar(historyView, { append: true }),
+    }),
+    [
+      archiveWorkspacePending,
+      availableFolders,
+      deferredSearch,
+      externalSessions,
+      handleArchiveWorkspace,
+      handleConfirmArchiveWorkspace,
+      handleCreateCurrentModeSession,
+      handleCreateProject,
+      handleSelectSessionFromRail,
+      historyView,
+      isChatSurface,
+      loadSidebar,
+      messageMode,
+      missionSessions,
+      projectName,
+      projectPath,
+      search,
+      selectedFolderId,
+      selectedProject?.name,
+      selectedProjectId,
+      selectedSessionId,
+      selectedTag,
+      setHistoryView,
+      setProjectName,
+      setProjectPath,
+      setSearch,
+      setSelectedFolderId,
+      setSelectedProjectId,
+      setSelectedTag,
+      showProjectCreate,
+      sidebarLoadingMore,
+      sidebarNextCursor,
+      visibleSessionLabelById,
+      workspaceMissionSessionCount,
+      workspaceName,
+      workspaceSummaryCards,
+      workspaceSummaryText,
+    ],
+  );
 
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = selectedSession
     ? {
@@ -2976,7 +3075,7 @@ export function MissionThreadedControllerHost({
         contextSelection,
         delegationRun: visibleDelegationRun,
         delegationSuggestion,
-        notices: [...lifecycleNotices, ...localNotices],
+        notices: threadNotices,
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
         visualStreamMode,
@@ -3023,15 +3122,7 @@ export function MissionThreadedControllerHost({
         onSubmitUserInput: (response) => void handleSubmitUserInput(response),
         onRefreshThread: () => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true }),
         isDragActive,
-        queueItems: queuedOutbound.map((item) => ({
-          id: item.id,
-          action: item.action,
-          label: item.content.trim()
-            ? item.content.trim().slice(0, 96)
-            : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
-          createdAt: item.createdAt,
-          paused: Boolean(item.paused),
-        })),
+        queueItems,
         editingTurnId,
         planningMode: planningMode === "advisory" ? "advisory" : "off",
         effectiveToolAutonomy,
@@ -3041,13 +3132,7 @@ export function MissionThreadedControllerHost({
         pendingAttachments,
         pendingAttachmentModes,
         threadKnowledgeAttachments: threadKnowledgeAttachments?.items ?? [],
-        presetOptions: presetProfiles.map((item) => ({
-          value: item.agentId,
-          label: item.label,
-          summary: item.summary,
-          routeHint: item.routeHint,
-          toolsPosture: item.toolsPosture,
-        })),
+        presetOptions,
         selectedPresetId,
         presetApplyWarning,
         selectedTurnRecovery,
@@ -3210,13 +3295,7 @@ export function MissionThreadedControllerHost({
               hasDirtyDraft: hasDirtyWorkbenchDraft,
               generatedArtifact: activeGeneratedArtifact,
               onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
-              availableProjects: (projects?.items ?? [])
-                .filter((item) => item.lifecycleStatus === "active")
-                .map((project) => ({
-                  projectId: project.projectId,
-                  name: project.name,
-                  workspacePath: project.workspacePath,
-                })),
+              availableProjects: activeCodeProjects,
               selectedProjectCandidateId: selectedProjectBindingCandidateId,
               sourceBindingBusy: sessionControlPending === "project" || sessionControlPending === "code_source",
               onBindExistingProject: async (projectId) => {
@@ -3337,12 +3416,7 @@ export function MissionThreadedControllerHost({
           integrationConnectionId,
           integrationTarget,
           selectedSessionProjectValue,
-          projectOptions: [
-            { value: "none", label: "Unassigned" },
-            ...(projects?.items ?? [])
-              .filter((item) => item.lifecycleStatus === "active")
-              .map((project) => ({ value: project.projectId, label: project.name })),
-          ],
+          projectOptions,
           loadModelsForProvider,
           getCachedModels,
           resolveProviderModelSelection,

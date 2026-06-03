@@ -20,7 +20,6 @@ import {
   fetchChatProactiveRuns,
   fetchChatProactiveStatus,
   fetchChatSessionBinding,
-  fetchChatSessionGeneratedArtifacts,
   fetchChatSessionPrefs,
   fetchChatSessions,
   fetchChatSpecialistCandidates,
@@ -334,12 +333,10 @@ export function useChatSessionData(input: {
         setMessagesLoading(true);
       }
       try {
-        const [nextThread, nextBinding, nextPrefs, nextArtifacts, nextKnowledgeAttachments] = await Promise.all([
+        const [nextThread, nextBinding, nextPrefs] = await Promise.all([
           includeThread ? fetchChatThread(sessionId) : Promise.resolve(undefined),
           fetchChatSessionBinding(sessionId),
           fetchChatSessionPrefs(sessionId),
-          fetchChatSessionGeneratedArtifacts(sessionId),
-          fetchThreadKnowledgeAttachments(sessionId),
         ]);
         if (generation !== loadCoreGenerationRef.current) return;
         if (nextThread) {
@@ -347,8 +344,6 @@ export function useChatSessionData(input: {
         }
         setBinding(nextBinding.item);
         setPrefs(nextPrefs);
-        setGeneratedArtifacts(nextArtifacts);
-        setThreadKnowledgeAttachments(nextKnowledgeAttachments);
       } finally {
         if (!background) {
           setMessagesLoading(false);

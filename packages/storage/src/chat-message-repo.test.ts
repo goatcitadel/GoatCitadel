@@ -173,6 +173,20 @@ describe("ChatMessageRepository", () => {
     );
   });
 
+  it("loads selected messages in one bounded batch", () => {
+    const repo = createRepo();
+    repo.upsertMany([
+      message({ messageId: "m1", content: "first" }),
+      message({ messageId: "m2", role: "assistant", actorType: "agent", actorId: "assistant", content: "second" }),
+      message({ messageId: "m3", content: "third" }),
+    ]);
+
+    const byId = repo.listByMessageIds(["m3", "m1", "m1", "missing"]);
+
+    assert.deepEqual([...byId.keys()].sort(), ["m1", "m3"]);
+    assert.equal(byId.get("m3")?.content, "third");
+  });
+
   it("upsertMany works inside an outer transaction", () => {
     const { repo, db } = createRepoWithDb();
     const messages = [

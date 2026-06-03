@@ -62,6 +62,7 @@ export class SessionRepository {
   private readonly applyUsageStmt;
   private readonly listStmt;
   private readonly listAfterCursorStmt;
+  private readonly listBySessionIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listOperatorSummariesStmt;
 
   public constructor(
@@ -163,6 +164,27 @@ export class SessionRepository {
     return this.mapSessionRow(row);
   }
 
+  public listBySessionIds(sessionIds: string[]): Map<string, SessionMeta> {
+    const uniqueSessionIds = [...new Set(sessionIds.map((item) => item.trim()).filter(Boolean))];
+    const sessionsById = new Map<string, SessionMeta>();
+    if (uniqueSessionIds.length === 0) {
+      return sessionsById;
+    }
+
+    for (let index = 0; index < uniqueSessionIds.length; index += 400) {
+      const batch = uniqueSessionIds.slice(index, index + 400);
+      const stmt = this.getListBySessionIdsStmt(batch.length);
+      const rows = stmt.all(...batch);
+      assertSessionRows(rows);
+      for (const row of rows) {
+        const session = this.mapSessionRow(row);
+        sessionsById.set(session.sessionId, session);
+      }
+    }
+
+    return sessionsById;
+  }
+
   public list(limit: number, cursor?: string): SessionMeta[] {
     const parsedCursor = parseCompositeCursor(cursor);
     const rows = parsedCursor
@@ -224,6 +246,21 @@ export class SessionRepository {
       costUsdTotal: row.cost_usd_total,
       budgetState: row.budget_state,
     };
+  }
+
+  private getListBySessionIdsStmt(size: number) {
+    const cached = this.listBySessionIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM sessions
+      WHERE session_id IN (${placeholders})
+    `);
+    this.listBySessionIdsStmtCache.set(size, stmt);
+    return stmt;
   }
 }
 

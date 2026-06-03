@@ -3,6 +3,36 @@ import TestRenderer from "react-test-renderer";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import { ChatThreadView } from "./ChatThreadView";
 
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({
+    atBottomStateChange,
+    className,
+    components,
+    computeItemKey,
+    data = [],
+    followOutput,
+    itemContent,
+    style,
+  }: any) => {
+    if (followOutput) {
+      atBottomStateChange?.(true);
+    }
+    const Header = components?.Header;
+    const Footer = components?.Footer;
+    return (
+      <div className={className} style={style} data-virtuoso="true">
+        {Header ? <Header /> : null}
+        {data.map((item: any, index: number) => (
+          <div key={computeItemKey?.(index, item) ?? item.turnId ?? index} data-virtuoso-item="true">
+            {itemContent(index, item)}
+          </div>
+        ))}
+        {Footer ? <Footer /> : null}
+      </div>
+    );
+  },
+}));
+
 function createThread(content: string): ChatThreadResponse {
   return {
     sessionId: "sess-1",
@@ -520,9 +550,8 @@ describe("ChatThreadView", () => {
     expect(liveRegions[0]?.props["aria-live"]).toBe("polite");
   });
 
-  it("renders stream status, thread notices, and follows the bottom marker", () => {
+  it("renders stream status, thread notices, and reports virtualized bottom state", () => {
     const onBottomStateChange = vi.fn();
-    const scrollIntoView = vi.fn();
     let renderer!: TestRenderer.ReactTestRenderer;
     TestRenderer.act(() => {
       renderer = TestRenderer.create(
@@ -541,15 +570,12 @@ describe("ChatThreadView", () => {
           queuedCount={2}
           onBottomStateChange={onBottomStateChange}
         />,
-        {
-          createNodeMock: (element) =>
-            element.type === "div" && element.props["aria-hidden"] === "true" ? { scrollIntoView } : null,
-        },
       );
     });
 
     expect(renderedText(renderer)).toContain("Streaming (2 queued)");
     expect(renderedText(renderer)).toContain("Tool queue is backed up.");
+    expect(onBottomStateChange).toHaveBeenCalledWith(true);
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
@@ -593,7 +619,6 @@ describe("ChatThreadView", () => {
 
   it("keeps following output when a new turn arrives while already pinned to the bottom", () => {
     const onBottomStateChange = vi.fn();
-    const scrollIntoView = vi.fn();
     const scrollElement = { scrollHeight: 900, scrollTop: 500, clientHeight: 400 };
     const thread = createThread("plain content");
     const props = {
@@ -604,9 +629,6 @@ describe("ChatThreadView", () => {
     };
     const renderer = TestRenderer.create(<ChatThreadView {...props} />, {
       createNodeMock: (element) => {
-        if (element.type === "div" && element.props["aria-hidden"] === "true") {
-          return { scrollIntoView };
-        }
         if (
           element.type === "div" &&
           typeof element.props.className === "string" &&
@@ -617,10 +639,7 @@ describe("ChatThreadView", () => {
         return null;
       },
     });
-    // Keep onBottomStateChange history: the hook de-duplicates repeated bottom
-    // states, so the pinned `true` is asserted from the initial follow tick while
-    // the post-update tick stays silent (still pinned, never reports `false`).
-    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
 
     scrollElement.scrollHeight = 1200;
     const nextTurn = {
@@ -653,9 +672,9 @@ describe("ChatThreadView", () => {
       />,
     );
 
-    expect(scrollIntoView).toHaveBeenCalled();
     expect(onBottomStateChange).toHaveBeenCalledWith(true);
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+    expect(renderer.root.findAllByProps({ "data-virtuoso": "true" })).toHaveLength(1);
   });
 
   it("renders compact cowork delegation details and opens attached run details", () => {
