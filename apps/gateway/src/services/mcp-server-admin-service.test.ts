@@ -277,6 +277,9 @@ describe("mcp-server-admin-service", () => {
     });
     expect(host.writeMcpAuthState).toHaveBeenCalledWith(host.authState);
 
+    await expect(completeMcpOAuth(host, "server-1", "secret-code")).rejects.toThrow(
+      "OAuth state is required to complete this handshake.",
+    );
     await expect(completeMcpOAuth(host, "server-1", "secret-code", "wrong-state")).rejects.toThrow(
       "OAuth state mismatch.",
     );
@@ -290,6 +293,9 @@ describe("mcp-server-admin-service", () => {
       oauthState: undefined,
       lastCodePreview: "secret-c",
     });
+    await expect(completeMcpOAuth(host, "server-1", "secret-code", started.state)).rejects.toThrow(
+      "No OAuth handshake in progress for this server.",
+    );
     await expect(completeMcpOAuth(createHost(), "missing", "code")).rejects.toThrow(
       "No OAuth handshake in progress for this server.",
     );

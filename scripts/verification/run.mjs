@@ -8,6 +8,7 @@ import {
   runAgenticGovernanceLane,
   runAgenticHarnessAvailabilityLane,
   runAgenticHarnessesLane,
+  runAgenticMcpOAuthLane,
   runAgenticPluginsMarketplaceLane,
   runAgenticSelfImprovementTrustLane,
   runAgenticWorkbenchLoopLane,
@@ -71,6 +72,7 @@ const VALID_LANES = new Set([
   "agentic-contracts",
   "agentic-governance",
   "agentic-harnesses",
+  "agentic-mcp-oauth",
   "agentic-workbench-loop",
   "agentic-channels-runtime",
   "agentic-harness-availability",
@@ -208,6 +210,8 @@ async function main() {
       await runAgenticGovernanceLane(context);
     } else if (lane === "agentic-harnesses") {
       await runAgenticHarnessesLane(context);
+    } else if (lane === "agentic-mcp-oauth") {
+      await runAgenticMcpOAuthLane(context);
     } else if (lane === "agentic-workbench-loop") {
       await runAgenticWorkbenchLoopLane(context);
     } else if (lane === "agentic-channels-runtime") {
@@ -285,6 +289,7 @@ function shouldGenerateReview(lane) {
 async function runAgenticProofSuite(context) {
   await runAgenticContractsLane(context);
   await runAgenticGovernanceLane(context);
+  await runAgenticMcpOAuthLane(context);
   await runAgenticHarnessesLane(context);
   await runAgenticWorkbenchLoopLane(context);
   await runAgenticChannelsRuntimeLane(context);

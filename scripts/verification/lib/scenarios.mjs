@@ -833,6 +833,16 @@ export async function runAgenticPluginsMarketplaceLane(context) {
   });
 }
 
+export async function runAgenticMcpOAuthLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "mcpOAuth",
+    id: "agentic.mcp-oauth.gateway-governed",
+    lane: "agentic-mcp-oauth",
+    title: "Remote MCP and OAuth invocation remains gateway-governed",
+    subsystem: "agentic",
+  });
+}
+
 export async function runAgenticSelfImprovementTrustLane(context) {
   await runAgenticProofScenario(context, {
     profile: "selfImprovement",

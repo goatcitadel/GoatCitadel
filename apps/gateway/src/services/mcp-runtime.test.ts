@@ -584,6 +584,70 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("injects resolved OAuth bearer tokens into remote MCP HTTP calls without echoing secrets", async () => {
+    const seenAuthorizations: Array<string | undefined> = [];
+    await withRemoteMcpHttpServer(
+      ({ message, request, response }) => {
+        seenAuthorizations.push(request.headers.authorization);
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+                serverInfo: { name: "remote-oauth-test", version: "1.0.0" },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/call") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                content: [{ type: "text", text: "oauth remote ok" }],
+                structuredContent: { ok: true },
+              },
+            }),
+          );
+        }
+      },
+      async (url) => {
+        const oauthToken = "oauth-access-token-secret-1234567890";
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url, { authType: "oauth2" }),
+          {
+            toolName: "remote.search",
+            arguments: { q: "goatcitadel" },
+          },
+          1000,
+          {
+            networkAllowlist: [new URL(url).host],
+            oauthAccessTokenResolver: async () => oauthToken,
+          },
+        );
+
+        expect(result).toMatchObject({
+          ok: true,
+          output: {
+            structuredContent: { ok: true },
+            contentText: "oauth remote ok",
+          },
+        });
+        expect(seenAuthorizations).toContain(`Bearer ${oauthToken}`);
+        expect(JSON.stringify(result)).not.toContain(oauthToken);
+      },
+    );
+  });
+
   it("aborts a slow MCP tool call when the signal fires", async () => {
     const server = createTestServer(MCP_SLOW_CALL_SCRIPT);
     const controller = new AbortController();

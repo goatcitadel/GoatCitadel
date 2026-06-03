@@ -303,6 +303,38 @@ const CHECK_GROUPS = Object.freeze({
       ),
     ],
   },
+  mcpOAuth: {
+    title: "Remote MCP and OAuth gateway-governed invocation",
+    checks: [
+      commandCheck(
+        "Remote MCP and OAuth invocation remains gateway-governed",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "--reporter",
+          "verbose",
+          "src/routes/mcp.test.ts",
+          "src/services/mcp-server-admin-service.test.ts",
+          "src/services/mcp-oauth-token-service.test.ts",
+          "src/services/mcp-runtime.test.ts",
+          "src/services/tool-invocation-coordinator-service.test.ts",
+        ],
+        {
+          timeoutMs: 180_000,
+          expectedStdout: [
+            "stores OAuth handshake state and completes it through the connect path",
+            "exchanges authorization codes into OS secret-store refs without serializing raw tokens",
+            "injects resolved OAuth bearer tokens into remote MCP HTTP calls without echoing secrets",
+            "records successful MCP runtime policy as an external runtime execution",
+          ],
+        },
+      ),
+    ],
+  },
   marketplace: {
     title: "Plugin/provider marketplace callable-boundary behavior",
     checks: [

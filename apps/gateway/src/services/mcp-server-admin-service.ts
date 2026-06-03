@@ -204,10 +204,13 @@ export async function completeMcpOAuth(
 ): Promise<McpServerRecord> {
   const authRows = host.readMcpAuthState();
   const authRow = authRows[serverId];
-  if (!authRow) {
+  if (!authRow?.oauthState) {
     throw new Error("No OAuth handshake in progress for this server.");
   }
-  if (state && authRow.oauthState && authRow.oauthState !== state) {
+  if (!state) {
+    throw new Error("OAuth state is required to complete this handshake.");
+  }
+  if (authRow.oauthState !== state) {
     throw new Error("OAuth state mismatch.");
   }
   const server = host.requireMcpServer(serverId);
