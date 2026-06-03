@@ -124,6 +124,33 @@ The source bootstrap clones or updates the repo and adds the `goatcitadel` and `
 
 Full setup, update, uninstall, and troubleshooting guidance lives in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
+### macOS Apple Silicon installer smoke (experimental)
+
+The first macOS installer lane is for Apple Silicon friend smoke only. It builds an
+ad-hoc-signed, non-notarized DMG and should not be treated as a supported public
+release asset yet.
+
+Build it on an Apple Silicon Mac:
+
+```bash
+pnpm package:bundle --target macos-arm64 --skip-desktop
+pnpm package:macos --target macos-arm64
+```
+
+Expected artifact:
+
+```text
+artifacts/installers/macos/GoatCitadel-1.0.0-macos-arm64.dmg
+```
+
+The DMG embeds the immutable GoatCitadel runtime inside the Tauri app at
+`Contents/Resources/goatcitadel`. Mutable runtime state, including `runtime-root`,
+logs, pid files, config, data, and artifacts, lives under
+`~/Library/Application Support/GoatCitadel`. Because the app is ad-hoc signed and
+not notarized, Gatekeeper warning/override behavior is expected during this
+stage. Public macOS support still requires real Mac smoke evidence plus the
+release workflow, signing, notarization, and installer proof gates.
+
 ### Source Clone
 
 Use this path for development, contribution, and raw GitHub validation.
@@ -180,7 +207,8 @@ The compose file binds published ports to `127.0.0.1` by default. Set `GOATCITAD
 | --- | --- | --- | --- |
 | Windows | x64 | `GoatCitadel-Setup-windows-x64.exe` | Supported |
 | Windows | arm64 | `GoatCitadel-Setup-windows-arm64.exe` | Supported |
-| macOS | x64 / arm64 | source/dev install | Development-only |
+| macOS | arm64 | `GoatCitadel-1.0.0-macos-arm64.dmg` | Experimental friend-smoke only |
+| macOS | x64 | source/dev install | Development-only |
 | Linux | x64 | source/dev install or Docker | Development-only |
 | Linux | arm64 | n/a | Not shipped |
 
