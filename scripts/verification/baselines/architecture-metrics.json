@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-06-02T05:47:42.515Z",
-  "gatewayLineCount": 9089,
+  "generatedAt": "2026-06-03T04:05:47.755Z",
+  "gatewayLineCount": 9129,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
@@ -9,13 +9,13 @@
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
-      "lineCount": 9517,
-      "bytes": 395903
+      "lineCount": 9843,
+      "bytes": 406986
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 9089,
-      "bytes": 349961
+      "lineCount": 9129,
+      "bytes": 351932
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
@@ -24,8 +24,8 @@
     },
     {
       "path": "apps/gateway/src/services/capability-system-service.ts",
-      "lineCount": 3910,
-      "bytes": 142258
+      "lineCount": 3915,
+      "bytes": 146610
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
@@ -39,8 +39,8 @@
     },
     {
       "path": "apps/gateway/src/services/skill-import-service.ts",
-      "lineCount": 2678,
-      "bytes": 98420
+      "lineCount": 2771,
+      "bytes": 101671
     },
     {
       "path": "apps/gateway/src/services/chat-proactive-service.ts",
@@ -48,12 +48,12 @@
       "bytes": 80259
     },
     {
-      "path": "apps/gateway/src/services/settings-auth-service.ts",
-      "lineCount": 2162,
-      "bytes": 69503
+      "path": "apps/gateway/src/services/chat-workbench-service.ts",
+      "lineCount": 2198,
+      "bytes": 77016
     }
   ],
-  "gatewayPublicMethodCount": 255,
+  "gatewayPublicMethodCount": 256,
   "gatewayPublicMethodsByRegion": {
     "approvals": 18,
     "chat-sessions": 14,
@@ -66,7 +66,7 @@
     "mcp": 17,
     "memory": 6,
     "orchestration": 7,
-    "other": 69,
+    "other": 70,
     "prompt-packs": 1,
     "realtime-events": 3,
     "runtime-provider": 4,

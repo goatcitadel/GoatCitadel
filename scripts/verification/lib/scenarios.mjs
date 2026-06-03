@@ -1579,6 +1579,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         method: "DELETE",
         body: {
           mode: "soft",
+          workspaceId,
           deletedBy: "verification",
           deleteReason: "restore scenario",
         },
