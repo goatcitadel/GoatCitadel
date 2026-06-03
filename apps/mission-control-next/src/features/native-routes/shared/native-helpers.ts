@@ -67,7 +67,7 @@ export function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): Nat
   return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
 }
 
-export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<unknown>) {
+export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<unknown> = [loader]) {
   const [state, setState] = useState<LoadState<T>>({
     loading: true,
     error: null,
@@ -104,6 +104,10 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
         data: null,
       });
     }
+    // The dependency list is part of this custom hook's caller contract so
+    // callers can reload on route/workspace changes without duplicating the
+    // stale-response guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   useEffect(() => {

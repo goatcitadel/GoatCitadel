@@ -113,7 +113,7 @@ export function WorkbenchMonacoEditor({
       editorRef.current = null;
       modelRef.current = null;
     };
-  }, [resolvedLanguage]);
+  }, [resolvedLanguage, usesDiffLayout]);
 
   useEffect(() => {
     const monaco = monacoRef.current;

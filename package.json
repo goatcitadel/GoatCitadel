@@ -115,7 +115,7 @@
     "overrides": {
       "@webgpu/types": "link:vendor/webgpu-types-stub",
       "brace-expansion@^2.0.2": "2.0.3",
-      "brace-expansion@^5.0.0": "5.0.5",
+      "brace-expansion@^5.0.0": "5.0.6",
       "dompurify": "3.4.0",
       "express-rate-limit@8.3.2>ip-address": "10.1.1",
       "fast-uri": "3.1.2",
@@ -124,7 +124,8 @@
       "postcss": "8.5.10",
       "qs": "6.15.2",
       "undici": "^6.24.1",
-      "uuid": "14.0.0"
+      "uuid": "14.0.0",
+      "ws@^8.0.0": "8.20.1"
     }
   },
   "devDependencies": {
@@ -135,14 +136,14 @@
     "c8": "^10.1.3",
     "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
     "playwright": "^1.56.1",
-    "prettier": "^3.8.1",
+    "prettier": "^3.8.3",
     "sharp": "^0.34.4",
-    "tsx": "^4.20.5",
-    "typescript": "^6.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.58.0",
     "vitest": "^4.1.8",
     "zod": "^3.24.1"
@@ -157,6 +158,6 @@
     ]
   },
   "dependencies": {
-    "shell-quote": "^1.8.3"
+    "shell-quote": "^1.8.4"
   }
 }

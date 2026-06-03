@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
 import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
@@ -36,9 +36,11 @@ export function MonacoDiffEditor({
   const originalModelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
   const modifiedModelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
   const latestInputRef = useRef({ original, modified, language });
+  const latestEditorOptionsRef = useRef({ renderSideBySide });
   latestInputRef.current = { original, modified, language };
+  latestEditorOptionsRef.current = { renderSideBySide };
 
-  function applyDiffModel(nextOriginal: string, nextModified: string, nextLanguage?: string): void {
+  const applyDiffModel = useCallback((nextOriginal: string, nextModified: string, nextLanguage?: string): void => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
     if (!shouldRenderMonacoRuntime() || !editor || !monaco) {
@@ -54,7 +56,7 @@ export function MonacoDiffEditor({
       modified: modifiedModelRef.current,
     });
     monaco.editor.setTheme(resolveMonacoTheme());
-  }
+  }, []);
 
   useEffect(() => {
     if (!shouldRenderMonacoRuntime() || !containerRef.current) {
@@ -62,7 +64,7 @@ export function MonacoDiffEditor({
     }
     let disposed = false;
 
-    void loadMonacoEditorRuntime(language).then((monaco) => {
+    void loadMonacoEditorRuntime(latestInputRef.current.language).then((monaco) => {
       if (disposed || !containerRef.current) {
         return;
       }
@@ -76,7 +78,7 @@ export function MonacoDiffEditor({
         lineNumbers: "on",
         minimap: { enabled: false },
         readOnly: true,
-        renderSideBySide,
+        renderSideBySide: latestEditorOptionsRef.current.renderSideBySide,
         scrollBeyondLastLine: false,
         smoothScrolling: true,
       });
@@ -93,11 +95,11 @@ export function MonacoDiffEditor({
       modifiedModelRef.current = null;
       editorRef.current = null;
     };
-  }, []);
+  }, [applyDiffModel]);
 
   useEffect(() => {
     applyDiffModel(original, modified, language);
-  }, [language, modified, original]);
+  }, [applyDiffModel, language, modified, original]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ renderSideBySide });

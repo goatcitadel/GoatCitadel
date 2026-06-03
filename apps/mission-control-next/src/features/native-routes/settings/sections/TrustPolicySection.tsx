@@ -90,7 +90,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
       snapshot: snapshot.data,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const rows = useMemo(() => buildTrustPolicyRows(data?.snapshot), [data?.snapshot]);
   const visibleRows = useMemo(
     () => filterTrustPolicyRows(rows, { search, statusFilter, kindFilter }),

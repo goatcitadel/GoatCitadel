@@ -24,7 +24,7 @@ import {
 
 export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const load = useCallback(() => fetchSettings(), []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<ReturnType<typeof normalizeBudgetMode>>("balanced");
   const [savingBudgetMode, setSavingBudgetMode] = useState(false);

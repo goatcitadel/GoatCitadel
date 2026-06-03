@@ -372,6 +372,9 @@ export function useChatDelegationPolicyActions(input: {
       setSending(false);
     }
   }, [
+    activeDelegationRun?.runId,
+    activeDelegationRun?.taskId,
+    activeWorkflowTurn?.trace.orchestration?.runId,
     draft,
     ensureSession,
     messages,
@@ -614,7 +617,6 @@ export function useChatDelegationPolicyActions(input: {
       activeDelegationRun?.taskId,
       activeDelegationRun?.runId,
       activeWorkflowTurn?.trace.orchestration?.runId,
-      activeWorkflowTurn?.turnId,
       prefs?.model,
       prefs?.providerId,
       selectedTurn,

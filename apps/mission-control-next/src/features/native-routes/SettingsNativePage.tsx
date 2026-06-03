@@ -411,7 +411,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
       meshReadiness: meshReadiness.data,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
 
   return (
     <SettingsSectionShell loading={loading} error={error}>
@@ -672,7 +672,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       firstRunEvidence: buildFirstRunEvidenceSnapshot(agenticRuns.items, evidenceEnvelopes.items),
     } satisfies OnboardingPageState;
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [defaultsDraft, setDefaultsDraft] = useState<{
     defaultToolProfile: ToolProfile;
@@ -928,7 +928,7 @@ function DemoStartPanel({
   setActiveWorkspaceId: (workspaceId: string) => void;
 }) {
   const load = useCallback(async () => fetchDemoState(), []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -1228,7 +1228,7 @@ type PersonalityEditorDraft = {
 
 function PersonalitiesSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => fetchPersonalities(), []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
   const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
@@ -3329,7 +3329,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       daemon: daemon.data,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [form, setForm] = useState({
     mode: "none",
@@ -3671,7 +3671,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
       npuModels: npuModels.data.items,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [llamaForm, setLlamaForm] = useState({
     enabled: false,
@@ -4148,7 +4148,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
 function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: SettingsSectionProps) {
   const [view, setView] = useState<"active" | "archived" | "all">("all");
   const load = useCallback(async () => fetchWorkspaces("all", 500), []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [createForm, setCreateForm] = useState({
@@ -4440,7 +4440,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
       sideEffectRuns: sideEffectRuns.data.items,
     };
   }, [activeWorkspaceId]);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedConnectionId, setSelectedConnectionId] = useState("");
   const [createCatalogId, setCreateCatalogId] = useState("");
@@ -5371,7 +5371,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
       connections: connections.data.items,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedDraftId, setSelectedDraftId] = useState("");
   const [createCatalogId, setCreateCatalogId] = useState("");
@@ -5816,7 +5816,7 @@ function McpSection(_props: SettingsSectionProps) {
       serverMode: serverMode.data,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedServerId, setSelectedServerId] = useState("");
   const [createForm, setCreateForm] = useState({
@@ -6438,7 +6438,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       settings,
     };
   }, [activeWorkspaceId]);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("safe");
   const [profileDraft, setProfileDraft] = useState<PermissionProfileEditorDraft>(createEmptyPermissionProfileDraft);
@@ -7126,7 +7126,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       settings,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
@@ -7595,7 +7595,7 @@ function AddonsSection(_props: SettingsSectionProps) {
       stagedPacks: stagedPacks.data.items,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedAddonId, setSelectedAddonId] = useState("");
   const [selectedPackId, setSelectedPackId] = useState("");

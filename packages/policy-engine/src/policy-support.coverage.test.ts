@@ -29,6 +29,17 @@ describe("tool pattern support", () => {
   it("rejects blank patterns before matching", () => {
     expect(matchesToolPattern("   ", "fs.read")).toBe(false);
   });
+
+  it("normalizes tool names before exact and wildcard matching", () => {
+    expect(matchesToolPattern("fs.read", " fs.read ")).toBe(true);
+    expect(matchesToolPattern("browser.*", " browser.navigate ")).toBe(true);
+  });
+
+  it("rejects blank or pathological pattern inputs", () => {
+    expect(matchesToolPattern("*", "   ")).toBe(false);
+    expect(matchesToolPattern(`${"a".repeat(513)}*`, "fs.read")).toBe(false);
+    expect(matchesToolPattern("fs.*", `${"a".repeat(513)}`)).toBe(false);
+  });
 });
 
 describe("approval bypass support", () => {

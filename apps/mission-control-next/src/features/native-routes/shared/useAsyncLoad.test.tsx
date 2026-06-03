@@ -41,6 +41,20 @@ function Harness({
   return null;
 }
 
+function DefaultDepsHarness({
+  loader,
+  marker,
+  onState,
+}: {
+  loader: () => Promise<string>;
+  marker: string;
+  onState: (snapshot: LoadState<string> & { reload: () => Promise<void> }) => void;
+}) {
+  const result = useAsyncLoad(loader);
+  onState(result);
+  return <span>{marker}</span>;
+}
+
 describe("useAsyncLoad (MCNEXT-001 stale-response guard)", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -142,5 +156,29 @@ describe("useAsyncLoad (MCNEXT-001 stale-response guard)", () => {
     expect(latest!.loading).toBe(false);
     expect(latest!.error).toBeNull();
     expect(latest!.data).toBe("payload");
+  });
+
+  it("does not restart a load on unrelated rerenders when defaulting to loader identity", async () => {
+    let calls = 0;
+    const loader = async () => {
+      calls += 1;
+      return "payload";
+    };
+    let latest: (LoadState<string> & { reload: () => Promise<void> }) | null = null;
+
+    await act(async () => {
+      root.render(<DefaultDepsHarness loader={loader} marker="first" onState={(snapshot) => (latest = snapshot)} />);
+      await Promise.resolve();
+    });
+    expect(latest!.data).toBe("payload");
+    expect(calls).toBe(1);
+
+    await act(async () => {
+      root.render(<DefaultDepsHarness loader={loader} marker="second" onState={(snapshot) => (latest = snapshot)} />);
+      await Promise.resolve();
+    });
+
+    expect(latest!.data).toBe("payload");
+    expect(calls).toBe(1);
   });
 });

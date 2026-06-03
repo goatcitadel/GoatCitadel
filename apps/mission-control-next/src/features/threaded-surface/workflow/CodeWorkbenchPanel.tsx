@@ -58,6 +58,7 @@ type CodePanelType = Extract<MissionThreadedWorkflowPanel, { kind: "code" }>;
 const CODE_WORKBENCH_LAYOUT_STORAGE_KEY = "goatcitadel.code-workbench.layout.v1";
 const CODE_WORKBENCH_INSPECTOR_STORAGE_KEY = "goatcitadel.code-workbench.inspector.v1";
 const DEFAULT_FILE_PANE_PERCENT = 28;
+const EMPTY_CHANGED_FILES: string[] = [];
 const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: string }> = [
   { kind: "source", label: "Source" },
   { kind: "wrapper_manifest", label: "Wrapper" },
@@ -639,7 +640,7 @@ function summarizeValidationForReview(
         ? "No skipped validation recorded."
         : "Tests skipped or not yet recorded in this workbench.";
   const duration = validation?.durationMs ? ` · ${Math.round(validation.durationMs / 100) / 10}s` : "";
-  const validationChangedFiles = validation?.changedFiles ?? [];
+  const validationChangedFiles = validation?.changedFiles ?? EMPTY_CHANGED_FILES;
   const detail = validationChangedFiles.length
     ? `${validationChangedFiles.length} changed file${validationChangedFiles.length === 1 ? "" : "s"} covered${duration}`
     : validation
@@ -711,7 +712,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [selectedTurn?.assistantMessage?.content],
   );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
-  const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
+  const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? EMPTY_CHANGED_FILES;
   const validationPresets = useMemo(
     () => getValidationCommandPresets(workbenchState?.packageManager),
     [workbenchState?.packageManager],

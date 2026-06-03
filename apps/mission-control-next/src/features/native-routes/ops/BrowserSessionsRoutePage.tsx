@@ -33,6 +33,7 @@ const GRANT_SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
   state: 3,
   admin: 4,
 };
+const EMPTY_BROWSER_SESSIONS: BrowserSessionRecord[] = [];
 
 export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [filter, setFilter] = useState<BrowserSessionFilter>("active");
@@ -57,7 +58,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
     return { issues: nativeLoadIssues([sessions]), sessions: sessions.data };
   }, [activeWorkspaceId, filter]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
-  const sessions = data?.sessions ?? [];
+  const sessions = data?.sessions ?? EMPTY_BROWSER_SESSIONS;
   const activeCount = sessions.filter((item) => item.status === "active").length;
   const selectedSession = sessions.find((item) => item.sessionId === selectedSessionId) ?? sessions[0] ?? null;
 

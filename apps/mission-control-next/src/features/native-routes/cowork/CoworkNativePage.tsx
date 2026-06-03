@@ -47,6 +47,9 @@ type CoworkOperatorRecord = {
   lastActivityAt?: string;
 };
 
+const EMPTY_TASKS: TaskCardRecord[] = [];
+const EMPTY_OPERATORS: CoworkOperatorRecord[] = [];
+const EMPTY_DELIVERABLES: TaskDeliverableRecord[] = [];
 const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
   "planning",
   "inbox",
@@ -162,9 +165,10 @@ export function CoworkNativePage({
     };
   }, [loadCowork]);
 
-  const tasks = state.data?.tasks ?? [];
-  const deletedTasks = state.data?.deletedTasks ?? [];
-  const operators = state.data?.operators ?? [];
+  const tasks = state.data?.tasks ?? EMPTY_TASKS;
+  const deletedTasks = state.data?.deletedTasks ?? EMPTY_TASKS;
+  const operators = state.data?.operators ?? EMPTY_OPERATORS;
+  const currentDeliverables = deliverables.data ?? EMPTY_DELIVERABLES;
   const allSelectableTasks = useMemo(() => [...tasks, ...deletedTasks], [deletedTasks, tasks]);
   const groupedTasks = useMemo(
     () => ({
@@ -185,10 +189,10 @@ export function CoworkNativePage({
         tasks,
         deletedTasks,
         selectedTask,
-        deliverables: deliverables.data ?? [],
+        deliverables: currentDeliverables,
         deliverablesLoading: deliverables.loading,
       }),
-    [deletedTasks, deliverables.data, deliverables.loading, selectedTask, tasks],
+    [currentDeliverables, deletedTasks, deliverables.loading, selectedTask, tasks],
   );
   const executionSnapshot = useMemo(
     () =>
@@ -196,7 +200,7 @@ export function CoworkNativePage({
         tasks,
         deletedTasks,
         selectedTask,
-        deliverables: deliverables.data ?? [],
+        deliverables: currentDeliverables,
         deliverablesLoading: deliverables.loading,
         operators,
         pendingApprovals,
@@ -204,8 +208,8 @@ export function CoworkNativePage({
       }),
     [
       coworkContinuation,
+      currentDeliverables,
       deletedTasks,
-      deliverables.data,
       deliverables.loading,
       operators,
       pendingApprovals,
