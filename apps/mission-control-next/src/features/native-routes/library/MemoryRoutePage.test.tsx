@@ -884,6 +884,7 @@ describe("MemoryRoutePage", () => {
         maintenanceRuns: [],
       } as any;
 
+      const navigate = vi.fn();
       let renderer: ReactTestRenderer | null = null;
       await act(async () => {
         renderer = create(
@@ -892,7 +893,7 @@ describe("MemoryRoutePage", () => {
             activeWorkspaceId="default"
             activeWorkspaceName="Default"
             pendingApprovals={0}
-            navigate={vi.fn()}
+            navigate={navigate}
             setActiveWorkspaceId={vi.fn()}
           />,
         );
@@ -901,8 +902,15 @@ describe("MemoryRoutePage", () => {
 
       const text = collectText(renderer!.root);
       expect(text).toContain("Memory lifecycle admin is disabled in settings.");
+      expect(text).toContain("Continue without durable memory");
       expect(text).toContain("Memory maintenance is not enabled in this workspace.");
       expect(text).toContain("Select a memory item to inspect lifecycle state");
+      await act(async () => {
+        findButton(renderer!.root, "Open settings").props.onClick();
+        findButton(renderer!.root, "Continue without durable memory").props.onClick();
+      });
+      expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "trust-policy", theme: "library" });
+      expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "library" });
     } finally {
       Object.assign(memorySnapshot, original);
     }

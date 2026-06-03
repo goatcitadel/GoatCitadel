@@ -210,9 +210,11 @@ vi.mock("./lazy-legacy-pages", () => ({
   LazyThreadedSurfaceRoute: ({
     surface,
     onOpenApprovals,
+    onOpenStartHere,
   }: {
     surface: string;
     onOpenApprovals?: (approvalId?: string) => void;
+    onOpenStartHere?: () => void;
   }) =>
     createElement(
       "div",
@@ -223,6 +225,7 @@ vi.mock("./lazy-legacy-pages", () => ({
         { type: "button", onClick: () => onOpenApprovals?.("approval-focused-1") },
         "Open focused approval",
       ),
+      createElement("button", { type: "button", onClick: () => onOpenStartHere?.() }, "Open threaded Start Here"),
     ),
   preloadThreadedSurfaceRoute: vi.fn(() => Promise.resolve()),
 }));
@@ -534,6 +537,11 @@ describe("MissionControlNextApp", () => {
         ?.props.onClick();
     });
     expect(window.location.pathname).toBe("/code");
+
+    await act(async () => {
+      findButton(renderer, "Open threaded Start Here").props.onClick();
+    });
+    expect(window.location.pathname).toBe("/settings/onboarding");
 
     await act(async () => {
       findButton(renderer, "Start Here").props.onClick();

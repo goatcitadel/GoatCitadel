@@ -247,6 +247,11 @@
   font-weight: 700;
 }
 
+.mc-next-threaded-approval-review.mc-next-threaded-primary {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 42%, var(--primary));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 18%, transparent);
+}
+
 .mc-next-threaded-secondary.active,
 .mc-next-threaded-filter.active,
 .mc-next-threaded-session-row.active {

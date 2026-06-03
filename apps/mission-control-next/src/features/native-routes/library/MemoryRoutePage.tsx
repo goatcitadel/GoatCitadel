@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in local decomposition notes). */
 import { useEffect, useId, useMemo, useState } from "react";
-import { RefreshCw, SearchCheck, ShieldCheck, Waypoints } from "lucide-react";
+import { MessageSquareText, RefreshCw, SearchCheck, Settings, ShieldCheck, Waypoints } from "lucide-react";
 import type {
   EvidenceEnvelope,
   MemoryDecisionRecord,
@@ -437,16 +437,44 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             aria-activedescendant={memory.selectedItemId ? `memory-list-item-${memory.selectedItemId}` : undefined}
           >
             {visibleItems.length === 0 ? (
-              <EmptyState
-                size="compact"
-                title={
-                  memoryAdminTruthUnknown
-                    ? "Memory item truth is unavailable until backend settings truth reloads."
-                    : memoryAdminState === "disabled"
-                      ? "Memory lifecycle admin is disabled in settings."
-                      : "No memory items match the current filter."
-                }
-              />
+              <>
+                <EmptyState
+                  size="compact"
+                  title={
+                    memoryAdminTruthUnknown
+                      ? "Memory item truth is unavailable until backend settings truth reloads."
+                      : memoryAdminState === "disabled"
+                        ? "Memory lifecycle admin is disabled in settings."
+                        : "No memory items match the current filter."
+                  }
+                />
+                {memoryAdminState === "disabled" ? (
+                  <div className="mc-next-memory-disabled-guide">
+                    <p>
+                      Durable item edits stay locked until settings allow them. Chat, Cowork, and Code can continue
+                      without durable memory writes.
+                    </p>
+                    <div className="mc-next-settings-button-row">
+                      <button
+                        type="button"
+                        className="mc-next-button"
+                        onClick={() => navigate({ area: "settings", section: "trust-policy", theme: route.theme })}
+                      >
+                        <Settings className="h-4 w-4" />
+                        Open settings
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button"
+                        onClick={() => navigate({ area: "chat", theme: route.theme })}
+                      >
+                        <MessageSquareText className="h-4 w-4" />
+                        Continue without durable memory
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : (
               visibleItems.map((item) => {
                 const isSelected = memory.selectedItemId === item.itemId;

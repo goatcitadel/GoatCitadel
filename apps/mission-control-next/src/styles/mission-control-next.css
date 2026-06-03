@@ -845,6 +845,12 @@
   cursor: pointer;
 }
 
+.mc-next-rail-link > div {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
 .mc-next-rail-link:hover,
 .mc-next-rail-link:focus-visible {
   background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
@@ -862,6 +868,17 @@
   align-items: center;
   gap: 0.35rem;
   font-size: 0.72rem;
+}
+
+.mc-next-rail-link > div > span {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .mc-next-rail-release-badge {
@@ -884,6 +901,7 @@
 
 .mc-next-rail-count {
   display: inline-flex;
+  flex: 0 0 auto;
   min-width: 1.25rem;
   align-items: center;
   justify-content: center;
@@ -1674,6 +1692,10 @@
   .mc-next-status-strip {
     gap: 0.55rem;
   }
+
+  .mc-next-rail-link > div > span {
+    -webkit-line-clamp: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1812,7 +1834,40 @@
   }
 
   .mc-next-status-strip {
-    padding-bottom: 0.9rem;
+    flex-wrap: nowrap;
+    gap: 0.34rem;
+    min-height: 1.15rem;
+    padding-top: 0.08rem;
+    padding-bottom: 0.12rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .mc-next-status-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mc-next-status-pill {
+    flex: 0 0 auto;
+    gap: 0.18rem;
+    min-height: 1rem;
+    white-space: nowrap;
+  }
+
+  .mc-next-status-icon svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .mc-next-status-pill div > span {
+    display: none;
+  }
+
+  .mc-next-status-pill strong {
+    font-size: 0.56rem;
+    line-height: 1;
   }
 
   .notification-stack {

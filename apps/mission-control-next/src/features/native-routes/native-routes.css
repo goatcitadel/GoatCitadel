@@ -356,6 +356,23 @@
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
 }
 
+.mc-next-memory-disabled-guide {
+  display: grid;
+  gap: 0.48rem;
+  margin-top: 0.55rem;
+  padding: 0.58rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 24%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--mc-surface-1));
+}
+
+.mc-next-memory-disabled-guide p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
 .mc-next-memory-shell .mc-next-runtime-metric-grid {
   grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   gap: 0.36rem;
@@ -1559,6 +1576,29 @@
   display: grid;
   gap: 0.45rem;
   margin-top: 0.55rem;
+}
+
+.mc-next-project-empty-guide {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.65rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-empty-guide strong {
+  color: var(--foreground);
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.mc-next-project-empty-guide p {
+  margin: 0.16rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
 }
 
 .mc-next-project-home-base,

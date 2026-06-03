@@ -70,6 +70,7 @@ function buildInput() {
       onOpenCode: noop,
       onOpenTasks: noop,
       onOpenApprovals: noop,
+      onOpenStartHere: noop,
     },
     dropTargetProps: {
       isDragActive: false,
@@ -763,6 +764,7 @@ describe("ThreadedSurfacePage", () => {
         onCreateSession: vi.fn(),
         onOpenCowork: vi.fn(),
         onOpenCode: vi.fn(),
+        onOpenStartHere: vi.fn(),
       },
       dropTargetProps: {
         ...(buildInput() as any).dropTargetProps,
@@ -778,12 +780,14 @@ describe("ThreadedSurfacePage", () => {
     expect(normalizeText(collectText(renderer!.root))).toContain("0 Approvals");
     await act(async () => {
       findButton(renderer!.root, "Start chat").props.onClick();
+      findButton(renderer!.root, "Open Start Here").props.onClick();
       findButton(renderer!.root, "Attach files").props.onClick();
       findButton(renderer!.root, "Open Cowork").props.onClick();
       findButton(renderer!.root, "Open Code").props.onClick();
     });
 
     expect(emptyInput.emptyStateProps.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(emptyInput.emptyStateProps.onOpenStartHere).toHaveBeenCalledTimes(1);
     expect(emptyInput.dropTargetProps.onAttachFiles).toHaveBeenCalledTimes(1);
     expect(emptyInput.emptyStateProps.onOpenCowork).toHaveBeenCalledTimes(1);
     expect(emptyInput.emptyStateProps.onOpenCode).toHaveBeenCalledTimes(1);

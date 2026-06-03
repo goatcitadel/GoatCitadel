@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -89,9 +89,26 @@ export function ProjectsRoutePage({
   const [createDraft, setCreateDraft] = useState({ name: "", workspacePath: "", description: "" });
   const [editDraft, setEditDraft] = useState({ name: "", workspacePath: "", description: "" });
   const [filterView, setFilterView] = useState<ProjectFilterView>("all");
+  const createProjectNameRef = useRef<HTMLInputElement | null>(null);
   const isMounted = useIsMounted();
 
   const pinController = useProjectPinController(activeWorkspaceId);
+
+  const handleFocusCreateProject = useCallback(() => {
+    createProjectNameRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    createProjectNameRef.current?.focus();
+  }, []);
+
+  const handleOpenSurface = useCallback(
+    (mode: ChatMode) => {
+      navigate({ area: mode, theme: route.theme });
+    },
+    [navigate, route.theme],
+  );
+
+  const handleOpenStartHere = useCallback(() => {
+    navigate({ area: "settings", section: "onboarding", theme: route.theme });
+  }, [navigate, route.theme]);
 
   const loadProjects = useCallback(async () => {
     const startedAt = readRouteDiagnosticNow();
@@ -590,14 +607,44 @@ export function ProjectsRoutePage({
                 );
               })
             ) : (
-              <EmptyState
-                size="compact"
-                title={
-                  state.projects.length === 0
-                    ? "No active projects found in this workspace."
-                    : filterEmptyLabel(filterView)
-                }
-              />
+              <>
+                <EmptyState
+                  size="compact"
+                  title={
+                    state.projects.length === 0
+                      ? "No active projects found in this workspace."
+                      : filterEmptyLabel(filterView)
+                  }
+                />
+                {state.projects.length === 0 ? (
+                  <div className="mc-next-project-empty-guide">
+                    <div>
+                      <strong>Choose the first project move</strong>
+                      <p>Create a project, start in a surface, or use the sample mission to shape the first run.</p>
+                    </div>
+                    <div className="mc-next-settings-button-row">
+                      <button type="button" className="mc-next-button" onClick={handleFocusCreateProject}>
+                        <FolderPlus className="h-4 w-4" />
+                        Create project setup
+                      </button>
+                      {SURFACES.map((surface) => (
+                        <button
+                          key={surface.mode}
+                          type="button"
+                          className="mc-next-button"
+                          onClick={() => handleOpenSurface(surface.mode)}
+                        >
+                          <MessageSquarePlus className="h-4 w-4" />
+                          {`Start ${surface.label}`}
+                        </button>
+                      ))}
+                      <button type="button" className="mc-next-button" onClick={handleOpenStartHere}>
+                        Use Start Here sample mission
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
         </NativeCard>
@@ -689,6 +736,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Name</span>
                 <input
+                  ref={createProjectNameRef}
                   className="mc-next-settings-input"
                   value={createDraft.name}
                   onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))}

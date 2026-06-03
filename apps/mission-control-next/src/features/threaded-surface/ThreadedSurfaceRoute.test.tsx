@@ -46,6 +46,7 @@ describe("ThreadedSurfaceRoute", () => {
     const onOpenCode = vi.fn();
     const onOpenTasks = vi.fn();
     const onOpenApprovals = vi.fn();
+    const onOpenStartHere = vi.fn();
     const onOpenUniversalRunDetail = vi.fn();
     const onNavigateSurface = vi.fn();
 
@@ -60,6 +61,7 @@ describe("ThreadedSurfaceRoute", () => {
         onOpenCode,
         onOpenTasks,
         onOpenApprovals,
+        onOpenStartHere,
         onOpenUniversalRunDetail,
         onNavigateSurface,
       }),
@@ -76,6 +78,7 @@ describe("ThreadedSurfaceRoute", () => {
       onOpenCode,
       onOpenTasks,
       onOpenApprovals,
+      onOpenStartHere,
       onNavigateSurface,
     });
     expect(routeMocks.pageProps).toMatchObject({

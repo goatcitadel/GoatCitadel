@@ -206,7 +206,7 @@ export function MissionControlNextApp() {
       return true;
     }
     return false;
-  }, [inspectorOpen, navOpen]);
+  }, [inspectorOpen, navOpen, setInspectorOpen]);
 
   useShellKeyboardManager({
     onOpenPalette: () => setPaletteOpen(true),
@@ -687,6 +687,7 @@ export function MissionControlNextApp() {
                             key={item.id}
                             type="button"
                             className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
+                            aria-label={`${item.label}: ${item.description}`}
                             onClick={() => navigate(target)}
                           >
                             <div>
@@ -703,7 +704,7 @@ export function MissionControlNextApp() {
                                   </span>
                                 )}
                               </strong>
-                              <span>{item.description}</span>
+                              <span title={item.description}>{item.description}</span>
                             </div>
                             {typeof backlogCount === "number" ? (
                               <span className="mc-next-rail-count">{backlogCount}</span>
@@ -879,6 +880,7 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }
@@ -911,6 +913,7 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }
@@ -940,6 +943,7 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }

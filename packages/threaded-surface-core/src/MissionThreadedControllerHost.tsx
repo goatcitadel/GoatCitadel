@@ -203,6 +203,7 @@ export interface MissionThreadedEmptyStateProps {
   onOpenCode: () => void;
   onOpenTasks: () => void;
   onOpenApprovals: (approvalId?: string) => void;
+  onOpenStartHere?: () => void;
 }
 
 export interface MissionThreadedDropTargetProps {
@@ -714,6 +715,7 @@ export function MissionThreadedControllerHost({
   onOpenCode = () => undefined,
   onOpenTasks = () => undefined,
   onOpenApprovals = () => undefined,
+  onOpenStartHere = () => undefined,
   onNavigateSurface,
   renderSurface,
 }: {
@@ -728,6 +730,7 @@ export function MissionThreadedControllerHost({
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
   onOpenApprovals?: (approvalId?: string) => void;
+  onOpenStartHere?: () => void;
   onNavigateSurface?: (
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
@@ -3250,6 +3253,7 @@ export function MissionThreadedControllerHost({
     onOpenCode,
     onOpenTasks,
     onOpenApprovals,
+    onOpenStartHere,
   };
 
   const workflowPanel: MissionThreadedWorkflowPanel =

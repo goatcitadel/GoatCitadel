@@ -80,6 +80,50 @@ const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareTex
   },
 };
 
+type EmptyStateGuidance = {
+  title: string;
+  body: string;
+  startLabel: string;
+  startHereLabel: string;
+  cards: Array<{ title: string; body: string }>;
+};
+
+const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
+  chat: {
+    title: "Start with the first useful move",
+    body: "Ask directly, attach context, or open Start Here when this workspace still needs its first mission.",
+    startLabel: "Start chat",
+    startHereLabel: "Open Start Here",
+    cards: [
+      { title: "Fast answer", body: "Draft, compare, summarize, or ask a short question." },
+      { title: "Guided setup", body: "Use the sample mission when provider, workspace, or memory context is unclear." },
+      { title: "Escalate", body: "Move multi-step work to Cowork or source-bound implementation to Code." },
+    ],
+  },
+  cowork: {
+    title: "Set up supervised work",
+    body: "Turn a goal into a visible plan with task lanes, approvals, checkpoints, and delegated follow-through.",
+    startLabel: "Start cowork",
+    startHereLabel: "Use Start Here mission",
+    cards: [
+      { title: "Plan", body: "Frame the work before durable steps begin." },
+      { title: "Task board", body: "Track delegation, retries, blockers, and checkpoints." },
+      { title: "Approvals", body: "Review human-gated decisions before the run advances." },
+    ],
+  },
+  code: {
+    title: "Prepare a governed code pass",
+    body: "Bind source context, review diffs, run validation, and keep Code Mode proof visible before handoff.",
+    startLabel: "Start code",
+    startHereLabel: "Use Start Here mission",
+    cards: [
+      { title: "Source", body: "Attach files or start from a project-bound thread." },
+      { title: "Diffs", body: "Keep implementation changes reviewable in the workbench." },
+      { title: "Proof", body: "Pair approvals, artifacts, and validation with the final code pass." },
+    ],
+  },
+};
+
 type ThreadedUtilityPanelId = "preview" | "diff" | "terminal" | "files" | "background" | "plan";
 type ThreadedUtilityPanelMeta = { id: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
 
@@ -613,6 +657,12 @@ function ThreadConversationSurface({
     }
     return list;
   }, [props, surface]);
+  const approvalSignalText = `${props.trust.approvalsSummary} ${props.trust.runStateSummary ?? ""}`.toLowerCase();
+  const approvalsAreBlocking =
+    props.approvalsCount > 0 &&
+    (approvalSignalText.includes("approval") ||
+      approvalSignalText.includes("pending") ||
+      approvalSignalText.includes("waiting"));
 
   return (
     <div
@@ -667,7 +717,7 @@ function ThreadConversationSurface({
           <div className="mc-next-threaded-panel-switcher-row">
             <ThreadedPanelSwitcher activePanel={activeUtilityPanel} onSelectPanel={onSelectUtilityPanel} />
           </div>
-          <div className="mc-next-threaded-action-row">
+          <div className={`mc-next-threaded-action-row${approvalsAreBlocking ? " has-priority-approval" : ""}`}>
             {actions.map((action) => (
               <button key={action.label} type="button" className="mc-next-threaded-secondary" onClick={action.onClick}>
                 {action.label}
@@ -684,7 +734,13 @@ function ThreadConversationSurface({
               </button>
             ) : null}
             {props.approvalsCount > 0 ? (
-              <button type="button" className="mc-next-threaded-secondary" onClick={props.onOpenApprovals}>
+              <button
+                type="button"
+                className={`mc-next-threaded-approval-review ${
+                  approvalsAreBlocking ? "mc-next-threaded-primary" : "mc-next-threaded-secondary"
+                }`}
+                onClick={props.onOpenApprovals}
+              >
                 Approvals ({props.approvalsCount})
               </button>
             ) : null}
@@ -1289,6 +1345,7 @@ function ThreadEmptyState({
   dropTarget: MissionThreadedDropTargetProps;
 }) {
   const Icon = MODE_META[surface].icon;
+  const guidance = EMPTY_STATE_GUIDANCE[surface];
   return (
     <section
       className={`mc-next-threaded-empty mc-next-threaded-dropzone${dropTarget.isDragActive ? " drop-active" : ""}`}
@@ -1303,9 +1360,18 @@ function ThreadEmptyState({
       <div className="mc-next-threaded-empty-icon">
         <Icon size={22} />
       </div>
-      <h2>No active {MODE_META[surface].label.toLowerCase()} thread</h2>
-      <p>{helper}</p>
-      <p>{input.emptyStateProps.workspaceName}</p>
+      <p className="mc-next-threaded-empty-kicker">{input.emptyStateProps.workspaceName}</p>
+      <h2>{guidance.title}</h2>
+      <p>{guidance.body}</p>
+      <p className="mc-next-threaded-empty-support">{helper}</p>
+      <div className="mc-next-threaded-empty-guidance" aria-label={`${MODE_META[surface].label} starting points`}>
+        {guidance.cards.map((card) => (
+          <div key={card.title} className="mc-next-threaded-empty-card">
+            <strong>{card.title}</strong>
+            <span>{card.body}</span>
+          </div>
+        ))}
+      </div>
       <div className="mc-next-threaded-empty-facts" aria-label="Workspace readiness">
         <span>
           <strong>{input.emptyStateProps.sessionCount}</strong>
@@ -1322,8 +1388,17 @@ function ThreadEmptyState({
       </div>
       <div className="mc-next-threaded-empty-actions">
         <button type="button" className="mc-next-threaded-primary" onClick={input.emptyStateProps.onCreateSession}>
-          Start {MODE_META[surface].label.toLowerCase()}
+          {guidance.startLabel}
         </button>
+        {input.emptyStateProps.onOpenStartHere ? (
+          <button
+            type="button"
+            className="mc-next-threaded-secondary mc-next-threaded-start-here"
+            onClick={input.emptyStateProps.onOpenStartHere}
+          >
+            {guidance.startHereLabel}
+          </button>
+        ) : null}
         <button type="button" className="mc-next-threaded-secondary" onClick={dropTarget.onAttachFiles}>
           Attach files
         </button>
@@ -1336,26 +1411,21 @@ function ThreadEmptyState({
             Approvals ({input.emptyStateProps.approvalsCount})
           </button>
         ) : null}
-        {surface === "chat"
-          ? [
-              <button
-                key="open-cowork"
-                type="button"
-                className="mc-next-threaded-secondary"
-                onClick={input.emptyStateProps.onOpenCowork}
-              >
-                Open Cowork
-              </button>,
-              <button
-                key="open-code"
-                type="button"
-                className="mc-next-threaded-secondary"
-                onClick={input.emptyStateProps.onOpenCode}
-              >
-                Open Code
-              </button>,
-            ]
-          : null}
+        {surface === "cowork" ? (
+          <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenTasks}>
+            Open task board
+          </button>
+        ) : null}
+        {surface === "chat" ? (
+          <>
+            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCowork}>
+              Open Cowork
+            </button>
+            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCode}>
+              Open Code
+            </button>
+          </>
+        ) : null}
       </div>
     </section>
   );

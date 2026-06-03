@@ -2715,14 +2715,17 @@ describe("MissionThreadedControllerHost", () => {
       prefs: null,
     });
 
-    await renderHost();
+    const onOpenStartHere = vi.fn();
+    await renderHost({ onOpenStartHere });
     await act(async () => {
       latestSurfaceInput?.emptyStateProps.onOpenCowork();
       latestSurfaceInput?.emptyStateProps.onOpenCode();
       latestSurfaceInput?.emptyStateProps.onOpenTasks();
       latestSurfaceInput?.emptyStateProps.onOpenApprovals();
+      latestSurfaceInput?.emptyStateProps.onOpenStartHere?.();
       await flushEffects(4);
     });
+    expect(onOpenStartHere).toHaveBeenCalledTimes(1);
 
     await cleanupRenderedHosts();
     setupMocks();
