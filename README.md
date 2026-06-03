@@ -1,22 +1,58 @@
 # GoatCitadel
 
-> Local-first AI operations console for chat, coding, orchestration, memory, tools, approvals, and operator-visible runtime truth.
+<p align="center">
+  <strong>Local-first AI operations console for chat, coding, orchestration, memory, tools, approvals, and operator-visible runtime truth.</strong>
+</p>
 
-[![Website](https://img.shields.io/badge/website-goatcitadel.app-22d3ee?style=for-the-badge)](https://goatcitadel.app)
-[![Release](https://img.shields.io/badge/release-1.0.0-1ec8a5?style=for-the-badge)](./CHANGELOG.md)
-[![UI](https://img.shields.io/badge/ui-Mission%20Control%20Next-0f172a?style=for-the-badge)](./apps/mission-control-next)
-[![Runtime](https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge)](./apps/gateway)
-[![Local First](https://img.shields.io/badge/posture-local--first-2dd4bf?style=for-the-badge)](./docs/INSTALL_SETUP_TESTING.md)
-[![Monorepo](https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge)](./package.json)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/goatcitadel/GoatCitadel)
+<p align="center">
+  <a href="https://goatcitadel.app"><img alt="Website" src="https://img.shields.io/badge/website-goatcitadel.app-22d3ee?style=for-the-badge"></a>
+  <a href="./CHANGELOG.md"><img alt="Release" src="https://img.shields.io/badge/release-1.0.0-1ec8a5?style=for-the-badge"></a>
+  <a href="./apps/mission-control-next"><img alt="Mission Control Next" src="https://img.shields.io/badge/ui-Mission%20Control%20Next-0f172a?style=for-the-badge"></a>
+  <a href="./apps/gateway"><img alt="Fastify Gateway" src="https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge"></a>
+  <a href="./package.json"><img alt="pnpm monorepo" src="https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge"></a>
+  <a href="https://deepwiki.com/goatcitadel/GoatCitadel"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
+</p>
 
-README last updated: 2026-06-02
+<p align="center">
+  <a href="#quickstart"><strong>Start</strong></a>
+  ·
+  <a href="#product-tour"><strong>Tour</strong></a>
+  ·
+  <a href="#current-release-truth"><strong>Release truth</strong></a>
+  ·
+  <a href="#verification"><strong>Verify</strong></a>
+  ·
+  <a href="./docs/1_0_CONTRACT.md"><strong>1.0 contract</strong></a>
+</p>
 
-[goatcitadel.app](https://goatcitadel.app) is the public product site. This repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported technical claims.
+README last updated: 2026-06-03
 
 GoatCitadel is built for operators who want more leverage than a chat box and more control than a hidden-state agent platform. It combines a Mission Control UI, a Fastify gateway, shared orchestration and policy packages, governed Code Mode, local-first memory/context flows, native Windows desktop packaging, and inspectable runtime evidence.
 
-## Screenshots
+[goatcitadel.app](https://goatcitadel.app) is the public product site. This repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported technical claims.
+
+## At A Glance
+
+| What GoatCitadel gives you | How it stays trustworthy |
+| --- | --- |
+| A single console for Chat, Cowork, Code, Projects, Library, Ops, and Settings | Gateway-owned runtime APIs, audit, policy, approvals, and durable execution |
+| Supervised agentic work with plans, checkpoints, retries, and approval waits | Durable mission sessions and retained operator evidence |
+| Governed trusted-code execution for implementation, review, and debugging | Explicit approval, artifact hashes, execution-time checks, path jails, and policy gates |
+| Local-first memory, skills, tools, integrations, and provider management | Operator-visible lifecycle controls, provenance, and inspectable/callable catalog separation |
+| Native Windows and Docker-backed local/shared-host operation | Runtime boundaries that do not replace auth, approvals, allowlists, or policy |
+
+## Pick Your Path
+
+| I want to... | Start here |
+| --- | --- |
+| Install the app on Windows | [Windows packaged installer](#windows-recommended-packaged-installer) |
+| Run from source | [Source clone](#source-clone) |
+| Run with Docker Compose | [Docker / Compose](#docker--compose) |
+| Understand what is actually shipped | [Current release truth](#current-release-truth) |
+| Check supported claims and proof | [Claims boundaries](#claims-boundaries) and [Verification](#verification) |
+| Contribute safely | [Development posture](#development-posture) and [CONTRIBUTING.md](./CONTRIBUTING.md) |
+
+## Product Tour
 
 The images below are regenerated from a sanitized Mission Control Next demo runtime. They are for a quick product tour; release visual proof is owned by the checked-in visual regression baselines and `pnpm verify:visual:regression`.
 
@@ -57,6 +93,18 @@ Regenerate the public gallery from a throwaway sanitized runtime:
 pnpm screenshots:capture
 ```
 
+## Product Surfaces
+
+| Surface | Purpose | Primary feel |
+| --- | --- | --- |
+| Chat | Fast conversation, questions, drafting, lightweight help | Simple, direct, low-friction |
+| Cowork | Supervised agentic work, planning, research, approvals, durable multi-step execution | Guided, transparent, powerful |
+| Code | Implementation, debugging, review, governed trusted-code execution | Technical, precise, test-driven |
+| Projects | Workspace and project organization | Structured, navigable |
+| Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
+| Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
+| Settings | Providers, models, tools, integrations, channels, auth, workspace controls | Clear, progressive, safe |
+
 ## Current Release Truth
 
 | Area | Current truth |
@@ -78,18 +126,6 @@ pnpm screenshots:capture
 
 The authoritative claim set is [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md), and [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./docs/CANONICAL_RUNTIME_STATE_MODEL.md).
 
-## Product Surfaces
-
-| Surface | Purpose | Primary feel |
-| --- | --- | --- |
-| Chat | Fast conversation, questions, drafting, lightweight help | Simple, direct, low-friction |
-| Cowork | Supervised agentic work, planning, research, approvals, durable multi-step execution | Guided, transparent, powerful |
-| Code | Implementation, debugging, review, governed trusted-code execution | Technical, precise, test-driven |
-| Projects | Workspace and project organization | Structured, navigable |
-| Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
-| Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
-| Settings | Providers, models, tools, integrations, channels, auth, workspace controls | Clear, progressive, safe |
-
 ## Quickstart
 
 ### Windows (recommended): packaged installer
@@ -98,14 +134,14 @@ For most Windows users, install from the packaged `.exe` release assets
 (`GoatCitadel-Setup-windows-x64.exe` / `GoatCitadel-Setup-windows-arm64.exe`); see
 [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md). Until public Authenticode
 signing is configured, those `.exe`s ship as clearly-labeled **unsigned convenience
-installers** — verify the published SHA-256 from the release proof bundle before running.
+installers**. Verify the published SHA-256 from the release proof bundle before running.
 
 ### Windows source bootstrap (advanced)
 
 > **Security note:** the one-liner below pipes a remote script straight into PowerShell with
 > no signature or checksum verification, and clones the repo from `main` unpinned. Prefer the
 > packaged installer above, or use the download-and-inspect flow so you can review the script
-> (and pin a release tag) before executing it.
+> and pin a release tag before executing it.
 
 Power-user one-liner:
 
