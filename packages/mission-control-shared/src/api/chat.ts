@@ -44,6 +44,8 @@ import type {
   ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
+  ChatSessionSearchMode,
+  ChatSessionSearchResponse,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -95,6 +97,8 @@ export interface ChatSessionsResponse {
   items: ChatSessionRecord[];
   nextCursor?: string;
 }
+
+export type { ChatSessionSearchResponse } from "@goatcitadel/contracts";
 
 export interface ChatMessagesResponse {
   items: ChatMessageRecord[];
@@ -247,6 +251,26 @@ export async function fetchChatSessions(input?: {
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);
   return request<ChatSessionsResponse>(`/api/v1/chat/sessions?${query.toString()}`);
+}
+
+export async function fetchChatSessionSearch(input: {
+  query: string;
+  mode?: ChatSessionSearchMode;
+  workspaceId?: string;
+  surface?: ChatMode;
+  limit?: number;
+  cursor?: string;
+  includeHidden?: boolean;
+}): Promise<ChatSessionSearchResponse> {
+  const query = new URLSearchParams();
+  query.set("query", input.query);
+  if (input.mode) query.set("mode", input.mode);
+  if (input.workspaceId) query.set("workspaceId", input.workspaceId);
+  if (input.surface) query.set("surface", input.surface);
+  if (input.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
+  query.set("limit", String(input.limit ?? 20));
+  if (input.cursor) query.set("cursor", input.cursor);
+  return request<ChatSessionSearchResponse>(`/api/v1/chat/session-search?${query.toString()}`);
 }
 
 export async function createChatSession(

@@ -2,6 +2,7 @@ import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
 import { createDiscordDefinition } from "./channel-setup-definitions/discord.js";
 import { createSlackDefinition } from "./channel-setup-definitions/slack.js";
 import { createTelegramDefinition } from "./channel-setup-definitions/telegram.js";
+import { createNtfyDefinition } from "./channel-setup-definitions/ntfy.js";
 import { createGoogleChatDefinition } from "./channel-setup-definitions/google-chat.js";
 import { createTeamsDefinition } from "./channel-setup-definitions/teams.js";
 import { createWhatsAppDefinition } from "./channel-setup-definitions/whatsapp.js";
@@ -20,6 +21,7 @@ const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.discord": createDiscordDefinition(),
   "channel.slack": createSlackDefinition(),
   "channel.telegram": createTelegramDefinition(),
+  "channel.ntfy": createNtfyDefinition(),
   "channel.google-chat": createGoogleChatDefinition(),
   "channel.teams": createTeamsDefinition(),
   "channel.whatsapp": createWhatsAppDefinition(),
@@ -58,6 +60,9 @@ function channelSetupSortRank(catalogId: string): number {
   }
   if (catalogId === "channel.telegram") {
     return 1;
+  }
+  if (catalogId === "channel.ntfy") {
+    return 2;
   }
   return 10;
 }

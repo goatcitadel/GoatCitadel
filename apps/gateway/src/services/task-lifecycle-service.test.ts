@@ -973,15 +973,47 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
 
 describe("TaskLifecycleService.autoBlockOnIncompleteExit", () => {
   it("transitions an in-progress task to blocked and emits worker_crash distress", () => {
-    const { service, publishRealtime } = createService();
-    const task = service.createTask({ title: "t", status: "in_progress" });
+    const recordAgenticDiagnosticSignal = vi.fn();
+    const { service, publishRealtime } = createService({ recordAgenticDiagnosticSignal });
+    const task = service.createTask({
+      title: "t",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-xyz",
+        durableRunId: "durable-run-xyz",
+        surface: "cowork",
+        status: "running",
+      },
+    });
     const blocked = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
     expect(blocked.status).toBe("blocked");
+    expect(blocked.agenticContext).toMatchObject({
+      runId: "run-xyz",
+      status: "failed",
+      failureClass: "crash",
+      diagnostics: [
+        expect.objectContaining({
+          code: "worker_crash",
+          evidenceRef: "durable-run:run-xyz",
+        }),
+      ],
+    });
     const crash = blocked.distressSignals?.find((s) => s.code === "worker_crash");
     expect(crash?.severity).toBe("critical");
     expect(crash?.evidenceRef).toBe("durable-run:run-xyz");
     const event = publishRealtime.mock.calls.find((c) => c[0] === "task_auto_blocked");
     expect(event).toBeTruthy();
+    expect(event?.[2]).toMatchObject({
+      reason: "worker_incomplete_exit",
+      diagnostic: expect.objectContaining({
+        code: "worker_crash",
+        evidenceRef: "durable-run:run-xyz",
+      }),
+    });
+    expect(recordAgenticDiagnosticSignal).toHaveBeenCalledWith({
+      task: expect.objectContaining({ taskId: task.taskId }),
+      diagnostic: expect.objectContaining({ code: "worker_crash" }),
+    });
   });
 
   it("is a no-op when task is already blocked", () => {

@@ -14,7 +14,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { clampInt } from "@goatcitadel/contracts";
+import { clampInt, coerceRetryAfterMs } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -1553,6 +1553,8 @@ async function executeCommsTool(
       return signalSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "telegram":
       return telegramSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+    case "ntfy":
+      return ntfySend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "teams":
       return teamsSend(connectionConfig, args, allowlist, message, attachments, grantAllowlist);
     case "google-chat":
@@ -2593,6 +2595,61 @@ async function telegramSendAttachment(
   return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
+async function ntfySend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const baseUrl = asString(config.baseUrl) ?? "https://ntfy.sh";
+  const topic = asString(args.target) ?? normalizeChannelTarget(target, "ntfy") ?? asString(config.topic);
+  if (!topic) {
+    throw new Error("Missing ntfy topic");
+  }
+  if (isEnabledFlag(args.dryRun) || isEnabledFlag(config.dryRun)) {
+    return `ntfy-dry-run-${Date.now()}`;
+  }
+  const token = secretFrom(config, "token", "tokenEnv");
+  const priority = clampInt(args.priority ?? config.priority, 3, 1, 5);
+  const title = asString(args.title) ?? asString(config.title) ?? "GoatCitadel";
+  const headers: Record<string, string> = {
+    "Content-Type": "text/plain; charset=utf-8",
+    Priority: String(priority),
+    Title: title,
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await fetchAllowlisted(
+    buildNtfyPublishUrl(baseUrl, topic),
+    {
+      method: "POST",
+      headers,
+      body: message,
+    },
+    allowlist,
+    undefined,
+    grantAllowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`ntfy.send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const messageId = res.response.headers.get("x-message-id") ?? asString(parseJsonRecord(bodyText).id);
+  return messageId ?? `ntfy-${Date.now()}`;
+}
+
+function buildNtfyPublishUrl(baseUrl: string, topic: string): string {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  return `${normalizedBase}/${encodeURIComponent(topic)}`;
+}
+
+function isEnabledFlag(value: unknown): boolean {
+  return value === true || asString(value)?.toLowerCase() === "true";
+}
+
 function parseOptionalIntegerLike(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -3437,6 +3494,7 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   slack: ["defaultChannel", "defaultTarget", "target"],
   discord: ["defaultChannelId", "defaultTarget", "target"],
   telegram: ["defaultChatId", "defaultTarget", "target"],
+  ntfy: ["topic", "defaultTopic", "defaultTarget", "target"],
   "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
   signal: ["defaultRecipient", "defaultTarget", "target"],
@@ -5258,18 +5316,7 @@ async function waitForHttpRetry(response: Response, attempt: number, signal?: Ab
 }
 
 function parseRetryAfterMs(value: string | null): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    return Math.max(0, numeric * 1000);
-  }
-  const parsed = Date.parse(value);
-  if (Number.isFinite(parsed)) {
-    return Math.max(0, parsed - Date.now());
-  }
-  return undefined;
+  return coerceRetryAfterMs(value, { maxMs: MAX_HTTP_RETRY_DELAY_MS });
 }
 
 function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {

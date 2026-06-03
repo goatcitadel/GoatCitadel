@@ -18,6 +18,19 @@ const listChatSessionsSchema = z.object({
     .optional(),
 });
 
+const searchChatSessionsSchema = z.object({
+  query: z.string().trim().min(1),
+  mode: z.enum(["discovery", "scroll", "browse"]).default("discovery"),
+  workspaceId: z.string().min(1).optional(),
+  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  limit: z.coerce.number().int().positive().max(200).default(20),
+  cursor: z.string().optional(),
+  includeHidden: z
+    .enum(["true", "false", "1", "0"])
+    .transform((value) => value === "true" || value === "1")
+    .optional(),
+});
+
 const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
 });
@@ -177,6 +190,18 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/session-search", async (request, reply) => {
+    const parsed = searchChatSessionsSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.chatSessions.searchChatSessions(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
     }
   });
 

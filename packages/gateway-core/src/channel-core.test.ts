@@ -247,6 +247,22 @@ describe("describeChannelCapabilities", () => {
     expect(lineOutbound.supportNotes).toEqual([
       "LINE inbound routing remains disabled until a channel secret is configured.",
     ]);
+
+    const ntfyOutbound = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+    });
+    expect(ntfyOutbound.supportedActions).toEqual(["channel.send", "channel.activity"]);
+    expect(ntfyOutbound.inboundModes).toEqual(["none"]);
+    expect(ntfyOutbound.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundReadiness: "unsupported",
+    });
+    expect(ntfyOutbound.runtimePosture.operatorSummary).toContain("outbound-only");
+    expect(ntfyOutbound.supportNotes).toEqual(
+      expect.arrayContaining(["Dry-run mode validates routing without publishing to the ntfy server."]),
+    );
   });
 
   it("describes static channel rules and setup diagnostics", () => {
@@ -257,6 +273,7 @@ describe("describeChannelCapabilities", () => {
       ["mattermost", { serverUrl: "https://mattermost.test", botTokenEnv: "MATTERMOST_TOKEN" }],
       ["imessage", { bridgeUrl: "http://127.0.0.1:1234", password: "pass" }],
       ["nextcloud-talk", { baseUrl: "https://cloud.test", token: "token" }],
+      ["ntfy", { baseUrl: "https://ntfy.test", topic: "ops" }],
       ["zalo", { token: "token" }],
       ["zalouser", { bridgeUrl: "http://127.0.0.1:4545", authToken: "token" }],
     ] as const;

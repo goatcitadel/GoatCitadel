@@ -31,6 +31,18 @@ describe("network-guard URL redaction (codex #25b, #26)", () => {
     expect(redactUrlForError("https://username:supersecret@example.com/path")).toBe("https://example.com");
   });
 
+  it("preserves safe URL shape while stripping userinfo, token paths, and sensitive query values", () => {
+    expect(redactUrlForError("https://user:pass@example.com:8443/path?access_token=secret&safe=ok")).toBe(
+      "https://example.com:8443",
+    );
+    expect(redactUrlForError("https://api.example.com/oauth/callback?code=secret&state=keep-shape")).toBe(
+      "https://api.example.com",
+    );
+    expect(redactUrlForError("http://token:secret@localhost:8787/api?authorization=Bearer%20secret")).toBe(
+      "http://localhost:8787",
+    );
+  });
+
   it("falls back gracefully on bare host:port input", () => {
     expect(redactUrlForError("api.telegram.org/bot12345:secret/sendMessage")).toBe("api.telegram.org");
   });

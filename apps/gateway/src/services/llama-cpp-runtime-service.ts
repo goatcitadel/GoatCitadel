@@ -16,6 +16,7 @@ import type {
   LlamaCppModelManifest,
   LlamaCppRuntimeStatus,
 } from "@goatcitadel/contracts";
+import { coerceHttpContentLength } from "@goatcitadel/contracts";
 import type { LlamaCppConfig } from "../config.js";
 
 const execFileAsync = promisify(execFile);
@@ -1200,8 +1201,9 @@ async function downloadUrlToFile(input: {
   }
 
   try {
-    const totalBytesHeader = response.headers.get("content-length");
-    const totalBytes = totalBytesHeader ? Number.parseInt(totalBytesHeader, 10) : undefined;
+    const totalBytes = coerceHttpContentLength(response.headers.get("content-length"), {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+    });
     const reader = response.body.getReader();
     const hash = createHash("sha256");
     const writer = fsSync.createWriteStream(tempPath);

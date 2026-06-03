@@ -149,7 +149,8 @@ describe("createChatCompletionStream", () => {
 
     const result = await collectStream(createChatCompletionStream(host, createRequest()));
 
-    expect(calls).toEqual(["primary:primary-model"]);
+    expect(calls.every((call) => call === "primary:primary-model")).toBe(true);
+    expect(calls).not.toContain("backup:backup-model");
     expect(result.chunks).toEqual([
       {
         choices: [{ delta: { content: "hello " } }],
@@ -172,7 +173,8 @@ describe("createChatCompletionStream", () => {
 
     const result = await collectStream(createChatCompletionStream(host, createRequest()));
 
-    expect(calls).toEqual(["primary:primary-model"]);
+    expect(calls.every((call) => call === "primary:primary-model")).toBe(true);
+    expect(calls).not.toContain("backup:backup-model");
     expect(result.chunks).toEqual([
       {
         choices: [{ delta: { content: "primary " } }],
@@ -648,6 +650,37 @@ describe("createChatCompletion", () => {
         fallbackProviderId: "backup",
         fallbackModel: "backup-model",
       }),
+    );
+  });
+
+  it("does not silently fall back to a smaller model when the provider reports context overflow", async () => {
+    const calls: string[] = [];
+    const host = createCompletionHost({
+      completion: async (request) => {
+        const providerId = request.providerId ?? "primary";
+        const model = request.model ?? (providerId === "primary" ? "primary-model" : "backup-model");
+        calls.push(`${providerId}:${model}`);
+        throw new Error("maximum context window exceeded");
+      },
+    });
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow("maximum context window exceeded");
+
+    expect(calls.every((call) => call === "primary:primary-model")).toBe(true);
+    expect(calls).not.toContain("backup:backup-model");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion.failed",
+        runtimeStatus: "failed",
+        runtimeError: expect.objectContaining({
+          message: "maximum context window exceeded",
+        }),
+      }),
+    );
+    expect(host.publishRealtime).not.toHaveBeenCalledWith(
+      "system",
+      "llm",
+      expect.objectContaining({ fallbackUsed: true }),
     );
   });
 

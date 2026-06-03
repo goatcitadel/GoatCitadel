@@ -47,6 +47,7 @@ describe("channel setup definitions", () => {
         "channel.discord",
         "channel.slack",
         "channel.telegram",
+        "channel.ntfy",
         "channel.google-chat",
         "channel.teams",
         "channel.whatsapp",
@@ -271,6 +272,63 @@ describe("channel setup definitions", () => {
         webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
         defaultChatId: "@ops_channel",
       }),
+    );
+  });
+
+  it("keeps ntfy setup outbound-only with env-backed token hydration and dry-run defaults", () => {
+    const definition = requireChannelSetupDefinition("channel.ntfy");
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.ntfy",
+        key: "ntfy",
+        label: "ntfy Ops",
+        config: {
+          baseUrl: "https://ntfy.example.com",
+          topic: "goatcitadel-ops",
+          tokenEnv: "NTFY_TOKEN",
+          priority: "4",
+          dryRun: true,
+        },
+      }),
+    );
+    const draft = {
+      ...createDraft("channel.ntfy", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(hydrated.hydration.status).toBe("opaque-secret");
+    expect(hydrated.hydration.fieldState.token).toBe("configured");
+    expect(hydrated.draft).not.toHaveProperty("token");
+    expect(definition.definition.catalog.supportedModes).toEqual(["guided", "manual"]);
+    expect(JSON.stringify(definition.definition)).toMatch(/send-only|outbound-only/i);
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://ntfy.example.com",
+        topic: "goatcitadel-ops",
+        tokenEnv: "NTFY_TOKEN",
+        priority: "4",
+        dryRun: true,
+      }),
+    );
+  });
+
+  it("rejects malformed ntfy topic and priority values", () => {
+    const definition = requireChannelSetupDefinition("channel.ntfy");
+    const issues = definition.validate(
+      createDraft("channel.ntfy", {
+        baseUrl: "ntfy.local",
+        topic: "bad/topic",
+        priority: "9",
+      }),
+    );
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fieldKey: "baseUrl", failureCategory: "malformed_value" }),
+        expect.objectContaining({ fieldKey: "topic", failureCategory: "malformed_value" }),
+        expect.objectContaining({ fieldKey: "priority", failureCategory: "malformed_value" }),
+      ]),
     );
   });
 
@@ -787,6 +845,7 @@ describe("channel setup definitions", () => {
       "channel.telegram",
       "channel.google-chat",
       "channel.teams",
+      "channel.ntfy",
       "channel.whatsapp",
       "channel.signal",
       "channel.mattermost",

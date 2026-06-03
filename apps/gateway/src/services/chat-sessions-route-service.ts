@@ -33,6 +33,7 @@ export const chatSessionsRouteMethods = [
   "runChatSessionWorkbenchCommand",
   "runChatSessionWorkbenchFileOperation",
   "saveChatSessionWorkbenchFile",
+  "searchChatSessions",
   "setChatSessionBinding",
   "unpinChatSession",
   "updateChatSession",

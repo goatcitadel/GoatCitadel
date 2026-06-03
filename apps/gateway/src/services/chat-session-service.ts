@@ -22,6 +22,9 @@ import {
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
   type ChatSessionSearchHitRecord,
+  type ChatSessionSearchQuery,
+  type ChatSessionSearchResponse,
+  type ChatSessionSearchResult,
   type ChatSideChatRecord,
   type RecentCrossProjectSession,
   type SessionMeta,
@@ -200,6 +203,78 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   }
 
   return records.slice(0, limit);
+}
+
+export function searchChatSessions(
+  deps: ChatSessionDependencies,
+  input: ChatSessionSearchQuery,
+): ChatSessionSearchResponse {
+  const query = input.query.trim();
+  if (!query) {
+    throw new Error("query is required for session search");
+  }
+  const mode = input.mode ?? "discovery";
+  const limit = Math.max(
+    1,
+    Math.min(mode === "browse" ? 200 : mode === "scroll" ? 100 : 50, Math.floor(input.limit ?? 20)),
+  );
+  const candidates = listChatSessions(deps, {
+    workspaceId: input.workspaceId,
+    scope: "all",
+    view: "all",
+    mode: input.surface,
+    limit: 20_000,
+    cursor: input.cursor,
+    includeHidden: input.includeHidden ?? false,
+  });
+  const hitsBySessionId = buildSessionSearchHits(
+    deps,
+    candidates.map((session) => session.sessionId),
+    query,
+    Math.min(500, Math.max(limit * 8, 80)),
+  );
+  const normalizedQuery = query.toLowerCase();
+  const items: ChatSessionSearchResult[] = [];
+
+  for (const session of candidates) {
+    const matchedFields = collectSessionSearchMatchedFields(session, normalizedQuery);
+    const hits = hitsBySessionId.get(session.sessionId) ?? [];
+    if (matchedFields.length === 0 && hits.length === 0) {
+      continue;
+    }
+    const hitScore = hits.reduce((sum, hit) => sum + hit.score, 0);
+    const metadataScore = matchedFields.length * 8;
+    const recencyScore = Number.isFinite(Date.parse(session.updatedAt)) ? Date.parse(session.updatedAt) / 1e13 : 0;
+    items.push({
+      session: {
+        ...session,
+        searchHits: hits,
+      },
+      hits,
+      matchedFields,
+      score: metadataScore + hitScore + recencyScore,
+    });
+  }
+
+  items.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    const updatedDelta = Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt);
+    if (updatedDelta !== 0) {
+      return updatedDelta;
+    }
+    return right.session.sessionId.localeCompare(left.session.sessionId);
+  });
+  const sliced = items.slice(0, limit);
+  const last = sliced.at(-1)?.session;
+  return {
+    items: sliced,
+    nextCursor: items.length > limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined,
+    query,
+    mode,
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 export function createChatSession(
@@ -758,6 +833,28 @@ function scoreSearchHit(content: string, query: string): number {
     return 2;
   }
   return 1;
+}
+
+function collectSessionSearchMatchedFields(session: ChatSessionRecord, normalizedQuery: string): string[] {
+  const fields: Array<[string, string | undefined]> = [
+    ["title", session.title],
+    ["sessionKey", session.sessionKey],
+    ["channel", session.channel],
+    ["account", session.account],
+    ["projectName", session.projectName],
+    ["folderName", session.folderName],
+    ["mode", session.mode],
+  ];
+  for (const tag of session.tags ?? []) {
+    fields.push(["tags", tag]);
+  }
+  const matched = new Set<string>();
+  for (const [field, value] of fields) {
+    if (value?.toLowerCase().includes(normalizedQuery)) {
+      matched.add(field);
+    }
+  }
+  return [...matched];
 }
 
 const CROSS_PROJECT_RECENTS_MAX_LIMIT = 20;

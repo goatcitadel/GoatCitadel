@@ -1273,7 +1273,7 @@
 }
 
 .mc-next-cowork-execution-card {
-  --mc-cowork-execution-accent: var(--gc-area-cowork);
+  --cowork-execution-accent: var(--area-cowork);
   grid-column: 1 / -1;
 }
 
@@ -1285,7 +1285,7 @@
 
 .mc-next-cowork-execution-kicker {
   margin: 0 0 0.28rem;
-  color: color-mix(in oklab, var(--mc-cowork-execution-accent) 62%, var(--text-muted));
+  color: color-mix(in oklab, var(--cowork-execution-accent) 62%, var(--text-muted));
   font-size: 0.58rem;
   font-weight: 800;
   letter-spacing: 0;
@@ -1309,14 +1309,14 @@
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-sm, 0.5rem);
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--mc-cowork-execution-accent) 5%, transparent), transparent 68%),
+    linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 5%, transparent), transparent 68%),
     color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
 }
 
 .mc-next-cowork-phase-step[data-state="active"] {
-  border-color: color-mix(in oklab, var(--mc-cowork-execution-accent) 42%, var(--border));
+  border-color: color-mix(in oklab, var(--cowork-execution-accent) 42%, var(--border));
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--mc-cowork-execution-accent) 13%, transparent), transparent 72%),
+    linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 13%, transparent), transparent 72%),
     color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
 }
 
@@ -1396,9 +1396,9 @@
 
 .mc-next-cowork-execution-truth {
   padding: 0.44rem 0.48rem;
-  border: 1px solid color-mix(in oklab, var(--mc-cowork-execution-accent) 22%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--cowork-execution-accent) 22%, var(--border));
   border-radius: var(--r-sm, 0.5rem);
-  background: color-mix(in oklab, var(--mc-cowork-execution-accent) 7%, transparent);
+  background: color-mix(in oklab, var(--cowork-execution-accent) 7%, transparent);
 }
 
 .mc-next-cowork-task-board-card {

@@ -248,6 +248,29 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
+  ntfy: {
+    supportedActions: ["channel.send"],
+    supportedAttachmentSources: ["url"],
+    inboundModes: ["none"],
+    threadCapabilities: {
+      rooms: true,
+    },
+    chunkingMode: "fallback",
+    supportsStreaming: false,
+    runtimePosture: {
+      outboundTransport: "api",
+      lifecycle: "stateless",
+      inboundReadiness: "unsupported",
+      operatorSummary:
+        "ntfy is normalized as a stateless outbound-only notification path. It can publish to a configured topic, but it does not accept inbound webhooks, subscriptions, or remote commands in this runtime.",
+    },
+    supportNotes: [
+      "ntfy v1 supports outbound text notifications only; inbound webhook and topic subscription handling are intentionally not wired.",
+      "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
+      "Dry-run mode validates routing without publishing to the ntfy server.",
+    ],
+    requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
+  },
   "google-chat": {
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],

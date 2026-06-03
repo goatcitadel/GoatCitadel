@@ -28,6 +28,7 @@ import {
   type ChatSessionWorkbenchTreeEntry,
   type ChatSessionWorkbenchTreeResponse,
   type ChatSessionWorkbenchValidationResult,
+  type CodeDiagnostic,
   type CodeModeRunRecord,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -175,12 +176,7 @@ export async function saveChatSessionWorkbenchFile(
 
   let existingStat: fsSync.Stats | null = null;
   try {
-    assertExistingWorkbenchRealpathAllowed(
-      deps,
-      context.projectRoot,
-      targetPath,
-      "workbench file",
-    );
+    assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, targetPath, "workbench file");
     existingStat = await fs.stat(targetPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -224,6 +220,7 @@ export async function saveChatSessionWorkbenchFile(
   const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
 
   const response = await buildWorkbenchFileResponse(deps, sessionId, context, normalized);
+  const diagnostics = buildWorkbenchDiagnostics(validation, [normalized]);
   deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
@@ -236,6 +233,7 @@ export async function saveChatSessionWorkbenchFile(
       activeFilePath: response.state.activeFilePath,
       validationStatus: response.state.validationStatus,
       validation,
+      diagnostics,
     },
     {
       eventClass: "operational_signal",
@@ -243,7 +241,10 @@ export async function saveChatSessionWorkbenchFile(
       links: { sessionId },
     },
   );
-  return response;
+  return {
+    ...response,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+  };
 }
 
 export async function runChatSessionWorkbenchFileOperation(
@@ -295,6 +296,7 @@ export async function runChatSessionWorkbenchFileOperation(
   const hydrated = hydrateWorkbenchRecord(deps, updated, context.project.projectId);
   const tree = await getChatSessionWorkbenchTree(deps, sessionId);
   const output = buildWorkbenchOperationOutput(hydrated, message, new Date().toISOString(), validation);
+  const diagnostics = output.diagnostics ?? [];
 
   deps.publishRealtime(
     "chat_workbench_updated",
@@ -309,6 +311,7 @@ export async function runChatSessionWorkbenchFileOperation(
       changedFiles,
       activeFilePath: hydrated.activeFilePath,
       validationStatus: hydrated.validationStatus,
+      diagnostics,
     },
     {
       eventClass: "operational_signal",
@@ -325,6 +328,7 @@ export async function runChatSessionWorkbenchFileOperation(
     changedFiles,
     tree,
     output,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   };
 }
 
@@ -482,6 +486,7 @@ export async function runChatSessionWorkbenchCommand(
     stdoutTruncated: result.stdoutTruncated,
     stderrTruncated: result.stderrTruncated,
   };
+  const diagnostics = buildWorkbenchCommandDiagnostics(run);
 
   deps.publishRealtime(
     "chat_workbench_updated",
@@ -501,6 +506,7 @@ export async function runChatSessionWorkbenchCommand(
       stderrPreview: run.stderrPreview,
       stdoutTruncated: run.stdoutTruncated,
       stderrTruncated: run.stderrTruncated,
+      diagnostics,
     },
     {
       eventClass: "operational_signal",
@@ -509,14 +515,18 @@ export async function runChatSessionWorkbenchCommand(
     },
   );
 
+  const hydratedFinalState = hydrateWorkbenchRecord(deps, finalState, context.project.projectId);
   return {
-    state: hydrateWorkbenchRecord(deps, finalState, context.project.projectId),
+    state: hydratedFinalState,
     run,
     output: buildWorkbenchOperationOutput(
-      hydrateWorkbenchRecord(deps, finalState, context.project.projectId),
+      hydratedFinalState,
       formatCommandOutput(command, args, status, run.stdoutPreview, run.stderrPreview),
       completedAt,
+      undefined,
+      diagnostics,
     ),
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   };
 }
 
@@ -561,6 +571,7 @@ export async function applyChatSessionWorkbenchPatch(
     startedAt,
     validation,
   );
+  const diagnostics = output.diagnostics ?? [];
   deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
@@ -574,6 +585,7 @@ export async function applyChatSessionWorkbenchPatch(
       changedFiles,
       validationStatus,
       validation,
+      diagnostics,
     },
     {
       eventClass: "operational_signal",
@@ -592,6 +604,7 @@ export async function applyChatSessionWorkbenchPatch(
     checkOnly,
     changedFiles,
     output,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   };
 }
 
@@ -742,10 +755,18 @@ export async function getChatSessionWorkbenchOutput(
     outputArtifactId: latest ? `code-mode-run:${latest.runId}` : undefined,
     validationStatus,
   });
+  const diagnostics = buildWorkbenchCommandDiagnostics({
+    status: latest?.status,
+    command: latest?.language ? `${latest.language} helper` : "code helper",
+    stdoutPreview: latest?.stdoutPreview,
+    stderrPreview: latest?.stderrPreview,
+    timedOut: latest?.status === "expired",
+  });
   return {
     state: hydrateWorkbenchRecord(deps, nextState, projectId),
     helperRuns,
     output,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
     lastUpdatedAt: latest?.createdAt,
   };
 }
@@ -979,6 +1000,7 @@ function buildWorkbenchOperationOutput(
   output: string,
   lastUpdatedAt: string,
   validation?: ChatSessionWorkbenchValidationResult,
+  diagnostics: CodeDiagnostic[] = buildWorkbenchDiagnostics(validation),
 ): ChatSessionWorkbenchOutputResponse {
   return {
     state,
@@ -987,8 +1009,100 @@ function buildWorkbenchOperationOutput(
       .filter(Boolean)
       .join("\n\n"),
     validation,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
     lastUpdatedAt,
   };
+}
+
+function buildWorkbenchDiagnostics(
+  validation?: ChatSessionWorkbenchValidationResult,
+  fallbackFiles: string[] = [],
+): CodeDiagnostic[] {
+  if (!validation || validation.status === "passed" || validation.status === "skipped") {
+    return [];
+  }
+  const stderr = validation.stderrPreview?.trim();
+  const parsed = stderr ? parseWorkbenchDiagnosticLocation(stderr) : undefined;
+  const filePath = parsed?.filePath ?? validation.changedFiles[0] ?? fallbackFiles[0] ?? ".";
+  const message =
+    parsed?.message || validation.reason || stderr || `${validation.commandLabel ?? "Validation"} failed.`;
+  return [
+    {
+      source: inferWorkbenchDiagnosticSource(validation.commandLabel),
+      severity: validation.status === "timed_out" ? "warning" : "error",
+      message: trimDiagnosticMessage(message),
+      filePath,
+      line: parsed?.line,
+      column: parsed?.column,
+      code: `workbench.validation.${validation.status}`,
+    },
+  ];
+}
+
+function buildWorkbenchCommandDiagnostics(input: {
+  status?: string;
+  command?: string;
+  args?: readonly string[];
+  stderrPreview?: string;
+  stdoutPreview?: string;
+  timedOut?: boolean;
+}): CodeDiagnostic[] {
+  if (input.status === "passed" || input.status === "completed") {
+    return [];
+  }
+  const commandLabel = [input.command, ...(input.args ?? [])].filter(Boolean).join(" ").trim() || "workbench command";
+  const preview = input.stderrPreview?.trim() || input.stdoutPreview?.trim();
+  return [
+    {
+      source: "workbench_command",
+      severity: input.timedOut ? "warning" : "error",
+      message: trimDiagnosticMessage(preview || `${commandLabel} did not complete successfully.`),
+      filePath: ".",
+      code: `workbench.command.${input.status ?? "failed"}`,
+    },
+  ];
+}
+
+function parseWorkbenchDiagnosticLocation(value: string):
+  | {
+      filePath: string;
+      message: string;
+      line?: number;
+      column?: number;
+    }
+  | undefined {
+  const [firstLine] = value.split(/\r?\n/, 1);
+  const match = firstLine?.match(/^([^:\n]+):\s*(.*)$/u);
+  if (!match) {
+    return undefined;
+  }
+  const filePath = match[1]?.trim();
+  const message = match[2]?.trim() ?? "";
+  if (!filePath) {
+    return undefined;
+  }
+  const locationMatch = message.match(/\bline\s+(\d+)\s+column\s+(\d+)/iu);
+  return {
+    filePath,
+    message,
+    line: locationMatch ? Number.parseInt(locationMatch[1] ?? "", 10) : undefined,
+    column: locationMatch ? Number.parseInt(locationMatch[2] ?? "", 10) : undefined,
+  };
+}
+
+function inferWorkbenchDiagnosticSource(commandLabel?: string): string {
+  const normalized = commandLabel?.toLowerCase() ?? "";
+  if (normalized.includes("json")) {
+    return "json_parse";
+  }
+  if (normalized.includes("git diff")) {
+    return "git_diff_check";
+  }
+  return "workbench_validation";
+}
+
+function trimDiagnosticMessage(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
 
 function formatWorkbenchValidationOutput(validation?: ChatSessionWorkbenchValidationResult): string | undefined {
@@ -1138,6 +1252,7 @@ function publishWorkbenchValidationResult(
   projectId: string,
   validation: ChatSessionWorkbenchValidationResult,
 ): void {
+  const diagnostics = buildWorkbenchDiagnostics(validation);
   deps.publishRealtime(
     "chat_workbench_updated",
     "chat",
@@ -1147,6 +1262,7 @@ function publishWorkbenchValidationResult(
       projectId,
       validationStatus: mapWorkbenchValidationState(validation),
       validation,
+      diagnostics,
     },
     {
       eventClass: "operational_signal",
@@ -1290,12 +1406,7 @@ async function readWorkbenchFilePayload(
   const targetPath = path.resolve(projectRoot, normalized);
   assertPathInsideRoot(targetPath, projectRoot, "workbench file");
   try {
-    assertExistingWorkbenchRealpathAllowed(
-      deps,
-      projectRoot,
-      targetPath,
-      "workbench file",
-    );
+    assertExistingWorkbenchRealpathAllowed(deps, projectRoot, targetPath, "workbench file");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {

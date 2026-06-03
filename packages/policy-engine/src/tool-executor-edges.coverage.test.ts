@@ -237,6 +237,63 @@ describe("tool executor edge coverage", () => {
     expect(body).toContain('"severity":"info"');
   });
 
+  it("sends ntfy outbound notifications and respects dry-run delivery", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 200, headers: { "x-message-id": "ntfy-msg-1" } }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "ntfy.example.com");
+
+    const live = await executeTool(
+      request("channel.send", {
+        connectionId: "ntfy-live",
+        message: "Release proof finished.",
+        title: "Ops",
+        priority: "5",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "ntfy-live",
+        key: "ntfy",
+        config: {
+          baseUrl: "https://ntfy.example.com",
+          topic: "goatcitadel-ops",
+          token: "ntfy-token",
+          priority: "2",
+        },
+      }),
+    );
+
+    expect(live).toMatchObject({ status: "sent", providerMessageId: "ntfy-msg-1" });
+    const firstCall = fetchMock.mock.calls[0] as [string | URL, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(firstCall?.[0])).toBe("https://ntfy.example.com/goatcitadel-ops");
+    expect(firstCall?.[1]?.body).toBe("Release proof finished.");
+    expect(firstCall?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer ntfy-token",
+      Priority: "5",
+      Title: "Ops",
+    });
+
+    const dryRun = await executeTool(
+      request("channel.send", {
+        connectionId: "ntfy-dry-run",
+        message: "Validate only.",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "ntfy-dry-run",
+        key: "ntfy",
+        config: {
+          baseUrl: "https://ntfy.example.com",
+          topic: "goatcitadel-ops",
+          dryRun: true,
+        },
+      }),
+    );
+
+    expect(dryRun).toMatchObject({ status: "sent" });
+    expect(String(dryRun.providerMessageId)).toMatch(/^ntfy-dry-run-/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("dispatches Slack and Discord reaction and unsend adapters", async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);

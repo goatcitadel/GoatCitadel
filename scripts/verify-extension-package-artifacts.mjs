@@ -29,12 +29,19 @@ if (!fs.existsSync(distValidatorPath)) {
 const { validateIntegrationPluginAuthorManifest } = await import(pathToFileURL(distValidatorPath).href);
 const rootManifest = readJson(rootManifestPath);
 const packageManifest = readJson(packageManifestPath);
+const packageTemplateManifests = listManifestFiles(path.join(packageDir, "templates"));
 
 validateIntegrationPluginAuthorManifest(rootManifest);
 validateIntegrationPluginAuthorManifest(packageManifest);
 
 if (JSON.stringify(rootManifest) !== JSON.stringify(packageManifest)) {
   fail("packaged reference integration-plugin manifest drifted from the repo reference scaffold.");
+}
+if (packageTemplateManifests.length === 0) {
+  fail("extensions-sdk templates do not include any distributed GoatCitadel manifests.");
+}
+for (const relativeManifestPath of packageTemplateManifests) {
+  readJson(path.join(packageDir, "templates", relativeManifestPath));
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ext-pack-"));
@@ -79,6 +86,16 @@ try {
   if (JSON.stringify(extractedManifest) !== JSON.stringify(rootManifest)) {
     fail("extracted reference integration-plugin manifest drifted from the repo reference scaffold.");
   }
+  const extractedTemplateRoot = path.join(extractDir, "package", "templates");
+  const extractedTemplateManifests = listManifestFiles(extractedTemplateRoot);
+  if (JSON.stringify(extractedTemplateManifests) !== JSON.stringify(packageTemplateManifests)) {
+    fail(
+      `packed extensions-sdk artifact manifest set drifted: expected ${packageTemplateManifests.join(", ")}, found ${extractedTemplateManifests.join(", ")}`,
+    );
+  }
+  for (const relativeManifestPath of extractedTemplateManifests) {
+    readJson(path.join(extractedTemplateRoot, relativeManifestPath));
+  }
   console.log(`Verified extensions-sdk package artifact: ${path.basename(tarball)}`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -86,6 +103,28 @@ try {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function listManifestFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+  const out = [];
+  walkManifestFiles(rootDir, rootDir, out);
+  return out.sort();
+}
+
+function walkManifestFiles(rootDir, currentDir, out) {
+  for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+    const fullPath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      walkManifestFiles(rootDir, fullPath, out);
+      continue;
+    }
+    if (entry.isFile() && /^goatcitadel\..+\.json$/u.test(entry.name)) {
+      out.push(path.relative(rootDir, fullPath).replaceAll("\\", "/"));
+    }
+  }
 }
 
 function findPackedTarball(tempDir, stdout) {

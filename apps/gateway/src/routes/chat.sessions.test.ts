@@ -33,6 +33,24 @@ describe("chat session routes", () => {
       includeHidden: true,
     });
 
+    const searched = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&mode=discovery&workspaceId=default&surface=code&limit=2",
+    });
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json()).toMatchObject({
+      query: "deploy",
+      mode: "discovery",
+      items: [{ session: { sessionId: "sess-1" } }],
+    });
+    expect(chatSessions.searchChatSessions).toHaveBeenCalledWith({
+      query: "deploy",
+      mode: "discovery",
+      workspaceId: "default",
+      surface: "code",
+      limit: 2,
+    });
+
     await expect(
       app.inject({
         method: "POST",
@@ -305,6 +323,11 @@ function buildApp(chatSessions: Record<string, unknown>): FastifyInstance {
 function createChatSessionsService(overrides: Record<string, unknown> = {}) {
   return {
     listChatSessions: vi.fn(() => [{ sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z" }]),
+    searchChatSessions: vi.fn(() => ({
+      query: "deploy",
+      mode: "discovery",
+      items: [{ session: { sessionId: "sess-1" }, hits: [], matchedFields: ["title"], score: 8 }],
+    })),
     createChatSession: vi.fn(() => ({ sessionId: "sess-created" })),
     archiveChatSessionsBulk: vi.fn(async () => ({ archived: 2 })),
     updateChatSession: vi.fn(() => ({ sessionId: "sess-1", title: "Renamed" })),

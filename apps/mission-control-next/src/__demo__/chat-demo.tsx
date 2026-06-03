@@ -208,18 +208,18 @@ function InlineMediaCard({
   onOpenLightbox: (attachment: DemoAttachment) => void;
 }) {
   return (
-    <article className="chat-v11-attachment-preview-card">
-      <div className="chat-v11-attachment-preview-head">
+    <article className="mc-next-attachment-preview-card">
+      <div className="mc-next-attachment-preview-head">
         <strong>{attachment.fileName}</strong>
         <span>{attachment.mimeType}</span>
       </div>
-      <p className="chat-v11-attachment-preview-meta">{attachment.sizeKb} KB · ready</p>
-      <div className="chat-v11-attachment-inline-media">
+      <p className="mc-next-attachment-preview-meta">{attachment.sizeKb} KB · ready</p>
+      <div className="mc-next-attachment-inline-media">
         {attachment.kind === "image" ? (
           <img
             src={attachment.src}
             alt={attachment.fileName}
-            className="chat-v11-attachment-inline-image"
+            className="mc-next-attachment-inline-image"
             loading="lazy"
             decoding="async"
             onClick={() => onOpenLightbox(attachment)}
@@ -228,7 +228,7 @@ function InlineMediaCard({
           />
         ) : attachment.kind === "audio" ? (
           <audio
-            className="chat-v11-attachment-inline-audio"
+            className="mc-next-attachment-inline-audio"
             controls
             preload="auto"
             src={attachment.src}
@@ -236,7 +236,7 @@ function InlineMediaCard({
           />
         ) : (
           <video
-            className="chat-v11-attachment-inline-video"
+            className="mc-next-attachment-inline-video"
             controls
             preload="auto"
             src={attachment.src}
@@ -244,11 +244,11 @@ function InlineMediaCard({
           />
         )}
       </div>
-      <div className="chat-v11-attachment-preview-actions">
-        <button type="button" className="chat-v11-attachment-preview-action">
+      <div className="mc-next-attachment-preview-actions">
+        <button type="button" className="mc-next-attachment-preview-action">
           Open
         </button>
-        <button type="button" className="chat-v11-attachment-preview-action">
+        <button type="button" className="mc-next-attachment-preview-action">
           Download
         </button>
       </div>
@@ -278,12 +278,12 @@ function Lightbox({ attachment, onClose }: { attachment: DemoAttachment | null; 
   return (
     <dialog
       ref={ref}
-      className="chat-v11-attachment-lightbox"
+      className="mc-next-attachment-lightbox"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <button type="button" className="chat-v11-attachment-lightbox-close" aria-label="Close preview" onClick={onClose}>
+      <button type="button" className="mc-next-attachment-lightbox-close" aria-label="Close preview" onClick={onClose}>
         ×
       </button>
       <img src={attachment.src} alt={attachment.fileName} />
@@ -325,7 +325,7 @@ function DemoTurnCard({
             </p>
             <AssistantMessageRenderer role="user" content={turn.content} />
             {turn.attachments && turn.attachments.length > 0 ? (
-              <div className="chat-v11-attachment-preview-stack">
+              <div className="mc-next-attachment-preview-stack">
                 {turn.attachments.map((attachment) => (
                   <InlineMediaCard key={attachment.id} attachment={attachment} onOpenLightbox={onOpenLightbox} />
                 ))}

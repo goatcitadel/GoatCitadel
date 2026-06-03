@@ -259,6 +259,33 @@ export interface ChatSessionListQuery {
   includeHidden?: boolean;
 }
 
+export type ChatSessionSearchMode = "discovery" | "scroll" | "browse";
+
+export interface ChatSessionSearchQuery {
+  query: string;
+  mode?: ChatSessionSearchMode;
+  workspaceId?: string;
+  surface?: ChatMode;
+  limit?: number;
+  cursor?: string;
+  includeHidden?: boolean;
+}
+
+export interface ChatSessionSearchResult {
+  session: ChatSessionRecord;
+  hits: ChatSessionSearchHitRecord[];
+  matchedFields: string[];
+  score: number;
+}
+
+export interface ChatSessionSearchResponse {
+  items: ChatSessionSearchResult[];
+  nextCursor?: string;
+  query: string;
+  mode: ChatSessionSearchMode;
+  generatedAt: string;
+}
+
 export interface ChatSessionBulkArchiveInput {
   workspaceId?: string;
   scope?: ChatSessionScope | "all";
@@ -307,6 +334,18 @@ export interface ChatSessionWorkbenchValidationResult {
   reason?: string;
 }
 
+export type CodeDiagnosticSeverity = "error" | "warning" | "info";
+
+export interface CodeDiagnostic {
+  source: string;
+  severity: CodeDiagnosticSeverity;
+  message: string;
+  filePath: string;
+  line?: number;
+  column?: number;
+  code?: string;
+}
+
 export interface ChatSessionWorkbenchRecord {
   sessionId: string;
   projectId?: string;
@@ -346,6 +385,7 @@ export interface ChatSessionWorkbenchFileResponse {
   language: string;
   changed: boolean;
   content: string;
+  diagnostics?: CodeDiagnostic[];
 }
 
 export interface ChatSessionWorkbenchSaveFileRequest {
@@ -376,6 +416,7 @@ export interface ChatSessionWorkbenchFileOperationResponse {
   changedFiles: string[];
   tree: ChatSessionWorkbenchTreeResponse;
   output: ChatSessionWorkbenchOutputResponse;
+  diagnostics?: CodeDiagnostic[];
 }
 
 export interface ChatSessionWorkbenchFileDiffResponse {
@@ -411,6 +452,7 @@ export interface ChatSessionWorkbenchCommandRunResponse {
   state: ChatSessionWorkbenchRecord;
   run: import("./agentic-runtime.js").AgenticCommandRunRecord;
   output: ChatSessionWorkbenchOutputResponse;
+  diagnostics?: CodeDiagnostic[];
 }
 
 export interface ChatSessionWorkbenchPatchApplyRequest {
@@ -424,6 +466,7 @@ export interface ChatSessionWorkbenchPatchApplyResponse {
   checkOnly: boolean;
   changedFiles: string[];
   output: ChatSessionWorkbenchOutputResponse;
+  diagnostics?: CodeDiagnostic[];
 }
 
 export interface ChatSessionWorkbenchPatchExportResponse {
@@ -443,6 +486,7 @@ export interface ChatSessionWorkbenchRevertResponse {
   revertedFiles: string[];
   changedFiles: string[];
   output: ChatSessionWorkbenchOutputResponse;
+  diagnostics?: CodeDiagnostic[];
 }
 
 export interface ChatSessionWorkbenchOutputRunSummary {
@@ -461,6 +505,7 @@ export interface ChatSessionWorkbenchOutputResponse {
   helperRuns: ChatSessionWorkbenchOutputRunSummary[];
   output: string;
   validation?: ChatSessionWorkbenchValidationResult;
+  diagnostics?: CodeDiagnostic[];
   lastUpdatedAt?: string;
 }
 

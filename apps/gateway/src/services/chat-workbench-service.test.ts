@@ -480,15 +480,22 @@ describe("chat workbench helpers", () => {
     run("git", ["add", "."], path.dirname(path.dirname(projectRoot)));
     run("git", ["commit", "-m", "add json"], path.dirname(path.dirname(projectRoot)));
 
-    await expect(
-      saveChatSessionWorkbenchFile(deps, "sess-1", {
-        path: "config.json",
-        content: "{ invalid json",
-      }),
-    ).resolves.toEqual(
+    const file = await saveChatSessionWorkbenchFile(deps, "sess-1", {
+      path: "config.json",
+      content: "{ invalid json",
+    });
+    expect(file).toEqual(
       expect.objectContaining({
         path: "config.json",
         changed: true,
+        diagnostics: [
+          expect.objectContaining({
+            source: "json_parse",
+            severity: "error",
+            filePath: "config.json",
+            code: "workbench.validation.failed",
+          }),
+        ],
       }),
     );
 
@@ -504,6 +511,12 @@ describe("chat workbench helpers", () => {
           reason: "Changed JSON failed to parse.",
           changedFiles: ["config.json"],
         }),
+        diagnostics: [
+          expect.objectContaining({
+            source: "json_parse",
+            filePath: "config.json",
+          }),
+        ],
       }),
     );
     expect(deps.storage.chatSessionWorkbench.ensure("sess-1").validationStatus).toBe("failed");

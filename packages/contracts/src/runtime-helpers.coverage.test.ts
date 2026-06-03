@@ -18,7 +18,17 @@ import { ToolPolicyConfigSchema } from "./config-schemas.js";
 import { deriveHookPhase, type HookTrigger } from "./hooks.js";
 import { deriveMemoryItemLifecycleState } from "./memory.js";
 import { inferProviderForModelId, providerAllowsForeignModelIds } from "./provider-templates.js";
-import { clampInt, coerceBoundedInt, coerceDeadlineDate, coerceDurationMs, coercePositiveInt } from "./utils.js";
+import {
+  clampInt,
+  coerceBoundedInt,
+  coerceDeadlineDate,
+  coerceDurationMs,
+  coerceHttpContentLength,
+  coerceIsoDeadlineDate,
+  coercePort,
+  coercePositiveInt,
+  coerceRetryAfterMs,
+} from "./utils.js";
 import {
   buildVoiceOperatorGuidance,
   buildVoiceRecoveryActions,
@@ -221,6 +231,28 @@ describe("schema and utility helpers", () => {
         max: new Date("2026-01-02T00:00:00.000Z"),
       })?.toISOString(),
     ).toBe("2026-01-02T00:00:00.000Z");
+  });
+
+  it("bounds HTTP and port coercion edge cases", () => {
+    expect(coerceHttpContentLength(" 12 ", { maxBytes: 100 })).toBe(12);
+    expect(coerceHttpContentLength("-1", { fallback: undefined, maxBytes: 100 })).toBeUndefined();
+    expect(coerceHttpContentLength("1.5", { fallback: 7, maxBytes: 100 })).toBe(7);
+    expect(coerceHttpContentLength("999999", { maxBytes: 1000 })).toBe(1000);
+    expect(coercePort("65535")).toBe(65535);
+    expect(coercePort("0", 8787)).toBe(8787);
+    expect(coercePort("65536", 8787)).toBe(8787);
+  });
+
+  it("bounds retry-after and ISO deadline coercion", () => {
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    expect(coerceRetryAfterMs("2", { maxMs: 10_000, now })).toBe(2000);
+    expect(coerceRetryAfterMs("2.5", { maxMs: 10_000, now })).toBe(2500);
+    expect(coerceRetryAfterMs("-1", { fallback: 250, maxMs: 10_000, now })).toBe(250);
+    expect(coerceRetryAfterMs("999", { maxMs: 1500, now })).toBe(1500);
+    expect(coerceRetryAfterMs("Thu, 01 Jan 2026 00:00:03 GMT", { maxMs: 10_000, now })).toBe(3000);
+    expect(coerceRetryAfterMs("not-a-date", { fallback: undefined, maxMs: 10_000, now })).toBeUndefined();
+    expect(coerceIsoDeadlineDate("2026-01-02T00:00:00.000Z")?.toISOString()).toBe("2026-01-02T00:00:00.000Z");
+    expect(coerceIsoDeadlineDate("Fri, 02 Jan 2026 00:00:00 GMT")).toBeUndefined();
   });
 });
 

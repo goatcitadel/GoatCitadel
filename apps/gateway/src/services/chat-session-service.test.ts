@@ -17,6 +17,7 @@ import {
   maybeAutoTitleChatSession,
   pinChatSession,
   restoreChatSession,
+  searchChatSessions,
   setChatSessionBinding,
   type ChatSessionDependencies,
   unpinChatSession,
@@ -532,6 +533,31 @@ describe("chat session service", () => {
       });
       expect(metadataMatches.map((record) => record.sessionId)).toEqual([metadataSession.sessionId]);
       expect(metadataMatches[0]?.searchHits).toEqual([]);
+
+      const noLlmSearch = searchChatSessions(deps, {
+        query: "preflight",
+        mode: "discovery",
+        workspaceId: "default",
+        surface: "chat",
+        limit: 5,
+      });
+      expect(noLlmSearch).toMatchObject({
+        query: "preflight",
+        mode: "discovery",
+        items: [
+          {
+            session: { sessionId: searchSession.sessionId },
+            matchedFields: [],
+            hits: expect.arrayContaining([
+              expect.objectContaining({
+                messageId: "msg-start",
+                excerpt: expect.stringContaining("preflight"),
+              }),
+            ]),
+          },
+        ],
+      });
+      expect(noLlmSearch.nextCursor).toBeUndefined();
     } finally {
       cleanup();
     }

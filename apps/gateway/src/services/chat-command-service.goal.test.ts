@@ -91,11 +91,13 @@ function step(overrides: Partial<ChatDelegationStepRecord>): ChatDelegationStepR
 describe("chat goal command", () => {
   it("is listed in the command catalog and /help", async () => {
     expect(listChatCommandCatalog().some((item) => item.command === "/goal")).toBe(true);
+    expect(listChatCommandCatalog().some((item) => item.command === "/subgoal")).toBe(true);
 
     const result = await parseChatCommand(createDeps(), "session-1", "/help");
 
     expect(result.ok).toBe(true);
     expect(result.message).toContain("/goal [pause|resume|clear|<objective>]");
+    expect(result.message).toContain("/subgoal <objective>");
   });
 
   it("lists session goal memories", async () => {
@@ -155,6 +157,32 @@ describe("chat goal command", () => {
         surfaceMode: "code",
       }),
     );
+  });
+
+  it("routes /subgoal through the governed goal loop without exposing goal lifecycle controls", async () => {
+    const deps = createDeps();
+
+    const result = await parseChatCommand(
+      deps,
+      "session-1",
+      "/subgoal Verify the release evidence handoff. --max-iterations 1",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("Subgoal routed through /goal.");
+    expect(result.message).toContain("Goal hit:");
+    expect(deps.runChatDelegation).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        roles: ["coder", "qa"],
+        objective: expect.stringContaining("Verify the release evidence handoff."),
+      }),
+    );
+
+    await expect(parseChatCommand(createDeps(), "session-1", "/subgoal pause")).resolves.toMatchObject({
+      ok: false,
+      message: "Usage: /subgoal <objective> [--max-iterations N] [--budget-usd N]",
+    });
   });
 
   it("keeps looping until the iteration cap when QA does not mark the goal passing", async () => {

@@ -335,8 +335,15 @@ describe("mcp runtime", () => {
     expect(__internal.resolveSpawnCommand("npm", "linux", (candidate) => candidate === "/usr/local/bin/npm")).toBe(
       "/usr/local/bin/npm",
     );
+    expect(__internal.resolveSpawnCommand("pnpm", "linux", (candidate) => candidate === "/usr/local/bin/pnpm")).toBe(
+      "/usr/local/bin/pnpm",
+    );
+    expect(__internal.resolveSpawnCommand("yarn", "linux", () => false)).toBe("yarn");
     expect(__internal.resolveSpawnCommand("node", "linux", () => false)).toBe("node");
     expect(__internal.resolveSpawnCommand("/usr/bin/npx", "linux", () => true)).toBe("/usr/bin/npx");
+    expect(__internal.resolveSpawnCommand("./node_modules/.bin/mcp", "linux", () => true)).toBe(
+      "./node_modules/.bin/mcp",
+    );
   });
 
   it("selects approved browser fallback tools and prefers Playwright targets", () => {
@@ -680,6 +687,19 @@ describe("mcp runtime", () => {
       ok: false,
       error: "MCP stdio command is missing.",
     });
+
+    const spawnFailure = await invokeMcpRuntimeTool(
+      {
+        ...createTestServer(""),
+        command: "missing-secret-token-value-1234567890-mcp",
+        args: ["--token", "secret-token-value-1234567890"],
+      },
+      { toolName: "browser.navigate", arguments: {} },
+      250,
+    );
+    expect(spawnFailure.ok).toBe(false);
+    expect(spawnFailure.error).toContain("MCP stdio request failed");
+    expect(spawnFailure.error).not.toContain("secret-token-value");
   });
 
   it("blocks remote MCP invocation when the endpoint is not network-allowlisted", async () => {

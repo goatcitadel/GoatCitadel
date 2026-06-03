@@ -26,7 +26,7 @@ import type {
   WorkflowRecipeTemplateRecord,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
-import { buildN8nWorkflowTemplate, validateN8nTemplateExport } from "./workflow-recipe-n8n-template";
+import { buildN8nWorkflowTemplate, validateN8nTemplateExport } from "./workflow-recipe-n8n-template.js";
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "name",

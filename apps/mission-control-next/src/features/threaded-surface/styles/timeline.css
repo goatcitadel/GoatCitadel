@@ -407,14 +407,14 @@
   background: color-mix(in oklab, var(--mc-area-color) 9%, var(--mc-surface-1));
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-stack {
+.mc-next-thread-bubble .mc-next-attachment-preview-stack {
   display: grid;
   gap: 0.42rem;
   margin-top: 0.1rem;
   min-width: 0;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-card {
+.mc-next-thread-bubble .mc-next-attachment-preview-card {
   display: grid;
   gap: 0.38rem;
   min-width: 0;
@@ -425,8 +425,8 @@
   color: var(--foreground);
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-head,
-.mc-next-thread-bubble .chat-v11-attachment-preview-actions {
+.mc-next-thread-bubble .mc-next-attachment-preview-head,
+.mc-next-thread-bubble .mc-next-attachment-preview-actions {
   display: flex;
   align-items: center;
   gap: 0.42rem;
@@ -434,33 +434,33 @@
   min-width: 0;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-head {
+.mc-next-thread-bubble .mc-next-attachment-preview-head {
   justify-content: space-between;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-head strong,
-.mc-next-thread-bubble .chat-v11-attachment-preview-copy {
+.mc-next-thread-bubble .mc-next-attachment-preview-head strong,
+.mc-next-thread-bubble .mc-next-attachment-preview-copy {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-head span,
-.mc-next-thread-bubble .chat-v11-attachment-preview-meta,
-.mc-next-thread-bubble .chat-v11-attachment-preview-label,
-.mc-next-thread-bubble .chat-v11-attachment-action-status {
+.mc-next-thread-bubble .mc-next-attachment-preview-head span,
+.mc-next-thread-bubble .mc-next-attachment-preview-meta,
+.mc-next-thread-bubble .mc-next-attachment-preview-label,
+.mc-next-thread-bubble .mc-next-attachment-action-status {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.35;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-label {
+.mc-next-thread-bubble .mc-next-attachment-preview-label {
   color: color-mix(in oklab, var(--mc-area-color) 68%, var(--foreground));
   font-weight: 760;
   text-transform: uppercase;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-copy {
+.mc-next-thread-bubble .mc-next-attachment-preview-copy {
   display: -webkit-box;
   margin: 0;
   color: var(--text-secondary);
@@ -471,11 +471,11 @@
   overflow: hidden;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-copy.muted {
+.mc-next-thread-bubble .mc-next-attachment-preview-copy.muted {
   color: var(--text-muted);
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-action {
+.mc-next-thread-bubble .mc-next-attachment-preview-action {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -492,7 +492,7 @@
   line-height: 1.1;
 }
 
-.mc-next-thread-bubble .chat-v11-attachment-preview-action:disabled {
+.mc-next-thread-bubble .mc-next-attachment-preview-action:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
@@ -830,12 +830,12 @@
 
   .mc-next-thread-jump-latest,
   .mc-next-thread-turn-surface,
-  .chat-v11-attachment-inline-image,
+  .mc-next-attachment-inline-image,
   .mc-next-thread-citations > article {
     transition: none;
   }
 
-  .chat-v11-attachment-inline-image:hover,
+  .mc-next-attachment-inline-image:hover,
   .mc-next-thread-jump-latest:hover,
   .mc-next-thread-citations > article:hover {
     transform: none;
@@ -1019,13 +1019,13 @@
    Inline media previews — image, audio, video render inline so
    operators can preview without download.
    ============================================================ */
-.chat-v11-attachment-inline-media {
+.mc-next-attachment-inline-media {
   display: grid;
   gap: 0.42rem;
   margin-top: 0.1rem;
 }
 
-.chat-v11-attachment-inline-image {
+.mc-next-attachment-inline-image {
   display: block;
   max-width: 100%;
   max-height: 22rem;
@@ -1039,12 +1039,12 @@
     box-shadow 160ms ease;
 }
 
-.chat-v11-attachment-inline-image:hover {
+.mc-next-attachment-inline-image:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
 }
 
-.chat-v11-attachment-image-trigger {
+.mc-next-attachment-image-trigger {
   display: block;
   border: 0;
   background: none;
@@ -1052,8 +1052,8 @@
   cursor: zoom-in;
 }
 
-.chat-v11-attachment-inline-video,
-.chat-v11-attachment-inline-audio {
+.mc-next-attachment-inline-video,
+.mc-next-attachment-inline-audio {
   width: 100%;
   border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
@@ -1061,15 +1061,15 @@
   accent-color: var(--mc-area-color);
 }
 
-.chat-v11-attachment-inline-video {
+.mc-next-attachment-inline-video {
   max-height: 24rem;
 }
 
-.chat-v11-attachment-inline-audio {
+.mc-next-attachment-inline-audio {
   min-height: 2.4rem;
 }
 
-.chat-v11-attachment-inline-fallback {
+.mc-next-attachment-inline-fallback {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1084,18 +1084,18 @@
   cursor: pointer;
 }
 
-.chat-v11-attachment-inline-fallback:hover {
+.mc-next-attachment-inline-fallback:hover {
   border-color: color-mix(in oklab, var(--mc-area-color) 48%, var(--border));
   color: var(--foreground);
 }
 
-.chat-v11-attachment-inline-error {
+.mc-next-attachment-inline-error {
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 /* Lightbox overlay for expanded images */
-.chat-v11-attachment-lightbox {
+.mc-next-attachment-lightbox {
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -1112,27 +1112,27 @@
   z-index: 1000;
 }
 
-.chat-v11-attachment-lightbox::backdrop {
+.mc-next-attachment-lightbox::backdrop {
   background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(4px);
 }
 
 /* Fallback for very old engines without ::backdrop support: dim the dialog itself. */
 @supports not (selector(::backdrop)) {
-  .chat-v11-attachment-lightbox {
+  .mc-next-attachment-lightbox {
     background: rgba(0, 0, 0, 0.82);
     backdrop-filter: blur(4px);
   }
 }
 
-.chat-v11-attachment-lightbox img {
+.mc-next-attachment-lightbox img {
   max-width: 92vw;
   max-height: 92vh;
   border-radius: var(--r-sm);
   box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5);
 }
 
-.chat-v11-attachment-lightbox-close {
+.mc-next-attachment-lightbox-close {
   position: absolute;
   top: 1rem;
   right: 1rem;
@@ -1147,7 +1147,7 @@
   cursor: pointer;
 }
 
-.chat-v11-attachment-lightbox-close:hover {
+.mc-next-attachment-lightbox-close:hover {
   background: rgba(0, 0, 0, 0.75);
 }
 

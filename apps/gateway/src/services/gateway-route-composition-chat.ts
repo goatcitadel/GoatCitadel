@@ -151,6 +151,7 @@ export function composeChatRouteDependencies(
       chatWorkbenchService.runChatSessionWorkbenchFileOperation(ChatWorkbenchDependencies, sessionId, input),
     saveChatSessionWorkbenchFile: (sessionId, input) =>
       chatWorkbenchService.saveChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
+    searchChatSessions: (input) => chatSessionService.searchChatSessions(ChatSessionDependencies, input),
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),
     unpinChatSession: (sessionId) => chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId),
     updateChatSession: (sessionId, input) =>

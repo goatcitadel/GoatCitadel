@@ -25,6 +25,7 @@ import type {
   McpServerTemplateRecord,
   PersonalityCatalogResponse,
   ResearchSummaryRecord,
+  SkillImportSourceType,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
@@ -209,11 +210,17 @@ export interface ChatCommandDependencies {
     itemId: string,
     input: { status?: "active" | "superseded" | "disabled"; content?: string; confidence?: number },
   ): LearnedMemoryItemRecord;
-  validateSkillImport(input: { sourceRef: string }): Promise<{
+  validateSkillImport(input: { sourceRef: string; sourceType?: SkillImportSourceType }): Promise<{
     valid: boolean;
     errors: string[];
     riskLevel?: string;
     inferredSkillName?: string;
+    candidate?: {
+      name?: string;
+      compatibility?: {
+        callability?: string;
+      };
+    };
   }>;
 }
 
@@ -284,6 +291,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
       description: "Run a bounded implement-and-test loop toward a verifiable goal.",
     },
     {
+      command: "/subgoal",
+      usage: "/subgoal <objective> [--max-iterations N] [--budget-usd N]",
+      description: "Route a smaller objective through the governed goal/decomposition path.",
+    },
+    {
       command: "/personality",
       usage: "/personality [id|none]",
       description: "Show or set the global Chat personality default.",
@@ -332,6 +344,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
       command: "/skill",
       usage: "/skill install <sourceRef> [--confirm-high-risk]",
       description: "Validate and install a skill, disabled by default.",
+    },
+    {
+      command: "/skill-bundle",
+      usage: "/skill-bundle <url>",
+      description: "Create a review-only skill bundle import receipt without activation.",
     },
     { command: "/mcp", usage: "/mcp", description: "List configured MCP servers and connection state." },
     {
@@ -522,6 +539,29 @@ export async function parseChatCommand(
       command,
       args,
       message: result.message,
+    };
+  }
+
+  if (command === "/subgoal") {
+    const objective = args.join(" ").trim();
+    if (!objective || ["pause", "resume", "clear"].includes(objective.toLowerCase())) {
+      return { ok: false, command, args, message: "Usage: /subgoal <objective> [--max-iterations N] [--budget-usd N]" };
+    }
+    const result = await handleGoalCommand(deps, sessionId, args, {
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
+    });
+    return {
+      ok: result.ok,
+      command,
+      args,
+      message: result.ok ? `Subgoal routed through /goal.\n${result.message}` : result.message,
     };
   }
 
@@ -944,6 +984,33 @@ export async function parseChatCommand(
       args,
       message:
         "Usage: /skill enable|sleep|disable <skillId> | /skill search <query> | /skill lookup <query-or-url> | /skill install <sourceRef> [--confirm-high-risk]",
+    };
+  }
+
+  if (command === "/skill-bundle") {
+    const sourceRef = args.join(" ").trim();
+    if (!sourceRef) {
+      return { ok: false, command, args, message: "Usage: /skill-bundle <url>" };
+    }
+    const validation = await deps.validateSkillImport({ sourceRef, sourceType: "remote_bundle" });
+    const candidateName = validation.candidate?.name ?? validation.inferredSkillName ?? sourceRef;
+    const callability = validation.candidate?.compatibility?.callability ?? "review_only";
+    const lines = [
+      `Skill bundle review receipt: ${candidateName}`,
+      `Source: ${sourceRef}`,
+      `Status: ${validation.valid ? "valid for review" : "rejected"}`,
+      `Risk: ${validation.riskLevel ?? "unknown"}`,
+      `Callability: ${callability}`,
+      "Activation: none. No skill was installed or made callable.",
+    ];
+    if (validation.errors.length > 0) {
+      lines.push(`Findings: ${validation.errors.join("; ")}`);
+    }
+    return {
+      ok: validation.valid,
+      command,
+      args,
+      message: lines.join("\n"),
     };
   }
 

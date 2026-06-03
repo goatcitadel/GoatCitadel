@@ -318,6 +318,35 @@ describe("chat command runtime dispatch", () => {
     );
   });
 
+  it("creates review-only skill bundle receipts without activating imports", async () => {
+    const deps = createDeps();
+    vi.mocked(deps.validateSkillImport).mockResolvedValueOnce({
+      valid: true,
+      errors: [],
+      riskLevel: "medium",
+      inferredSkillName: "Bundle Skill",
+      candidate: {
+        name: "Bundle Skill",
+        compatibility: {
+          callability: "review_only",
+        },
+      },
+    });
+
+    await expect(
+      parseChatCommand(deps, "session-1", "/skill-bundle https://example.com/goatcitadel.skill-bundle.json"),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringContaining("Activation: none. No skill was installed or made callable."),
+    });
+
+    expect(deps.validateSkillImport).toHaveBeenCalledWith({
+      sourceRef: "https://example.com/goatcitadel.skill-bundle.json",
+      sourceType: "remote_bundle",
+    });
+    expect(deps.installSkillImport).not.toHaveBeenCalled();
+  });
+
   it("returns explicit usage failures for malformed commands", async () => {
     const deps = createDeps();
 

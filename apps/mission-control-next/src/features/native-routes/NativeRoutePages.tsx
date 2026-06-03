@@ -1,6 +1,6 @@
+import { Suspense, lazy } from "react";
 import type { AppRoute } from "@next/app/route-model";
 import { NativePageFrame } from "./NativeRoutePageLayout";
-import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
@@ -20,6 +20,10 @@ import { LibrarySkillsSection } from "./library/LibrarySkillsSection";
 import { routeSectionWithDefault } from "./shared/native-helpers";
 import type { NativeRoutePagesProps } from "./types";
 import "./native-routes.css";
+
+const NextSettingsNativePage = lazy(async () => ({
+  default: (await import("./SettingsNativePage")).SettingsNativePage,
+}));
 
 export type { CoworkTaskContinuationSummary } from "./shared/native-helpers";
 
@@ -135,13 +139,30 @@ function SettingsNativePage({
   setActiveWorkspaceId,
 }: NativeRoutePagesProps) {
   return (
-    <NextSettingsNativePage
-      route={route}
-      activeWorkspaceId={activeWorkspaceId}
-      activeWorkspaceName={activeWorkspaceName}
-      navigate={navigate}
-      setActiveWorkspaceId={setActiveWorkspaceId}
-    />
+    <Suspense fallback={<SettingsNativePageFallback activeWorkspaceName={activeWorkspaceName} />}>
+      <NextSettingsNativePage
+        route={route}
+        activeWorkspaceId={activeWorkspaceId}
+        activeWorkspaceName={activeWorkspaceName}
+        navigate={navigate}
+        setActiveWorkspaceId={setActiveWorkspaceId}
+      />
+    </Suspense>
+  );
+}
+
+function SettingsNativePageFallback({ activeWorkspaceName }: Pick<NativeRoutePagesProps, "activeWorkspaceName">) {
+  return (
+    <NativePageFrame
+      area="settings"
+      kicker="Settings"
+      title="Settings"
+      description={`Loading settings for ${activeWorkspaceName}.`}
+      loading
+      error={null}
+    >
+      <div className="mc-next-native-loading-placeholder" aria-label="Loading settings" />
+    </NativePageFrame>
   );
 }
 

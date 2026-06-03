@@ -65,6 +65,31 @@ describe("fetchAllowlisted (codex #11, #14)", () => {
     }
   });
 
+  it("blocks allowlisted hosts when any DNS result resolves to link-local private space", async () => {
+    let hit = false;
+    const server = createServer((_request, response) => {
+      hit = true;
+      response.end("metadata");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      await expect(
+        fetchAllowlisted(`http://bundle.example:${port}/skill-bundle.tgz`, {
+          allowlist: [`bundle.example:${port}`],
+          dnsLookup: (_hostname, _options, callback) =>
+            callback(null, [
+              { address: "203.0.113.10", family: 4 },
+              { address: "169.254.169.254", family: 4 },
+            ]),
+        }),
+      ).rejects.toThrow(/resolved address is blocked/i);
+      expect(hit).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("still allows explicitly allowlisted loopback hostnames to resolve to loopback", async () => {
     const server = createServer((_request, response) => {
       response.end("local-ok");

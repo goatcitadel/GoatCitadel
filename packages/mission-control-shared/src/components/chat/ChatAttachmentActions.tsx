@@ -122,9 +122,9 @@ export async function openChatAttachmentInBrowser(input: {
 export function ChatAttachmentActions({
   attachmentId,
   fileName,
-  className = "chat-v11-attachment-preview-actions",
-  buttonClassName = "chat-v11-attachment-preview-action",
-  statusClassName = "chat-v11-attachment-action-status",
+  className = "mc-next-attachment-preview-actions",
+  buttonClassName = "mc-next-attachment-preview-action",
+  statusClassName = "mc-next-attachment-action-status",
   openLabel = "Open",
   downloadLabel = "Download",
   onError,

@@ -161,6 +161,8 @@ import type {
   ChatSessionBindingRecord,
   ChatSessionListQuery,
   ChatSessionRecord,
+  ChatSessionSearchQuery,
+  ChatSessionSearchResponse,
   ChatSessionPrefsPatch,
   ChatSpecialistCandidateCreateInput,
   ChatSpecialistCandidatePatchInput,
@@ -2011,6 +2013,10 @@ export class GatewayService {
 
   public listChatSessions(query: ChatSessionListQuery = {}): ChatSessionRecord[] {
     return chatSessionService.listChatSessions(this.buildChatSessionDependencies(), query);
+  }
+
+  public searchChatSessions(query: ChatSessionSearchQuery): ChatSessionSearchResponse {
+    return chatSessionService.searchChatSessions(this.buildChatSessionDependencies(), query);
   }
 
   public createChatSession(input: ChatSessionCreateInput = {}): ChatSessionRecord {

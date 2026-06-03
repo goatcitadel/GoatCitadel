@@ -98,6 +98,7 @@ vi.mock("./chat-session-service.js", () => ({
   listChatSessions: vi.fn((_deps, query) => ({ items: [query] })),
   pinChatSession: vi.fn((_deps, sessionId) => ({ sessionId, pinned: true })),
   restoreChatSession: vi.fn((_deps, sessionId) => ({ sessionId, archived: false })),
+  searchChatSessions: vi.fn((_deps, input) => ({ items: [input], query: input.query })),
   setChatSessionBinding: vi.fn((_deps, input) => ({ input })),
   unpinChatSession: vi.fn((_deps, sessionId) => ({ sessionId, pinned: false })),
   updateChatSession: vi.fn((_deps, sessionId, input) => ({ sessionId, input })),
@@ -404,6 +405,10 @@ describe("composeChatRouteDependencies", () => {
       items: [{ sessionId: "session-1" }],
     });
     expect(deps.chatSessions.listChatSessions({ limit: 1 })).toMatchObject({ items: [{ limit: 1 }] });
+    expect(deps.chatSessions.searchChatSessions({ query: "deploy" })).toMatchObject({
+      query: "deploy",
+      items: [{ query: "deploy" }],
+    });
     await expect(deps.chatSessions.listChatThreadKnowledgeAttachments("session-1")).resolves.toMatchObject({
       content: { attachmentId: "attachment-1" },
       query: { realtimeType: "knowledge_embeddings_query" },

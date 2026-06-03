@@ -94,12 +94,12 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
   return (
     <dialog
       ref={dialogRef}
-      className="chat-v11-attachment-lightbox"
+      className="mc-next-attachment-lightbox"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <button type="button" className="chat-v11-attachment-lightbox-close" aria-label="Close preview" onClick={onClose}>
+      <button type="button" className="mc-next-attachment-lightbox-close" aria-label="Close preview" onClick={onClose}>
         ×
       </button>
       <img src={src} alt={alt} />
@@ -161,14 +161,14 @@ function ChatAttachmentInlineMedia({
   if (!activated) {
     const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(1);
     return (
-      <button type="button" className="chat-v11-attachment-inline-fallback" onClick={() => setActivated(true)}>
+      <button type="button" className="mc-next-attachment-inline-fallback" onClick={() => setActivated(true)}>
         Load {kind} preview ({sizeMb} MB)
       </button>
     );
   }
 
   if (error) {
-    return <p className="chat-v11-attachment-inline-error">Inline preview unavailable: {error}</p>;
+    return <p className="mc-next-attachment-inline-error">Inline preview unavailable: {error}</p>;
   }
 
   if (!objectUrl) {
@@ -180,14 +180,14 @@ function ChatAttachmentInlineMedia({
       <>
         <button
           type="button"
-          className="chat-v11-attachment-image-trigger"
+          className="mc-next-attachment-image-trigger"
           aria-label={`Open ${fileName} in full view`}
           onClick={openLightbox}
         >
           <img
             src={objectUrl}
             alt={fileName}
-            className="chat-v11-attachment-inline-image"
+            className="mc-next-attachment-inline-image"
             loading="lazy"
             decoding="async"
           />
@@ -199,14 +199,14 @@ function ChatAttachmentInlineMedia({
 
   if (kind === "audio") {
     return (
-      <audio className="chat-v11-attachment-inline-audio" controls preload="metadata" src={objectUrl}>
+      <audio className="mc-next-attachment-inline-audio" controls preload="metadata" src={objectUrl}>
         Your browser does not support inline audio playback.
       </audio>
     );
   }
 
   return (
-    <video className="chat-v11-attachment-inline-video" controls preload="metadata" src={objectUrl}>
+    <video className="mc-next-attachment-inline-video" controls preload="metadata" src={objectUrl}>
       Your browser does not support inline video playback.
     </video>
   );
@@ -298,17 +298,17 @@ function ChatAttachmentPreviewCard({
   const inlineKind = preview ? pickInlineMediaKind(preview) : null;
 
   return (
-    <article ref={cardRef} className="chat-v11-attachment-preview-card">
-      <div className="chat-v11-attachment-preview-head">
+    <article ref={cardRef} className="mc-next-attachment-preview-card">
+      <div className="mc-next-attachment-preview-head">
         <strong>{attachment.fileName}</strong>
         <span>{attachment.mimeType}</span>
       </div>
-      <p className="chat-v11-attachment-preview-meta">
+      <p className="mc-next-attachment-preview-meta">
         {Math.max(1, Math.round(attachment.sizeBytes / 1024))} KB
         {preview ? ` · ${preview.analysisStatus}` : ""}
       </p>
       {inlineKind ? (
-        <div className="chat-v11-attachment-inline-media">
+        <div className="mc-next-attachment-inline-media">
           <ChatAttachmentInlineMedia
             kind={inlineKind}
             attachmentId={attachment.attachmentId}
@@ -320,16 +320,16 @@ function ChatAttachmentPreviewCard({
       ) : null}
       <ChatAttachmentActions attachmentId={attachment.attachmentId} fileName={attachment.fileName} />
       {!shouldLoadPreview && !preview ? (
-        <p className="chat-v11-attachment-preview-copy muted">Preview will load when visible.</p>
+        <p className="mc-next-attachment-preview-copy muted">Preview will load when visible.</p>
       ) : extractionSummary ? (
         <>
-          <p className="chat-v11-attachment-preview-label">{extractionLabel}</p>
-          <p className="chat-v11-attachment-preview-copy">{extractionSummary}</p>
+          <p className="mc-next-attachment-preview-label">{extractionLabel}</p>
+          <p className="mc-next-attachment-preview-copy">{extractionSummary}</p>
         </>
       ) : error ? (
-        <p className="chat-v11-attachment-preview-copy muted">Preview unavailable: {error}</p>
+        <p className="mc-next-attachment-preview-copy muted">Preview unavailable: {error}</p>
       ) : inlineKind ? null : (
-        <p className="chat-v11-attachment-preview-copy muted">Extraction is still preparing.</p>
+        <p className="mc-next-attachment-preview-copy muted">Extraction is still preparing.</p>
       )}
     </article>
   );
@@ -381,7 +381,7 @@ export function ChatAttachmentPreviewStack({
   }
 
   return (
-    <div className="chat-v11-attachment-preview-stack">
+    <div className="mc-next-attachment-preview-stack">
       {attachments.map((attachment) => (
         <ChatAttachmentPreviewCard key={attachment.attachmentId} attachment={attachment} eager={eager} />
       ))}

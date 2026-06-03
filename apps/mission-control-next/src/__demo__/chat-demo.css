@@ -44,21 +44,12 @@ body {
   display: grid;
   place-items: start center;
   padding: 1.5rem 2rem 3rem;
-  --mc-area-color: var(--area-chat);
-  --mc-surface-1: var(--bg-surface-1);
-  --mc-surface-2: var(--bg-surface-2);
-  --mc-border-subtle: var(--border-subtle);
   --foreground: var(--fg-primary);
   --background: var(--bg-app);
   --border: var(--border-default);
   --text-secondary: var(--fg-secondary);
   --text-muted: var(--fg-muted);
   --card: var(--bg-surface-1);
-  --gc-risk-safe: var(--risk-safe);
-  --gc-risk-caution: var(--risk-caution);
-  --gc-risk-danger: var(--risk-danger);
-  --mc-font-mono: var(--font-mono);
-  --mc-scrollbar-safe-gutter: 0px;
 }
 
 .demo-card {

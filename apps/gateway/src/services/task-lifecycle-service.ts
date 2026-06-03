@@ -209,17 +209,41 @@ export class TaskLifecycleService {
     if (current.status === "done" || current.status === "blocked") {
       return current;
     }
-    const distressSignals = emitDistressSignal(current.distressSignals, {
+    const diagnostic: AgenticDiagnosticSignal = {
+      signalId: `worker-incomplete-exit-${runId}`,
       code: "worker_crash",
       severity: "critical",
       title: "Worker exited without closing the task",
       summary: `Durable run ${runId} exited without a terminal close.`,
       evidenceRef: `durable-run:${runId}`,
+      createdAt: new Date().toISOString(),
+    };
+    const distressSignals = emitDistressSignal(current.distressSignals, {
+      code: "worker_crash",
+      severity: "critical",
+      title: diagnostic.title,
+      summary: diagnostic.summary,
+      evidenceRef: diagnostic.evidenceRef,
     });
-    const updated = this.deps.storage.tasks.update(taskId, { distressSignals, status: "blocked" });
+    const agenticContext = current.agenticContext
+      ? {
+          ...current.agenticContext,
+          status: "failed" as const,
+          failureClass: "crash" as const,
+          diagnostics: [...(current.agenticContext.diagnostics ?? []), diagnostic],
+        }
+      : undefined;
+    const update: TaskUpdateInput = { distressSignals, status: "blocked" };
+    if (agenticContext) {
+      update.agenticContext = agenticContext;
+    }
+    const updated = this.deps.storage.tasks.update(taskId, update);
+    if (agenticContext) {
+      this.deps.recordAgenticDiagnosticSignal?.({ task: updated, diagnostic });
+    }
     this.publishTaskEvent(
       "task_auto_blocked",
-      { taskId, runId, reason: "worker_incomplete_exit" },
+      { taskId, runId, reason: "worker_incomplete_exit", diagnostic },
       buildTaskRealtimeLinks(updated),
     );
     return updated;

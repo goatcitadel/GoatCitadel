@@ -529,6 +529,7 @@ async function flush() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
     await Promise.resolve();
   });
 }

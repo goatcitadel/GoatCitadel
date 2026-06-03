@@ -160,6 +160,34 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "channel.ntfy": {
+    catalogId: "channel.ntfy",
+    title: "ntfy Notification Connection",
+    description: "Connect an outbound-only ntfy topic for operator-visible notifications.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "ntfy" }),
+      url("baseUrl", "Base URL", {
+        defaultValue: "https://ntfy.sh",
+        placeholder: "https://ntfy.sh",
+        required: true,
+      }),
+      text("topic", "Topic", {
+        placeholder: "goatcitadel-ops",
+        required: true,
+      }),
+      text("tokenEnv", "Token ENV Var", {
+        placeholder: "NTFY_TOKEN",
+        secretRef: true,
+        advanced: true,
+      }),
+      select("priority", "Priority", ["1", "2", "3", "4", "5"], "3", {
+        advanced: true,
+      }),
+      bool("dryRun", "Dry Run Only", false),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "channel.matrix": {
     catalogId: "channel.matrix",
     title: "Matrix Connection",
@@ -784,6 +812,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "beta",
     ["bot-token"],
     ["chat", "threads", "attachments", "reactions", "unsend", "typing"],
+  ),
+  entry(
+    "channel",
+    "ntfy",
+    "ntfy",
+    "Outbound-only ntfy notification delivery.",
+    "beta",
+    ["token", "none"],
+    ["notifications", "outbound"],
   ),
   entry(
     "channel",

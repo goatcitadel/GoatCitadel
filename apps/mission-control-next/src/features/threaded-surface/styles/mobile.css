@@ -415,8 +415,8 @@
     justify-content: flex-start;
   }
 
-  .mc-next-thread-bubble .chat-v11-attachment-preview-actions,
-  .mc-next-thread-bubble .chat-v11-attachment-preview-action {
+  .mc-next-thread-bubble .mc-next-attachment-preview-actions,
+  .mc-next-thread-bubble .mc-next-attachment-preview-action {
     width: 100%;
   }
 

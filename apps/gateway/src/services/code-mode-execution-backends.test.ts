@@ -7,6 +7,30 @@ import {
 } from "./code-mode-execution-backends.js";
 
 describe("code-mode-execution-backends", () => {
+  it("keeps Docker preview-only without explicit enablement and image config", () => {
+    const response = buildCodeModeExecutionBackends({
+      codeModeEnabled: true,
+      sandbox: sandboxMetadata(),
+      dockerBackend: { enabled: false, dockerCommand: "docker" },
+      env: {
+        GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED: "false",
+      },
+    });
+    const docker = response.items.find((item) => item.backendId === "docker-container");
+
+    expect(response.activeBackendId).toBe("trusted-code-host");
+    expect(docker).toMatchObject({
+      status: "preview",
+      runtimeSupport: "preview_only",
+      callable: false,
+      blockers: expect.arrayContaining(["Docker backend is not enabled."]),
+      governance: expect.arrayContaining([
+        "Must not replace auth, approvals, or operator-visible sandbox posture.",
+        "Docker is extra isolation evidence, not sufficient evidence for a hostile-code sandbox claim.",
+      ]),
+    });
+  });
+
   it("keeps Aider preview-only until Docker and Aider image config are both present", () => {
     const preview = buildCodeModeExecutionBackends({
       codeModeEnabled: true,

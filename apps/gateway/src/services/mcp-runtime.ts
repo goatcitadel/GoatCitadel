@@ -180,10 +180,11 @@ export async function invokeMcpRuntimeTool(
     };
   } catch (error) {
     const sanitized = sanitizeMcpRuntimeError((error as Error).message);
+    const message = `MCP stdio request failed: ${sanitized}`;
     return {
       ok: false,
-      error: sanitized,
-      contentItems: [{ type: "error", text: sanitized }],
+      error: message,
+      contentItems: [{ type: "error", text: message }],
     };
   }
 }
@@ -1213,6 +1214,12 @@ function extractMcpContentPart(value: unknown): string {
 function sanitizeMcpRuntimeError(value: string): string {
   return value
     .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, "$1=[REDACTED]")
+    .replace(/\bauthorization\s*:\s*Bearer\s+\S+/gi, "authorization=[REDACTED]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
+    .replace(
+      /\b(?=[A-Za-z0-9_.-]*(?:secret|token|api[-_]?key))(?=[A-Za-z0-9_.-]*[-_])(?=[A-Za-z0-9_.-]{16,}\b)[A-Za-z0-9_.-]+\b/gi,
+      "[REDACTED]",
+    )
     .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
     .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
     .slice(0, 4096);
