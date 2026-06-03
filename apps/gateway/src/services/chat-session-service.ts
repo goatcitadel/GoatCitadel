@@ -195,21 +195,6 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     return right.sessionId.localeCompare(left.sessionId);
   });
 
-  if (query.cursor) {
-    const [cursorUpdatedAt, cursorSessionId] = query.cursor.split("|");
-    if (cursorUpdatedAt && cursorSessionId) {
-      records = records.filter((record) => {
-        if (record.updatedAt < cursorUpdatedAt) {
-          return true;
-        }
-        if (record.updatedAt > cursorUpdatedAt) {
-          return false;
-        }
-        return record.sessionId < cursorSessionId;
-      });
-    }
-  }
-
   return records.slice(0, limit);
 }
 

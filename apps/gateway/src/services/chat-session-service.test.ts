@@ -679,6 +679,66 @@ describe("chat session service", () => {
     }
   });
 
+  it("continues paginating after an older pinned session without dropping newer unpinned sessions", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      storage.sessions.upsert({
+        sessionId: "session-pinned",
+        sessionKey: "mission:operator:pinned",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Pinned incident",
+        timestamp: "2026-05-03T15:00:00.000Z",
+      });
+      storage.sessions.upsert({
+        sessionId: "session-new",
+        sessionKey: "mission:operator:new",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Newer follow-up",
+        timestamp: "2026-05-03T16:00:00.000Z",
+      });
+      storage.sessions.upsert({
+        sessionId: "session-old",
+        sessionKey: "mission:operator:old",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Older follow-up",
+        timestamp: "2026-05-03T14:00:00.000Z",
+      });
+      for (const sessionId of ["session-pinned", "session-new", "session-old"]) {
+        storage.chatSessionMeta.ensure(sessionId, "2026-05-03T13:00:00.000Z", "default");
+        storage.chatSessionPrefs.ensure(sessionId, "2026-05-03T13:00:00.000Z");
+      }
+      storage.chatSessionMeta.patch("session-pinned", { pinned: true }, "2026-05-03T13:01:00.000Z");
+
+      const deps = createDeps(storage);
+      const first = listChatSessions(deps, {
+        scope: "all",
+        view: "all",
+        includeHidden: true,
+        workspaceId: "default",
+        limit: 1,
+      });
+      expect(first.map((record) => record.sessionId)).toEqual(["session-pinned"]);
+
+      const second = listChatSessions(deps, {
+        scope: "all",
+        view: "all",
+        includeHidden: true,
+        workspaceId: "default",
+        limit: 2,
+        cursor: `${first[0]!.updatedAt}|${first[0]!.sessionId}`,
+      });
+      expect(second.map((record) => record.sessionId)).toEqual(["session-new", "session-old"]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("uses caller limits and batch prefs lookup for unfiltered session lists", () => {
     const { storage, cleanup } = createStorage();
     try {

@@ -211,7 +211,7 @@ function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSession
           Attach files
         </button>
         {props.approvalsCount > 0 ? (
-          <button type="button" className="mc-next-thread-inline-button" onClick={props.onOpenApprovals}>
+          <button type="button" className="mc-next-thread-inline-button" onClick={() => props.onOpenApprovals()}>
             Approvals ({props.approvalsCount})
           </button>
         ) : null}

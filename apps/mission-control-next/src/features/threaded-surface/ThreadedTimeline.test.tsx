@@ -603,7 +603,8 @@ describe("ThreadedTimeline", () => {
     findButton("Continue in Cowork").props.onClick();
     findButton("Open in Code").props.onClick();
     findButton("Attach files").props.onClick();
-    findButton("Approvals").props.onClick();
+    const clickEvent = { type: "click" };
+    findButton("Approvals").props.onClick(clickEvent);
 
     expect(onDraftChange).toHaveBeenCalledWith(
       "Summarize the current workspace state and suggest the safest next step.",
@@ -612,6 +613,8 @@ describe("ThreadedTimeline", () => {
     expect(onNavigateSurface).toHaveBeenCalledWith("code");
     expect(onAttachFiles).toHaveBeenCalledTimes(1);
     expect(onOpenApprovals).toHaveBeenCalledTimes(1);
+    expect(onOpenApprovals).toHaveBeenCalledWith();
+    expect(onOpenApprovals).not.toHaveBeenCalledWith(clickEvent);
     expect(renderedText(renderer)).toContain("Selected turns · 2 selected");
   });
 

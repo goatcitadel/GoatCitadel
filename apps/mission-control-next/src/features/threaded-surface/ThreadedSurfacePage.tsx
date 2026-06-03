@@ -739,7 +739,7 @@ function ThreadConversationSurface({
                 className={`mc-next-threaded-approval-review ${
                   approvalsAreBlocking ? "mc-next-threaded-primary" : "mc-next-threaded-secondary"
                 }`}
-                onClick={props.onOpenApprovals}
+                onClick={() => props.onOpenApprovals()}
               >
                 Approvals ({props.approvalsCount})
               </button>

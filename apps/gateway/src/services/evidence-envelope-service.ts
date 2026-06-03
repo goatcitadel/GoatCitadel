@@ -1,4 +1,4 @@
-import { createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type {
   EvidenceEnvelope,
   EvidenceEnvelopeEventKind,
@@ -30,8 +30,6 @@ const SECRET_KEY_PATTERN = /(?:api[_-]?key|auth|bearer|cookie|credential|passwor
 const SECRET_VALUE_PATTERN =
   /(?:sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,}|bearer\s+[a-z0-9._-]{16,})/i;
 const EVIDENCE_DIGEST_DOMAIN_KEY = "goatcitadel:evidence-envelope-digest:v1";
-const EVIDENCE_DIGEST_ITERATIONS = 120_000;
-const EVIDENCE_DIGEST_BYTES = 32;
 
 export class EvidenceEnvelopeService {
   private readonly signingKey?: string;
@@ -119,13 +117,7 @@ export function stableStringify(value: unknown): string {
 }
 
 export function evidenceDigestHex(canonicalPayload: string): string {
-  return pbkdf2Sync(
-    canonicalPayload,
-    EVIDENCE_DIGEST_DOMAIN_KEY,
-    EVIDENCE_DIGEST_ITERATIONS,
-    EVIDENCE_DIGEST_BYTES,
-    "sha256",
-  ).toString("hex");
+  return createHmac("sha256", EVIDENCE_DIGEST_DOMAIN_KEY).update(canonicalPayload).digest("hex");
 }
 
 export function sha256(value: string): string {

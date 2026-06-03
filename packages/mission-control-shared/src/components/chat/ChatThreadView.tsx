@@ -1,5 +1,5 @@
 import type { ChatMode, ChatStreamingPreview, ChatThreadResponse } from "@goatcitadel/contracts";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
@@ -127,12 +127,26 @@ export function ChatThreadView({
     threadTurnCount,
     latestTurnId ?? "none",
     latestTraceStatus ?? "none",
+    activeStreamingTurnId ?? "none",
+    streamingPreview?.turnId ?? "none",
+    streamingPreview?.visibleText.length ?? 0,
+    streamingPreview?.isRunning ? "running" : "idle",
     notices.length,
     queuedCount,
     streamStatus,
     selectedTurnId ?? "none",
     streamError ?? "none",
   ].join(":");
+  useEffect(() => {
+    if (!followOutput || threadTurnCount <= 0) {
+      return;
+    }
+    virtuosoRef.current?.scrollToIndex({
+      index: threadTurnCount - 1,
+      align: "end",
+      behavior: streamStatus === "streaming" ? "auto" : "smooth",
+    });
+  }, [followOutput, streamStatus, threadSignalsKey, threadTurnCount]);
 
   if (loading) {
     return <div className="chat-v11-thread-loading mc-next-thread-empty">Loading thread...</div>;
@@ -166,6 +180,7 @@ export function ChatThreadView({
         announce={true}
       />
       <Virtuoso
+        key={thread.sessionId}
         ref={virtuosoRef}
         data={thread.turns}
         computeItemKey={(_index, turn) => turn.turnId}
