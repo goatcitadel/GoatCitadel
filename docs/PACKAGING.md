@@ -6,13 +6,13 @@ GoatCitadel now has a packaged runtime contract for installer work.
 
 - `windows-x64`
 - `windows-arm64`
+- `macos-arm64` (experimental friend-smoke bundle/DMG only)
 
-The current tagged release workflow publishes Windows proof only. macOS and Linux bundle scripts remain development lanes until their installer artifacts, signing/notarization story, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
+The current tagged release workflow publishes Windows proof only. The macOS arm64 scripts can create an ad-hoc-signed local DMG for friend smoke, but it is not notarized and is not release proof. macOS and Linux release claims remain blocked until their installer artifacts, signing/notarization story, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
 
 Deferred targets:
 
 - `darwin-x64`
-- `darwin-arm64`
 - `linux-x64`
 - `linux-arm64`
 
@@ -76,12 +76,17 @@ The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Star
 
 ## macOS packaging
 
-macOS package scripts are experimental and are not published by the current release workflow:
+macOS arm64 packaging is experimental and is not published by the current release workflow:
 
-- `GoatCitadel-Setup-darwin-x64.pkg`
-- `GoatCitadel-Setup-darwin-arm64.pkg`
+- `GoatCitadel-1.0.0-macos-arm64.dmg`
 
-Do not cite macOS packages as release proof until the workflow emits, signs, and smoke-tests them.
+The DMG embeds the immutable packaged runtime inside the Tauri app at `Contents/Resources/goatcitadel`. The desktop host sets `GOATCITADEL_APP_DIR` to that immutable payload and keeps mutable runtime state under `~/Library/Application Support/GoatCitadel`, including `runtime-root`, logs, pid files, config, data, and artifacts.
+
+The first Mac lane uses ad-hoc signing (`signingIdentity: "-"`) for Apple Silicon friend testing. It is not notarized, may require Gatekeeper override, and must not be described as public-trust distribution.
+
+Do not cite macOS packages as release proof until the workflow emits, signs/notarizes, and smoke-tests them.
+
+The later LaunchAgent stage should introduce a foreground `goatcitadel service run` supervisor before any `~/Library/LaunchAgents/com.goatcitadel.gateway.plist` install path is wired. Do not point `launchctl` at the one-shot `launch` command.
 
 ## Linux packaging
 
@@ -97,18 +102,21 @@ Do not cite Linux packages as release proof until the workflow emits, signs, and
 pnpm package:desktop --target windows-x64
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
+pnpm package:bundle --target macos-arm64 --skip-desktop
+pnpm package:macos --target macos-arm64
 pnpm verify:desktop
 ```
 
-`package:bundle` verifies the embedded Node archive against either `--node-sha256 <sha256>` or the upstream Node `SHASUMS256.txt` entry before copying `node.exe` into the bundle.
+`package:bundle` verifies the embedded Node archive against either `--node-sha256 <sha256>` or the upstream Node `SHASUMS256.txt` entry before copying `node.exe` or `node` into the bundle.
 
 ## Unsigned distribution checklist
 
-Unsigned convenience builds are acceptable for internal or early public testing, but the release copy must be explicit:
+Unsigned or ad-hoc-signed convenience builds are acceptable for internal or early friend testing, but the release copy must be explicit:
 
 - name artifacts with `unsigned`, target, and commit or tag, for example `GoatCitadel-Setup-windows-x64-unsigned-v1.0.0.exe`
 - publish a matching `.sha256` file and a plain checksum verification command
 - include known-warning copy that Windows SmartScreen or browser download warnings may appear because the installer is not Authenticode-signed
+- include known-warning copy that macOS Gatekeeper may require Privacy & Security override when using ad-hoc-signed, non-notarized DMGs
 - attach install smoke output, uninstall smoke output, Mission Control screenshots, provider/channel fixture results, Docker smoke where applicable, and the standalone white-paper link
 - keep "works unsigned with warning" separate from any "signed/trusted installer" language
 

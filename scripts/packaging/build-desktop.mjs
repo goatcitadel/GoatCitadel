@@ -3,48 +3,45 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
 const desktopDir = path.join(repoRoot, "apps", "mission-control-desktop");
 const desktopTauriDir = path.join(desktopDir, "src-tauri");
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
-const supportedTargets = {
-  "windows-x64": { triple: "x86_64-pc-windows-msvc", exeName: "GoatCitadel-Mission-Control-Desktop.exe" },
-  "windows-arm64": { triple: "aarch64-pc-windows-msvc", exeName: "GoatCitadel-Mission-Control-Desktop.exe" },
-};
 
 const args = parseArgs(process.argv.slice(2));
 const target = args.target;
-if (!target || !supportedTargets[target]) {
+if (!target || !PACKAGING_TARGETS[target]) {
   printUsage();
   process.exit(1);
 }
 
-const targetInfo = supportedTargets[target];
+const targetInfo = requirePackagingTarget(target);
 const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "desktop", target));
-const outExePath = path.join(outDir, targetInfo.exeName);
+const outArtifactPath = path.join(outDir, targetInfo.desktopArtifactName);
 
 await main();
 
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   if (!args.skipBuild) {
-    ensureRustTarget(targetInfo.triple);
+    ensureRustTarget(targetInfo.tauriTriple);
     runPnpm(["--dir", desktopDir, "build"]);
-    runPnpm(["--dir", desktopDir, "exec", "tauri", "build", "--target", targetInfo.triple]);
+    runPnpm(["--dir", desktopDir, "exec", "tauri", "build", "--target", targetInfo.tauriTriple]);
   }
 
-  const builtExe = findBuiltDesktopExe(targetInfo.triple);
-  fs.copyFileSync(builtExe, outExePath);
+  const builtArtifact = findBuiltDesktopArtifact(targetInfo);
+  fs.copyFileSync(builtArtifact, outArtifactPath);
   fs.writeFileSync(
     path.join(outDir, "desktop-manifest.json"),
     JSON.stringify(
       {
         target,
-        triple: targetInfo.triple,
-        executable: path.relative(outDir, outExePath).replaceAll("\\", "/"),
-        sourceExecutable: path.relative(repoRoot, builtExe).replaceAll("\\", "/"),
+        triple: targetInfo.tauriTriple,
+        executable: path.relative(outDir, outArtifactPath).replaceAll("\\", "/"),
+        sourceExecutable: path.relative(repoRoot, builtArtifact).replaceAll("\\", "/"),
         createdAt: new Date().toISOString(),
       },
       null,
@@ -52,7 +49,7 @@ async function main() {
     ),
     "utf8",
   );
-  console.log(`Built GoatCitadel desktop executable: ${outExePath}`);
+  console.log(`Built GoatCitadel desktop executable: ${outArtifactPath}`);
 }
 
 function parseArgs(argv) {
@@ -80,7 +77,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-desktop.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--skip-build]",
+    "Usage: node scripts/packaging/build-desktop.mjs --target <windows-x64|windows-arm64|macos-arm64> [--out-dir <dir>] [--skip-build]",
   );
 }
 
@@ -115,9 +112,9 @@ function runPnpm(pnpmArgs) {
   }
 }
 
-function findBuiltDesktopExe(triple) {
+function findBuiltDesktopArtifact(currentTargetInfo) {
   const releaseRoots = [
-    path.join(desktopTauriDir, "target", triple, "release"),
+    path.join(desktopTauriDir, "target", currentTargetInfo.tauriTriple, "release"),
     path.join(desktopTauriDir, "target", "release"),
   ];
   const matches = [];
@@ -127,7 +124,14 @@ function findBuiltDesktopExe(triple) {
     }
     for (const filePath of listFiles(root)) {
       const fileName = path.basename(filePath).toLowerCase();
-      if (fileName.endsWith(".exe") && fileName.includes("goatcitadel")) {
+      const matchesWindowsArtifact =
+        currentTargetInfo.platform === "windows" && fileName.endsWith(".exe") && fileName.includes("goatcitadel");
+      const matchesMacArtifact =
+        currentTargetInfo.platform === "darwin" &&
+        !fileName.includes(".") &&
+        fileName.includes("goatcitadel") &&
+        fs.statSync(filePath).isFile();
+      if (matchesWindowsArtifact || matchesMacArtifact) {
         matches.push(filePath);
       }
     }

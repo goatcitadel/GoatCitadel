@@ -8,8 +8,11 @@ import readline from "node:readline/promises";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
-const preferredBaseDir = path.join(os.homedir(), ".GoatCitadel");
-const legacyBaseDir = path.join(os.homedir(), ".goatcitadel");
+const preferredBaseDir = resolvePreferredBaseDir();
+const legacyBaseDirs =
+  process.platform === "darwin"
+    ? [path.join(os.homedir(), ".GoatCitadel"), path.join(os.homedir(), ".goatcitadel")]
+    : [path.join(os.homedir(), ".goatcitadel")];
 const pnpmVersion = "10.31.0";
 const workspaceRuntimeBuildPackages = [
   "@goatcitadel/contracts",
@@ -400,11 +403,21 @@ function resolveBaseDir(installDirOverride) {
   if (process.env.GOATCITADEL_HOME?.trim()) {
     return path.resolve(process.env.GOATCITADEL_HOME.trim());
   }
-  return fs.existsSync(path.join(preferredBaseDir, "app"))
-    ? preferredBaseDir
-    : fs.existsSync(path.join(legacyBaseDir, "app"))
-      ? legacyBaseDir
-      : preferredBaseDir;
+  if (fs.existsSync(path.join(preferredBaseDir, "app"))) {
+    return preferredBaseDir;
+  }
+  for (const legacyBaseDir of legacyBaseDirs) {
+    if (fs.existsSync(path.join(legacyBaseDir, "app"))) {
+      return legacyBaseDir;
+    }
+  }
+  return preferredBaseDir;
+}
+
+function resolvePreferredBaseDir() {
+  return process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Application Support", "GoatCitadel")
+    : path.join(os.homedir(), ".GoatCitadel");
 }
 
 function resolveAppDir(currentBaseDir) {

@@ -33,6 +33,8 @@ struct LauncherInvocation {
     program: String,
     args_prefix: Vec<String>,
     install_root: PathBuf,
+    working_dir: PathBuf,
+    app_dir: Option<PathBuf>,
     windows_shell: bool,
 }
 
@@ -159,7 +161,10 @@ fn main() {
 }
 
 #[tauri::command]
-fn launch_runtime(app: AppHandle, state: State<'_, DesktopState>) -> Result<DesktopLaunchResult, String> {
+fn launch_runtime(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<DesktopLaunchResult, String> {
     let output = run_launcher(["launch", "--no-open", "--json", "--wait"])?;
     let result: DesktopLaunchResult = serde_json::from_str(&output)
         .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))?;
@@ -193,7 +198,8 @@ fn read_runtime_status(state: State<'_, DesktopState>) -> Result<DesktopRuntimeS
 fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
     stop_approval_watcher(&state)?;
     let output = run_launcher(["stop", "--json"])?;
-    serde_json::from_str(&output).map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))
+    serde_json::from_str(&output)
+        .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))
 }
 
 #[tauri::command]
@@ -296,7 +302,8 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "logs" => {
                 if let Ok(root) = resolve_launcher().map(|launcher| launcher.install_root) {
-                    let _ = path_to_open_target(&root.join("runtime").join("logs")).and_then(|target| open_external(&target));
+                    let _ = path_to_open_target(&root.join("runtime").join("logs"))
+                        .and_then(|target| open_external(&target));
                 }
             }
             "quit" => {
@@ -368,8 +375,15 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
         Err(_) => return,
     };
     let gateway_url = runtime.gateway_url.clone();
-    let mut token = runtime.desktop_event_stream.as_ref().and_then(|value| value.token.clone());
-    if let Some(error) = runtime.desktop_event_stream.as_ref().and_then(|value| value.error.clone()) {
+    let mut token = runtime
+        .desktop_event_stream
+        .as_ref()
+        .and_then(|value| value.token.clone());
+    if let Some(error) = runtime
+        .desktop_event_stream
+        .as_ref()
+        .and_then(|value| value.error.clone())
+    {
         emit_watcher_error(&app, "desktop_sse_token_unavailable", &error);
     }
 
@@ -421,7 +435,10 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
 }
 
 fn build_event_stream_url(gateway_url: &str, token: Option<&str>) -> String {
-    let mut url = format!("{}/api/v1/events/stream?replay=0", trim_trailing_slash(gateway_url));
+    let mut url = format!(
+        "{}/api/v1/events/stream?replay=0",
+        trim_trailing_slash(gateway_url)
+    );
     if let Some(token) = token.filter(|value| !value.is_empty()) {
         url.push_str("&sse_token=");
         url.push_str(&url_encode_query_value(token));
@@ -473,12 +490,18 @@ fn parse_approval_notification(data: &str) -> Option<ApprovalNotificationPayload
         .or_else(|| value.get("links")?.get("approvalId")?.as_str())?;
     Some(ApprovalNotificationPayload {
         approval_id: approval_id.to_string(),
-        kind: payload.get("kind").and_then(Value::as_str).map(str::to_string),
+        kind: payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         risk_level: payload
             .get("riskLevel")
             .and_then(Value::as_str)
             .map(str::to_string),
-        status: payload.get("status").and_then(Value::as_str).map(str::to_string),
+        status: payload
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -532,7 +555,8 @@ fn parse_operator_attention_notification(data: &str) -> Option<OperatorAttention
 
     if signal.contains("paused_for_approval")
         || signal.contains("waiting_for_operator")
-        || (is_run_like_signal(&signal) && (signal.contains("blocked") || signal.contains("requires_operator")))
+        || (is_run_like_signal(&signal)
+            && (signal.contains("blocked") || signal.contains("requires_operator")))
     {
         return Some(OperatorAttentionPayload {
             title: "GoatCitadel is waiting".to_string(),
@@ -585,8 +609,11 @@ fn run_launcher<const N: usize>(args: [&str; N]) -> Result<String, String> {
         direct.args(command_args.iter().skip(1));
         direct
     };
-    command.current_dir(&launcher.install_root);
+    command.current_dir(&launcher.working_dir);
     command.env("GOATCITADEL_HOME", &launcher.install_root);
+    if let Some(app_dir) = &launcher.app_dir {
+        command.env("GOATCITADEL_APP_DIR", app_dir);
+    }
     command.env("GOATCITADEL_DESKTOP_HOST", "1");
 
     let output = command
@@ -596,9 +623,15 @@ fn run_launcher<const N: usize>(args: [&str; N]) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         return Err(if stderr.is_empty() {
-            format!("GoatCitadel launcher exited with {}: {}", output.status, stdout)
+            format!(
+                "GoatCitadel launcher exited with {}: {}",
+                output.status, stdout
+            )
         } else {
-            format!("GoatCitadel launcher exited with {}: {}", output.status, stderr)
+            format!(
+                "GoatCitadel launcher exited with {}: {}",
+                output.status, stderr
+            )
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -608,7 +641,10 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
     if let Ok(raw) = env::var("GOATCITADEL_DESKTOP_LAUNCHER") {
         let launcher = PathBuf::from(raw);
         if launcher.exists() {
-            return Ok(invocation_for_launcher(launcher, env::var("GOATCITADEL_HOME").ok().map(PathBuf::from)));
+            return Ok(invocation_for_launcher(
+                launcher,
+                env::var("GOATCITADEL_HOME").ok().map(PathBuf::from),
+            ));
         }
     }
 
@@ -619,8 +655,13 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
         }
     }
 
-    let exe = env::current_exe().map_err(|error| format!("Unable to locate current executable: {error}"))?;
+    let exe = env::current_exe()
+        .map_err(|error| format!("Unable to locate current executable: {error}"))?;
     for ancestor in exe.ancestors() {
+        let macos_resource_root = ancestor.join("Resources").join("goatcitadel");
+        if let Some(invocation) = invocation_under_macos_resource_root(&macos_resource_root) {
+            return Ok(invocation);
+        }
         if ancestor.join("app").join("release-manifest.json").exists() {
             if let Some(invocation) = invocation_under_install_root(ancestor) {
                 return Ok(invocation);
@@ -632,6 +673,8 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
                 program: "node".to_string(),
                 args_prefix: vec![source_launcher.to_string_lossy().to_string()],
                 install_root: ancestor.to_path_buf(),
+                working_dir: ancestor.to_path_buf(),
+                app_dir: None,
                 windows_shell: false,
             });
         }
@@ -641,17 +684,23 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
 }
 
 fn invocation_under_install_root(root: &Path) -> Option<LauncherInvocation> {
-    let packaged_node = root
-        .join("app")
-        .join("runtime")
-        .join("node")
-        .join(if cfg!(target_os = "windows") { "node.exe" } else { "node" });
+    let packaged_node =
+        root.join("app")
+            .join("runtime")
+            .join("node")
+            .join(if cfg!(target_os = "windows") {
+                "node.exe"
+            } else {
+                "node"
+            });
     let packaged_script = root.join("app").join("bin").join("goatcitadel.mjs");
     if packaged_node.exists() && packaged_script.exists() {
         return Some(LauncherInvocation {
             program: packaged_node.to_string_lossy().to_string(),
             args_prefix: vec![packaged_script.to_string_lossy().to_string()],
             install_root: root.to_path_buf(),
+            working_dir: root.to_path_buf(),
+            app_dir: None,
             windows_shell: false,
         });
     }
@@ -661,6 +710,26 @@ fn invocation_under_install_root(root: &Path) -> Option<LauncherInvocation> {
     }
 
     None
+}
+
+fn invocation_under_macos_resource_root(root: &Path) -> Option<LauncherInvocation> {
+    let app_dir = root.join("app");
+    if !app_dir.join("release-manifest.json").exists() {
+        return None;
+    }
+    let packaged_node = app_dir.join("runtime").join("node").join("node");
+    let packaged_script = app_dir.join("bin").join("goatcitadel.mjs");
+    if !(packaged_node.exists() && packaged_script.exists()) {
+        return None;
+    }
+    Some(LauncherInvocation {
+        program: packaged_node.to_string_lossy().to_string(),
+        args_prefix: vec![packaged_script.to_string_lossy().to_string()],
+        install_root: resolve_desktop_home(),
+        working_dir: root.to_path_buf(),
+        app_dir: Some(app_dir),
+        windows_shell: false,
+    })
 }
 
 fn launcher_under_install_root(root: &Path) -> Option<PathBuf> {
@@ -675,7 +744,10 @@ fn launcher_under_install_root(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn invocation_for_launcher(launcher: PathBuf, install_root_override: Option<PathBuf>) -> LauncherInvocation {
+fn invocation_for_launcher(
+    launcher: PathBuf,
+    install_root_override: Option<PathBuf>,
+) -> LauncherInvocation {
     let install_root = install_root_override.unwrap_or_else(|| {
         launcher
             .parent()
@@ -684,10 +756,13 @@ fn invocation_for_launcher(launcher: PathBuf, install_root_override: Option<Path
             .unwrap_or_else(|| PathBuf::from("."))
     });
     if launcher.extension().and_then(|value| value.to_str()) == Some("mjs") {
+        let app_dir = env::var("GOATCITADEL_APP_DIR").ok().map(PathBuf::from);
         return LauncherInvocation {
             program: "node".to_string(),
             args_prefix: vec![launcher.to_string_lossy().to_string()],
+            working_dir: install_root.clone(),
             install_root,
+            app_dir,
             windows_shell: false,
         };
     }
@@ -699,12 +774,35 @@ fn invocation_for_launcher(launcher: PathBuf, install_root_override: Option<Path
     LauncherInvocation {
         program: launcher.to_string_lossy().to_string(),
         args_prefix: Vec::new(),
+        working_dir: install_root.clone(),
         install_root,
+        app_dir: env::var("GOATCITADEL_APP_DIR").ok().map(PathBuf::from),
         windows_shell,
     }
 }
 
-fn launcher_command_args<const N: usize>(launcher: &LauncherInvocation, args: [&str; N]) -> Vec<String> {
+fn resolve_desktop_home() -> PathBuf {
+    if let Ok(raw_home) = env::var("GOATCITADEL_HOME") {
+        if !raw_home.trim().is_empty() {
+            return PathBuf::from(raw_home);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("GoatCitadel");
+        }
+    }
+    PathBuf::from(".")
+}
+
+fn launcher_command_args<const N: usize>(
+    launcher: &LauncherInvocation,
+    args: [&str; N],
+) -> Vec<String> {
     let mut command_args = vec![launcher.program.clone()];
     command_args.extend(launcher.args_prefix.iter().cloned());
     command_args.extend(args.into_iter().map(str::to_string));
@@ -723,7 +821,10 @@ fn quote_windows_command_arg(value: &str) -> String {
     if value.is_empty() {
         return "\"\"".to_string();
     }
-    if !value.chars().any(|character| character.is_whitespace() || "\"&()^<>|".contains(character)) {
+    if !value
+        .chars()
+        .any(|character| character.is_whitespace() || "\"&()^<>|".contains(character))
+    {
         return value.to_string();
     }
     format!("\"{}\"", value.replace('"', "\\\""))
@@ -746,7 +847,9 @@ fn open_external(target: &str) -> Result<(), String> {
             )
         };
         if result as isize <= 32 {
-            return Err(format!("Failed to open {target}: ShellExecuteW returned {result:?}"));
+            return Err(format!(
+                "Failed to open {target}: ShellExecuteW returned {result:?}"
+            ));
         }
         return Ok(());
     }
@@ -829,7 +932,10 @@ fn looks_like_url(target: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn to_wide_null(value: &str) -> Vec<u16> {
-    OsStr::new(value).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn path_to_open_target(path: &Path) -> Result<&str, String> {

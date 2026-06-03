@@ -6,22 +6,29 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveUiTarget } from "../lib/ui-target.mjs";
+import {
+  nodeArchiveName,
+  nodeArchiveRoot,
+  PACKAGING_TARGETS,
+  requirePackagingTarget,
+} from "./lib/packaging-targets.mjs";
+import {
+  buildReleaseManifest,
+  renderPosixLauncher,
+  renderWindowsLaunchers,
+} from "./lib/package-renderers.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
-const supportedTargets = {
-  "windows-x64": { platform: "windows", arch: "x64" },
-  "windows-arm64": { platform: "windows", arch: "arm64" },
-};
-
 const args = parseArgs(process.argv.slice(2));
 const target = args.target;
-if (!target || !supportedTargets[target]) {
+if (!target || !PACKAGING_TARGETS[target]) {
   printUsage();
   process.exit(1);
 }
+const targetInfo = requirePackagingTarget(target);
 
 const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "bundles"));
 const version = args.version || packageJson.version;
@@ -31,7 +38,7 @@ const appRoot = path.join(bundleRoot, "app");
 const gatewayDeployDir = path.join(appRoot, "gateway");
 const missionControlDistDir = path.join(appRoot, "mission-control", "dist");
 const desktopRuntimeDir = path.join(appRoot, "desktop");
-const desktopExecutableName = "GoatCitadel-Mission-Control-Desktop.exe";
+const desktopExecutableName = targetInfo.desktopArtifactName;
 const desktopArtifactPath = path.join(
   repoRoot,
   "artifacts",
@@ -45,6 +52,7 @@ const templatesRoot = path.join(appRoot, "templates");
 const nodeVersion = args.nodeVersion || process.version;
 const uiTarget = resolveUiTarget(repoRoot, process.env);
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const includeDesktopHost = targetInfo.bundleDesktopHost && !args.skipDesktop;
 
 await main();
 
@@ -68,7 +76,7 @@ async function main() {
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   writeUiTargetManifest(appRoot);
-  if (!args.skipDesktop) {
+  if (includeDesktopHost) {
     copyDesktopExecutable();
   }
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
@@ -88,7 +96,6 @@ async function main() {
   writeReleaseManifest({
     bundleRoot,
     appRoot,
-    target,
     version,
     nodeVersion,
   });
@@ -142,12 +149,17 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
+    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64|macos-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
   );
 }
 
 function runPnpm(pnpmArgs) {
-  const result = spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "pnpm", ...pnpmArgs], {
+  const cmd = process.platform === "win32" ? WINDOWS_CMD_PATH : "pnpm";
+  const cmdArgs =
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...pnpmArgs])]
+      : pnpmArgs;
+  const result = spawnSync(cmd, cmdArgs, {
     cwd: repoRoot,
     stdio: "inherit",
   });
@@ -162,16 +174,23 @@ function runPnpm(pnpmArgs) {
 async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: requestedNodeVersion, destinationDir }) {
   fs.mkdirSync(destinationDir, { recursive: true });
   const normalizedVersion = requestedNodeVersion.startsWith("v") ? requestedNodeVersion : `v${requestedNodeVersion}`;
-  const targetInfo = supportedTargets[bundleTarget];
-  const runtimeFilename = targetInfo.platform === "windows" ? "node.exe" : "node";
+  const targetInfo = requirePackagingTarget(bundleTarget);
+  const runtimeFilename = targetInfo.nodeExecutableName;
   const destinationPath = path.join(destinationDir, runtimeFilename);
 
-  if (process.platform === "win32" && process.arch === targetInfo.arch && process.version === normalizedVersion) {
+  if (
+    process.platform === targetInfo.platform &&
+    process.arch === targetInfo.arch &&
+    process.version === normalizedVersion
+  ) {
     fs.copyFileSync(process.execPath, destinationPath);
+    if (targetInfo.platform !== "windows") {
+      fs.chmodSync(destinationPath, 0o755);
+    }
     return;
   }
 
-  const archiveName = `node-${normalizedVersion}-win-${targetInfo.arch}.zip`;
+  const archiveName = nodeArchiveName(normalizedVersion, targetInfo);
   const archiveUrl = `https://nodejs.org/dist/${normalizedVersion}/${archiveName}`;
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-node-runtime-"));
   const archivePath = path.join(tempRoot, archiveName);
@@ -191,31 +210,19 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
   fs.writeFileSync(archivePath, archiveBuffer);
   fs.mkdirSync(expandedRoot, { recursive: true });
 
-  const expandResult = spawnSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `Expand-Archive -LiteralPath ${toPowershellSingleQuoted(archivePath)} -DestinationPath ${toPowershellSingleQuoted(expandedRoot)} -Force`,
-    ],
-    {
-      stdio: "inherit",
-    },
-  );
-  if (expandResult.error) {
-    throw expandResult.error;
-  }
-  if (expandResult.status !== 0) {
-    throw new Error(`Expand-Archive exited with code ${expandResult.status}`);
-  }
+  expandNodeRuntimeArchive({ archivePath, expandedRoot, targetInfo });
 
-  const extractedNodePath = path.join(expandedRoot, `node-${normalizedVersion}-win-${targetInfo.arch}`, "node.exe");
+  const extractedNodePath =
+    targetInfo.nodeArchiveType === "zip"
+      ? path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "node.exe")
+      : path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "bin", "node");
   if (!fs.existsSync(extractedNodePath)) {
-    throw new Error(`Embedded Node runtime was extracted without node.exe: ${extractedNodePath}`);
+    throw new Error(`Embedded Node runtime was extracted without ${runtimeFilename}: ${extractedNodePath}`);
   }
   fs.copyFileSync(extractedNodePath, destinationPath);
+  if (targetInfo.platform !== "windows") {
+    fs.chmodSync(destinationPath, 0o755);
+  }
 }
 
 async function verifyNodeArchiveChecksum({ archiveName, archiveUrl, archiveBuffer, expectedSha256 }) {
@@ -245,102 +252,43 @@ function writeLaunchers(bundleRootPath) {
   const launcherDir = path.join(bundleRootPath, "bin");
   fs.mkdirSync(launcherDir, { recursive: true });
 
-  const launcherCmd = [
-    "@echo off",
-    "setlocal",
-    'set "SCRIPT_DIR=%~dp0"',
-    'for %%I in ("%SCRIPT_DIR%..") do set "GOATCITADEL_HOME=%%~fI"',
-    '"%GOATCITADEL_HOME%\\app\\runtime\\node\\node.exe" "%GOATCITADEL_HOME%\\app\\bin\\goatcitadel.mjs" %*',
-    "exit /b %ERRORLEVEL%",
-    "",
-  ].join("\r\n");
+  if (targetInfo.platform === "windows") {
+    const { cmd, ps1 } = renderWindowsLaunchers();
+    for (const name of ["goatcitadel", "goat"]) {
+      fs.writeFileSync(path.join(launcherDir, `${name}.cmd`), cmd, "ascii");
+      fs.writeFileSync(path.join(launcherDir, `${name}.ps1`), ps1, "ascii");
+    }
+    return;
+  }
 
-  const launcherPs1 = [
-    "param(",
-    "  [Parameter(ValueFromRemainingArguments = $true)]",
-    "  [string[]]$Args",
-    ")",
-    "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
-    "$goatHome = Resolve-Path (Join-Path $scriptDir '..')",
-    "$env:GOATCITADEL_HOME = $goatHome",
-    "& (Join-Path $goatHome 'app\\runtime\\node\\node.exe') (Join-Path $goatHome 'app\\bin\\goatcitadel.mjs') @Args",
-    "",
-  ].join("\r\n");
-
+  const launcher = renderPosixLauncher();
   for (const name of ["goatcitadel", "goat"]) {
-    fs.writeFileSync(path.join(launcherDir, `${name}.cmd`), launcherCmd, "ascii");
-    fs.writeFileSync(path.join(launcherDir, `${name}.ps1`), launcherPs1, "ascii");
+    const launcherPath = path.join(launcherDir, name);
+    fs.writeFileSync(launcherPath, launcher, "ascii");
+    fs.chmodSync(launcherPath, 0o755);
   }
 }
 
 function writeReleaseManifest({
   bundleRoot: bundleRootPath,
   appRoot: packagedAppRoot,
-  target: bundleTarget,
   version: bundleVersion,
   nodeVersion: bundledNodeVersion,
 }) {
-  const targetInfo = supportedTargets[bundleTarget];
   const checksums = {};
   for (const filePath of listFiles(bundleRootPath)) {
     const relativePath = path.relative(bundleRootPath, filePath).replaceAll("\\", "/");
     checksums[relativePath] = sha256(filePath);
   }
-  const manifest = {
+  const manifest = buildReleaseManifest({
+    targetInfo,
     version: bundleVersion,
-    platform: targetInfo.platform,
-    arch: targetInfo.arch,
-    target: bundleTarget,
-    components: [
-      {
-        id: "core-runtime",
-        required: true,
-        path: "app/gateway",
-        description: "Compiled GoatCitadel gateway runtime with production dependencies.",
-      },
-      {
-        id: "mission-control",
-        required: true,
-        path: "app/mission-control/dist",
-        uiTarget: {
-          packageName: uiTarget.packageName,
-          packageDirName: uiTarget.packageDirName,
-          displayName: uiTarget.displayName,
-          compatibilityPath: true,
-        },
-        description: `Built ${uiTarget.displayName} operator surface.`,
-      },
-      {
-        id: "embedded-node",
-        required: true,
-        version: bundledNodeVersion,
-        path: "app/runtime/node/node.exe",
-        description: "Embedded Node runtime used by the packaged launcher.",
-      },
-      {
-        id: "mission-control-desktop",
-        required: !args.skipDesktop,
-        path: `app/desktop/${desktopExecutableName}`,
-        description: "Native desktop host for Mission Control, tray controls, runtime recovery, and local notifications.",
-      },
-      {
-        id: "chromium-runtime",
-        required: false,
-        description: "Installer-managed Playwright Chromium runtime.",
-      },
-      {
-        id: "voice-runtime",
-        required: false,
-        description: "Installer-managed local voice runtime.",
-      },
-    ],
+    nodeVersion: bundledNodeVersion,
     checksums,
-    launcher: {
-      command: "goatcitadel launch",
-      windows: "bin/goatcitadel.cmd",
-      desktop: `app/desktop/${desktopExecutableName}`,
-    },
-  };
+    uiTarget,
+    includeDesktopHost,
+    desktopArtifactName: desktopExecutableName,
+  });
   fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 }
 
@@ -436,6 +384,9 @@ function removeDirectory(targetPath) {
     fs.rmSync(targetPath, { recursive: true, force: true });
     return;
   } catch {
+    if (process.platform !== "win32") {
+      throw new Error(`Unable to remove existing directory: ${targetPath}`);
+    }
     const result = spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "rmdir", "/s", "/q", targetPath], {
       cwd: repoRoot,
       stdio: "ignore",
@@ -470,4 +421,54 @@ function copyIfExists(sourcePath, destinationPath) {
 
 function toPowershellSingleQuoted(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function expandNodeRuntimeArchive({ archivePath, expandedRoot, targetInfo: currentTargetInfo }) {
+  if (currentTargetInfo.nodeArchiveType === "zip") {
+    const expandResult = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Expand-Archive -LiteralPath ${toPowershellSingleQuoted(archivePath)} -DestinationPath ${toPowershellSingleQuoted(expandedRoot)} -Force`,
+      ],
+      {
+        stdio: "inherit",
+      },
+    );
+    if (expandResult.error) {
+      throw expandResult.error;
+    }
+    if (expandResult.status !== 0) {
+      throw new Error(`Expand-Archive exited with code ${expandResult.status}`);
+    }
+    return;
+  }
+
+  const tarCommand = process.platform === "win32" ? "tar.exe" : "tar";
+  const tarResult = spawnSync(tarCommand, ["-xzf", archivePath, "-C", expandedRoot], {
+    stdio: "inherit",
+  });
+  if (tarResult.error) {
+    throw tarResult.error;
+  }
+  if (tarResult.status !== 0) {
+    throw new Error(`${tarCommand} exited with code ${tarResult.status}`);
+  }
+}
+
+function buildWindowsCommand(parts) {
+  return parts.map((value) => quoteWindowsCommandArg(String(value))).join(" ");
+}
+
+function quoteWindowsCommandArg(value) {
+  if (value.length === 0) {
+    return '""';
+  }
+  if (!/[\s"&()^<>|]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
 }
