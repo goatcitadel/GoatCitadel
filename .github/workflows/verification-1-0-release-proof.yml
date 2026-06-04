@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   required-lanes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -19,40 +19,58 @@ jobs:
         include:
           - laneScript: verify:runtime:truth
             artifactSlug: runtime-truth
+            runner: ubuntu-latest
           - laneScript: verify:auth:matrix
             artifactSlug: auth-matrix
+            runner: ubuntu-latest
           - laneScript: verify:code-mode:sandbox
             artifactSlug: code-mode-sandbox
+            runner: ubuntu-latest
           - laneScript: verify:code-mode:hostile-sandbox
             artifactSlug: code-mode-hostile-sandbox
+            runner: windows-latest
           - laneScript: verify:mesh:readiness
             artifactSlug: mesh-readiness
+            runner: ubuntu-latest
           - laneScript: verify:agentic:governance
             artifactSlug: agentic-governance
+            runner: ubuntu-latest
           - laneScript: verify:agentic:proof
             artifactSlug: agentic-proof
+            runner: ubuntu-latest
           - laneScript: verify:ui:parity
             artifactSlug: ui-parity
+            runner: ubuntu-latest
           - laneScript: verify:memory:truth
             artifactSlug: memory-truth
+            runner: ubuntu-latest
           - laneScript: verify:realtime:truth
             artifactSlug: realtime-truth
+            runner: ubuntu-latest
           - laneScript: verify:architecture:metrics
             artifactSlug: architecture-metrics
+            runner: ubuntu-latest
           - laneScript: verify:operator:proof
             artifactSlug: operator-proof
+            runner: ubuntu-latest
           - laneScript: verify:durable:recovery
             artifactSlug: durable-recovery
+            runner: ubuntu-latest
           - laneScript: verify:surface:regression
             artifactSlug: surface-regression
+            runner: ubuntu-latest
           - laneScript: verify:visual:regression
             artifactSlug: visual-regression
+            runner: ubuntu-latest
           - laneScript: verify:backup:roundtrip
             artifactSlug: backup-roundtrip
+            runner: ubuntu-latest
           - laneScript: verify:catalog:parity
             artifactSlug: catalog-parity
+            runner: ubuntu-latest
           - laneScript: verify:api:compat
             artifactSlug: api-compat
+            runner: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

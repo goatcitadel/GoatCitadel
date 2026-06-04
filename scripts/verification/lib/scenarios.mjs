@@ -148,6 +148,7 @@ export const A2A_FULL_LANE_COMMANDS = Object.freeze([
       "exec",
       "vitest",
       "run",
+      "src/services/a2a-grpc-service.test.ts",
       "src/services/a2a-route-service.test.ts",
       "src/routes/tasks.test.ts",
     ],
@@ -554,6 +555,16 @@ export async function runCodeModeHostileSandboxLane(context) {
             issues.push("Hostile sandbox public claim was allowed without a complete green platform matrix.");
           }
         }
+        if (proof.claim?.platformClaims?.win32?.publicClaimAllowed === true) {
+          const win32Proof = proof.claim.platformClaims.win32.proof;
+          const win32ProofPasses =
+            win32Proof?.status === "pass" &&
+            requiredCanaries.every((canary) => win32Proof.checksPassed?.includes(canary)) &&
+            (win32Proof.checksFailed?.length ?? 0) === 0;
+          if (!win32ProofPasses) {
+            issues.push("Windows hostile sandbox public claim was allowed without green Windows canary proof.");
+          }
+        }
         if (proof.sandboxAvailable && proof.currentPlatformProof?.status !== "pass") {
           issues.push(
             `Available native hostile sandbox failed canaries: ${
@@ -576,6 +587,9 @@ export async function runCodeModeHostileSandboxLane(context) {
         currentPlatform: proof?.platform,
         currentPlatformProofStatus: proof?.currentPlatformProof?.status,
         publicClaimAllowed: proof?.claim?.publicClaimAllowed ?? false,
+        windowsPublicClaimAllowed: proof?.claim?.platformClaims?.win32?.publicClaimAllowed ?? false,
+        windowsPlatformProofStatus: proof?.claim?.platformClaims?.win32?.proof?.status ?? "missing",
+        platformClaims: proof?.claim?.platformClaims,
       });
       return {
         status: issues.length ? "failed" : "passed",
@@ -589,6 +603,8 @@ export async function runCodeModeHostileSandboxLane(context) {
           checksPassed: proof?.currentPlatformProof?.checksPassed?.length,
           checksFailed: proof?.currentPlatformProof?.checksFailed?.length,
           publicClaimAllowed: proof?.claim?.publicClaimAllowed ?? false,
+          windowsPublicClaimAllowed: proof?.claim?.platformClaims?.win32?.publicClaimAllowed ?? false,
+          windowsPlatformProofStatus: proof?.claim?.platformClaims?.win32?.proof?.status ?? "missing",
         },
         artifacts: emptyArtifacts({
           diagnostics: [

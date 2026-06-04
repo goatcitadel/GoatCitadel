@@ -373,11 +373,11 @@ function buildAgentScalabilityTracks(
       callable: Boolean(a2a?.governance.callable),
       implementationStatus: a2a?.governance.callable ? "implemented" : "partial",
       summary: a2a?.governance.callable
-        ? "A2A JSON-RPC is configured as a governed external agent-to-agent Gateway boundary."
+        ? "A2A is configured as a governed external agent-to-agent Gateway boundary across enabled JSON-RPC, HTTP+JSON, push, and gRPC bindings."
         : "A2A is present as a Gateway-owned external interoperability boundary but is not currently callable.",
       reasons: a2a?.governance.reasons ?? [
         "Operator-authenticated preview routes expose an Agent Card and A2A-style task envelope mapping.",
-        "Callable A2A requires enabled inbound JSON-RPC, configured peer credentials, durable task bindings, and audit.",
+        "Callable A2A requires enabled inbound bindings, configured peer credentials, durable task bindings, network allowlists, and audit.",
         "A2A must remain a first-class interoperability protocol, not a provider template or MCP alias.",
       ],
       evidence: [
@@ -398,6 +398,10 @@ function buildAgentScalabilityTracks(
           path: "apps/gateway/src/services/a2a-bridge-service.ts",
         },
         {
+          label: "Gateway A2A gRPC transport",
+          path: "apps/gateway/src/services/a2a-grpc-server.ts",
+        },
+        {
           label: "A2A bridge contracts",
           path: "packages/contracts/src/a2a.ts",
         },
@@ -411,8 +415,8 @@ function buildAgentScalabilityTracks(
         },
       ],
       requiredNextSteps: [
-        "Keep gRPC, HTTP+JSON, push notifications, and authenticated extended cards non-callable until implemented",
-        "Continue proving peer auth, network allowlists, durable task binding, and audit before reporting callable state",
+        "Keep public Agent Card discovery disabled by default unless explicitly configured",
+        "Continue proving peer auth, network allowlists, durable task binding, audit, push delivery, and gRPC behavior in verify:a2a:full",
         "Keep mesh-native readiness, leases, ownership, and replication separate from A2A interop",
       ],
       checkedAt,

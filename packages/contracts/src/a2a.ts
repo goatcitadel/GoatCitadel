@@ -48,9 +48,16 @@ export interface A2AOutboundPeerConfig {
   peerId: string;
   label?: string;
   agentCardUrl: string;
+  grpcUrl?: string;
   token?: string;
   tokenEnv?: string;
   enabled?: boolean;
+}
+
+export interface A2ABridgeGrpcRuntimeConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
 }
 
 export interface A2ABridgeRuntimeConfig {
@@ -60,6 +67,7 @@ export interface A2ABridgeRuntimeConfig {
   bindings: A2ABridgeProtocolBinding[];
   inbound: {
     enabled: boolean;
+    grpc: A2ABridgeGrpcRuntimeConfig;
     peerCredentials: A2APeerCredentialConfig[];
   };
   outbound: {
@@ -75,6 +83,7 @@ export interface A2ABridgeGovernance {
   outboundNetworkEnabled: boolean;
   inboundJsonRpcEnabled: boolean;
   inboundHttpJsonEnabled: boolean;
+  inboundGrpcEnabled: boolean;
   replayPolicy: A2ABridgeReplayPolicy;
   audit: "gateway_route" | "durable_gateway_audit";
   reasons: string[];
@@ -128,6 +137,7 @@ export interface A2ABridgeStatusResponse {
     taskPreview: string;
     jsonRpc: string;
     httpJson: string;
+    grpc: string;
     authenticatedExtendedCard: string;
     publicDiscovery?: string;
     outboundPreview?: string;
@@ -303,10 +313,13 @@ export interface A2AJsonRpcErrorResponse {
 
 export type A2AJsonRpcResponse = A2AJsonRpcSuccessResponse | A2AJsonRpcErrorResponse;
 
+export type A2AOutboundTransport = "JSONRPC" | "GRPC";
+
 export interface A2AOutboundPreviewRequest {
   peerId: string;
   method: A2AJsonRpcMethod;
   params: Record<string, unknown>;
+  transport?: A2AOutboundTransport;
   idempotencyKey?: string;
 }
 
@@ -314,8 +327,10 @@ export interface A2AOutboundPreviewResponse {
   checkedAt: string;
   peerId: string;
   method: A2AJsonRpcMethod;
+  transport: A2AOutboundTransport;
   agentCardUrl?: string;
   jsonRpcUrl?: string;
+  grpcUrl?: string;
   callable: boolean;
   governance: A2ABridgeGovernance;
   warnings: string[];
@@ -326,9 +341,11 @@ export interface A2AOutboundSendResponse {
   checkedAt: string;
   peerId: string;
   method: A2AJsonRpcMethod;
+  transport: A2AOutboundTransport;
   status: "blocked" | "sent" | "replayed";
   agentCardUrl?: string;
   jsonRpcUrl?: string;
+  grpcUrl?: string;
   idempotencyKey: string;
   auditRef?: string;
   response?: A2AJsonRpcResponse;

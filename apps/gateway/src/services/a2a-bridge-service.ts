@@ -21,6 +21,11 @@ export const DEFAULT_A2A_RUNTIME_CONFIG: A2ABridgeRuntimeConfig = {
   bindings: ["JSONRPC"],
   inbound: {
     enabled: false,
+    grpc: {
+      enabled: false,
+      host: "127.0.0.1",
+      port: 8788,
+    },
     peerCredentials: [],
   },
   outbound: {
@@ -47,6 +52,7 @@ export function buildA2ABridgeStatus(input: {
       taskPreview: `${baseUrl}/api/v1/a2a/task-preview`,
       jsonRpc: `${baseUrl}/api/v1/a2a/jsonrpc`,
       httpJson: `${baseUrl}/api/v1/a2a/http-json/tasks`,
+      grpc: buildGrpcUrl(baseUrl, config.inbound.grpc),
       authenticatedExtendedCard: `${baseUrl}/api/v1/a2a/extended-agent-card`,
       publicDiscovery: `${baseUrl}/.well-known/agent-card.json`,
       outboundPreview: `${baseUrl}/api/v1/a2a/outbound/preview`,
@@ -132,6 +138,11 @@ export function normalizeA2AConfig(config: A2ABridgeRuntimeConfig | undefined): 
     bindings: normalizeProtocolBindings(config?.bindings),
     inbound: {
       enabled: config?.inbound?.enabled ?? DEFAULT_A2A_RUNTIME_CONFIG.inbound.enabled,
+      grpc: {
+        enabled: config?.inbound?.grpc?.enabled ?? DEFAULT_A2A_RUNTIME_CONFIG.inbound.grpc.enabled,
+        host: config?.inbound?.grpc?.host ?? DEFAULT_A2A_RUNTIME_CONFIG.inbound.grpc.host,
+        port: config?.inbound?.grpc?.port ?? DEFAULT_A2A_RUNTIME_CONFIG.inbound.grpc.port,
+      },
       peerCredentials: config?.inbound?.peerCredentials ?? [],
     },
     outbound: {
@@ -169,12 +180,16 @@ export function buildA2ABridgeGovernance(
   const inboundHttpJsonEnabled = Boolean(
     config.enabled && config.inbound.enabled && config.bindings.includes("HTTP_JSON"),
   );
+  const inboundGrpcEnabled = Boolean(
+    config.enabled && config.inbound.enabled && config.bindings.includes("GRPC") && config.inbound.grpc.enabled,
+  );
   const outboundNetworkEnabled = Boolean(config.enabled && config.outbound.enabled);
   const configuredPeerCount = peerCredentials.filter((credential) => credential.status === "configured").length;
-  const callable = (inboundJsonRpcEnabled || inboundHttpJsonEnabled) && configuredPeerCount > 0;
+  const callable = (inboundJsonRpcEnabled || inboundHttpJsonEnabled || inboundGrpcEnabled) && configuredPeerCount > 0;
   const reasons = buildGovernanceReasons(config, {
     inboundJsonRpcEnabled,
     inboundHttpJsonEnabled,
+    inboundGrpcEnabled,
     outboundNetworkEnabled,
     configuredPeerCount,
   });
@@ -191,6 +206,7 @@ export function buildA2ABridgeGovernance(
     outboundNetworkEnabled,
     inboundJsonRpcEnabled,
     inboundHttpJsonEnabled,
+    inboundGrpcEnabled,
     replayPolicy: callable ? "durable_task_binding" : "preview_only",
     audit: callable || outboundNetworkEnabled ? "durable_gateway_audit" : "gateway_route",
     reasons,
@@ -235,6 +251,7 @@ function buildA2AAgentCard(input: {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const jsonRpcCallable = input.governance.inboundJsonRpcEnabled && input.governance.callable;
   const httpJsonCallable = input.governance.inboundHttpJsonEnabled && input.governance.callable;
+  const grpcCallable = input.governance.inboundGrpcEnabled && input.governance.callable;
   const publicationStatus = input.config.publicDiscoveryEnabled
     ? "public_discovery"
     : input.config.enabled
@@ -259,11 +276,13 @@ function buildA2AAgentCard(input: {
           : "Inbound JSON-RPC requires A2A, inbound mode, JSON-RPC binding, and configured peer credentials.",
       },
       {
-        url: `${baseUrl}/api/v1/a2a/grpc`,
+        url: buildGrpcUrl(baseUrl, input.config.inbound.grpc),
         protocolBinding: "GRPC",
         protocolVersion: "1.0",
-        enabled: false,
-        reason: "gRPC transport is advertised as a non-callable future capability flag.",
+        enabled: grpcCallable,
+        reason: grpcCallable
+          ? "Inbound gRPC is callable for configured A2A peers on the Gateway gRPC listener."
+          : "gRPC requires A2A, inbound mode, GRPC binding, configured peer credentials, and an enabled gRPC listener.",
       },
       {
         url: `${baseUrl}/api/v1/a2a/http-json`,
@@ -276,12 +295,13 @@ function buildA2AAgentCard(input: {
       },
     ],
     capabilities: {
-      streaming: jsonRpcCallable,
+      streaming: jsonRpcCallable || grpcCallable,
       pushNotifications: input.governance.callable,
       stateTransitionHistory: true,
       extendedAgentCard: input.governance.callable,
       extensions: [
         ...(httpJsonCallable ? ["goatcitadel.http_json_tasks"] : []),
+        ...(grpcCallable ? ["goatcitadel.grpc_tasks"] : []),
         ...(input.governance.callable ? ["goatcitadel.push_notifications"] : []),
       ],
     },
@@ -293,7 +313,14 @@ function buildA2AAgentCard(input: {
         name: "Governed Task Interop",
         description:
           "Accepts peer-authenticated A2A messages through Gateway policy, durable task bindings, and visible chat/task lifecycle state.",
-        tags: ["a2a", "json-rpc", ...(httpJsonCallable ? ["http-json"] : []), "durable-tasks", "operator-governed"],
+        tags: [
+          "a2a",
+          "json-rpc",
+          ...(httpJsonCallable ? ["http-json"] : []),
+          ...(grpcCallable ? ["grpc"] : []),
+          "durable-tasks",
+          "operator-governed",
+        ],
         inputModes: ["text/plain", "application/json"],
         outputModes: ["application/json"],
       },
@@ -346,6 +373,7 @@ function buildGovernanceReasons(
   state: {
     inboundJsonRpcEnabled: boolean;
     inboundHttpJsonEnabled: boolean;
+    inboundGrpcEnabled: boolean;
     outboundNetworkEnabled: boolean;
     configuredPeerCount: number;
   },
@@ -366,7 +394,15 @@ function buildGovernanceReasons(
   if (!state.inboundHttpJsonEnabled) {
     reasons.push("Inbound HTTP+JSON is not callable until A2A inbound mode and HTTP_JSON binding are enabled.");
   }
-  if ((state.inboundJsonRpcEnabled || state.inboundHttpJsonEnabled) && state.configuredPeerCount === 0) {
+  if (!state.inboundGrpcEnabled) {
+    reasons.push(
+      "Inbound gRPC is not callable until A2A inbound mode, GRPC binding, and the gRPC listener are enabled.",
+    );
+  }
+  if (
+    (state.inboundJsonRpcEnabled || state.inboundHttpJsonEnabled || state.inboundGrpcEnabled) &&
+    state.configuredPeerCount === 0
+  ) {
     reasons.push("Inbound A2A requires at least one configured, unexpired, unrevoked peer credential.");
   }
   if (!state.outboundNetworkEnabled) {
@@ -375,8 +411,16 @@ function buildGovernanceReasons(
   reasons.push(
     "A2A push notification delivery is callable for configured peers and remains governed by Gateway peer auth, network allowlists, durable task bindings, and external side-effect audit.",
   );
-  reasons.push("gRPC stays a non-callable capability flag until implemented.");
+  reasons.push(
+    "A2A gRPC remains a Gateway-owned loopback/default listener and outbound client; it does not replace mesh-native readiness, leases, ownership, or replication.",
+  );
   return reasons;
+}
+
+function buildGrpcUrl(baseUrl: string, grpc: A2ABridgeRuntimeConfig["inbound"]["grpc"]): string {
+  const base = new URL(normalizeBaseUrl(baseUrl));
+  const host = grpc.host === "0.0.0.0" || grpc.host === "::" ? base.hostname : grpc.host;
+  return `grpc://${host}:${grpc.port}`;
 }
 
 function normalizeProtocolBindings(

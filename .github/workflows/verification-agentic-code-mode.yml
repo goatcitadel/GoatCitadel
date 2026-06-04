@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   agentic-code-mode:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -62,12 +62,16 @@ jobs:
         include:
           - laneScript: verify:code-mode:sandbox
             artifactSlug: code-mode-sandbox
+            runner: ubuntu-latest
           - laneScript: verify:code-mode:hostile-sandbox
             artifactSlug: code-mode-hostile-sandbox
+            runner: windows-latest
           - laneScript: verify:agentic:governance
             artifactSlug: agentic-governance
+            runner: ubuntu-latest
           - laneScript: verify:agentic:proof
             artifactSlug: agentic-proof
+            runner: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -46,7 +46,7 @@ pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom-path>
 node scripts/release/sign-release-artifacts.mjs --artifacts-dir <artifact-dir>
 node scripts/release/assemble-release-package.mjs --version <version> --artifacts-dir <artifact-dir> --sbom-file <sbom-path>
 node scripts/release/wait-for-release-proof.mjs --repository <owner/repo> --commit <commit-sha> --timeout-ms 14400000
-node scripts/release/write-release-certificate.mjs --version <version> --tag <tag> --artifacts-dir <artifact-dir> --proof-zip <zip-path> --out-file <certificate-path> --require-success
+node scripts/release/write-release-certificate.mjs --version <version> --tag <tag> --artifacts-dir <artifact-dir> --proof-zip <zip-path> --hostile-sandbox-proof <code-mode-hostile-sandbox-proof.json> --out-file <certificate-path> --require-success
 ```
 
 ## Environment Notes

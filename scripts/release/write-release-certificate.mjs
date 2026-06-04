@@ -64,6 +64,11 @@ const proofZipPath = path.resolve(
     path.join(repoRoot, "artifacts", "release", "package", `GoatCitadel-v${version}-release-package.zip`),
 );
 const outFile = path.resolve(args.outFile ?? path.join(repoRoot, "artifacts", "release", "release-certificate.json"));
+const hostileSandboxProofPath = args.hostileSandboxProof
+  ? path.resolve(args.hostileSandboxProof)
+  : process.env.GOATCITADEL_HOSTILE_SANDBOX_PROOF
+    ? path.resolve(process.env.GOATCITADEL_HOSTILE_SANDBOX_PROOF)
+    : null;
 
 if (!fs.existsSync(artifactsDir)) {
   throw new Error(`Artifacts directory does not exist: ${artifactsDir}`);
@@ -77,6 +82,7 @@ const repository = process.env.GITHUB_REPOSITORY ?? args.repository ?? null;
 const requiredLanes = await resolveRequiredLanes({ commit, repository });
 const releaseAssets = listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir));
 const proofBundle = fileRecord(proofZipPath, path.dirname(proofZipPath));
+const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSandboxProofPath) : null;
 
 const certificate = {
   schemaVersion: 1,
@@ -101,6 +107,12 @@ const certificate = {
     coveredLanes: RELEASE_PROOF_COVERED_LANES,
     directOnlyLanes: REQUIRED_LANE_SPECS.filter((lane) => !lane.releaseProofCovered).map((lane) => lane.name),
   },
+  hostileSandboxWindowsClaim: buildHostileSandboxWindowsClaim({
+    commit,
+    proof: hostileSandboxProof,
+    proofPath: hostileSandboxProofPath,
+    requiredLanes,
+  }),
   trivyStatus: requiredLanes.find((lane) => lane.name === "security:trivy")?.status ?? "missing",
   acceptedFailures: [],
   releaseAssets,
@@ -156,6 +168,11 @@ function parseArgs(argv) {
     }
     if (value === "--out-file") {
       parsed.outFile = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value === "--hostile-sandbox-proof") {
+      parsed.hostileSandboxProof = argv[index + 1];
       index += 1;
       continue;
     }
@@ -289,6 +306,46 @@ function formatLaneFailure(lane) {
   const workflow = lane.proofWorkflowFile ?? lane.workflowFile;
   const url = lane.workflowRunUrl ? ` ${lane.workflowRunUrl}` : "";
   return `${lane.name}=${lane.status} via ${workflow}${url}`;
+}
+
+function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLanes }) {
+  const lane = requiredLanes.find((item) => item.name === "verify:code-mode:hostile-sandbox");
+  const proofRun = lane?.substitutedByReleaseProof ? lane.releaseProofRun : lane?.directRun;
+  const proofHeadSha = proofRun?.headSha ?? null;
+  const exactShaMatched = Boolean(commit && proofHeadSha === commit);
+  const win32Claim = proof?.claim?.platformClaims?.win32 ?? null;
+  const fallbackWin32Proof = Array.isArray(proof?.claim?.platformProof)
+    ? proof.claim.platformProof.find((item) => item?.platform === "win32")
+    : null;
+  const win32Proof = win32Claim?.proof ?? fallbackWin32Proof ?? null;
+  const laneGreen = lane?.status === "success";
+  const proofAllowsWindowsClaim = Boolean(win32Claim?.publicClaimAllowed);
+  return {
+    claimScope: "windows_appcontainer",
+    aggregatePublicClaimAllowed: Boolean(proof?.claim?.publicClaimAllowed),
+    publicClaimAllowed: Boolean(laneGreen && exactShaMatched && proofAllowsWindowsClaim),
+    laneStatus: lane?.status ?? "missing",
+    workflowRunUrl: lane?.workflowRunUrl ?? null,
+    proofWorkflowFile: lane?.proofWorkflowFile ?? "verification-agentic-code-mode.yml",
+    proofSource: lane?.proofSource ?? "lane-workflow",
+    exactSha: commit,
+    proofHeadSha,
+    exactShaMatched,
+    proofRef: proofPath ? path.relative(repoRoot, proofPath).replaceAll("\\", "/") : null,
+    currentPlatform: proof?.platform ?? null,
+    currentPlatformProofStatus: proof?.currentPlatformProof?.status ?? null,
+    windowsPlatformProofStatus: win32Proof?.status ?? "missing",
+    checksPassed: Array.isArray(win32Proof?.checksPassed) ? win32Proof.checksPassed : [],
+    checksFailed: Array.isArray(win32Proof?.checksFailed) ? win32Proof.checksFailed : [],
+    blockers: win32Claim?.blockers ?? ["Windows AppContainer hostile sandbox proof artifact was not provided."],
+  };
+}
+
+function readOptionalJson(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function listFiles(rootDir) {

@@ -129,6 +129,10 @@ test("release certificate requires hostile sandbox proof from the exact-SHA rele
     writer,
     /\{ name: "verify:code-mode:hostile-sandbox", workflowFile: "verification-agentic-code-mode\.yml", required: true \}/,
   );
+  assert.match(writer, /--hostile-sandbox-proof/);
+  assert.match(writer, /hostileSandboxWindowsClaim/);
+  assert.match(writer, /platformClaims\?\.win32/);
+  assert.match(writer, /exactShaMatched/);
 });
 
 test("release package metadata locks release and packaging scripts with fail-closed commands", () => {

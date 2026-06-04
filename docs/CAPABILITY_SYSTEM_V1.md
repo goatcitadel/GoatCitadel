@@ -82,7 +82,7 @@ Code Mode v1 is intentionally narrow:
 - feature-flagged by `codeModeV1Enabled`
 - operator-approved before every run
 - trusted-code only
-- no hostile-code guarantees
+- no cross-platform hostile-code guarantees
 - read-only deterministic wrappers only
 - no in-program approval pause/resume
 
@@ -93,7 +93,8 @@ Operator truth:
 - Windows uses a constrained AppContainer launcher with stdio JSON-RPC transport when prerequisites are available
 - if required host isolation is unavailable, Code Mode fails closed
 - if isolation is advisory only, the run may proceed but must surface unsandboxed/advisory metadata to the operator
-- hostile-code promotion is separate and remains blocked until `verify:code-mode:hostile-sandbox` has green native Linux, macOS, and Windows adversarial canary proof
+- Windows-only hostile-code wording is allowed only when `hostileSandboxClaim.platformClaims.win32.publicClaimAllowed` is true from Windows AppContainer adversarial canary proof on the exact release SHA
+- aggregate hostile-code promotion remains blocked until `verify:code-mode:hostile-sandbox` has green native Linux Firejail, macOS Seatbelt, and Windows AppContainer adversarial canary proof
 
 ### Launch Contract
 

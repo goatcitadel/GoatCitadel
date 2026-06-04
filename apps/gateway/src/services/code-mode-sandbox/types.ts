@@ -19,6 +19,10 @@ export const CODE_MODE_HOSTILE_SANDBOX_PLATFORMS = ["linux", "darwin", "win32"] 
 export type CodeModeSandboxPlatform = CodeModeSandboxMetadata["platform"];
 export type CodeModeHostileSandboxClaimMetadata = NonNullable<CodeModeSandboxMetadata["hostileSandboxClaim"]>;
 export type CodeModeHostileSandboxPlatformProof = CodeModeHostileSandboxClaimMetadata["platformProof"][number];
+type CodeModeHostileSandboxNativePlatform = (typeof CODE_MODE_HOSTILE_SANDBOX_PLATFORMS)[number];
+type CodeModeHostileSandboxNativePlatformProof = CodeModeHostileSandboxPlatformProof & {
+  platform: CodeModeHostileSandboxNativePlatform;
+};
 
 export type CommandResolver = (command: string, platform: CodeModeSandboxPlatform) => string | undefined;
 
@@ -98,17 +102,17 @@ export function buildHostileSandboxClaimMetadata(
   platform: CodeModeSandboxMetadata["platform"],
   proofs: CodeModeHostileSandboxPlatformProof[] = [],
 ): CodeModeHostileSandboxClaimMetadata {
-  const platformProof = CODE_MODE_HOSTILE_SANDBOX_PLATFORMS.map((candidate) => {
-    const proof = proofs.find((item) => item.platform === candidate);
-    return (
-      proof ?? {
+  const platformProof: CodeModeHostileSandboxNativePlatformProof[] = CODE_MODE_HOSTILE_SANDBOX_PLATFORMS.map(
+    (candidate) => {
+      const proof = proofs.find((item) => item.platform === candidate);
+      return (proof ?? {
         platform: candidate,
         status: "missing" as const,
         checksPassed: [],
         checksFailed: [...CODE_MODE_HOSTILE_SANDBOX_CANARIES],
-      }
-    );
-  });
+      }) as CodeModeHostileSandboxNativePlatformProof;
+    },
+  );
   const publicClaimAllowed = platformProof.every(
     (proof) =>
       proof.status === "pass" &&
@@ -121,6 +125,9 @@ export function buildHostileSandboxClaimMetadata(
       ? "blocked"
       : "not_promoted";
   const currentPlatformProof = platformProof.find((proof) => proof.platform === platform);
+  const platformClaims = Object.fromEntries(
+    platformProof.map((proof) => [proof.platform, buildPlatformClaimMetadata(proof)]),
+  ) as CodeModeHostileSandboxClaimMetadata["platformClaims"];
   const proofBlockers = platformProof
     .filter((proof) => proof.status !== "pass")
     .map((proof) => `${proof.platform} hostile sandbox proof is ${proof.status}.`);
@@ -129,6 +136,7 @@ export function buildHostileSandboxClaimMetadata(
     publicClaimAllowed,
     requiredCanaries: [...CODE_MODE_HOSTILE_SANDBOX_CANARIES],
     platformProof: [...platformProof],
+    platformClaims,
     blockers: publicClaimAllowed
       ? []
       : [
@@ -144,6 +152,39 @@ export function buildHostileSandboxClaimMetadata(
       "Fail-closed required mode must stay separate from any public hostile-code sandbox claim.",
     ],
   };
+}
+
+function buildPlatformClaimMetadata(
+  proof: CodeModeHostileSandboxNativePlatformProof,
+): CodeModeHostileSandboxClaimMetadata["platformClaims"][keyof CodeModeHostileSandboxClaimMetadata["platformClaims"]] {
+  const publicClaimAllowed = proofAllowsHostileSandboxClaim(proof);
+  const claimStatus = publicClaimAllowed ? "promoted" : proof.status === "fail" ? "blocked" : "not_promoted";
+  return {
+    platform: proof.platform,
+    claimStatus,
+    publicClaimAllowed,
+    proof,
+    blockers: publicClaimAllowed
+      ? []
+      : [
+          `${proof.platform} hostile sandbox proof is ${proof.status}.`,
+          ...CODE_MODE_HOSTILE_SANDBOX_CANARIES.filter((canary) => !proof.checksPassed.includes(canary)).map(
+            (canary) => `${proof.platform} proof is missing canary: ${canary}.`,
+          ),
+        ],
+    governance: [
+      `${proof.platform} hostile-code sandbox claims are platform-scoped and do not imply cross-platform hostile-code sandboxing.`,
+      "Aggregate hostile-code sandbox promotion still requires Windows AppContainer, Linux Firejail, and macOS Seatbelt proof on the exact release SHA.",
+    ],
+  };
+}
+
+function proofAllowsHostileSandboxClaim(proof: CodeModeHostileSandboxPlatformProof): boolean {
+  return (
+    proof.status === "pass" &&
+    proof.checksFailed.length === 0 &&
+    CODE_MODE_HOSTILE_SANDBOX_CANARIES.every((canary) => proof.checksPassed.includes(canary))
+  );
 }
 
 export function buildCommonProbeChecks(config: CodeModeSandboxConfig): {

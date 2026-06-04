@@ -17,6 +17,14 @@ interface MockGatewayApp {
     info: ReturnType<typeof vi.fn>;
     warn: ReturnType<typeof vi.fn>;
   };
+  services: {
+    a2a: unknown;
+  };
+}
+
+interface MockA2AGrpcServer {
+  close: ReturnType<typeof vi.fn>;
+  enabled: boolean;
 }
 
 const importMainWithMocks = async (
@@ -24,6 +32,7 @@ const importMainWithMocks = async (
     app?: MockGatewayApp;
     allowUnauthNetwork?: boolean;
     buildAppError?: Error;
+    grpcServer?: MockA2AGrpcServer;
     host?: string;
     shouldWarnUnsafeBind?: boolean;
     terminalTask?: string;
@@ -58,8 +67,18 @@ const importMainWithMocks = async (
         info: vi.fn(),
         warn: vi.fn(),
       },
+      services: {
+        a2a: {},
+      },
     } satisfies MockGatewayApp);
   const setGoatcitadelTerminalTitle = vi.fn();
+  const grpcServer =
+    options.grpcServer ??
+    ({
+      close: vi.fn(async () => undefined),
+      enabled: false,
+    } satisfies MockA2AGrpcServer);
+  const startA2AGrpcServer = vi.fn(async () => grpcServer);
 
   vi.doMock("./app.js", () => ({
     buildApp: vi.fn(async () => {
@@ -79,6 +98,9 @@ const importMainWithMocks = async (
   vi.doMock("./runtime-ux.js", () => ({
     setGoatcitadelTerminalTitle,
   }));
+  vi.doMock("./services/a2a-grpc-server.js", () => ({
+    startA2AGrpcServer,
+  }));
   vi.doMock("./startup-guard.js", () => ({
     INSECURE_LOCAL_ONLY_OVERRIDE_ENV: "GOATCITADEL_ALLOW_UNAUTHENTICATED_NETWORK",
     resolveAllowUnauthNetwork: vi.fn(() => options.allowUnauthNetwork ?? false),
@@ -88,7 +110,7 @@ const importMainWithMocks = async (
 
   await import("./main.js");
 
-  return { app, handlers, onSpy, setGoatcitadelTerminalTitle };
+  return { app, grpcServer, handlers, onSpy, setGoatcitadelTerminalTitle, startA2AGrpcServer };
 };
 
 describe("gateway main entrypoint", () => {
@@ -100,13 +122,18 @@ describe("gateway main entrypoint", () => {
   });
 
   it("registers warning and shutdown handlers around a successful listen", async () => {
-    const { app, handlers, setGoatcitadelTerminalTitle } = await importMainWithMocks({
+    const { app, handlers, setGoatcitadelTerminalTitle, startA2AGrpcServer } = await importMainWithMocks({
       terminalTask: " Gateway Dev ",
     });
 
     expect(setGoatcitadelTerminalTitle).toHaveBeenCalledWith("Gateway Dev");
     expect(app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 8787 });
     expect(app.log.info).toHaveBeenCalledWith("gateway listening on http://127.0.0.1:8787");
+    expect(startA2AGrpcServer).toHaveBeenCalledWith({
+      a2a: app.services.a2a,
+      config: app.gatewayConfig,
+      logger: app.log,
+    });
 
     handlers.get("warning")?.[0]?.(
       Object.assign(new Error("deprecated option"), {
@@ -150,6 +177,9 @@ describe("gateway main entrypoint", () => {
         info: vi.fn(),
         warn: vi.fn(),
       },
+      services: {
+        a2a: {},
+      },
     } satisfies MockGatewayApp;
     const { handlers, setGoatcitadelTerminalTitle } = await importMainWithMocks({
       app,
@@ -185,6 +215,9 @@ describe("gateway main entrypoint", () => {
         info: vi.fn(),
         warn: vi.fn(),
       },
+      services: {
+        a2a: {},
+      },
     } satisfies MockGatewayApp;
     const { handlers } = await importMainWithMocks({ app });
 
@@ -213,6 +246,9 @@ describe("gateway main entrypoint", () => {
         error: vi.fn(),
         info: vi.fn(),
         warn: vi.fn(),
+      },
+      services: {
+        a2a: {},
       },
     } satisfies MockGatewayApp;
 

@@ -79,6 +79,11 @@
     "bindings": ["JSONRPC"],
     "inbound": {
       "enabled": false,
+      "grpc": {
+        "enabled": false,
+        "host": "127.0.0.1",
+        "port": 8788
+      },
       "peerCredentials": []
     },
     "outbound": {

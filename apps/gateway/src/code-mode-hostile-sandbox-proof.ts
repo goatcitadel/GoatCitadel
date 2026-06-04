@@ -86,7 +86,12 @@ function normalizePlatformProof(value: unknown): CodeModeHostileSandboxPlatformP
   if (record.platform !== "linux" && record.platform !== "darwin" && record.platform !== "win32") {
     return undefined;
   }
-  if (record.status !== "pass" && record.status !== "fail" && record.status !== "missing") {
+  if (
+    record.status !== "pass" &&
+    record.status !== "fail" &&
+    record.status !== "missing" &&
+    record.status !== "not_applicable"
+  ) {
     return undefined;
   }
   return {

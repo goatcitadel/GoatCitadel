@@ -542,6 +542,26 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     assistant.a2a.inbound.enabled = a2aInbound === "1" || a2aInbound.toLowerCase() === "true";
   }
 
+  const a2aBindings = parseA2ABindingsEnv(process.env.GOATCITADEL_A2A_BINDINGS);
+  if (a2aBindings.length > 0) {
+    assistant.a2a.bindings = a2aBindings;
+  }
+
+  const a2aGrpcEnabled = parseBooleanEnv(process.env.GOATCITADEL_A2A_GRPC_ENABLED);
+  if (a2aGrpcEnabled !== undefined) {
+    assistant.a2a.inbound.grpc.enabled = a2aGrpcEnabled;
+  }
+
+  const a2aGrpcHost = process.env.GOATCITADEL_A2A_GRPC_HOST?.trim();
+  if (a2aGrpcHost) {
+    assistant.a2a.inbound.grpc.host = a2aGrpcHost;
+  }
+
+  const a2aGrpcPort = parseIntEnv(process.env.GOATCITADEL_A2A_GRPC_PORT);
+  if (a2aGrpcPort !== undefined) {
+    assistant.a2a.inbound.grpc.port = clampInt(a2aGrpcPort, 8788, 0, 65_535);
+  }
+
   const a2aOutbound = process.env.GOATCITADEL_A2A_OUTBOUND_ENABLED;
   if (a2aOutbound) {
     assistant.a2a.outbound.enabled = a2aOutbound === "1" || a2aOutbound.toLowerCase() === "true";
@@ -874,6 +894,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const meshReplication = (meshInput.replication ?? {}) as Partial<MeshConfig["replication"]>;
   const a2aInput = (input.a2a ?? {}) as Partial<A2ABridgeRuntimeConfig>;
   const a2aInboundInput = (a2aInput.inbound ?? {}) as Partial<A2ABridgeRuntimeConfig["inbound"]>;
+  const a2aGrpcInput = (a2aInboundInput.grpc ?? {}) as Partial<A2ABridgeRuntimeConfig["inbound"]["grpc"]>;
   const a2aOutboundInput = (a2aInput.outbound ?? {}) as Partial<A2ABridgeRuntimeConfig["outbound"]>;
   const npuInput = (input.npu ?? {}) as Partial<NpuConfig>;
   const npuSidecar = (npuInput.sidecar ?? {}) as Partial<NpuConfig["sidecar"]>;
@@ -1041,6 +1062,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       bindings: a2aInput.bindings ?? ["JSONRPC"],
       inbound: {
         enabled: a2aInboundInput.enabled ?? false,
+        grpc: {
+          enabled: a2aGrpcInput.enabled ?? false,
+          host: a2aGrpcInput.host ?? "127.0.0.1",
+          port: clampInt(a2aGrpcInput.port, 8788, 0, 65_535),
+        },
         peerCredentials: a2aInboundInput.peerCredentials ?? [],
       },
       outbound: {
@@ -1339,4 +1365,18 @@ function parseIntEnv(value: string | undefined): number | undefined {
   }
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseA2ABindingsEnv(value: string | undefined): A2ABridgeRuntimeConfig["bindings"] {
+  if (!value?.trim()) {
+    return [];
+  }
+  const bindings = value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(
+      (item): item is A2ABridgeRuntimeConfig["bindings"][number] =>
+        item === "JSONRPC" || item === "GRPC" || item === "HTTP_JSON",
+    );
+  return [...new Set(bindings)];
 }

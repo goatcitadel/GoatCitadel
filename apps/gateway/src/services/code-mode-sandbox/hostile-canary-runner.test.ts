@@ -99,6 +99,18 @@ describe("runCodeModeHostileSandboxCanaries", () => {
     expect(proof.claim).toMatchObject({
       claimStatus: "not_promoted",
       publicClaimAllowed: false,
+      platformClaims: {
+        win32: {
+          claimStatus: "promoted",
+          publicClaimAllowed: true,
+        },
+        linux: {
+          publicClaimAllowed: false,
+        },
+        darwin: {
+          publicClaimAllowed: false,
+        },
+      },
     });
     expect(proof.claim.blockers).toEqual(expect.arrayContaining(["linux hostile sandbox proof is missing."]));
   });
@@ -127,6 +139,11 @@ describe("runCodeModeHostileSandboxCanaries", () => {
     expect(proof.claim).toMatchObject({
       claimStatus: "promoted",
       publicClaimAllowed: true,
+      platformClaims: {
+        win32: { publicClaimAllowed: true },
+        linux: { publicClaimAllowed: true },
+        darwin: { publicClaimAllowed: true },
+      },
       blockers: [],
     });
   });

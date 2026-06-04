@@ -174,9 +174,11 @@ export type CodeModeHostileSandboxCanary =
 
 export type CodeModeHostileSandboxClaimStatus = "not_promoted" | "blocked" | "promoted";
 export type CodeModeHostileSandboxPlatformProofStatus = "pass" | "fail" | "missing" | "not_applicable";
+export type CodeModeHostileSandboxNativePlatform = "linux" | "darwin" | "win32";
+export type CodeModeHostileSandboxProofPlatform = CodeModeHostileSandboxNativePlatform | "unknown";
 
 export interface CodeModeHostileSandboxPlatformProof {
-  platform: CodeModeSandboxMetadata["platform"];
+  platform: CodeModeHostileSandboxProofPlatform;
   status: CodeModeHostileSandboxPlatformProofStatus;
   checksPassed: CodeModeHostileSandboxCanary[];
   checksFailed: CodeModeHostileSandboxCanary[];
@@ -184,11 +186,21 @@ export interface CodeModeHostileSandboxPlatformProof {
   checkedAt?: string;
 }
 
+export interface CodeModeHostileSandboxPlatformClaimMetadata {
+  platform: CodeModeHostileSandboxNativePlatform;
+  claimStatus: CodeModeHostileSandboxClaimStatus;
+  publicClaimAllowed: boolean;
+  proof: CodeModeHostileSandboxPlatformProof;
+  blockers: string[];
+  governance: string[];
+}
+
 export interface CodeModeHostileSandboxClaimMetadata {
   claimStatus: CodeModeHostileSandboxClaimStatus;
   publicClaimAllowed: boolean;
   requiredCanaries: CodeModeHostileSandboxCanary[];
   platformProof: CodeModeHostileSandboxPlatformProof[];
+  platformClaims: Record<CodeModeHostileSandboxNativePlatform, CodeModeHostileSandboxPlatformClaimMetadata>;
   blockers: string[];
   governance: string[];
 }

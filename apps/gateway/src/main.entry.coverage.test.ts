@@ -4,6 +4,7 @@ const buildAppMock = vi.fn();
 const shouldWarnMock = vi.fn();
 const resolveWarnMock = vi.fn();
 const resolveAllowMock = vi.fn();
+const startA2AGrpcServerMock = vi.fn();
 
 vi.mock("./app.js", () => ({
   buildApp: buildAppMock,
@@ -15,6 +16,10 @@ vi.mock("./startup-guard.js", () => ({
   resolveAllowUnauthNetwork: resolveAllowMock,
 }));
 
+vi.mock("./services/a2a-grpc-server.js", () => ({
+  startA2AGrpcServer: startA2AGrpcServerMock,
+}));
+
 describe("gateway main entrypoint coverage", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -22,6 +27,11 @@ describe("gateway main entrypoint coverage", () => {
     shouldWarnMock.mockReset();
     resolveWarnMock.mockReset();
     resolveAllowMock.mockReset();
+    startA2AGrpcServerMock.mockReset();
+    startA2AGrpcServerMock.mockResolvedValue({
+      close: vi.fn().mockResolvedValue(undefined),
+      enabled: false,
+    });
     delete process.env.GATEWAY_HOST;
     delete process.env.GATEWAY_PORT;
   });
@@ -50,6 +60,9 @@ describe("gateway main entrypoint coverage", () => {
         warn: warnMock,
         error: errorMock,
       },
+      services: {
+        a2a: {},
+      },
     });
     shouldWarnMock.mockReturnValue(false);
     resolveWarnMock.mockReturnValue(true);
@@ -59,6 +72,7 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(startA2AGrpcServerMock).toHaveBeenCalledTimes(1);
     expect(errorMock).not.toHaveBeenCalled();
   });
 
@@ -82,6 +96,9 @@ describe("gateway main entrypoint coverage", () => {
         warn: warnMock,
         error: errorMock,
       },
+      services: {
+        a2a: {},
+      },
     });
     shouldWarnMock.mockReturnValue(true);
     resolveWarnMock.mockReturnValue(true);
@@ -92,6 +109,7 @@ describe("gateway main entrypoint coverage", () => {
 
     expect(warnMock).toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(startA2AGrpcServerMock).toHaveBeenCalledTimes(1);
   });
 
   it("hard exits when unsafe bind is blocked", async () => {
@@ -100,9 +118,7 @@ describe("gateway main entrypoint coverage", () => {
     const infoMock = vi.fn();
     const warnMock = vi.fn();
     const errorMock = vi.fn();
-    const exitSpy = vi
-      .spyOn(process, "exit")
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
 
     buildAppMock.mockResolvedValue({
       gatewayConfig: {
@@ -116,6 +132,9 @@ describe("gateway main entrypoint coverage", () => {
         info: infoMock,
         warn: warnMock,
         error: errorMock,
+      },
+      services: {
+        a2a: {},
       },
     });
     shouldWarnMock.mockReturnValue(true);
@@ -136,9 +155,7 @@ describe("gateway main entrypoint coverage", () => {
     const infoMock = vi.fn();
     const warnMock = vi.fn();
     const errorMock = vi.fn();
-    const exitSpy = vi
-      .spyOn(process, "exit")
-      .mockImplementation((() => undefined) as never);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
 
     buildAppMock.mockResolvedValue({
       gatewayConfig: {
@@ -152,6 +169,9 @@ describe("gateway main entrypoint coverage", () => {
         info: infoMock,
         warn: warnMock,
         error: errorMock,
+      },
+      services: {
+        a2a: {},
       },
     });
     shouldWarnMock.mockReturnValue(false);

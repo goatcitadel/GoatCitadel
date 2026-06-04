@@ -14,6 +14,7 @@ import {
 } from "./startup-guard.js";
 import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
 import { env } from "./env.js";
+import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./services/a2a-grpc-server.js";
 
 setBootCheckpoint("main.ts:body-start");
 const port = env.GATEWAY_PORT;
@@ -27,6 +28,7 @@ setBootCheckpoint("main.ts:buildApp-starting");
 const app = await buildApp();
 setBootCheckpoint("main.ts:buildApp-returned");
 let shuttingDown = false;
+let a2aGrpcServer: A2AGrpcServerHandle | undefined;
 
 process.on("warning", (warning) => {
   app.log.warn(
@@ -46,6 +48,10 @@ const shutdown = async (signal: string) => {
   }
   shuttingDown = true;
   try {
+    if (a2aGrpcServer?.enabled) {
+      await a2aGrpcServer.close();
+      app.log.info("A2A gRPC listener stopped");
+    }
     const result = await performShutdown(app, signal, undefined, {
       onForceExitArmed: () => {
         console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
@@ -98,6 +104,11 @@ try {
   setBootCheckpoint("main.ts:listen-starting");
   await app.listen({ port, host });
   app.log.info(`gateway listening on http://${host}:${port}`);
+  a2aGrpcServer = await startA2AGrpcServer({
+    config: app.gatewayConfig,
+    a2a: app.services.a2a,
+    logger: app.log,
+  });
   endBootTracking();
 } catch (error) {
   app.log.error(error);

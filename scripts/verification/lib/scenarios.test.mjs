@@ -27,7 +27,7 @@ test("A2A full lane keeps governed gateway and contract proof commands", () => {
     "--filter @goatcitadel/storage build",
     "verify:storage:migration-parity",
     "--filter @goatcitadel/gateway typecheck",
-    "--filter @goatcitadel/gateway exec vitest run src/services/a2a-route-service.test.ts src/routes/tasks.test.ts",
+    "--filter @goatcitadel/gateway exec vitest run src/services/a2a-grpc-service.test.ts src/services/a2a-route-service.test.ts src/routes/tasks.test.ts",
   ]) {
     assert.ok(commandArgs.has(expected), `A2A full lane should include ${expected}`);
   }

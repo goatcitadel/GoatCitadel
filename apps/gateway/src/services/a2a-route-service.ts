@@ -12,6 +12,7 @@ import type {
   A2AOutboundPreviewRequest,
   A2AOutboundPreviewResponse,
   A2AOutboundSendResponse,
+  A2AOutboundTransport,
   A2ATaskPushNotificationConfig,
   A2ATaskBindingRecord,
   A2ATaskExportPreviewRequest,
@@ -36,6 +37,8 @@ import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2APushNotificationService } from "./a2a-push-notification-service.js";
+import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
+import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
 import {
   buildInboundIdempotencyKey,
   buildOutboundHeaders,
@@ -90,12 +93,15 @@ export interface A2ARouteServiceDependencies {
   mutationIdempotencyStore?: MutationIdempotencyStore;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   pushDeliveryFetch?: typeof fetchAllowlisted;
+  grpcClient?: A2AGrpcClientPort;
 }
 
 export class A2ARouteService {
   private readonly pushNotifications: A2APushNotificationService;
+  private readonly grpcClient: A2AGrpcClientPort;
 
   public constructor(private readonly deps: A2ARouteServiceDependencies) {
+    this.grpcClient = deps.grpcClient ?? new A2AGrpcClient();
     this.pushNotifications = new A2APushNotificationService({
       config: deps.config,
       storage: deps.storage,
@@ -197,10 +203,10 @@ export class A2ARouteService {
       switch (request.value.method) {
         case "SendMessage":
           return jsonRpcResult(request.value.id, {
-            task: await this.sendMessage(peer, request.value.params ?? {}, checkedAt, false),
+            task: await this.sendMessage(peer, request.value.params ?? {}, checkedAt, false, "a2a_jsonrpc"),
           });
         case "SendStreamingMessage": {
-          const task = await this.sendMessage(peer, request.value.params ?? {}, checkedAt, true);
+          const task = await this.sendMessage(peer, request.value.params ?? {}, checkedAt, true, "a2a_jsonrpc");
           return jsonRpcResult(request.value.id, {
             task,
             events: this.buildEventsForTask(task, 0, checkedAt),
@@ -289,7 +295,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
-    return this.sendMessage(peer, params, checkedAt, false);
+    return this.sendMessage(peer, params, checkedAt, false, "a2a_http_json");
   }
 
   public getHttpJsonTask(
@@ -324,6 +330,68 @@ export class A2ARouteService {
     };
   }
 
+  public async sendGrpcMessage(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ABridgeTask> {
+    this.assertInboundBinding("GRPC");
+    return this.sendMessage(peer, params, checkedAt, false, "a2a_grpc");
+  }
+
+  public async sendGrpcStreamingMessage(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
+    this.assertInboundBinding("GRPC");
+    const task = await this.sendMessage(peer, params, checkedAt, true, "a2a_grpc");
+    return {
+      task,
+      events: this.buildEventsForTask(task, 0, checkedAt),
+    };
+  }
+
+  public getGrpcTask(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): A2ABridgeTask {
+    this.assertInboundBinding("GRPC");
+    return this.getA2ATask(peer, params, checkedAt);
+  }
+
+  public async cancelGrpcTask(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ABridgeTask> {
+    this.assertInboundBinding("GRPC");
+    return this.cancelA2ATask(peer, params, checkedAt);
+  }
+
+  public getGrpcTaskEvents(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): { task: A2ABridgeTask; events: A2ABridgeTaskEvent[] } {
+    this.assertInboundBinding("GRPC");
+    const task = this.getA2ATask(peer, params, checkedAt);
+    const since = readNumber(params.lastEventSequence) ?? 0;
+    return {
+      task,
+      events: this.buildEventsForTask(task, since, checkedAt),
+    };
+  }
+
+  public getGrpcAuthenticatedExtendedAgentCard(
+    peer: A2APeerAuthResult,
+    input: { checkedAt: string; baseUrl?: string },
+  ) {
+    this.assertInboundBinding("GRPC");
+    return this.getAuthenticatedExtendedAgentCard(peer, input);
+  }
+
   public async setTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
@@ -354,11 +422,46 @@ export class A2ARouteService {
     return this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
+  public async setGrpcTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ATaskPushNotificationConfig> {
+    this.assertInboundBinding("GRPC");
+    return this.setTaskPushNotificationConfig(peer, params, checkedAt);
+  }
+
+  public getGrpcTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+  ): A2ATaskPushNotificationConfig {
+    this.assertInboundBinding("GRPC");
+    return this.getTaskPushNotificationConfig(peer, params);
+  }
+
+  public listGrpcTaskPushNotificationConfigs(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown> = {},
+  ): A2ATaskPushNotificationConfig[] {
+    this.assertInboundBinding("GRPC");
+    return this.listTaskPushNotificationConfigs(peer, params);
+  }
+
+  public deleteGrpcTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): { taskId: string; peerId: string; deleted: boolean } {
+    this.assertInboundBinding("GRPC");
+    return this.deleteTaskPushNotificationConfig(peer, params, checkedAt);
+  }
+
   public previewOutbound(
     input: A2AOutboundPreviewRequest,
     checkedAt = new Date().toISOString(),
   ): A2AOutboundPreviewResponse {
     const peer = this.findOutboundPeer(input.peerId);
+    const transport = normalizeOutboundTransport(input.transport);
     const envelope: A2AJsonRpcRequest = {
       jsonrpc: "2.0",
       id: input.idempotencyKey ?? `a2a-out-${randomUUID()}`,
@@ -377,7 +480,9 @@ export class A2ARouteService {
       checkedAt,
       peerId: input.peerId,
       method: input.method,
+      transport,
       agentCardUrl: peer?.agentCardUrl,
+      grpcUrl: transport === "GRPC" ? peer?.grpcUrl : undefined,
       callable: Boolean(this.config.enabled && this.config.outbound.enabled && peer?.enabled !== false),
       governance: status.governance,
       warnings,
@@ -398,11 +503,31 @@ export class A2ARouteService {
         checkedAt,
         peerId: input.peerId,
         method: input.method,
+        transport: preview.transport,
         status: "blocked",
         agentCardUrl: peer?.agentCardUrl,
+        grpcUrl: preview.grpcUrl,
         idempotencyKey,
         warnings: [...preview.warnings, "Outbound send was blocked before the external boundary."],
       };
+    }
+
+    if (preview.transport === "GRPC") {
+      return sendOutboundGrpc({
+        request: input,
+        actorId,
+        checkedAt,
+        preview,
+        idempotencyKey,
+        peer,
+        deps: {
+          config: this.deps.config,
+          storage: this.deps.storage,
+          grpcClient: this.grpcClient,
+          mutationIdempotencyStore: this.deps.mutationIdempotencyStore,
+          evidenceEnvelopeService: this.deps.evidenceEnvelopeService,
+        },
+      });
     }
 
     const run = await runIdempotentExternalSideEffect<A2AJsonRpcResponse>({
@@ -442,6 +567,7 @@ export class A2ARouteService {
         checkedAt,
         peerId: input.peerId,
         method: input.method,
+        transport: "JSONRPC",
         status: "replayed",
         agentCardUrl: peer.agentCardUrl,
         idempotencyKey,
@@ -454,6 +580,7 @@ export class A2ARouteService {
         checkedAt,
         peerId: input.peerId,
         method: input.method,
+        transport: "JSONRPC",
         status: "blocked",
         agentCardUrl: peer.agentCardUrl,
         idempotencyKey,
@@ -465,6 +592,7 @@ export class A2ARouteService {
       checkedAt,
       peerId: input.peerId,
       method: input.method,
+      transport: "JSONRPC",
       status: "sent",
       agentCardUrl: peer.agentCardUrl,
       idempotencyKey,
@@ -523,6 +651,7 @@ export class A2ARouteService {
     params: Record<string, unknown>,
     checkedAt: string,
     streaming: boolean,
+    source: "a2a_jsonrpc" | "a2a_http_json" | "a2a_grpc",
   ): Promise<A2ABridgeTask> {
     const message = normalizeInboundMessage(params);
     const contextId = readString(params.contextId) ?? message.contextId ?? `ctx-${peer.peerId}`;
@@ -572,7 +701,7 @@ export class A2ARouteService {
         metadata: {
           inboundMessage: message,
           streaming,
-          source: "a2a_jsonrpc",
+          source,
           createdByPeerLabel: peer.label,
         },
       },
@@ -817,4 +946,8 @@ export class A2ARouteService {
     });
     return { jsonRpcUrl: jsonRpc.url };
   }
+}
+
+function normalizeOutboundTransport(value: A2AOutboundTransport | undefined): A2AOutboundTransport {
+  return value === "GRPC" ? "GRPC" : "JSONRPC";
 }

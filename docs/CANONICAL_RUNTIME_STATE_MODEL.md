@@ -83,11 +83,11 @@ Authority:
 
 Implementation status:
 - A2A v1.0 is the external agent-to-agent standard at the Gateway boundary, not the internal mesh protocol.
-- JSON-RPC over HTTP/S is the only callable v1 binding. gRPC, HTTP+JSON, push notifications, and authenticated extended cards stay non-callable flags until implemented.
+- Callable A2A v1 support includes JSON-RPC over HTTP/S, peer-authenticated HTTP+JSON task routes, peer-configured task push notification delivery, authenticated extended Agent Cards, and Gateway-owned gRPC task transport when the `GRPC` binding and loopback/default gRPC listener are explicitly configured.
 - Public Agent Card discovery at `/.well-known/agent-card.json` is disabled by default; operator diagnostics remain available at `/api/v1/a2a/agent-card`.
 - Inbound A2A uses configured peer credentials through the `a2a-peer` route-access class. It must not reuse operator auth as peer auth.
 - Inbound `SendMessage` creates or reuses a peer-scoped hidden chat session, creates a visible TaskLifecycle task, dispatches through `agentSendChatMessage`, and stores an A2A-to-local binding with idempotency by peer/context/message identity.
-- Outbound A2A uses configured peers, Agent Card discovery, the network allowlist, the replay-safe external side-effect runner, and durable audit records.
+- Outbound A2A uses configured peers, Agent Card discovery, optional configured `grpcUrl` fallback for gRPC peers, the network allowlist, the replay-safe external side-effect runner, and durable audit records.
 
 Notes:
 - A2A is external interoperability. GoatCitadel mesh remains native runtime coordination for readiness, leases, ownership, replication, failover, and LAN/WAN/tailnet state.

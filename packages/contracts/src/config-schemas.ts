@@ -418,6 +418,14 @@ export const AssistantConfigInputSchema = z
         inbound: z
           .object({
             enabled: z.boolean().optional(),
+            grpc: z
+              .object({
+                enabled: z.boolean().optional(),
+                host: z.string().optional(),
+                port: z.number().int().min(0).max(65_535).optional(),
+              })
+              .passthrough()
+              .optional(),
             peerCredentials: z
               .array(
                 z
@@ -446,6 +454,7 @@ export const AssistantConfigInputSchema = z
                     peerId: z.string(),
                     label: z.string().optional(),
                     agentCardUrl: z.string(),
+                    grpcUrl: z.string().optional(),
                     token: z.string().optional(),
                     tokenEnv: z.string().optional(),
                     enabled: z.boolean().optional(),

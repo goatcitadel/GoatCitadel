@@ -61,6 +61,7 @@ const a2aOutboundBodySchema = z.object({
   peerId: z.string().min(1),
   method: a2aJsonRpcMethodSchema,
   params: z.record(z.unknown()).default({}),
+  transport: z.enum(["JSONRPC", "GRPC"]).optional(),
   idempotencyKey: z.string().min(1).optional(),
 });
 
