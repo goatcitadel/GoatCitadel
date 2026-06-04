@@ -28,8 +28,10 @@ This document defines the minimum dependency hygiene expected for GoatCitadel `1
 
 ## Supported Runtime Surfaces
 
-- Windows x64 and arm64 installers are the current CI-built release installer surfaces.
-- macOS arm64 has an experimental ad-hoc-signed local DMG lane for friend smoke only. macOS x64 and Linux x64 remain source/shared-host development surfaces, and no macOS/Linux package is public release proof until the release workflow emits native artifacts, signing/notarization evidence, and smoke proof for those targets.
+- Windows x64 and arm64 installers are the current CI-built release installer surfaces. They become public-trust installer proof only when Authenticode signing and installer smoke pass.
+- macOS arm64 has an experimental DMG lane: manual smoke remains ad-hoc signed and non-notarized, while public release builds require Developer ID signing, notarization, stapling, checksum, and DMG smoke before upload.
+- Linux x64 has an experimental release tarball lane with checksum and archive smoke. It remains a browser-launcher bundle without a native desktop host.
+- macOS and Linux stay experimental until a release workflow run emits the exact signed/notarized artifact where applicable plus checksum and smoke proof, and the support matrix is deliberately promoted.
 
 ## Release Constraints
 

@@ -44,6 +44,7 @@ const CODE_MODE_ENV_PASSTHROUGH_KEYS = [
 const HOSTILE_CANARY_SECRET_ENV = "GOATCITADEL_HOSTILE_CANARY_SECRET";
 const HOSTILE_CANARY_SECRET_VALUE = "goatcitadel-hostile-canary-synthetic-secret";
 const HOSTILE_CANARY_TIMEOUT_MS = 15_000;
+const HOSTILE_CANARY_WINDOWS_APPCONTAINER_TIMEOUT_MS = 45_000;
 
 export interface CodeModeHostileSandboxCanaryResult {
   name: CodeModeHostileSandboxCanary;
@@ -403,10 +404,11 @@ function spawnCodeModeSandboxLaunch(
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const timeoutMs = resolveHostileCanaryTimeoutMs(launch);
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error("Hostile sandbox canary launch timed out."));
-    }, HOSTILE_CANARY_TIMEOUT_MS);
+      reject(new Error(`Hostile sandbox canary launch timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
     let stdout = "";
     let stderr = "";
     child.stdout?.setEncoding("utf8");
@@ -426,6 +428,13 @@ function spawnCodeModeSandboxLaunch(
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+function resolveHostileCanaryTimeoutMs(launch: CodeModeSandboxLaunchSpec): number {
+  const usesWindowsAppContainerLauncher = launch.generatedArtifacts.some(
+    (artifact) => path.basename(artifact).toLowerCase() === "code-mode-appcontainer-launcher.ps1",
+  );
+  return usesWindowsAppContainerLauncher ? HOSTILE_CANARY_WINDOWS_APPCONTAINER_TIMEOUT_MS : HOSTILE_CANARY_TIMEOUT_MS;
 }
 
 interface HarnessReport {

@@ -85,15 +85,17 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
     rejectUnsafeProfilePath(input.harnessPath);
     await fs.mkdir(input.runTempRoot, { recursive: true });
     const stagedNodePath = path.join(input.runTempRoot, "code-mode-node.exe");
+    const stagedHarnessPath = path.join(input.runTempRoot, "code-mode-harness.mjs");
     await fs.copyFile(input.nodePath, stagedNodePath);
+    await fs.copyFile(input.harnessPath, stagedHarnessPath);
     const launcherPath = path.join(input.runTempRoot, "code-mode-appcontainer-launcher.ps1");
     await fs.writeFile(
       launcherPath,
-      buildPowerShellLauncher({ ...input, nodePath: stagedNodePath }, [
+      buildPowerShellLauncher({ ...input, nodePath: stagedNodePath, harnessPath: stagedHarnessPath }, [
         `--max-old-space-size=${input.heapMb}`,
         "--input-type=module",
         "--eval",
-        buildHarnessEvalBootstrap(resolveSandboxRelativeArgument(input.runTempRoot, input.harnessPath)),
+        buildHarnessEvalBootstrap(resolveSandboxRelativeArgument(input.runTempRoot, stagedHarnessPath)),
       ]),
       "utf8",
     );
@@ -109,7 +111,7 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
       },
       shell: false,
       enforcedWorkspaceRoot: input.runTempRoot,
-      generatedArtifacts: [launcherPath, stagedNodePath],
+      generatedArtifacts: [launcherPath, stagedNodePath, stagedHarnessPath],
       advisoryUnsandboxed: false,
     };
   }
@@ -142,6 +144,7 @@ $profileName = ${quotePowerShell(profileName)}
 $displayName = 'GoatCitadel Code Mode'
 $workspace = ${quotePowerShell(input.runTempRoot)}
 $nodePath = ${quotePowerShell(input.nodePath)}
+$harnessPath = ${quotePowerShell(input.harnessPath)}
 $arguments = @(${nodeArguments.map((argument) => quotePowerShell(argument)).join(", ")})
 
 Add-Type -TypeDefinition @"
@@ -286,7 +289,7 @@ public static class GoatCitadelAppContainerLauncher {
     public UIntPtr PeakJobMemoryUsed;
   }
 
-  public static int Launch(string profileName, string displayName, string workspace, string nodePath, string[] arguments) {
+  public static int Launch(string profileName, string displayName, string workspace, string nodePath, string harnessPath, string[] arguments) {
     IntPtr sid;
     int result = CreateAppContainerProfile(profileName, displayName, "GoatCitadel Code Mode temporary sandbox", IntPtr.Zero, 0, out sid);
     if (result != 0) {
@@ -298,6 +301,8 @@ public static class GoatCitadelAppContainerLauncher {
 
     try {
       GrantWorkspaceAccess(workspace, sid);
+      GrantFileAccess(nodePath, sid, FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize);
+      GrantFileAccess(harnessPath, sid, FileSystemRights.Read | FileSystemRights.Synchronize);
 
       SECURITY_CAPABILITIES securityCapabilities = new SECURITY_CAPABILITIES();
       securityCapabilities.AppContainerSid = sid;
@@ -365,6 +370,13 @@ public static class GoatCitadelAppContainerLauncher {
     System.IO.Directory.SetAccessControl(workspace, security);
   }
 
+  private static void GrantFileAccess(string filePath, IntPtr sid, FileSystemRights rights) {
+    var security = System.IO.File.GetAccessControl(filePath);
+    var account = new SecurityIdentifier(sid);
+    security.AddAccessRule(new FileSystemAccessRule(account, rights, AccessControlType.Allow));
+    System.IO.File.SetAccessControl(filePath, security);
+  }
+
   private static void ApplyJobLimits(IntPtr job) {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
@@ -417,7 +429,7 @@ public static class GoatCitadelAppContainerLauncher {
 }
 "@
 
-exit [GoatCitadelAppContainerLauncher]::Launch($profileName, $displayName, $workspace, $nodePath, $arguments)
+exit [GoatCitadelAppContainerLauncher]::Launch($profileName, $displayName, $workspace, $nodePath, $harnessPath, $arguments)
 `;
 }
 

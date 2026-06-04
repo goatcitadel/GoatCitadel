@@ -1,15 +1,17 @@
 # Reproducible Release
 
-This document defines the current GoatCitadel release recipe for installer builds and the proof bundle that ships with each signed public Windows release.
+This document defines the current GoatCitadel release recipe for installer and bundle builds plus the proof bundle that ships with signed public Windows releases and experimental cross-platform artifacts.
 
 ## Scope
 
-This process covers the signed installer artifacts published by `.github/workflows/release-installers.yml`:
+This process covers the artifacts published by `.github/workflows/release-installers.yml`:
 
 - `windows-x64`
 - `windows-arm64`
+- `macos-arm64` experimental DMG when Developer ID signing and notarization credentials are configured
+- `linux-x64` experimental tarball
 
-macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets. Manual unsigned Windows workflow-dispatch runs are also development packaging smoke only: they may prove x64/arm64 build and install/uninstall behavior, but they are workflow artifacts, are not automatically published as a GitHub release, and never count as public-trust signed release proof. They may be manually attached only as clearly labeled unsigned convenience assets.
+Windows signed installers are the current public-trust installer surface. macOS and Linux stay experimental until a release workflow run emits signed/notarized evidence where applicable, checksums, smoke evidence, and an explicit support-matrix promotion. Manual unsigned workflow-dispatch runs are development packaging smoke only: they may prove Windows x64/arm64 build and install/uninstall behavior, Linux archive smoke, or ad-hoc macOS DMG smoke, but they are workflow artifacts, are not automatically published as a GitHub release, and never count as public-trust signed release proof. They may be manually attached only as clearly labeled unsigned or experimental convenience assets.
 
 ## Locked Inputs
 
@@ -51,8 +53,9 @@ node scripts/release/write-release-certificate.mjs --version <version> --tag <ta
 
 ## Environment Notes
 
-- Installer builds run on GitHub-hosted Windows runners.
+- Installer and bundle builds run on GitHub-hosted Windows, macOS, and Linux runners.
 - Public tag builds fail if Authenticode signing secrets are missing. Unsigned output is reserved for explicit manual/dev workflow runs, is not automatically published as a GitHub release, and may only be attached manually as clearly labeled unsigned convenience assets that do not count as public-trust signed release proof.
+- Public tag builds fail if macOS notarization secrets are missing for the experimental macOS DMG lane. Manual `allow_unsigned=true` macOS output is ad-hoc signed, non-notarized, and friend-smoke only.
 - The embedded Node archive is verified against a pinned `--node-sha256` value or the upstream Node `SHASUMS256.txt` entry before it is copied into the bundle.
 - The final release package is assembled on Ubuntu after the per-platform artifacts are downloaded.
 - GitHub Actions context values are copied into `provenance/build-metadata.json`, `provenance/slsa-attestation.json`, and the separate `release-certificate.json`.

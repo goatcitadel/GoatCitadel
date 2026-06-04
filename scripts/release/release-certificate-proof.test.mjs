@@ -135,6 +135,28 @@ test("release certificate requires hostile sandbox proof from the exact-SHA rele
   assert.match(writer, /exactShaMatched/);
 });
 
+test("release certificate requires direct exact-SHA A2A full proof", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
+  assert.ok(coveredBlock, "release proof covered lane list should be present");
+  assert.doesNotMatch(coveredBlock[1], /"verify:a2a:full"/);
+  assert.match(
+    writer,
+    /\{ name: "verify:a2a:full", workflowFile: "verification-a2a-full\.yml", required: true \}/,
+  );
+
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/verification-a2a-full.yml", import.meta.url), "utf8");
+  assert.match(workflow, /name:\s*Verification A2A Full/);
+  assert.match(workflow, /run:\s*pnpm verify:a2a:full/);
+  assert.match(workflow, /if-no-files-found:\s*error/);
+
+  const releaseWorkflow = fs.readFileSync(
+    new URL("../../.github/workflows/release-installers.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(releaseWorkflow, /--workflow verification-a2a-full\.yml/);
+});
+
 test("release package metadata locks release and packaging scripts with fail-closed commands", () => {
   const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
   assert.match(assembler, /lockedInputDigests/);
@@ -142,6 +164,12 @@ test("release package metadata locks release and packaging scripts with fail-clo
   assert.match(assembler, /scripts\/release/);
   assert.match(assembler, /wait-for-release-proof\.mjs --repository <owner\/repo> --commit <commit-sha>/);
   assert.match(assembler, /write-release-certificate\.mjs --version <version> --tag <tag>[\s\S]*--require-success/);
+});
+
+test("release artifact signing includes macOS DMGs and Linux tarballs", () => {
+  const signer = fs.readFileSync(new URL("./sign-release-artifacts.mjs", import.meta.url), "utf8");
+  assert.match(signer, /entry\.name\.endsWith\("\.dmg"\)/);
+  assert.match(signer, /entry\.name\.endsWith\("\.tar\.gz"\)/);
 });
 
 test("release package carries security triage docs with package-relative links", () => {

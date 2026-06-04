@@ -34,6 +34,7 @@ const bundleDir = path.resolve(
 const configPath = path.resolve(args.configOut || path.join(outDir, `GoatCitadel-${target}.tauri.conf.json`));
 const dmgFileName = `GoatCitadel-${version}-${target}.dmg`;
 const outDmgPath = path.join(outDir, dmgFileName);
+const signingIdentity = args.signingIdentity || process.env.GOATCITADEL_MACOS_SIGNING_IDENTITY || "-";
 
 await main();
 
@@ -88,12 +89,15 @@ async function main() {
 
   const builtDmg = findBuiltDmg(targetInfo.tauriTriple);
   fs.copyFileSync(builtDmg, outDmgPath);
+  if (args.notarize) {
+    notarizeAndStapleDmg(outDmgPath);
+  }
   fs.writeFileSync(`${outDmgPath}.sha256`, `${sha256(outDmgPath)} *${path.basename(outDmgPath)}\n`, "utf8");
   console.log(`Built experimental macOS installer: ${outDmgPath}`);
 }
 
 function parseArgs(argv) {
-  const parsed = { emitOnly: false, skipBuild: false };
+  const parsed = { emitOnly: false, skipBuild: false, notarize: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--target") {
@@ -131,6 +135,30 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (value === "--signing-identity") {
+      parsed.signingIdentity = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value === "--notarize") {
+      parsed.notarize = true;
+      continue;
+    }
+    if (value === "--notary-apple-id") {
+      parsed.notaryAppleId = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value === "--notary-team-id") {
+      parsed.notaryTeamId = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value === "--notary-password") {
+      parsed.notaryPassword = argv[index + 1];
+      index += 1;
+      continue;
+    }
     if (value === "--skip-build") {
       parsed.skipBuild = true;
       continue;
@@ -146,7 +174,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-macos-native-installer.mjs --target <macos-arm64> [--version <semver>] [--bundle-dir <dir>] [--out-dir <dir>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--config-out <path>] [--skip-build] [--emit-only]",
+    "Usage: node scripts/packaging/build-macos-native-installer.mjs --target <macos-arm64> [--version <semver>] [--bundle-dir <dir>] [--out-dir <dir>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--config-out <path>] [--signing-identity <identity>] [--notarize --notary-apple-id <id> --notary-team-id <team> --notary-password <password>] [--skip-build] [--emit-only]",
   );
 }
 
@@ -154,9 +182,36 @@ function writeMacTauriConfig(currentConfigPath, currentBundleDir) {
   const config = renderMacTauriConfig({
     bundleDir: path.resolve(currentBundleDir),
     version,
+    signingIdentity,
   });
   fs.mkdirSync(path.dirname(currentConfigPath), { recursive: true });
   fs.writeFileSync(currentConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+function notarizeAndStapleDmg(dmgPath) {
+  const appleId = args.notaryAppleId || process.env.GOATCITADEL_MACOS_NOTARY_APPLE_ID;
+  const teamId = args.notaryTeamId || process.env.GOATCITADEL_MACOS_NOTARY_TEAM_ID;
+  const password = args.notaryPassword || process.env.GOATCITADEL_MACOS_NOTARY_PASSWORD;
+  if (!appleId || !teamId || !password) {
+    throw new Error(
+      "macOS notarization requires --notary-apple-id, --notary-team-id, and --notary-password, or matching GOATCITADEL_MACOS_NOTARY_* environment variables.",
+    );
+  }
+
+  runCommand("xcrun", [
+    "notarytool",
+    "submit",
+    dmgPath,
+    "--apple-id",
+    appleId,
+    "--team-id",
+    teamId,
+    "--password",
+    password,
+    "--wait",
+  ]);
+  runCommand("xcrun", ["stapler", "staple", dmgPath]);
+  runCommand("xcrun", ["stapler", "validate", dmgPath]);
 }
 
 function runNode(nodeArgs) {
@@ -173,6 +228,14 @@ function runPnpm(pnpmArgs) {
     stdio: "inherit",
   });
   assertSuccessful(result, `pnpm ${pnpmArgs.join(" ")}`);
+}
+
+function runCommand(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  assertSuccessful(result, `${command} ${commandArgs.join(" ")}`);
 }
 
 function ensureRustTarget(triple) {

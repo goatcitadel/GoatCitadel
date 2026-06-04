@@ -135,6 +135,17 @@ test("macOS Tauri overlay embeds the runtime bundle and uses ad-hoc signing", ()
   assert.equal(config.bundle.macOS.signingIdentity, "-");
 });
 
+test("macOS Tauri overlay can use a Developer ID identity for notarized CI DMGs", () => {
+  const bundleDir = path.join(os.tmpdir(), "GoatCitadel-1.0.0-macos-arm64");
+  const config = renderMacTauriConfig({
+    bundleDir,
+    version: "1.0.0",
+    signingIdentity: "Developer ID Application: GoatCitadel Test (TEAMID)",
+  });
+
+  assert.equal(config.bundle.macOS.signingIdentity, "Developer ID Application: GoatCitadel Test (TEAMID)");
+});
+
 test("root package exposes package:macos without changing Windows scripts", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assert.equal(packageJson.scripts["package:macos"], "node scripts/packaging/build-macos-native-installer.mjs");
@@ -145,4 +156,14 @@ test("launcher source documents the macOS Application Support default", () => {
   const source = fs.readFileSync(path.join(repoRoot, "bin", "goatcitadel.mjs"), "utf8");
   assert.match(source, /Library", "Application Support", "GoatCitadel"/);
   assert.match(source, /GOATCITADEL_APP_DIR/);
+});
+
+test("release workflow carries experimental macOS and Linux packaging promotion lanes", () => {
+  const workflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-installers.yml"), "utf8");
+  assert.match(workflow, /name:\s*Release Installers and Bundles/);
+  assert.match(workflow, /pnpm package:macos --target macos-arm64 --notarize/);
+  assert.match(workflow, /macos-arm64-experimental-release-assets/);
+  assert.match(workflow, /pnpm package:bundle --target linux-x64 --skip-desktop/);
+  assert.match(workflow, /linux-x64-experimental-release-assets/);
+  assert.match(workflow, /GoatCitadel-\$\{PACKAGE_VERSION\}-linux-x64\.tar\.gz/);
 });

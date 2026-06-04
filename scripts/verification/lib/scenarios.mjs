@@ -536,6 +536,15 @@ export async function runCodeModeHostileSandboxLane(context) {
       if (!contents.win32.includes("GetStdHandle") || !contents.win32.includes("STARTF_USESTDHANDLES")) {
         issues.push("Windows AppContainer stdio JSON-RPC launcher must preserve inherited std handles.");
       }
+      if (
+        !contents.win32.includes("code-mode-harness.mjs") ||
+        !contents.win32.includes("GrantFileAccess(nodePath, sid") ||
+        !contents.win32.includes("GrantFileAccess(harnessPath, sid")
+      ) {
+        issues.push(
+          "Windows AppContainer launcher must stage the harness in the workspace and grant explicit SID access only to staged executable inputs.",
+        );
+      }
       if (!proof) {
         issues.push("Hostile sandbox proof CLI did not write a proof artifact.");
       } else {

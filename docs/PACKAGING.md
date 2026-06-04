@@ -6,10 +6,10 @@ GoatCitadel now has a packaged runtime contract for installer work.
 
 - `windows-x64`
 - `windows-arm64`
-- `macos-arm64` (experimental friend-smoke bundle/DMG only)
-- `linux-x64` (experimental source bundle only)
+- `macos-arm64` (experimental DMG; public release path requires Developer ID signing, notarization, stapling, checksum, and DMG smoke)
+- `linux-x64` (experimental release tarball with POSIX browser launcher)
 
-The current tagged release workflow publishes Windows proof only. The macOS arm64 scripts can create an ad-hoc-signed local DMG for friend smoke, and the Linux x64 bundle target can create a local POSIX browser-launcher bundle, but neither target is release proof. macOS and Linux release claims remain blocked until their installer artifacts, signing/notarization story where applicable, checksums, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
+The tagged release workflow publishes Windows proof, an experimental Linux x64 tarball, and a macOS arm64 DMG only when the macOS notarization credentials are present. The macOS arm64 workflow-dispatch path can still create an ad-hoc-signed DMG for friend smoke. macOS and Linux remain experimental until their exact release artifacts have signed/notarized evidence where applicable, checksums, and smoke output from `.github/workflows/release-installers.yml`.
 
 Deferred targets:
 
@@ -76,25 +76,25 @@ The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Star
 
 ## macOS packaging
 
-macOS arm64 packaging is experimental and is not published by the current release workflow:
+macOS arm64 packaging is experimental:
 
 - `GoatCitadel-1.0.0-macos-arm64.dmg`
 
 The DMG embeds the immutable packaged runtime inside the Tauri app at `Contents/Resources/goatcitadel`. The desktop host sets `GOATCITADEL_APP_DIR` to that immutable payload and keeps mutable runtime state under `~/Library/Application Support/GoatCitadel`, including `runtime-root`, logs, pid files, config, data, and artifacts.
 
-The first Mac lane uses ad-hoc signing (`signingIdentity: "-"`) for Apple Silicon friend testing. It is not notarized, may require Gatekeeper override, and must not be described as public-trust distribution.
+The manual unsigned Mac lane uses ad-hoc signing (`signingIdentity: "-"`) for Apple Silicon friend testing. It is not notarized, may require Gatekeeper override, and must not be described as public-trust distribution. The public release lane is fail-closed on Developer ID signing and Apple notarization credentials, runs `notarytool submit --wait`, staples the DMG, validates the staple, writes a checksum, and mounts the DMG for structural smoke before upload.
 
-Do not cite macOS packages as release proof until the workflow emits, signs/notarizes, and smoke-tests them.
+Do not cite macOS packages as public-trust proof until the workflow has actually emitted a signed/notarized, stapled, checksummed, and smoke-tested DMG for the exact release SHA.
 
 The later LaunchAgent stage should introduce a foreground `goatcitadel service run` supervisor before any `~/Library/LaunchAgents/com.goatcitadel.gateway.plist` install path is wired. Do not point `launchctl` at the one-shot `launch` command.
 
 ## Linux packaging
 
-Linux package scripts are experimental and are not published by the current release workflow:
+Linux package scripts are experimental:
 
 - `pnpm package:bundle --target linux-x64 --skip-desktop`
 
-The Linux x64 bundle emits a POSIX `bin/goatcitadel` launcher that opens the packaged web runtime rather than a native desktop host. It is a local/source bundle target only. Do not cite Linux packages as release proof until the workflow emits, signs, checksums, and smoke-tests them.
+The Linux x64 bundle emits a POSIX `bin/goatcitadel` launcher that opens the packaged web runtime rather than a native desktop host. The release workflow archives it as `GoatCitadel-<version>-linux-x64.tar.gz`, writes a `.sha256`, extracts it, verifies the launcher and experimental manifest, and publishes it as an experimental release asset. Do not cite Linux packages as non-experimental public-trust proof until a release run has signed, checksummed, and smoke-tested the exact artifact and the support matrix is deliberately promoted.
 
 ## Build commands
 
@@ -135,11 +135,11 @@ pnpm verify:fast
 
 ## Release workflow
 
-The GitHub Actions installer workflow currently builds Windows x64/arm64 installers. The desktop executable is built before the bundle, checked with `cargo check` and `cargo test`, and copied into `app/desktop/`. Public release publication requires signing before the final installer is uploaded.
+The GitHub Actions installer workflow builds Windows x64/arm64 installers, an experimental Linux x64 tarball, and a macOS arm64 DMG when the notarization credentials are configured. The Windows desktop executable is built before the bundle, checked with `cargo check` and `cargo test`, and copied into `app/desktop/`. Public release publication requires signing before the final Windows installer is uploaded.
 
 Public-trust signed Windows releases are fail-closed: Authenticode signing secrets must be present, and `signtool verify /pa` must pass for both the desktop executable and the generated installer. The `v1.0.0` GitHub release may attach unsigned Windows x64/arm64 installers as clearly labeled convenience assets from an explicit manual workflow run with `allow_unsigned=true`; those assets are not Authenticode-signed, do not carry `release-certificate.json` public-trust status, and must not be described as signed installer proof. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
 
-Before public release upload, the workflow also verifies that both Windows matrix targets produced installers/checksums and runs a silent install/uninstall smoke for each generated Windows installer. The manual unsigned smoke path runs the same matrix build and install/uninstall smoke, and its artifacts are named as unsigned package smoke assets; for `v1.0.0`, those artifacts may be copied onto the GitHub release only with explicit unsigned labeling.
+Before public release upload, the workflow verifies that both Windows matrix targets produced installers/checksums and runs a silent install/uninstall smoke for each generated Windows installer. It also requires the experimental Linux tarball/checksum and experimental macOS DMG/checksum artifacts when the public release job runs. The manual unsigned smoke path runs Windows install/uninstall smoke, Linux archive smoke, and macOS ad-hoc DMG smoke; those artifacts are named as unsigned or experimental package smoke assets and may be copied onto `v1.0.0` only with explicit unsigned/experimental labeling.
 
 Tagged releases assemble a proof bundle alongside the raw installers. The proof bundle includes:
 

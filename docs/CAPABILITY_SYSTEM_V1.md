@@ -82,7 +82,7 @@ Code Mode v1 is intentionally narrow:
 - feature-flagged by `codeModeV1Enabled`
 - operator-approved before every run
 - trusted-code only
-- no cross-platform hostile-code guarantees
+- no hostile-code guarantees beyond explicitly proof-scoped platform wording
 - read-only deterministic wrappers only
 - no in-program approval pause/resume
 

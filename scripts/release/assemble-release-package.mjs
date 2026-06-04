@@ -241,7 +241,7 @@ function buildMetadataRecord(input) {
     commit: process.env.GITHUB_SHA ?? null,
     repository: process.env.GITHUB_REPOSITORY ?? null,
     workflow: {
-      name: process.env.GITHUB_WORKFLOW ?? "Release Installers",
+      name: process.env.GITHUB_WORKFLOW ?? "Release Installers and Bundles",
       ref: workflowRef,
       runId: process.env.GITHUB_RUN_ID ?? null,
       runNumber: process.env.GITHUB_RUN_NUMBER ?? null,
@@ -290,7 +290,7 @@ function buildSlsaAttestation(input) {
         externalParameters: {
           version: input.version,
           tag: input.tagName,
-          workflow: process.env.GITHUB_WORKFLOW ?? "Release Installers",
+          workflow: process.env.GITHUB_WORKFLOW ?? "Release Installers and Bundles",
         },
         internalParameters: {
           repository: process.env.GITHUB_REPOSITORY ?? "local",

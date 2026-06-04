@@ -48,6 +48,7 @@ const REQUIRED_LANE_SPECS = [
   { name: "verify:backup:roundtrip", workflowFile: "verification-backup-roundtrip.yml", required: true },
   { name: "verify:catalog:parity", workflowFile: "verification-catalog-parity.yml", required: true },
   { name: "verify:api:compat", workflowFile: "verification-api-compat.yml", required: true },
+  { name: "verify:a2a:full", workflowFile: "verification-a2a-full.yml", required: true },
   { name: "docs:check", workflowFile: "verification-docs-check.yml", required: true },
   { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
 ].map((spec) => ({
@@ -93,7 +94,7 @@ const certificate = {
   repository,
   generatedAt: new Date().toISOString(),
   releaseWorkflow: {
-    name: process.env.GITHUB_WORKFLOW ?? "Release Windows Installers",
+    name: process.env.GITHUB_WORKFLOW ?? "Release Installers and Bundles",
     runId: process.env.GITHUB_RUN_ID ?? null,
     runNumber: process.env.GITHUB_RUN_NUMBER ?? null,
     runUrl:

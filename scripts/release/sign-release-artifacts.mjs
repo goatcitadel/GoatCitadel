@@ -96,6 +96,7 @@ function listArtifactFiles(rootDir) {
       }
       if (
         entry.name.endsWith(".exe") ||
+        entry.name.endsWith(".dmg") ||
         entry.name.endsWith(".pkg") ||
         entry.name.endsWith(".zip") ||
         entry.name.endsWith(".tar.gz")

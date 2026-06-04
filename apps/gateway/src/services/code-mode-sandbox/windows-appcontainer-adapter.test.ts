@@ -77,10 +77,18 @@ describe("WindowsAppContainerSandboxAdapter", () => {
       advisoryUnsandboxed: false,
     });
     expect(launch.env.GOATCITADEL_CODE_MODE_TRANSPORT).toBe("stdio_jsonrpc");
+    expect(launch.generatedArtifacts.map((artifact) => path.basename(artifact))).toEqual(
+      expect.arrayContaining(["code-mode-appcontainer-launcher.ps1", "code-mode-node.exe", "code-mode-harness.mjs"]),
+    );
     const launcherPath = path.join(root, "run", "code-mode-appcontainer-launcher.ps1");
     await expect(fs.stat(launcherPath)).resolves.toBeTruthy();
-    await expect(fs.readFile(launcherPath, "utf8")).resolves.toEqual(expect.stringContaining("GetStdHandle"));
-    await expect(fs.readFile(launcherPath, "utf8")).resolves.toEqual(expect.stringContaining("STARTF_USESTDHANDLES"));
+    const launcher = await fs.readFile(launcherPath, "utf8");
+    expect(launcher).toContain("GetStdHandle");
+    expect(launcher).toContain("STARTF_USESTDHANDLES");
+    expect(launcher).toContain("$harnessPath");
+    expect(launcher).toContain("GrantFileAccess(nodePath, sid");
+    expect(launcher).toContain("GrantFileAccess(harnessPath, sid");
+    await expect(fs.stat(path.join(root, "run", "code-mode-harness.mjs"))).resolves.toBeTruthy();
   });
 
   it("rejects launcher paths with unsafe profile characters before writing launch artifacts", async () => {

@@ -128,7 +128,7 @@ export function buildReleaseManifest({
   return manifest;
 }
 
-export function renderMacTauriConfig({ bundleDir, version }) {
+export function renderMacTauriConfig({ bundleDir, version, signingIdentity = "-" }) {
   return {
     version,
     bundle: {
@@ -139,7 +139,7 @@ export function renderMacTauriConfig({ bundleDir, version }) {
           "Resources/goatcitadel": bundleDir,
         },
         minimumSystemVersion: "13.0",
-        signingIdentity: "-",
+        signingIdentity,
         dmg: {
           appPosition: { x: 180, y: 220 },
           applicationFolderPosition: { x: 480, y: 220 },
