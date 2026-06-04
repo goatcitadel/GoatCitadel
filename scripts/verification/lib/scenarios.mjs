@@ -135,6 +135,11 @@ export const A2A_FULL_LANE_COMMANDS = Object.freeze([
     args: ["verify:storage:migration-parity"],
   },
   {
+    id: "a2a-full.mission-control-shared-build",
+    title: "A2A Mission Control shared build",
+    args: ["--filter", "@goatcitadel/mission-control-shared", "build"],
+  },
+  {
     id: "a2a-full.gateway-typecheck",
     title: "Gateway A2A typecheck",
     args: ["--filter", "@goatcitadel/gateway", "typecheck"],
