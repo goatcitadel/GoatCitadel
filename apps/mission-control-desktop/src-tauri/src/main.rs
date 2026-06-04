@@ -662,6 +662,9 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
         if let Some(invocation) = invocation_under_macos_resource_root(&macos_resource_root) {
             return Ok(invocation);
         }
+        if let Some(invocation) = invocation_for_packaged_app_dir(ancestor) {
+            return Ok(invocation);
+        }
         if ancestor.join("app").join("release-manifest.json").exists() {
             if let Some(invocation) = invocation_under_install_root(ancestor) {
                 return Ok(invocation);
@@ -681,6 +684,14 @@ fn resolve_launcher() -> Result<LauncherInvocation, String> {
     }
 
     Err("Unable to locate GoatCitadel launcher from the desktop app location.".to_string())
+}
+
+fn invocation_for_packaged_app_dir(app_dir: &Path) -> Option<LauncherInvocation> {
+    if !app_dir.join("release-manifest.json").exists() {
+        return None;
+    }
+    let install_root = app_dir.parent()?;
+    invocation_under_install_root(install_root)
 }
 
 fn invocation_under_install_root(root: &Path) -> Option<LauncherInvocation> {
@@ -950,6 +961,7 @@ fn trim_trailing_slash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn validates_browser_targets_to_loopback_hosts() {
@@ -982,6 +994,41 @@ mod tests {
         assert_eq!(quote_windows_command_arg("plain"), "plain");
         assert_eq!(quote_windows_command_arg("with space"), "\"with space\"");
         assert_eq!(quote_windows_command_arg("a&b"), "\"a&b\"");
+    }
+
+    #[test]
+    fn packaged_app_dir_resolves_to_parent_install_root() {
+        let root = env::temp_dir().join(format!(
+            "goatcitadel-desktop-launcher-test-{}",
+            std::process::id()
+        ));
+        let app_dir = root.join("app");
+        let node_name = if cfg!(target_os = "windows") {
+            "node.exe"
+        } else {
+            "node"
+        };
+        let node_path = app_dir.join("runtime").join("node").join(node_name);
+        let launcher_path = app_dir.join("bin").join("goatcitadel.mjs");
+
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir_all(node_path.parent().expect("node parent")).expect("node dir");
+        fs::create_dir_all(launcher_path.parent().expect("launcher parent")).expect("bin dir");
+        fs::write(app_dir.join("release-manifest.json"), "{}").expect("manifest");
+        fs::write(&node_path, "").expect("node");
+        fs::write(&launcher_path, "").expect("launcher");
+
+        let invocation =
+            invocation_for_packaged_app_dir(&app_dir).expect("packaged app invocation");
+        assert_eq!(invocation.install_root, root);
+        assert_eq!(invocation.working_dir, root);
+        assert_eq!(invocation.program, node_path.to_string_lossy());
+        assert_eq!(
+            invocation.args_prefix,
+            vec![launcher_path.to_string_lossy()]
+        );
+
+        fs::remove_dir_all(invocation.install_root).ok();
     }
 
     #[test]
