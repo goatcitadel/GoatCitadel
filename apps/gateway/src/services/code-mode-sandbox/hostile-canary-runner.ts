@@ -44,7 +44,7 @@ const CODE_MODE_ENV_PASSTHROUGH_KEYS = [
 const HOSTILE_CANARY_SECRET_ENV = "GOATCITADEL_HOSTILE_CANARY_SECRET";
 const HOSTILE_CANARY_SECRET_VALUE = "goatcitadel-hostile-canary-synthetic-secret";
 const HOSTILE_CANARY_TIMEOUT_MS = 15_000;
-const HOSTILE_CANARY_WINDOWS_APPCONTAINER_TIMEOUT_MS = 45_000;
+const HOSTILE_CANARY_WINDOWS_APPCONTAINER_TIMEOUT_MS = 120_000;
 
 export interface CodeModeHostileSandboxCanaryResult {
   name: CodeModeHostileSandboxCanary;
@@ -187,7 +187,11 @@ export async function runCodeModeHostileSandboxCanaries(
   } finally {
     await closeServer(server);
     if (!options.preserveTempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      try {
+        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+      } catch (error) {
+        setupWarnings.push(`temp cleanup failed: ${clampForEvidence(errorMessage(error), 320)}`);
+      }
     }
   }
 
@@ -513,6 +517,10 @@ function redactCanaryOutput(value: string): string {
 
 function clampForEvidence(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const HOSTILE_CANARY_HARNESS_SOURCE = String.raw`import { spawn } from "node:child_process";
