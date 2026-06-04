@@ -579,6 +579,22 @@ export interface PromptPackExportRecord {
       promptCount: number;
       providerCount: number;
       testCount: number;
+      assertionCount?: number;
+      runRowCount?: number;
+      traceLinkCount?: number;
+      toolUseExpectationCount?: number;
+      redactionPosture?: "redacted_export" | "source_defined" | "unknown";
+      seededSampling?: {
+        deterministic: boolean;
+        seed?: string;
+        sampleCount?: number;
+      };
+      goatcitadelProvenance?: {
+        packId: string;
+        exportEndpoint: string;
+        importedMaterialCallable: false;
+        sideEffectPosture: "export_only" | "preview_only";
+      };
       notes: string[];
     };
   };

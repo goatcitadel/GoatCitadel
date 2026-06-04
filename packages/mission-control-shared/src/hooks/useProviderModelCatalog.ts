@@ -29,6 +29,12 @@ export interface ProviderModelCatalogOption {
   hasApiKey?: boolean;
   capabilities?: RuntimeSettingsResponse["llm"]["providers"][number]["capabilities"];
   models: string[];
+  sanitizedEndpointIdentity: string;
+  localCostPosture?: "zero_cost_local_runtime" | "unknown";
+  contextLimitSource?: "provider_config" | "runtime_active_model" | "template_fallback" | "unknown";
+  contextWindowTokens?: number;
+  contextWindowMismatch?: boolean;
+  modelRefreshStatus?: "fresh" | "stale" | "not_checked" | "error";
   modelProbeState?: ProviderModelProbeState;
   modelProbeSource?: ProviderModelProbeSource;
   modelProbeCheckedAt?: string;
@@ -93,6 +99,13 @@ function buildProviderCatalog(
   return config.providers.map((provider) => {
     const cached = getValidProviderModelCacheEntry(cache, provider.providerId, now);
     const template = findProviderTemplate(provider.providerId);
+    const activeContext =
+      provider.providerId === config.activeProviderId
+        ? readOptionalNumber(config, "activeModelContextWindow")
+        : undefined;
+    const providerContext = readOptionalNumber(provider, "activeModelContextWindow");
+    const contextWindowTokens = providerContext ?? activeContext;
+    const isLocal = isLocalProvider(provider.providerId, provider.baseUrl);
     return {
       providerId: provider.providerId,
       label: provider.label,
@@ -110,12 +123,58 @@ function buildProviderCatalog(
         ...(template?.knownModels ?? []),
         ...(cached?.items ?? []),
       ]),
+      sanitizedEndpointIdentity: sanitizeProviderEndpointIdentity(provider.baseUrl),
+      localCostPosture: isLocal ? "zero_cost_local_runtime" : undefined,
+      contextLimitSource: providerContext ? "provider_config" : activeContext ? "runtime_active_model" : "unknown",
+      contextWindowTokens,
+      contextWindowMismatch:
+        typeof providerContext === "number" &&
+        typeof activeContext === "number" &&
+        provider.providerId === config.activeProviderId &&
+        providerContext !== activeContext,
+      modelRefreshStatus: cached
+        ? cached.state === "error"
+          ? "error"
+          : cached.expiresAt > now
+            ? "fresh"
+            : "stale"
+        : "not_checked",
       modelProbeState: cached?.state ?? "not_checked",
       modelProbeSource: cached?.source,
       modelProbeCheckedAt: cached?.checkedAt,
       modelProbeWarning: cached?.warning,
     } satisfies ProviderModelCatalogOption;
   });
+}
+
+function isLocalProvider(providerId: string, baseUrl: string): boolean {
+  const normalizedProvider = providerId.toLowerCase();
+  if (normalizedProvider.includes("local") || normalizedProvider === "ollama" || normalizedProvider === "lmstudio") {
+    return true;
+  }
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeProviderEndpointIdentity(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "custom endpoint";
+  }
+}
+
+function readOptionalNumber(source: unknown, key: string): number | undefined {
+  if (typeof source !== "object" || source === null) {
+    return undefined;
+  }
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export async function previewProviderModels(

@@ -17,6 +17,21 @@ export interface ReviewReadinessSummary {
   lanes: ReviewReadinessLane[];
   openFindings: number;
   linkedTasks: TaskRecord[];
+  releaseProof?: {
+    sourceCertificate: "release-certificate.json";
+    exactShaStatus: "exact" | "partial" | "missing" | "unknown";
+    artifacts: Array<{
+      name: string;
+      platformArch: string;
+      signatureStatus: "signed" | "unsigned" | "experimental";
+      sha256: string;
+      sizeBytes: number;
+      sourceWorkflow: string;
+      exactShaStatus: string;
+      certificateInclusion: "included" | "missing";
+      acceptedCaveats: string[];
+    }>;
+  };
 }
 
 export interface ReviewFindingInput {

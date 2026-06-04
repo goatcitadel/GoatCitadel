@@ -2333,8 +2333,21 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                         <p>
                           {backend.kind} · {backend.status} · {backend.runtimeSupport}
                           {backend.default ? " · default" : ""}
+                          {backend.evaluationOnly ? " · evaluation only" : ""}
                         </p>
-                        <p>{backend.callable ? "Callable for approved Code Mode runs." : backend.blockers[0]}</p>
+                        <p>
+                          {backend.callable
+                            ? "Callable for approved Code Mode runs."
+                            : (backend.blockers[0] ?? "Reference only; not callable.")}
+                        </p>
+                        {backend.evaluation ? (
+                          <p>
+                            Matrix: path {backend.evaluation.pathIsolation}, network{" "}
+                            {backend.evaluation.networkControls}, artifacts {backend.evaluation.artifactCapture},
+                            Windows {backend.evaluation.windowsSupport}. Proof:{" "}
+                            {backend.evaluation.requiredProofLanes.join(", ")}
+                          </p>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

@@ -141,4 +141,47 @@ describe("ReviewReadinessService", () => {
       artifactRef: path.join("artifacts", "verification", "2026-05-27T00-00-00Z-fast"),
     });
   });
+
+  it("projects release artifact proof rows from release-certificate.json when present", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-review-readiness-"));
+    tempDirs.push(rootDir);
+    const releaseDir = path.join(rootDir, "artifacts", "release");
+    fs.mkdirSync(releaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(releaseDir, "release-certificate.json"),
+      JSON.stringify({
+        commit: "abc123",
+        releaseWorkflow: { name: "Release Installers and Bundles" },
+        requiredLanes: [{ directRun: { head_sha: "abc123" } }],
+        releaseAssets: [
+          { fileName: "GoatCitadel-linux-x64.tar.gz", sha256: "sha", sizeBytes: 321 },
+          { fileName: "GoatCitadel-linux-x64.tar.gz.sig", sha256: "sig-sha", sizeBytes: 21 },
+        ],
+      }),
+    );
+    const service = new ReviewReadinessService({
+      rootDir,
+      taskLifecycleService: {
+        listTasks: vi.fn(() => []),
+        createTask: vi.fn(),
+        updateTask: vi.fn(),
+        appendTaskActivity: vi.fn(),
+        appendTaskDeliverable: vi.fn(),
+      } as never,
+    });
+
+    const releaseProof = service.getReadiness().releaseProof;
+    expect(releaseProof).toMatchObject({
+      sourceCertificate: "release-certificate.json",
+      exactShaStatus: "exact",
+    });
+    expect(releaseProof?.artifacts.find((artifact) => artifact.name === "GoatCitadel-linux-x64.tar.gz")).toMatchObject({
+      name: "GoatCitadel-linux-x64.tar.gz",
+      platformArch: "linux/x64",
+      signatureStatus: "signed",
+      sha256: "sha",
+      sizeBytes: 321,
+      sourceWorkflow: "Release Installers and Bundles",
+    });
+  });
 });

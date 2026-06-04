@@ -41,3 +41,26 @@ export interface EvidenceEnvelopeListQuery {
 export interface EvidenceEnvelopeListResponse {
   items: EvidenceEnvelope[];
 }
+
+export type BrowserProofActionKind = "observe" | "extract" | "act";
+
+export interface BrowserProofRecord {
+  proofId: string;
+  actionKind: BrowserProofActionKind;
+  targetDescription: string;
+  selector?: string;
+  semanticTarget?: string;
+  screenshotRef?: string;
+  screenshotSha256?: string;
+  artifactRefs?: string[];
+  actionResult: "succeeded" | "blocked" | "failed" | "unknown";
+  policyDecision: "allowed" | "blocked" | "requires_approval" | "not_evaluated";
+  privateHostGuard: "allowed" | "blocked" | "not_applicable" | "unknown";
+  networkGuard: "allowed" | "blocked" | "not_applicable" | "unknown";
+  redactionSummary: {
+    applied: boolean;
+    fields: string[];
+    note: string;
+  };
+  createdAt: string;
+}

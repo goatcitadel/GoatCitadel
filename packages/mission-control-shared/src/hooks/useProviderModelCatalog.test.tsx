@@ -166,6 +166,14 @@ describe("useProviderModelCatalog", () => {
       apiKeySource: "env",
       hasApiKey: true,
       modelProbeState: "not_checked",
+      sanitizedEndpointIdentity: "https://api.openai.com",
+      modelRefreshStatus: "not_checked",
+    });
+    expect(hook.result.providers[1]).toMatchObject({
+      providerId: "custom",
+      sanitizedEndpointIdentity: "http://localhost:11434",
+      localCostPosture: "zero_cost_local_runtime",
+      contextLimitSource: "unknown",
     });
     expect(hook.result.providers[0]?.models).toEqual(expect.arrayContaining(["gpt-default", "gpt-active"]));
     expect(refreshMocks.useRefreshSubscription).toHaveBeenCalledWith("chat", expect.any(Function), {

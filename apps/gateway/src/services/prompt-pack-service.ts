@@ -2322,7 +2322,7 @@ export class PromptPackService {
     const latestSnapshot = this.readLatestPromptPackSnapshot(archiveDir, snapshotPrefix, ".json", "_promptfoo");
     const snapshotCount = this.countPromptPackSnapshots(archiveDir, snapshotPrefix, ".json", "_promptfoo");
     const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
-    const interop = buildPromptfooExportInterop(tests);
+    const interop = buildPromptfooExportInterop(tests, pack);
     const snapshotFields = latestSnapshot
       ? {
           latestSnapshotPath: latestSnapshot.path,
@@ -3196,7 +3196,16 @@ function buildPromptfooExportPayload(report: PromptPackReportRecord, generatedAt
   };
 }
 
-function buildPromptfooExportInterop(tests: PromptPackTestRecord[]): PromptPackExportRecord["interop"] {
+function buildPromptfooExportInterop(
+  tests: PromptPackTestRecord[],
+  pack?: PromptPackRecord,
+): PromptPackExportRecord["interop"] {
+  const assertionCount = tests.reduce((count, test) => {
+    const expectedSignals = test.diagnosticMetadata?.expectedRuntimeSignals?.length ?? 0;
+    const likelyFailures = test.diagnosticMetadata?.likelyFailureClasses?.length ?? 0;
+    return count + Math.max(1, expectedSignals + likelyFailures);
+  }, 0);
+  const toolUseExpectationCount = tests.filter((test) => test.toolTier && test.toolTier !== "no-tools").length;
   return {
     promptfoo: {
       compatible: true,
@@ -3204,9 +3213,28 @@ function buildPromptfooExportInterop(tests: PromptPackTestRecord[]): PromptPackE
       promptCount: 1,
       providerCount: 1,
       testCount: tests.length,
+      assertionCount,
+      runRowCount: 0,
+      traceLinkCount: 0,
+      toolUseExpectationCount,
+      redactionPosture: "redacted_export",
+      seededSampling: {
+        deterministic: true,
+        seed: pack?.packId,
+        sampleCount: tests.length,
+      },
+      goatcitadelProvenance: pack
+        ? {
+            packId: pack.packId,
+            exportEndpoint: `/api/v1/prompt-packs/${pack.packId}/export?format=promptfoo`,
+            importedMaterialCallable: false,
+            sideEffectPosture: "export_only",
+          }
+        : undefined,
       notes: [
         "Export is read-only JSON and uses an operator-provided provider placeholder.",
         "GoatCitadel does not run Promptfoo or call providers while exporting.",
+        "Imported Promptfoo-shaped material is preview-only evidence and is not callable or auto-promoted.",
       ],
     },
   };

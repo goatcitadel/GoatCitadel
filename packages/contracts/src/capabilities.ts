@@ -205,9 +205,31 @@ export interface CodeModeHostileSandboxClaimMetadata {
   governance: string[];
 }
 
-export type CodeModeExecutionBackendKind = "host" | "docker" | "aider_adapter";
+export type CodeModeExecutionBackendKind =
+  | "host"
+  | "docker"
+  | "aider_adapter"
+  | "e2b"
+  | "daytona"
+  | "sandbox0"
+  | "kubernetes_agent_sandbox";
 export type CodeModeExecutionBackendStatus = "active" | "available" | "preview" | "blocked" | "unknown";
 export type CodeModeExecutionRuntimeSupport = "active_runner" | "preview_only" | "not_available";
+
+export type CodeModeBackendEvaluationScore = "strong" | "partial" | "weak" | "unknown" | "not_applicable";
+
+export interface CodeModeBackendEvaluationMatrix {
+  credentialStorage: CodeModeBackendEvaluationScore;
+  pathIsolation: CodeModeBackendEvaluationScore;
+  networkControls: CodeModeBackendEvaluationScore;
+  artifactCapture: CodeModeBackendEvaluationScore;
+  resumeStateSemantics: CodeModeBackendEvaluationScore;
+  windowsSupport: CodeModeBackendEvaluationScore;
+  localFirstViability: CodeModeBackendEvaluationScore;
+  license: CodeModeBackendEvaluationScore;
+  cost: CodeModeBackendEvaluationScore;
+  requiredProofLanes: string[];
+}
 
 export interface CodeModeRunExecutionBackendRef {
   backendId: string;
@@ -225,10 +247,18 @@ export interface CodeModeExecutionBackendRecord extends CodeModeRunExecutionBack
   description: string;
   blockers: string[];
   governance: string[];
+  evaluationOnly?: boolean;
+  evaluation?: CodeModeBackendEvaluationMatrix;
   evidence: {
     sandbox?: CodeModeSandboxMetadata;
     detectedCommand?: string;
     envFlag?: string;
+    credentialFileChecks?: Array<{
+      pathLabel: string;
+      exists: boolean;
+      permissionStatus: "ok" | "too_broad" | "missing" | "unknown";
+      note: string;
+    }>;
   };
 }
 

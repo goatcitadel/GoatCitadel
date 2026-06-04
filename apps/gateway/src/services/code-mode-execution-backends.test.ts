@@ -80,6 +80,33 @@ describe("code-mode-execution-backends", () => {
       isolationProfile: "docker/aider-audit/no_operator_workspace",
     });
   });
+
+  it("includes unsupported backend candidates as evaluation-only metadata", () => {
+    const response = buildCodeModeExecutionBackends({
+      codeModeEnabled: true,
+      sandbox: sandboxMetadata(),
+      env: {},
+    });
+
+    const e2b = response.items.find((item) => item.backendId === "e2b-reference");
+    const kubernetes = response.items.find((item) => item.backendId === "kubernetes-agent-sandbox-reference");
+
+    expect(e2b).toMatchObject({
+      callable: false,
+      evaluationOnly: true,
+      runtimeSupport: "preview_only",
+      blockers: ["Reference/evaluation only: no configured GoatCitadel execution backend exists."],
+      evaluation: {
+        localFirstViability: "weak",
+        requiredProofLanes: expect.arrayContaining(["verify:code-mode:sandbox", "docs:check"]),
+      },
+    });
+    expect(kubernetes).toMatchObject({
+      kind: "kubernetes_agent_sandbox",
+      evaluationOnly: true,
+      callable: false,
+    });
+  });
 });
 
 function sandboxMetadata(): CodeModeSandboxMetadata {

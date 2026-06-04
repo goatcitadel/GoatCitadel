@@ -183,8 +183,28 @@ export interface ExternalSideEffectRunListQuery {
   limit?: number;
 }
 
+export interface ExternalSideEffectRunHealthSummary {
+  generatedAt: string;
+  total: number;
+  successRate: number;
+  failedBeforeBoundaryCount: number;
+  unknownOutcomeCount: number;
+  staleClaimedNotSentCount: number;
+  replayAuditEligibleCount: number;
+  lastStatusCheckAt?: string;
+  manualReconciliationCount: number;
+  posture: {
+    readOnly: true;
+    operatorTriggeredStatusReads: true;
+    hiddenPolling: false;
+    managedWorkflowLifecycle: false;
+    note: string;
+  };
+}
+
 export interface ExternalSideEffectRunListResponse {
   items: ExternalSideEffectRunRecord[];
+  summary?: ExternalSideEffectRunHealthSummary;
 }
 
 export interface IntegrationExternalWritebackEnvelope {

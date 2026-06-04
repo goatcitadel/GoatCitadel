@@ -40,6 +40,7 @@ export class ReviewReadinessService {
       lanes: READINESS_LANES.map((lane) => this.resolveLane(lane.lane, lane.command)),
       openFindings: linkedTasks.filter((task) => task.status !== "done").length,
       linkedTasks,
+      releaseProof: this.readReleaseProofSummary(),
     };
   }
 
@@ -115,6 +116,51 @@ export class ReviewReadinessService {
       lastRunAt: artifact.modifiedAt.toISOString(),
       rerunHint: command,
     };
+  }
+
+  private readReleaseProofSummary(): ReviewReadinessSummary["releaseProof"] | undefined {
+    const certificatePath = path.join(this.deps.rootDir, "artifacts", "release", "release-certificate.json");
+    if (!fs.existsSync(certificatePath)) {
+      return undefined;
+    }
+    try {
+      const certificate = JSON.parse(fs.readFileSync(certificatePath, "utf8")) as Record<string, unknown>;
+      const artifacts = Array.isArray(certificate.releaseAssets) ? certificate.releaseAssets : [];
+      const requiredLanes = Array.isArray(certificate.requiredLanes) ? certificate.requiredLanes : [];
+      const acceptedCaveats = Array.isArray(certificate.acceptedFailures)
+        ? certificate.acceptedFailures.map((item) => String(item))
+        : [];
+      const exactShaStatus = summarizeReleaseExactShaStatus(requiredLanes, readString(certificate.commit));
+      return {
+        sourceCertificate: "release-certificate.json",
+        exactShaStatus,
+        artifacts: artifacts.map((artifact) => {
+          const record = isRecord(artifact) ? artifact : {};
+          const name =
+            readString(record.name) ??
+            readString(record.fileName) ??
+            readString(record.relativePath) ??
+            readString(record.path) ??
+            "unknown";
+          return {
+            name,
+            platformArch: inferReleasePlatformArch(name),
+            signatureStatus: inferReleaseSignatureStatus(record, artifacts),
+            sha256:
+              readString(record.sha256) ?? readString(record.digestSha256) ?? readString(record.hash) ?? "missing",
+            sizeBytes: readNumber(record.sizeBytes) ?? readNumber(record.size) ?? 0,
+            sourceWorkflow:
+              readString(isRecord(certificate.releaseWorkflow) ? certificate.releaseWorkflow.name : undefined) ??
+              "unknown",
+            exactShaStatus,
+            certificateInclusion: "included",
+            acceptedCaveats,
+          };
+        }),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private git(args: string[]): string | undefined {
@@ -232,4 +278,82 @@ function artifactMatchesLane(artifactPath: string, lane: string): boolean {
   } catch {
     return false;
   }
+}
+
+function summarizeReleaseExactShaStatus(requiredLanes: unknown[], commit: string | undefined) {
+  if (!commit) {
+    return "unknown";
+  }
+  if (!requiredLanes.length) {
+    return "unknown";
+  }
+  const matching = requiredLanes.filter((lane) => {
+    if (!isRecord(lane)) {
+      return false;
+    }
+    const directRun = isRecord(lane.directRun) ? lane.directRun : {};
+    const releaseProofRun = isRecord(lane.releaseProofRun) ? lane.releaseProofRun : {};
+    return (
+      readString(directRun.headSha) === commit ||
+      readString(directRun.head_sha) === commit ||
+      readString(releaseProofRun.headSha) === commit ||
+      readString(releaseProofRun.head_sha) === commit
+    );
+  }).length;
+  return matching === requiredLanes.length ? "exact" : matching > 0 ? "partial" : "missing";
+}
+
+function inferReleaseSignatureStatus(
+  record: Record<string, unknown>,
+  artifacts: unknown[],
+): "signed" | "unsigned" | "experimental" {
+  if (record.signature || record.signaturePath || record.certificatePath) {
+    return "signed";
+  }
+  const name = readString(record.name) ?? readString(record.fileName) ?? readString(record.relativePath) ?? "";
+  if (name.endsWith(".sig") || name.endsWith(".pem")) {
+    return "signed";
+  }
+  const siblingNames = new Set(
+    artifacts
+      .map((artifact) => (isRecord(artifact) ? artifact : {}))
+      .map(
+        (artifact) =>
+          readString(artifact.name) ?? readString(artifact.fileName) ?? readString(artifact.relativePath) ?? "",
+      ),
+  );
+  if (siblingNames.has(`${name}.sig`) || siblingNames.has(`${name}.pem`) || siblingNames.has(`${name}.cert.pem`)) {
+    return "signed";
+  }
+  return /experimental|preview/i.test(name) ? "experimental" : "unsigned";
+}
+
+function inferReleasePlatformArch(name: string): string {
+  const lower = name.toLowerCase();
+  const platform = lower.includes("win")
+    ? "windows"
+    : lower.includes("mac") || lower.includes("darwin") || lower.endsWith(".dmg")
+      ? "macos"
+      : lower.includes("linux") || lower.endsWith(".tar.gz")
+        ? "linux"
+        : "unknown";
+  const arch =
+    lower.includes("arm64") || lower.includes("aarch64")
+      ? "arm64"
+      : lower.includes("x64") || lower.includes("amd64")
+        ? "x64"
+        : "unknown";
+  return `${platform}/${arch}`;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

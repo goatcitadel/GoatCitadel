@@ -664,6 +664,24 @@ function ProposalTrustReviewPanel({
     : (curatorReview?.candidate.status ?? proposal?.status ?? "not requested");
   const mutationApplied = Boolean(curatorReview?.mutationApplied);
   const evidence = curatorReview?.evidence.length ? curatorReview.evidence : readPayloadEvidenceRefs(payload);
+  const supportPreview =
+    readPayloadString(payload, ["supportPreview", "supportFilePreview", "supportFiles.preview"]) ??
+    (evidence.length
+      ? `${evidence.length} support reference${evidence.length === 1 ? "" : "s"} attached.`
+      : "No support-file preview attached.");
+  const revisionDiff =
+    readPayloadString(payload, ["revisionDiff", "diffPreview", "mutation.diffPreview"]) ??
+    "No revision diff preview was attached to this proposal.";
+  const quarantineReason =
+    curatorReview?.corruptionStatus === "quarantined"
+      ? (readPayloadString(payload, ["quarantineReason", "corruptionReason"]) ??
+        "Candidate is quarantined by curator integrity status.")
+      : (readPayloadString(payload, ["quarantineReason", "corruptionReason"]) ?? "No quarantine reason recorded.");
+  const proposalStatusFilter = `${proposal?.proposalKind ?? "proposal"} · ${proposal?.status ?? "not requested"}`;
+  const notCallableCopy =
+    curatorReview?.runtimeProvenCallable || callableImpact === "none"
+      ? "No callable expansion is active from this proposal."
+      : "Not callable yet: imported or generated skill material stays outside callableCatalog until governed activation.";
   const actionDisabledReasons = curatorReview?.disabledReasons ?? {};
   const actionStatuses = curatorReview?.actionStatuses;
   const actions: ImprovementCandidateLifecycleAction[] = [
@@ -704,10 +722,20 @@ function ProposalTrustReviewPanel({
             value: callableImpact,
             meta: curatorReview?.corruptionStatus ?? "proposal payload",
           },
+          { label: "Proposal filter", value: proposalStatusFilter, meta: "Status list scope" },
+          {
+            label: "Trust boundary",
+            value: curatorReview?.runtimeProvenCallable ? "Runtime proven" : "Not callable yet",
+            meta: "inspectableCatalog only",
+          },
         ]}
       />
       <LibraryCodeBlock label="Observed issue">{observedIssue}</LibraryCodeBlock>
       <LibraryCodeBlock label="Proposed change">{proposedChange}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Support preview">{supportPreview}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Revision diff">{revisionDiff}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Quarantine reason">{quarantineReason}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Callable boundary">{notCallableCopy}</LibraryCodeBlock>
       <LibraryCodeBlock label="Rollback">{rollbackRef}</LibraryCodeBlock>
       <LibraryActionList
         items={evidence.slice(0, 8).map((item) => ({

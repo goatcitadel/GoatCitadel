@@ -303,6 +303,18 @@ describe("prompt-pack parser, import, export, and reports", () => {
             compatible: true,
             configVersion: "promptfoo.config.v1",
             testCount: 2,
+            redactionPosture: "redacted_export",
+            seededSampling: {
+              deterministic: true,
+              seed: pack.packId,
+              sampleCount: 2,
+            },
+            goatcitadelProvenance: {
+              packId: pack.packId,
+              exportEndpoint: `/api/v1/prompt-packs/${pack.packId}/export?format=promptfoo`,
+              importedMaterialCallable: false,
+              sideEffectPosture: "export_only",
+            },
           },
         },
       });

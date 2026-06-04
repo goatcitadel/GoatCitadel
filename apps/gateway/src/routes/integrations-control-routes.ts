@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { ExternalSideEffectRunHealthSummary, ExternalSideEffectRunRecord } from "@goatcitadel/contracts";
 import {
   catalogParamsSchema,
   catalogQuerySchema,
@@ -50,8 +51,10 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const items = fastify.services.integrations.listExternalSideEffectRuns(parsed.data);
     return reply.send({
-      items: fastify.services.integrations.listExternalSideEffectRuns(parsed.data),
+      items,
+      summary: buildExternalSideEffectHealthSummary(items),
     });
   });
 
@@ -244,4 +247,50 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(notFound ? 404 : 409).send({ error: message });
     }
   });
+}
+
+function buildExternalSideEffectHealthSummary(
+  items: ExternalSideEffectRunRecord[],
+): ExternalSideEffectRunHealthSummary {
+  const generatedAt = new Date().toISOString();
+  const completed = items.filter((item) => item.status === "completed").length;
+  const staleClaimCutoff = Date.now() - 15 * 60 * 1000;
+  const staleClaimedNotSentCount = items.filter((item) => {
+    if (item.status !== "claimed_not_sent") {
+      return false;
+    }
+    const timestamp = Date.parse(item.updatedAt || item.createdAt);
+    return Number.isFinite(timestamp) && timestamp <= staleClaimCutoff;
+  }).length;
+  const replayAuditEligibleCount = items.filter(
+    (item) =>
+      item.replayPolicy === "idempotent_external" &&
+      (item.resumeState === "manual_retry_after_recorded_failure" || item.status === "claimed_not_sent"),
+  ).length;
+  const lastStatusCheckAt = items
+    .map((item) => item.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  return {
+    generatedAt,
+    total: items.length,
+    successRate: items.length === 0 ? 0 : completed / items.length,
+    failedBeforeBoundaryCount: items.filter((item) => item.status === "failed_before_boundary").length,
+    unknownOutcomeCount: items.filter((item) => item.status === "unknown_external_outcome").length,
+    staleClaimedNotSentCount,
+    replayAuditEligibleCount,
+    lastStatusCheckAt,
+    manualReconciliationCount: items.filter(
+      (item) =>
+        item.resumeState === "manual_retry_after_recorded_failure" || item.status === "unknown_external_outcome",
+    ).length,
+    posture: {
+      readOnly: true,
+      operatorTriggeredStatusReads: true,
+      hiddenPolling: false,
+      managedWorkflowLifecycle: false,
+      note: "Activepieces and n8n bridge evidence is computed from the existing side-effect ledger; recipe exports remain read-only planning artifacts.",
+    },
+  };
 }

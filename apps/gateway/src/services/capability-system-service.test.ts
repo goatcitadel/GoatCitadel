@@ -461,7 +461,7 @@ describe("CapabilitySystemService", () => {
       mutationSemantics: "none",
       defaultBackendId: "trusted-code-host",
       activeBackendId: "trusted-code-host",
-      items: [
+      items: expect.arrayContaining([
         expect.objectContaining({
           backendId: "trusted-code-host",
           kind: "host",
@@ -480,7 +480,12 @@ describe("CapabilitySystemService", () => {
           callable: false,
           adapterForBackendId: "docker-container",
         }),
-      ],
+        expect.objectContaining({
+          backendId: "e2b-reference",
+          callable: false,
+          evaluationOnly: true,
+        }),
+      ]),
     });
   });
 
@@ -498,7 +503,7 @@ describe("CapabilitySystemService", () => {
     expect(response).toMatchObject({
       defaultBackendId: "trusted-code-host",
       activeBackendId: "docker-container",
-      items: [
+      items: expect.arrayContaining([
         expect.objectContaining({
           backendId: "trusted-code-host",
           callable: false,
@@ -518,7 +523,7 @@ describe("CapabilitySystemService", () => {
           backendId: "aider-cli-adapter",
           callable: false,
         }),
-      ],
+      ]),
     });
   });
 

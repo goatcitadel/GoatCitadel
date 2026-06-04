@@ -1009,6 +1009,41 @@ export function RuntimeRoutePage({
               />
             </NativeCard>
             <NativeCard
+              title="Browser proof abstraction"
+              subtitle="Governed browser evidence records for observe, extract, and act steps; no autonomous browser control plane."
+              density="compact"
+              stats={[
+                { label: "Kinds", value: "observe / extract / act" },
+                { label: "Policy", value: "governed evidence" },
+              ]}
+            >
+              <MetricGrid
+                items={[
+                  { label: "Target", value: "selector + semantic", meta: "Operator-readable" },
+                  { label: "Artifacts", value: "screenshot/hash refs", meta: "When available" },
+                  { label: "Guards", value: "network + private host", meta: "Policy decision recorded" },
+                  { label: "Redaction", value: "summary required", meta: "No raw secret display" },
+                ]}
+              />
+              <NativeList
+                items={[
+                  {
+                    title: "Evidence metadata only",
+                    meta: "BrowserProofRecord",
+                    body: "Records capture target description, selector or semantic target, action result, policy decision, guard status, artifact hashes, and redaction summary.",
+                  },
+                  {
+                    title: "Governed action boundary",
+                    meta: "No Stagehand dependency",
+                    body: "Browser actions remain policy-governed and do not create autonomous browser runtime takeover.",
+                  },
+                ]}
+                emptyLabel="Browser proof abstraction is not configured."
+                density="compact"
+                ariaLabel="Browser proof abstraction"
+              />
+            </NativeCard>
+            <NativeCard
               title="Backup posture"
               subtitle="Recovery state should be inspectable without sharing a connector card."
               density="compact"
@@ -1415,6 +1450,19 @@ function ReleaseProofDashboardPanel({
         density="compact"
         maxHeight="min(28vh, 14rem)"
         ariaLabel="Release route proof scope"
+      />
+      <NativeList
+        items={(summary?.releaseProof?.artifacts ?? []).map((artifact) => ({
+          title: artifact.name,
+          meta: `${artifact.platformArch} · ${artifact.signatureStatus} · ${artifact.exactShaStatus}`,
+          body: `${artifact.sha256} · ${formatBytes(artifact.sizeBytes)} · ${artifact.sourceWorkflow} · certificate ${artifact.certificateInclusion}${
+            artifact.acceptedCaveats.length ? ` · caveats: ${artifact.acceptedCaveats.join(", ")}` : ""
+          }`,
+        }))}
+        emptyLabel="No public artifact proof table is loaded. Generate one from release-certificate.json with scripts/release/release-proof-summary.mjs."
+        density="compact"
+        maxHeight="min(28vh, 14rem)"
+        ariaLabel="Release artifact proof table"
       />
     </NativeCard>
   );

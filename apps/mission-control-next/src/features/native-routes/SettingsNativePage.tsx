@@ -12,6 +12,7 @@ import {
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
+  type ExternalSideEffectRunHealthSummary,
   type ExternalSideEffectRunRecord,
   type LlmProviderAdviceResponse,
   type LlmProviderRequestConfig,
@@ -4438,6 +4439,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
       meetStatus: meetStatus.data,
       meetSessions: meetSessions.data,
       sideEffectRuns: sideEffectRuns.data.items,
+      sideEffectSummary: sideEffectRuns.data.summary,
     };
   }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
@@ -4786,6 +4788,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
             <PluginTrustPanel plugins={data.plugins} />
             <ExternalSideEffectLedgerPanel
               runs={data.sideEffectRuns}
+              summary={data.sideEffectSummary}
               selectedConnectionId={selectedConnection?.connectionId}
               busy={replayAuditBusy}
               onStartReplayAudit={(run) => void handleStartReplayAudit(run)}
@@ -5064,6 +5067,7 @@ function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
 
 function ExternalSideEffectLedgerPanel({
   runs,
+  summary,
   selectedConnectionId,
   busy,
   onStartReplayAudit,
@@ -5071,6 +5075,7 @@ function ExternalSideEffectLedgerPanel({
   onOpenReplayAudit,
 }: {
   runs: ExternalSideEffectRunRecord[];
+  summary?: ExternalSideEffectRunHealthSummary;
   selectedConnectionId?: string;
   busy?: boolean;
   onStartReplayAudit: (run?: ExternalSideEffectRunRecord) => void;
@@ -5089,6 +5094,7 @@ function ExternalSideEffectLedgerPanel({
   ).length;
   const visibleRuns = selectedConnectionRuns.length ? selectedConnectionRuns : runs;
   const replayAuditCandidates = visibleRuns.filter(isExternalSideEffectReplayAuditCandidate);
+  const health = summary ?? buildExternalSideEffectFallbackSummary(runs);
 
   return (
     <SettingsPanel
@@ -5100,6 +5106,40 @@ function ExternalSideEffectLedgerPanel({
         { label: "Blocked", value: String(blockedCount) },
       ]}
     >
+      <SettingsMetricGrid
+        items={[
+          {
+            label: "Success rate",
+            value: formatExternalSideEffectSuccessRate(health.successRate),
+            meta: `${health.total} ledger rows`,
+          },
+          {
+            label: "Failed before boundary",
+            value: String(health.failedBeforeBoundaryCount),
+            meta: "Replay-audit review",
+          },
+          {
+            label: "Unknown outcome",
+            value: String(health.unknownOutcomeCount),
+            meta: "Manual reconciliation",
+          },
+          {
+            label: "Stale claimed",
+            value: String(health.staleClaimedNotSentCount),
+            meta: "Claimed but not sent",
+          },
+          {
+            label: "Replay audit eligible",
+            value: String(health.replayAuditEligibleCount),
+            meta: "Read-only eligibility",
+          },
+          {
+            label: "Last status check",
+            value: health.lastStatusCheckAt ? formatDateTime(health.lastStatusCheckAt) : "Never",
+            meta: health.posture.operatorTriggeredStatusReads ? "Operator-triggered" : "Unknown",
+          },
+        ]}
+      />
       <SettingsActionList
         items={visibleRuns.map((run) => {
           const workflowEvidence = formatActivepiecesWorkflowEvidence(run);
@@ -5150,9 +5190,11 @@ function ExternalSideEffectLedgerPanel({
       <SettingsNotice
         notice={{
           tone: replayAuditCandidates.length ? "info" : "warning",
-          message: replayAuditCandidates.length
-            ? "Replay audits create a durable eligibility check for pre-boundary or stale claimed-not-sent runs; they do not retry unknown post-boundary outcomes."
-            : "No replay-audit candidates are visible. Started, completed, blocked, and unknown external outcomes remain manual reconciliation.",
+          message: `${health.posture.note} ${
+            replayAuditCandidates.length
+              ? "Replay audits create a durable eligibility check for pre-boundary or stale claimed-not-sent runs; they do not retry unknown post-boundary outcomes."
+              : "No replay-audit candidates are visible. Started, completed, blocked, and unknown external outcomes remain manual reconciliation."
+          }`,
         }}
       />
       {selectedConnectionId && !selectedConnectionRuns.length && runs.length ? (
@@ -5165,6 +5207,41 @@ function ExternalSideEffectLedgerPanel({
       ) : null}
     </SettingsPanel>
   );
+}
+
+function buildExternalSideEffectFallbackSummary(
+  runs: ExternalSideEffectRunRecord[],
+): ExternalSideEffectRunHealthSummary {
+  const completed = runs.filter((run) => run.status === "completed").length;
+  return {
+    generatedAt: new Date().toISOString(),
+    total: runs.length,
+    successRate: runs.length ? completed / runs.length : 0,
+    failedBeforeBoundaryCount: runs.filter((run) => run.status === "failed_before_boundary").length,
+    unknownOutcomeCount: runs.filter((run) => run.status === "unknown_external_outcome").length,
+    staleClaimedNotSentCount: 0,
+    replayAuditEligibleCount: runs.filter(isExternalSideEffectReplayAuditCandidate).length,
+    lastStatusCheckAt: runs
+      .map((run) => run.updatedAt)
+      .filter(Boolean)
+      .sort()
+      .at(-1),
+    manualReconciliationCount: runs.filter((run) => run.status === "unknown_external_outcome").length,
+    posture: {
+      readOnly: true,
+      operatorTriggeredStatusReads: true,
+      hiddenPolling: false,
+      managedWorkflowLifecycle: false,
+      note: "External bridge health is derived from visible ledger rows; no hidden polling is active.",
+    },
+  };
+}
+
+function formatExternalSideEffectSuccessRate(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${Math.round(value * 100)}%`;
 }
 
 function isExternalSideEffectReplayAuditCandidate(run: ExternalSideEffectRunRecord): boolean {

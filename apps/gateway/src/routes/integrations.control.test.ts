@@ -225,6 +225,18 @@ describe("integrations control routes", () => {
           resumeState: "not_resumable",
         }),
       ],
+      summary: expect.objectContaining({
+        total: 1,
+        successRate: 0,
+        unknownOutcomeCount: 1,
+        replayAuditEligibleCount: 0,
+        manualReconciliationCount: 1,
+        posture: expect.objectContaining({
+          readOnly: true,
+          hiddenPolling: false,
+          managedWorkflowLifecycle: false,
+        }),
+      }),
     });
   });
 

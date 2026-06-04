@@ -1,4 +1,5 @@
 import type {
+  CodeModeBackendEvaluationMatrix,
   CodeModeExecutionBackendRecord,
   CodeModeExecutionBackendsResponse,
   CodeModeRunExecutionBackendRef,
@@ -27,7 +28,7 @@ export function buildCodeModeExecutionBackends(input: {
     mutationSemantics: "none",
     defaultBackendId: CODE_MODE_HOST_BACKEND_ID,
     activeBackendId,
-    items: [host, docker, aider],
+    items: [host, docker, aider, ...buildReferenceBackendCandidates()],
   };
 }
 
@@ -126,6 +127,18 @@ function buildTrustedCodeHostBackend(
       "Revalidates source, wrapper manifest, policy snapshot, and sandbox posture before launch.",
       "This is trusted-code execution and does not claim hostile-code sandboxing.",
     ],
+    evaluation: {
+      credentialStorage: "partial",
+      pathIsolation: "partial",
+      networkControls: "partial",
+      artifactCapture: "strong",
+      resumeStateSemantics: "partial",
+      windowsSupport: "strong",
+      localFirstViability: "strong",
+      license: "not_applicable",
+      cost: "strong",
+      requiredProofLanes: ["verify:code-mode:sandbox", "verify:runtime:truth"],
+    },
     evidence: {
       sandbox,
     },
@@ -165,6 +178,18 @@ function buildDockerBackend(
       "Docker is extra isolation evidence, not sufficient evidence for a hostile-code sandbox claim.",
       ...(callable ? ["Experimental: uses the configured local Docker daemon and a run-temp bind mount."] : []),
     ],
+    evaluation: {
+      credentialStorage: "partial",
+      pathIsolation: "strong",
+      networkControls: "partial",
+      artifactCapture: "partial",
+      resumeStateSemantics: "partial",
+      windowsSupport: "partial",
+      localFirstViability: "strong",
+      license: "strong",
+      cost: "strong",
+      requiredProofLanes: ["verify:code-mode:sandbox", "verify:desktop", "verify:runtime:truth"],
+    },
     evidence: {
       envFlag: enabled ? `${envFlag}=true` : envFlag,
       ...(dockerBackend?.dockerCommand ? { detectedCommand: dockerBackend.dockerCommand } : {}),
@@ -205,12 +230,129 @@ function buildAiderAdapter(
       "Runs only in run-temp/artifact space; operator workspace patches are not applied.",
       "Replay posture remains audit-only and non-replayable.",
     ],
+    evaluation: {
+      credentialStorage: "partial",
+      pathIsolation: "strong",
+      networkControls: "partial",
+      artifactCapture: "strong",
+      resumeStateSemantics: "weak",
+      windowsSupport: "partial",
+      localFirstViability: "partial",
+      license: "partial",
+      cost: "strong",
+      requiredProofLanes: ["verify:code-mode:sandbox", "verify:runtime:truth"],
+    },
     evidence: {
       envFlag: enabled ? `${envFlag}=true` : envFlag,
       ...(image ? { imageConfigured: true } : {}),
       ...(aiderAdapter?.command ? { command: aiderAdapter.command } : {}),
       ...(aiderAdapter?.model ? { model: aiderAdapter.model } : {}),
     },
+  };
+}
+
+function buildReferenceBackendCandidates(): CodeModeExecutionBackendRecord[] {
+  return [
+    buildReferenceBackend({
+      backendId: "e2b-reference",
+      kind: "e2b",
+      label: "E2B reference candidate",
+      description: "Reference-only remote sandbox candidate; no GoatCitadel execution support is configured.",
+      evaluation: {
+        credentialStorage: "unknown",
+        pathIsolation: "strong",
+        networkControls: "partial",
+        artifactCapture: "partial",
+        resumeStateSemantics: "partial",
+        windowsSupport: "not_applicable",
+        localFirstViability: "weak",
+        license: "partial",
+        cost: "partial",
+        requiredProofLanes: ["verify:code-mode:sandbox", "verify:runtime:truth", "docs:check"],
+      },
+    }),
+    buildReferenceBackend({
+      backendId: "daytona-reference",
+      kind: "daytona",
+      label: "Daytona reference candidate",
+      description: "Reference-only workspace backend candidate; not exposed as a callable Code Mode runner.",
+      evaluation: {
+        credentialStorage: "unknown",
+        pathIsolation: "strong",
+        networkControls: "partial",
+        artifactCapture: "partial",
+        resumeStateSemantics: "partial",
+        windowsSupport: "partial",
+        localFirstViability: "partial",
+        license: "partial",
+        cost: "partial",
+        requiredProofLanes: ["verify:code-mode:sandbox", "verify:desktop", "verify:runtime:truth"],
+      },
+    }),
+    buildReferenceBackend({
+      backendId: "sandbox0-reference",
+      kind: "sandbox0",
+      label: "Sandbox0 reference candidate",
+      description: "Reference-only sandbox candidate pending policy, artifact, credential, and Windows proof.",
+      evaluation: {
+        credentialStorage: "unknown",
+        pathIsolation: "unknown",
+        networkControls: "unknown",
+        artifactCapture: "unknown",
+        resumeStateSemantics: "unknown",
+        windowsSupport: "unknown",
+        localFirstViability: "unknown",
+        license: "unknown",
+        cost: "unknown",
+        requiredProofLanes: ["verify:code-mode:sandbox", "docs:check"],
+      },
+    }),
+    buildReferenceBackend({
+      backendId: "kubernetes-agent-sandbox-reference",
+      kind: "kubernetes_agent_sandbox",
+      label: "Kubernetes agent sandbox reference",
+      description: "Reference-only cluster sandbox candidate; no managed workflow lifecycle is enabled.",
+      evaluation: {
+        credentialStorage: "partial",
+        pathIsolation: "strong",
+        networkControls: "strong",
+        artifactCapture: "partial",
+        resumeStateSemantics: "partial",
+        windowsSupport: "not_applicable",
+        localFirstViability: "weak",
+        license: "strong",
+        cost: "partial",
+        requiredProofLanes: ["verify:code-mode:sandbox", "verify:runtime:truth", "docs:check"],
+      },
+    }),
+  ];
+}
+
+function buildReferenceBackend(input: {
+  backendId: string;
+  kind: CodeModeExecutionBackendRecord["kind"];
+  label: string;
+  description: string;
+  evaluation: CodeModeBackendEvaluationMatrix;
+}): CodeModeExecutionBackendRecord {
+  return {
+    backendId: input.backendId,
+    kind: input.kind,
+    label: input.label,
+    status: "preview",
+    runtimeSupport: "preview_only",
+    default: false,
+    callable: false,
+    description: input.description,
+    blockers: ["Reference/evaluation only: no configured GoatCitadel execution backend exists."],
+    governance: [
+      "Visible for backend evaluation only.",
+      "Must not appear as a callable execution backend until policy, approvals, artifact capture, credential storage, and proof lanes are implemented.",
+      "Does not change trusted-code or hostile-code sandbox claims.",
+    ],
+    evaluationOnly: true,
+    evaluation: input.evaluation,
+    evidence: {},
   };
 }
 

@@ -1,6 +1,7 @@
 import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
+import { coerceBoundedInteger } from "./runtime-boundary-coercion.js";
 
 export const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 
@@ -25,7 +26,7 @@ export const connectionsQuerySchema = z.object({
 export const externalSideEffectRunsQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).max(200).optional(),
   connectionId: z.string().trim().min(1).max(200).optional(),
-  limit: z.coerce.number().int().positive().max(500).default(200),
+  limit: z.preprocess((value) => coerceBoundedInteger(value, { defaultValue: 200, min: 1, max: 500 }), z.number()),
 });
 
 export const createConnectionSchema = z.object({
