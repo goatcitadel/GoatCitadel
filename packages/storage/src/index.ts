@@ -94,6 +94,7 @@ import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.
 import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
+import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
 
 export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;
@@ -202,6 +203,7 @@ export class Storage {
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
   public readonly externalSideEffectRuns: ExternalSideEffectRunRepository;
   public readonly a2aTaskBindings: A2ATaskBindingRepository;
+  public readonly a2aTaskPushConfigs: A2ATaskPushConfigRepository;
   public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
@@ -310,6 +312,7 @@ export class Storage {
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
     this.externalSideEffectRuns = new ExternalSideEffectRunRepository(this.db);
     this.a2aTaskBindings = new A2ATaskBindingRepository(this.db);
+    this.a2aTaskPushConfigs = new A2ATaskPushConfigRepository(this.db);
   }
 
   public close(): void {

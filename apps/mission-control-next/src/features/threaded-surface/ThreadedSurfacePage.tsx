@@ -62,21 +62,30 @@ import "./styles/composer.css";
 import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";
 
-const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareText; helper: string }> = {
+const MODE_META: Record<
+  ChatMode,
+  { label: string; icon: typeof MessageSquareText; helper: string; posture: string; stageLabel: string }
+> = {
   chat: {
     label: "Chat",
     icon: MessageSquareText,
     helper: "Fast conversation, attachments, and lightweight help.",
+    posture: "fast-conversation",
+    stageLabel: "Chat conversation stage",
   },
   cowork: {
     label: "Cowork",
     icon: Workflow,
     helper: "Delegation-first work with visible orchestration and checkpoints.",
+    posture: "orchestration-checkpoints",
+    stageLabel: "Cowork orchestration stage",
   },
   code: {
     label: "Code",
     icon: Code2,
     helper: "Implementation-focused thread with workbench and code-mode tools.",
+    posture: "workbench-proof",
+    stageLabel: "Code workbench stage",
   },
 };
 
@@ -300,6 +309,7 @@ export function ThreadedSurfacePage({
       data-mode={surface}
       data-active-mode={activeMode}
       data-area={surface}
+      data-surface-intent={MODE_META[surface].posture}
       style={rootStyle}
     >
       <button
@@ -481,7 +491,12 @@ export function ThreadedSurfacePage({
         />
       ) : null}
 
-      <section className={stageLayoutClass} style={stageStyle}>
+      <section
+        aria-label={MODE_META[activeMode].stageLabel}
+        className={stageLayoutClass}
+        data-stage-posture={MODE_META[activeMode].posture}
+        style={stageStyle}
+      >
         <div className="mc-next-threaded-primary-column">
           <input
             ref={input.dropTargetProps.fileInputRef}

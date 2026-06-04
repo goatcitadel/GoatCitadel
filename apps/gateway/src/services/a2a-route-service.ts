@@ -1,24 +1,21 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type {
   A2ABridgeArtifact,
-  A2ABridgeMessage,
-  A2ABridgeMessagePart,
+  A2ABridgeAgentCard,
+  A2ABridgeProtocolBinding,
   A2ABridgeRuntimeConfig,
   A2ABridgeTask,
   A2ABridgeTaskEvent,
-  A2ABridgeTaskState,
   A2ABridgeStatusResponse,
-  A2AJsonRpcErrorResponse,
   A2AJsonRpcRequest,
   A2AJsonRpcResponse,
   A2AOutboundPreviewRequest,
   A2AOutboundPreviewResponse,
   A2AOutboundSendResponse,
+  A2ATaskPushNotificationConfig,
   A2ATaskBindingRecord,
   A2ATaskExportPreviewRequest,
   A2ATaskExportPreviewResponse,
-  ChatSendMessageResponse,
-  TaskRecord,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
@@ -37,6 +34,30 @@ import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-s
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
+import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
+import { A2APushNotificationService } from "./a2a-push-notification-service.js";
+import {
+  buildInboundIdempotencyKey,
+  buildOutboundHeaders,
+  buildTaskTitle,
+  hashStableJson,
+  httpJsonServiceError,
+  isInboundPeerBinding,
+  jsonRpcError,
+  jsonRpcResult,
+  mapJsonRpcServiceError,
+  mapTaskStatusToA2AState,
+  normalizeInboundMessage,
+  parseJsonRpcRequest,
+  parseJsonRpcResponse,
+  partsToText,
+  readBearerToken,
+  readDurableRunId,
+  readInboundMessageFromBinding,
+  readNumber,
+  readString,
+  readTaskMaybe,
+} from "./a2a-route-utils.js";
 
 export interface A2APeerAuthResult {
   peerId: string;
@@ -68,10 +89,23 @@ export interface A2ARouteServiceDependencies {
   chatTurnRuntime: Pick<ChatTurnRuntimeService, "agentSendChatMessage">;
   mutationIdempotencyStore?: MutationIdempotencyStore;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
+  pushDeliveryFetch?: typeof fetchAllowlisted;
 }
 
 export class A2ARouteService {
-  public constructor(private readonly deps: A2ARouteServiceDependencies) {}
+  private readonly pushNotifications: A2APushNotificationService;
+
+  public constructor(private readonly deps: A2ARouteServiceDependencies) {
+    this.pushNotifications = new A2APushNotificationService({
+      config: deps.config,
+      storage: deps.storage,
+      tasks: deps.tasks,
+      mutationIdempotencyStore: deps.mutationIdempotencyStore,
+      pushDeliveryFetch: deps.pushDeliveryFetch,
+      buildTaskFromBinding: (binding, checkedAt) => this.buildTaskFromBinding(binding, checkedAt),
+      buildEventsForTask: (task, since, checkedAt) => this.buildEventsForTask(task, since, checkedAt),
+    });
+  }
 
   public getStatus(input: { checkedAt: string; baseUrl?: string }): A2ABridgeStatusResponse {
     return buildA2ABridgeStatus({
@@ -105,11 +139,15 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): A2APeerAuthResult | A2APeerAuthFailure {
     const config = this.config;
-    if (!config.enabled || !config.inbound.enabled || !config.bindings.includes("JSONRPC")) {
+    if (
+      !config.enabled ||
+      !config.inbound.enabled ||
+      !config.bindings.some((binding) => isInboundPeerBinding(binding))
+    ) {
       return {
         statusCode: 503,
         reason: "a2a_inbound_disabled",
-        message: "A2A inbound JSON-RPC is not enabled.",
+        message: "A2A inbound peer access is not enabled.",
       };
     }
     const token = readBearerToken(request.headers.authorization);
@@ -152,6 +190,10 @@ export class A2ARouteService {
       return jsonRpcError(null, request.code, request.message);
     }
     try {
+      const bindingError = this.resolveInboundBindingError("JSONRPC");
+      if (bindingError) {
+        return jsonRpcError(request.value.id, -32030, bindingError);
+      }
       switch (request.value.method) {
         case "SendMessage":
           return jsonRpcResult(request.value.id, {
@@ -166,14 +208,14 @@ export class A2ARouteService {
         }
         case "GetTask":
           return jsonRpcResult(request.value.id, {
-            task: this.getA2ATask(request.value.params ?? {}, checkedAt),
+            task: this.getA2ATask(peer, request.value.params ?? {}, checkedAt),
           });
         case "CancelTask":
           return jsonRpcResult(request.value.id, {
             task: await this.cancelA2ATask(peer, request.value.params ?? {}, checkedAt),
           });
         case "SubscribeToTask": {
-          const task = this.getA2ATask(request.value.params ?? {}, checkedAt);
+          const task = this.getA2ATask(peer, request.value.params ?? {}, checkedAt);
           const since = readNumber(request.value.params?.lastEventSequence) ?? 0;
           return jsonRpcResult(request.value.id, {
             task,
@@ -181,12 +223,25 @@ export class A2ARouteService {
           });
         }
         case "SetTaskPushNotificationConfig":
+          return jsonRpcResult(request.value.id, {
+            config: await this.setTaskPushNotificationConfig(peer, request.value.params ?? {}, checkedAt),
+          });
         case "GetTaskPushNotificationConfig":
+          return jsonRpcResult(request.value.id, {
+            config: this.getTaskPushNotificationConfig(peer, request.value.params ?? {}),
+          });
         case "ListTaskPushNotificationConfig":
+          return jsonRpcResult(request.value.id, {
+            configs: this.listTaskPushNotificationConfigs(peer, request.value.params ?? {}),
+          });
         case "DeleteTaskPushNotificationConfig":
-          return jsonRpcError(request.value.id, -32020, "A2A push notifications are not implemented.");
+          return jsonRpcResult(request.value.id, {
+            deleted: this.deleteTaskPushNotificationConfig(peer, request.value.params ?? {}, checkedAt),
+          });
         case "GetAuthenticatedExtendedCard":
-          return jsonRpcError(request.value.id, -32021, "Authenticated extended Agent Cards are not implemented.");
+          return jsonRpcResult(request.value.id, {
+            agentCard: this.getAuthenticatedExtendedAgentCard(peer, { checkedAt }),
+          });
         default:
           return jsonRpcError(request.value.id, -32601, "Unsupported A2A JSON-RPC method.");
       }
@@ -197,6 +252,106 @@ export class A2ARouteService {
 
   public getBinding(a2aTaskId: string): A2ATaskBindingRecord | undefined {
     return this.deps.storage.a2aTaskBindings.find(a2aTaskId);
+  }
+
+  public getAuthenticatedExtendedAgentCard(
+    peer: A2APeerAuthResult,
+    input: { checkedAt: string; baseUrl?: string },
+  ): A2ABridgeAgentCard & {
+    authenticatedPeer: A2APeerAuthResult;
+    checkedAt: string;
+    boundary: "gateway_peer_authenticated";
+  } {
+    const bindingError = this.resolveInboundBindingError();
+    if (bindingError) {
+      throw httpJsonServiceError(503, "a2a_inbound_disabled", bindingError);
+    }
+    const status = this.getStatus({ checkedAt: input.checkedAt, baseUrl: input.baseUrl });
+    return {
+      ...status.agentCard,
+      capabilities: {
+        ...status.agentCard.capabilities,
+        extendedAgentCard: true,
+      },
+      authenticatedPeer: {
+        peerId: peer.peerId,
+        label: peer.label,
+        scopes: peer.scopes,
+      },
+      checkedAt: input.checkedAt,
+      boundary: "gateway_peer_authenticated",
+    };
+  }
+
+  public async sendHttpJsonMessage(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ABridgeTask> {
+    this.assertInboundBinding("HTTP_JSON");
+    return this.sendMessage(peer, params, checkedAt, false);
+  }
+
+  public getHttpJsonTask(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): A2ABridgeTask {
+    this.assertInboundBinding("HTTP_JSON");
+    return this.getA2ATask(peer, params, checkedAt);
+  }
+
+  public async cancelHttpJsonTask(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ABridgeTask> {
+    this.assertInboundBinding("HTTP_JSON");
+    return this.cancelA2ATask(peer, params, checkedAt);
+  }
+
+  public getHttpJsonTaskEvents(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): { task: A2ABridgeTask; events: A2ABridgeTaskEvent[] } {
+    this.assertInboundBinding("HTTP_JSON");
+    const task = this.getA2ATask(peer, params, checkedAt);
+    const since = readNumber(params.lastEventSequence) ?? 0;
+    return {
+      task,
+      events: this.buildEventsForTask(task, since, checkedAt),
+    };
+  }
+
+  public async setTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ATaskPushNotificationConfig> {
+    return this.pushNotifications.setTaskPushNotificationConfig(peer, params, checkedAt);
+  }
+
+  public getTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+  ): A2ATaskPushNotificationConfig {
+    return this.pushNotifications.getTaskPushNotificationConfig(peer, params);
+  }
+
+  public listTaskPushNotificationConfigs(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown> = {},
+  ): A2ATaskPushNotificationConfig[] {
+    return this.pushNotifications.listTaskPushNotificationConfigs(peer, params);
+  }
+
+  public deleteTaskPushNotificationConfig(
+    peer: A2APeerAuthResult,
+    params: Record<string, unknown>,
+    checkedAt = new Date().toISOString(),
+  ): { taskId: string; peerId: string; deleted: boolean } {
+    return this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
   public previewOutbound(
@@ -323,6 +478,46 @@ export class A2ARouteService {
     return normalizeA2AConfig(this.deps.config.assistant.a2a);
   }
 
+  private assertInboundBinding(binding: A2ABridgeProtocolBinding): void {
+    const bindingError = this.resolveInboundBindingError(binding);
+    if (bindingError) {
+      throw httpJsonServiceError(503, "a2a_inbound_disabled", bindingError);
+    }
+  }
+
+  private resolveInboundBindingError(binding?: A2ABridgeProtocolBinding): string | undefined {
+    const config = this.config;
+    if (!config.enabled || !config.inbound.enabled) {
+      return "A2A inbound peer access is not enabled.";
+    }
+    if (binding && !config.bindings.includes(binding)) {
+      return `A2A inbound ${binding} binding is not enabled.`;
+    }
+    if (!config.bindings.some((candidate) => isInboundPeerBinding(candidate))) {
+      return "A2A inbound peer bindings are not enabled.";
+    }
+    return undefined;
+  }
+
+  private requirePeerTaskBinding(peer: A2APeerAuthResult, params: Record<string, unknown>): A2ATaskBindingRecord {
+    const taskId = readString(params.taskId) ?? readString(params.id);
+    if (!taskId) {
+      throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
+    }
+    const binding = this.deps.storage.a2aTaskBindings.find(taskId);
+    if (!binding) {
+      throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
+    }
+    this.assertPeerOwnsBinding(peer, binding);
+    return binding;
+  }
+
+  private assertPeerOwnsBinding(peer: A2APeerAuthResult, binding: A2ATaskBindingRecord): void {
+    if (binding.peerId !== peer.peerId) {
+      throw new A2AJsonRpcServiceError(-32022, "A2A task is not owned by the authenticated peer.");
+    }
+  }
+
   private async sendMessage(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
@@ -439,18 +634,13 @@ export class A2ARouteService {
       binding = this.deps.storage.a2aTaskBindings.update(binding.a2aTaskId, { state: "failed" });
     }
 
-    return this.buildTaskFromBinding(binding, checkedAt);
+    const nextTask = this.buildTaskFromBinding(binding, checkedAt);
+    await this.pushNotifications.deliverForTask(peer, binding, nextTask, checkedAt);
+    return nextTask;
   }
 
-  private getA2ATask(params: Record<string, unknown>, checkedAt: string): A2ABridgeTask {
-    const taskId = readString(params.taskId) ?? readString(params.id);
-    if (!taskId) {
-      throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
-    }
-    const binding = this.deps.storage.a2aTaskBindings.find(taskId);
-    if (!binding) {
-      throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
-    }
+  private getA2ATask(peer: A2APeerAuthResult, params: Record<string, unknown>, checkedAt: string): A2ABridgeTask {
+    const binding = this.requirePeerTaskBinding(peer, params);
     return this.buildTaskFromBinding(binding, checkedAt);
   }
 
@@ -467,6 +657,7 @@ export class A2ARouteService {
     if (!binding) {
       throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
     }
+    this.assertPeerOwnsBinding(peer, binding);
     if (binding.localTaskId) {
       this.deps.tasks.updateTask(binding.localTaskId, { status: "blocked" });
       this.deps.tasks.appendTaskActivity(binding.localTaskId, {
@@ -493,7 +684,9 @@ export class A2ARouteService {
       },
       checkedAt,
     );
-    return this.buildTaskFromBinding(updated, checkedAt);
+    const task = this.buildTaskFromBinding(updated, checkedAt);
+    await this.pushNotifications.deliverForTask(peer, updated, task, checkedAt);
+    return task;
   }
 
   private buildTaskFromBinding(binding: A2ATaskBindingRecord, checkedAt: string): A2ABridgeTask {
@@ -624,258 +817,4 @@ export class A2ARouteService {
     });
     return { jsonRpcUrl: jsonRpc.url };
   }
-}
-
-class A2AJsonRpcServiceError extends Error {
-  public constructor(
-    public readonly code: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-function parseJsonRpcRequest(
-  value: unknown,
-): { ok: true; value: A2AJsonRpcRequest } | { ok: false; code: number; message: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, code: -32600, message: "Invalid JSON-RPC request." };
-  }
-  const candidate = value as Partial<A2AJsonRpcRequest>;
-  if (candidate.jsonrpc !== "2.0" || typeof candidate.method !== "string") {
-    return { ok: false, code: -32600, message: "JSON-RPC 2.0 method is required." };
-  }
-  if (
-    candidate.params !== undefined &&
-    (!candidate.params || typeof candidate.params !== "object" || Array.isArray(candidate.params))
-  ) {
-    return { ok: false, code: -32602, message: "JSON-RPC params must be an object." };
-  }
-  return { ok: true, value: candidate as A2AJsonRpcRequest };
-}
-
-function normalizeInboundMessage(params: Record<string, unknown>): A2ABridgeMessage {
-  const rawMessage = readObject(params.message);
-  const message = rawMessage ?? params;
-  const rawParts = Array.isArray(message.parts) ? message.parts : undefined;
-  const parts = rawParts ? rawParts.map(normalizePart).filter(isMessagePart) : undefined;
-  const text = readString(message.text) ?? readString(params.text) ?? readString(params.content);
-  return {
-    role: readString(message.role) === "agent" ? "agent" : "user",
-    messageId: readString(message.messageId) ?? readString(params.messageId) ?? readString(params.id),
-    contextId: readString(message.contextId) ?? readString(params.contextId),
-    parts: parts?.length ? parts : [{ kind: "text", text: text ?? "" }],
-    metadata: readObject(message.metadata) ?? readObject(params.metadata),
-  };
-}
-
-function normalizePart(value: unknown): A2ABridgeMessagePart | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const kind = readString(record.kind) ?? readString(record.type);
-  if (kind === "text") {
-    return { kind: "text", text: readString(record.text) ?? "" };
-  }
-  if (kind === "data") {
-    return { kind: "data", data: readObject(record.data) ?? {} };
-  }
-  if (kind === "file") {
-    return {
-      kind: "file",
-      file: {
-        name: readString(record.name),
-        mimeType: readString(record.mimeType),
-        uri: readString(record.uri),
-        bytesBase64: readString(record.bytesBase64),
-      },
-    };
-  }
-  return undefined;
-}
-
-function isMessagePart(value: A2ABridgeMessagePart | undefined): value is A2ABridgeMessagePart {
-  return Boolean(value);
-}
-
-function partsToText(parts: A2ABridgeMessagePart[]): string {
-  const text = parts
-    .map((part) =>
-      part.kind === "text" ? part.text : part.kind === "data" ? JSON.stringify(part.data) : part.file.uri,
-    )
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || "[A2A message contained no text payload.]";
-}
-
-function buildTaskTitle(message: A2ABridgeMessage, peerId: string): string {
-  const text = partsToText(message.parts).replace(/\s+/g, " ").trim();
-  return `A2A ${peerId}: ${text.slice(0, 96) || "peer task"}`;
-}
-
-function buildInboundIdempotencyKey(
-  peerId: string,
-  contextId: string,
-  message: A2ABridgeMessage,
-  params: Record<string, unknown>,
-): string {
-  const explicit = message.messageId ?? readString(params.messageId) ?? readString(params.id);
-  if (explicit) {
-    return hashStableJson({ peerId, contextId, messageId: explicit });
-  }
-  return hashStableJson({ peerId, contextId, message });
-}
-
-function readInboundMessageFromBinding(binding: A2ATaskBindingRecord): A2ABridgeMessage | undefined {
-  const value = binding.metadata.inboundMessage;
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return value as A2ABridgeMessage;
-}
-
-function mapTaskStatusToA2AState(status: TaskRecord["status"], fallback: A2ABridgeTaskState): A2ABridgeTaskState {
-  switch (status) {
-    case "done":
-      return "completed";
-    case "blocked":
-      return fallback === "canceled" ? "canceled" : "failed";
-    case "planning":
-    case "inbox":
-    case "assigned":
-      return "submitted";
-    case "in_progress":
-    case "testing":
-    case "review":
-      return "working";
-    default:
-      return fallback;
-  }
-}
-
-function readTaskMaybe(tasks: Pick<TaskLifecycleService, "getTask">, taskId: string): TaskRecord | undefined {
-  try {
-    return tasks.getTask(taskId);
-  } catch {
-    return undefined;
-  }
-}
-
-function readDurableRunId(response: ChatSendMessageResponse): string | undefined {
-  const candidate = response as unknown as Record<string, unknown>;
-  return (
-    readString(candidate.durableRunId) ??
-    readString(candidate.agenticRunId) ??
-    readString(readObject(candidate.durable)?.runId) ??
-    readString(readObject(candidate.agentic)?.runId)
-  );
-}
-
-function jsonRpcResult(id: A2AJsonRpcRequest["id"], result: unknown): A2AJsonRpcResponse {
-  return {
-    jsonrpc: "2.0",
-    id: id ?? null,
-    result,
-  };
-}
-
-function jsonRpcError(
-  id: A2AJsonRpcRequest["id"] | null,
-  code: number,
-  message: string,
-  data?: Record<string, unknown>,
-): A2AJsonRpcErrorResponse {
-  return {
-    jsonrpc: "2.0",
-    id: id ?? null,
-    error: {
-      code,
-      message,
-      data,
-    },
-  };
-}
-
-function mapJsonRpcServiceError(id: A2AJsonRpcRequest["id"], error: unknown): A2AJsonRpcResponse {
-  if (error instanceof A2AJsonRpcServiceError) {
-    return jsonRpcError(id, error.code, error.message);
-  }
-  return jsonRpcError(id, -32603, "A2A method failed.");
-}
-
-function parseJsonRpcResponse(value: unknown): A2AJsonRpcResponse {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return jsonRpcError(null, -32603, "A2A peer returned a malformed JSON-RPC response.");
-  }
-  const candidate = value as Partial<A2AJsonRpcResponse>;
-  if (candidate.jsonrpc !== "2.0") {
-    return jsonRpcError(null, -32603, "A2A peer returned a malformed JSON-RPC response.");
-  }
-  return candidate as A2AJsonRpcResponse;
-}
-
-function buildOutboundHeaders(peer: { token?: string; tokenEnv?: string }): Record<string, string> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json",
-  };
-  const token = peer.token?.trim() || (peer.tokenEnv?.trim() ? process.env[peer.tokenEnv.trim()]?.trim() : undefined);
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
-function readBearerToken(value: unknown): string | undefined {
-  const header = Array.isArray(value) ? value[0] : value;
-  if (typeof header !== "string") {
-    return undefined;
-  }
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match?.[1]?.trim() || undefined;
-}
-
-function readObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function hashStableJson(value: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(stableJson(value)))
-    .digest("hex")
-    .slice(0, 32);
-}
-
-function stableJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJson);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, stableJson(item)]),
-  );
 }

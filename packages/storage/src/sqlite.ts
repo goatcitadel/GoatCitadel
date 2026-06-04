@@ -1062,6 +1062,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "a2a_task_bindings",
     up: createA2ATaskBindingSchema,
   },
+  {
+    version: 107,
+    name: "a2a_task_push_configs",
+    up: createA2ATaskPushConfigSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2419,6 +2424,34 @@ function createA2ATaskBindingSchema(db: DatabaseSync): void {
       ON a2a_task_bindings(peer_id, context_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_a2a_task_bindings_local_task
       ON a2a_task_bindings(local_task_id);
+  `);
+}
+
+function createA2ATaskPushConfigSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS a2a_task_push_configs (
+      a2a_task_id TEXT NOT NULL,
+      peer_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      events_json TEXT NOT NULL DEFAULT '["task.status"]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      auth_token TEXT,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_delivery_status TEXT NOT NULL DEFAULT 'pending',
+      last_delivery_error TEXT,
+      last_delivered_at TEXT,
+      next_retry_at TEXT,
+      last_event_sequence INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (a2a_task_id, peer_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_a2a_task_push_configs_peer_updated
+      ON a2a_task_push_configs(peer_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_a2a_task_push_configs_retry
+      ON a2a_task_push_configs(last_delivery_status, next_retry_at);
   `);
 }
 

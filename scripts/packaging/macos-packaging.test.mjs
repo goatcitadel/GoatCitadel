@@ -93,6 +93,38 @@ test("macOS release manifest is experimental and does not claim bundled desktop 
   assert.equal(manifest.components.some((item) => item.id === "mission-control-desktop"), false);
 });
 
+test("linux-x64 bundle target emits a POSIX browser launcher without release-proof claims", () => {
+  const target = requirePackagingTarget("linux-x64");
+  assert.equal(target.platform, "linux");
+  assert.equal(target.arch, "x64");
+  assert.equal(target.nodePlatform, "linux");
+  assert.equal(target.nodeArch, "x64");
+  assert.equal(target.nodeExecutableName, "node");
+  assert.equal(target.bundleDesktopHost, false);
+  assert.equal(nodeArchiveName("v22.1.0", target), "node-v22.1.0-linux-x64.tar.gz");
+
+  const manifest = buildReleaseManifest({
+    targetInfo: target,
+    version: "1.0.0",
+    nodeVersion: "v22.1.0",
+    checksums: { "bin/goatcitadel": "abc123" },
+    uiTarget: {
+      packageName: "@goatcitadel/mission-control-next",
+      packageDirName: "mission-control-next",
+      displayName: "Mission Control Next",
+    },
+    includeDesktopHost: false,
+    desktopArtifactName: target.desktopArtifactName,
+  });
+
+  assert.equal(manifest.platform, "linux");
+  assert.equal(manifest.arch, "x64");
+  assert.equal(manifest.experimental, true);
+  assert.equal(manifest.launcher.posix, "bin/goatcitadel");
+  assert.equal(manifest.launcher.desktop, "browser-launcher");
+  assert.equal(manifest.components.some((item) => item.id === "mission-control-desktop"), false);
+});
+
 test("macOS Tauri overlay embeds the runtime bundle and uses ad-hoc signing", () => {
   const bundleDir = path.join(os.tmpdir(), "GoatCitadel-1.0.0-macos-arm64");
   const config = renderMacTauriConfig({ bundleDir, version: "1.0.0" });

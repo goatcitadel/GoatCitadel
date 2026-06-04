@@ -12,6 +12,7 @@ import {
   runAgenticPluginsMarketplaceLane,
   runAgenticSelfImprovementTrustLane,
   runAgenticWorkbenchLoopLane,
+  runA2AFullLane,
   runAuthMatrixLane,
   runApiCompatibilityLane,
   runBackupRoundtripLane,
@@ -47,6 +48,7 @@ import {
 
 const VALID_LANES = new Set([
   "fast",
+  "a2a-full",
   "deep-core",
   "deep-ecosystem",
   "catalog-parity",
@@ -91,6 +93,7 @@ const REVIEW_LANES = new Set([
   "skills-catalog",
   "security-evals",
   "api-compat",
+  "a2a-full",
   "operator-proof",
   "durable-recovery",
   "surface-regression",
@@ -160,6 +163,8 @@ async function main() {
   try {
     if (lane === "fast") {
       await runFastLane(context);
+    } else if (lane === "a2a-full") {
+      await runA2AFullLane(context);
     } else if (lane === "deep-core") {
       await runDeepCoreLane(context, { profile });
     } else if (lane === "deep-ecosystem") {
@@ -236,6 +241,7 @@ async function main() {
       await runSkillsCatalogLane(context);
       await runSecurityEvalsLane(context);
       await runApiCompatibilityLane(context, { profile });
+      await runA2AFullLane(context);
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });

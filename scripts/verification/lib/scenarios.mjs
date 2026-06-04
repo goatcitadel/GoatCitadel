@@ -118,6 +118,42 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
 ]);
 
+export const A2A_FULL_LANE_COMMANDS = Object.freeze([
+  {
+    id: "a2a-full.contracts-build",
+    title: "A2A contracts build",
+    args: ["--filter", "@goatcitadel/contracts", "build"],
+  },
+  {
+    id: "a2a-full.storage-build",
+    title: "A2A storage build",
+    args: ["--filter", "@goatcitadel/storage", "build"],
+  },
+  {
+    id: "a2a-full.storage-migration-parity",
+    title: "A2A storage migration parity",
+    args: ["verify:storage:migration-parity"],
+  },
+  {
+    id: "a2a-full.gateway-typecheck",
+    title: "Gateway A2A typecheck",
+    args: ["--filter", "@goatcitadel/gateway", "typecheck"],
+  },
+  {
+    id: "a2a-full.gateway-routes",
+    title: "Gateway A2A route and service tests",
+    args: [
+      "--filter",
+      "@goatcitadel/gateway",
+      "exec",
+      "vitest",
+      "run",
+      "src/services/a2a-route-service.test.ts",
+      "src/routes/tasks.test.ts",
+    ],
+  },
+]);
+
 export async function runSkillsCatalogLane(context) {
   await runScenario(
     context,
@@ -252,6 +288,43 @@ export async function runFastLane(context) {
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
           logName: command.id,
           env,
+        });
+        return {
+          status: result.code === 0 ? "passed" : "failed",
+          error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+          metrics: {
+            exitCode: result.code,
+            durationMs: result.durationMs,
+          },
+          artifacts: {
+            diagnostics: [],
+            screenshots: [],
+            traces: [],
+            logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+            perf: [],
+            playwright: [],
+          },
+        };
+      },
+    );
+  }
+}
+
+export async function runA2AFullLane(context) {
+  for (const command of A2A_FULL_LANE_COMMANDS) {
+    await runScenario(
+      context,
+      {
+        id: command.id,
+        lane: "a2a-full",
+        title: command.title,
+        subsystem: "a2a",
+      },
+      async () => {
+        const result = await runCommand(pnpmCommand(), command.args, {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: command.id,
         });
         return {
           status: result.code === 0 ? "passed" : "failed",

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import platform
 import time
@@ -8,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 
 def utc_iso() -> str:
@@ -68,6 +69,7 @@ def load_manifest() -> List[Dict[str, Any]]:
                 "family": str(model.get("family", "other")),
                 "source": str(model.get("source", "local")),
                 "path": str(model.get("path")) if model.get("path") else None,
+                "sha256": str(model.get("sha256")) if model.get("sha256") else None,
                 "default": bool(model.get("default", False)),
                 "requiresQnn": bool(model.get("requiresQnn", False)),
                 "contextWindow": int(model.get("contextWindow", 0)) or None,
@@ -106,11 +108,13 @@ def detect_capabilities() -> Dict[str, Any]:
     system = platform.system().lower()
     is_windows_arm64 = system == "windows" and machine in {"arm64", "aarch64"}
 
-    supported = onnxruntime_available and onnxruntime_genai_available and (
-        qnn_available or is_windows_arm64
-    )
+    fallback_configured = bool(os.environ.get("GOATCITADEL_NPU_FALLBACK_URL", "").strip())
+    local_inference_ready = onnxruntime_available and onnxruntime_genai_available
+    supported = local_inference_ready and (qnn_available or not is_windows_arm64)
     if not supported and is_windows_arm64:
         details.append("Windows ARM64 detected; install ORT/GenAI with QNN support for NPU acceleration.")
+    if fallback_configured:
+        details.append("fallback proxy configured; responses are not local NPU inference unless local adapter is used")
 
     return {
         "platform": platform.platform(),
@@ -121,6 +125,9 @@ def detect_capabilities() -> Dict[str, Any]:
         "onnxRuntimeGenAiAvailable": onnxruntime_genai_available,
         "qnnExecutionProviderAvailable": qnn_available,
         "supported": supported,
+        "localInferenceReady": local_inference_ready,
+        "streamingChatCompletions": local_inference_ready,
+        "fallbackProxyConfigured": fallback_configured,
         "details": details,
     }
 
@@ -152,7 +159,7 @@ class RuntimeState:
         }
 
     def enabled_models(self) -> List[Dict[str, Any]]:
-        return [m for m in self.models if m.get("enabled")]
+        return [self.with_readiness(m) for m in self.models if m.get("enabled")]
 
     def resolve_model(self, model_id: Optional[str]) -> Dict[str, Any]:
         target = model_id or self.active_model_id
@@ -163,6 +170,20 @@ class RuntimeState:
             status_code=404,
             detail={"error": {"message": f"Unknown model: {target}", "type": "invalid_request_error"}},
         )
+
+    def with_readiness(self, model: Dict[str, Any]) -> Dict[str, Any]:
+        path_value = model.get("path")
+        expected_sha = str(model.get("sha256") or "").strip().lower()
+        if not path_value:
+            return {**model, "readiness": "missing_path", "backend": self.backend}
+        model_path = Path(str(path_value)).expanduser()
+        if not model_path.exists():
+            return {**model, "readiness": "missing_path", "backend": self.backend}
+        if expected_sha:
+            actual_sha = sha256_path(model_path)
+            if actual_sha != expected_sha:
+                return {**model, "readiness": "hash_mismatch", "backend": self.backend}
+        return {**model, "readiness": "ready", "backend": self.backend}
 
 
 app = FastAPI(title="GoatCitadel NPU Sidecar", version="0.1.0")
@@ -206,14 +227,106 @@ async def maybe_proxy(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if FALLBACK_API_KEY:
         headers["Authorization"] = f"Bearer {FALLBACK_API_KEY}"
 
+    proxy_payload = {**payload, "stream": False}
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
-        response = await client.post(f"{FALLBACK_BASE_URL}/v1/chat/completions", json=payload, headers=headers)
+        response = await client.post(f"{FALLBACK_BASE_URL}/v1/chat/completions", json=proxy_payload, headers=headers)
     if response.is_error:
         raise HTTPException(
             status_code=response.status_code,
             detail={"error": {"message": response.text[:500], "type": "provider_error"}},
         )
-    return response.json()
+    proxied = response.json()
+    if isinstance(proxied, dict):
+        proxied.setdefault("backend", "fallback_proxy")
+        proxied["goatcitadel_provenance"] = {
+            "localInference": False,
+            "backend": "fallback_proxy",
+            "fallbackReason": "GOATCITADEL_NPU_FALLBACK_URL configured",
+        }
+    return proxied
+
+
+def sha256_path(candidate: Path) -> str:
+    digest = hashlib.sha256()
+    if candidate.is_dir():
+        for file_path in sorted(path for path in candidate.rglob("*") if path.is_file()):
+            digest.update(str(file_path.relative_to(candidate)).replace("\\", "/").encode("utf-8"))
+            with file_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
+    with candidate.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def generate_local_completion(model: Dict[str, Any], prompt: str, max_tokens: int) -> str:
+    if model.get("readiness") != "ready":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": {
+                    "message": f"Model '{model.get('modelId')}' is not ready for local inference: {model.get('readiness')}.",
+                    "type": "model_not_ready",
+                }
+            },
+        )
+    if not STATE.capability.get("localInferenceReady"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": {
+                    "message": (
+                        "Local NPU inference is not ready. Install onnxruntime + onnxruntime-genai, provide a ready "
+                        "model manifest path, or configure GOATCITADEL_NPU_FALLBACK_URL for explicitly labeled proxy mode."
+                    ),
+                    "type": "runtime_unavailable",
+                    "localInferenceReady": False,
+                    "fallbackProxyConfigured": bool(FALLBACK_BASE_URL),
+                }
+            },
+        )
+    try:
+        import onnxruntime_genai as og  # type: ignore
+
+        model_path = str(Path(str(model["path"])).expanduser())
+        og_model = og.Model(model_path)
+        tokenizer = og.Tokenizer(og_model)
+        params = og.GeneratorParams(og_model)
+        params.set_search_options(max_length=max(1, min(max_tokens, 512)))
+        generator = og.Generator(og_model, params)
+        generator.append_tokens(tokenizer.encode(prompt))
+        while not generator.is_done():
+            generator.generate_next_token()
+        return tokenizer.decode(generator.get_sequence(0))
+    except HTTPException:
+        raise
+    except Exception as error:  # pragma: no cover - host/model dependent
+        STATE.last_error = str(error)[:500]
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"message": f"Local NPU inference failed: {str(error)[:500]}", "type": "inference_error"}},
+        ) from error
+
+
+async def stream_completion_chunks(response: Dict[str, Any]):
+    content = response["choices"][0]["message"]["content"]
+    chunk_id = response["id"]
+    model_id = response["model"]
+    for word in content.split(" "):
+        payload = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": response["created"],
+            "model": model_id,
+            "choices": [{"index": 0, "delta": {"content": word + " "}, "finish_reason": None}],
+            "backend": response["backend"],
+            "goatcitadel_provenance": response["goatcitadel_provenance"],
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+    yield f"data: {json.dumps({'id': chunk_id, 'object': 'chat.completion.chunk', 'created': response['created'], 'model': model_id, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 @app.post("/v1/chat/completions")
@@ -238,27 +351,8 @@ async def chat_completions(request: Request) -> JSONResponse:
         proxied.setdefault("backend", "fallback_proxy")
         return JSONResponse(proxied)
 
-    if not STATE.capability.get("onnxRuntimeAvailable"):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": {
-                    "message": (
-                        "NPU runtime not available. Install onnxruntime + onnxruntime-genai or configure "
-                        "GOATCITADEL_NPU_FALLBACK_URL for proxy mode."
-                    ),
-                    "type": "runtime_unavailable",
-                }
-            },
-        )
-
     prompt = flatten_messages(messages)
-    text = (
-        f"NPU sidecar is online ({STATE.backend}). Model '{model_id}' is selected. "
-        "Configure a runtime adapter or fallback URL to execute real local inference."
-    )
-    if prompt:
-        text += f" Last user prompt excerpt: {prompt[:220]}"
+    text = generate_local_completion(model, prompt, int(payload.get("max_tokens", 256) or 256))
 
     usage = {
         "prompt_tokens": estimate_tokens(prompt),
@@ -280,7 +374,16 @@ async def chat_completions(request: Request) -> JSONResponse:
         ],
         "usage": usage,
         "backend": STATE.backend,
+        "goatcitadel_provenance": {
+            "localInference": True,
+            "backend": STATE.backend,
+            "modelSha256": model.get("sha256"),
+            "modelReadiness": model.get("readiness"),
+            "fallbackReason": None,
+        },
     }
+    if bool(payload.get("stream", False)):
+        return StreamingResponse(stream_completion_chunks(response), media_type="text/event-stream")
     return JSONResponse(response)
 
 

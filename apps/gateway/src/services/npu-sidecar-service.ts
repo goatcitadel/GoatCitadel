@@ -15,6 +15,9 @@ interface SidecarHealthPayload {
   activeModelId?: string;
   backend?: "qnn" | "cpu" | "unknown";
   capability?: Partial<NpuCapabilityReport>;
+  localInferenceReady?: boolean;
+  streamingChatCompletions?: boolean;
+  fallbackProxyConfigured?: boolean;
   lastError?: string;
 }
 
@@ -234,20 +237,26 @@ export class NpuSidecarService {
       throw new Error(`NPU model listing failed (${response.status})`);
     }
     const json = (await response.json()) as { data?: Array<Record<string, unknown>> };
-    return (json.data ?? []).map((record) => {
-      const metadata = (record.metadata ?? {}) as Record<string, unknown>;
-      return {
-        modelId: String(record.id ?? metadata.modelId ?? ""),
-        label: String(metadata.label ?? record.id ?? "NPU model"),
-        family: normalizeModelFamily(metadata.family),
-        source: normalizeModelSource(metadata.source),
-        path: typeof metadata.path === "string" ? metadata.path : undefined,
-        default: Boolean(metadata.default),
-        requiresQnn: Boolean(metadata.requiresQnn),
-        contextWindow: typeof metadata.contextWindow === "number" ? metadata.contextWindow : undefined,
-        enabled: metadata.enabled === undefined ? true : Boolean(metadata.enabled),
-      };
-    }).filter((model) => model.modelId.length > 0);
+    return (json.data ?? [])
+      .map((record) => {
+        const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+        return {
+          modelId: String(record.id ?? metadata.modelId ?? ""),
+          label: String(metadata.label ?? record.id ?? "NPU model"),
+          family: normalizeModelFamily(metadata.family),
+          source: normalizeModelSource(metadata.source),
+          path: typeof metadata.path === "string" ? metadata.path : undefined,
+          sha256: typeof metadata.sha256 === "string" ? metadata.sha256 : undefined,
+          readiness: normalizeModelReadiness(metadata.readiness),
+          backend: normalizeNpuBackend(metadata.backend),
+          fallbackReason: typeof metadata.fallbackReason === "string" ? metadata.fallbackReason : undefined,
+          default: Boolean(metadata.default),
+          requiresQnn: Boolean(metadata.requiresQnn),
+          contextWindow: typeof metadata.contextWindow === "number" ? metadata.contextWindow : undefined,
+          enabled: metadata.enabled === undefined ? true : Boolean(metadata.enabled),
+        };
+      })
+      .filter((model) => model.modelId.length > 0);
   }
 
   public async close(): Promise<void> {
@@ -322,7 +331,11 @@ export class NpuSidecarService {
   private async waitForHealthy(timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + Math.max(2_000, timeoutMs);
     while (Date.now() < deadline) {
-      if (await this.fetchHealth().then(() => true).catch(() => false)) {
+      if (
+        await this.fetchHealth()
+          .then(() => true)
+          .catch(() => false)
+      ) {
         return true;
       }
       await sleep(300);
@@ -385,6 +398,9 @@ function defaultCapability(): NpuCapabilityReport {
     onnxRuntimeGenAiAvailable: false,
     qnnExecutionProviderAvailable: false,
     supported: false,
+    localInferenceReady: false,
+    streamingChatCompletions: false,
+    fallbackProxyConfigured: false,
     details: ["No sidecar capability report received yet."],
   };
 }
@@ -418,6 +434,22 @@ function normalizeModelSource(value: unknown): NpuModelManifest["source"] {
     return source;
   }
   return "custom";
+}
+
+function normalizeModelReadiness(value: unknown): NpuModelManifest["readiness"] {
+  const readiness = String(value ?? "unchecked").toLowerCase();
+  if (readiness === "ready" || readiness === "missing_path" || readiness === "hash_mismatch") {
+    return readiness;
+  }
+  return "unchecked";
+}
+
+function normalizeNpuBackend(value: unknown): NpuModelManifest["backend"] {
+  const backend = String(value ?? "unknown").toLowerCase();
+  if (backend === "qnn" || backend === "cpu") {
+    return backend;
+  }
+  return "unknown";
 }
 
 function resolveArgPath(rootDir: string, arg: string): string {

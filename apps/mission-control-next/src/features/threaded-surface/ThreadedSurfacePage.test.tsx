@@ -503,6 +503,34 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain(">Archive<");
   });
 
+  it("marks Chat, Cowork, and Code with distinct stage posture", () => {
+    const expectations = [
+      ["chat", "fast-conversation", "Chat conversation stage"],
+      ["cowork", "orchestration-checkpoints", "Cowork orchestration stage"],
+      ["code", "workbench-proof", "Code workbench stage"],
+    ] as const;
+
+    for (const [surface, posture, stageLabel] of expectations) {
+      const markup = renderToStaticMarkup(
+        <ThreadedSurfacePage
+          surface={surface}
+          input={
+            {
+              ...buildInput(),
+              messageMode: surface,
+              activeSessionSurfaceProps: buildActiveSessionProps({ mode: surface }),
+              emptyStateProps: null,
+            } as any
+          }
+        />,
+      );
+
+      expect(markup).toContain(`data-surface-intent="${posture}"`);
+      expect(markup).toContain(`data-stage-posture="${posture}"`);
+      expect(markup).toContain(`aria-label="${stageLabel}"`);
+    }
+  });
+
   it("shows the effective permission state directly above the composer", () => {
     const markup = renderToStaticMarkup(
       <ThreadedSurfacePage

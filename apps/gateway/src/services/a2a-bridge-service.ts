@@ -46,6 +46,8 @@ export function buildA2ABridgeStatus(input: {
       agentCard: `${baseUrl}/api/v1/a2a/agent-card`,
       taskPreview: `${baseUrl}/api/v1/a2a/task-preview`,
       jsonRpc: `${baseUrl}/api/v1/a2a/jsonrpc`,
+      httpJson: `${baseUrl}/api/v1/a2a/http-json/tasks`,
+      authenticatedExtendedCard: `${baseUrl}/api/v1/a2a/extended-agent-card`,
       publicDiscovery: `${baseUrl}/.well-known/agent-card.json`,
       outboundPreview: `${baseUrl}/api/v1/a2a/outbound/preview`,
       outboundSend: `${baseUrl}/api/v1/a2a/outbound/send`,
@@ -164,20 +166,31 @@ export function buildA2ABridgeGovernance(
   const inboundJsonRpcEnabled = Boolean(
     config.enabled && config.inbound.enabled && config.bindings.includes("JSONRPC"),
   );
+  const inboundHttpJsonEnabled = Boolean(
+    config.enabled && config.inbound.enabled && config.bindings.includes("HTTP_JSON"),
+  );
   const outboundNetworkEnabled = Boolean(config.enabled && config.outbound.enabled);
   const configuredPeerCount = peerCredentials.filter((credential) => credential.status === "configured").length;
-  const callable = inboundJsonRpcEnabled && configuredPeerCount > 0;
+  const callable = (inboundJsonRpcEnabled || inboundHttpJsonEnabled) && configuredPeerCount > 0;
   const reasons = buildGovernanceReasons(config, {
     inboundJsonRpcEnabled,
+    inboundHttpJsonEnabled,
     outboundNetworkEnabled,
     configuredPeerCount,
   });
   return {
-    exposure: config.publicDiscoveryEnabled ? "public_discovery" : callable ? "a2a_peer_jsonrpc" : "operator_api_only",
+    exposure: config.publicDiscoveryEnabled
+      ? "public_discovery"
+      : callable && inboundJsonRpcEnabled && !inboundHttpJsonEnabled
+        ? "a2a_peer_jsonrpc"
+        : callable
+          ? "a2a_peer_gateway"
+          : "operator_api_only",
     callable,
     approvalRequired: true,
     outboundNetworkEnabled,
     inboundJsonRpcEnabled,
+    inboundHttpJsonEnabled,
     replayPolicy: callable ? "durable_task_binding" : "preview_only",
     audit: callable || outboundNetworkEnabled ? "durable_gateway_audit" : "gateway_route",
     reasons,
@@ -221,6 +234,7 @@ function buildA2AAgentCard(input: {
 }): A2ABridgeAgentCard {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const jsonRpcCallable = input.governance.inboundJsonRpcEnabled && input.governance.callable;
+  const httpJsonCallable = input.governance.inboundHttpJsonEnabled && input.governance.callable;
   const publicationStatus = input.config.publicDiscoveryEnabled
     ? "public_discovery"
     : input.config.enabled
@@ -255,16 +269,21 @@ function buildA2AAgentCard(input: {
         url: `${baseUrl}/api/v1/a2a/http-json`,
         protocolBinding: "HTTP_JSON",
         protocolVersion: "1.0",
-        enabled: false,
-        reason: "HTTP+JSON transport is advertised as a non-callable future capability flag.",
+        enabled: httpJsonCallable,
+        reason: httpJsonCallable
+          ? "Inbound HTTP+JSON is callable for configured A2A peers."
+          : "HTTP+JSON requires A2A, inbound mode, HTTP_JSON binding, and configured peer credentials.",
       },
     ],
     capabilities: {
       streaming: jsonRpcCallable,
-      pushNotifications: false,
+      pushNotifications: input.governance.callable,
       stateTransitionHistory: true,
-      extendedAgentCard: false,
-      extensions: [],
+      extendedAgentCard: input.governance.callable,
+      extensions: [
+        ...(httpJsonCallable ? ["goatcitadel.http_json_tasks"] : []),
+        ...(input.governance.callable ? ["goatcitadel.push_notifications"] : []),
+      ],
     },
     defaultInputModes: ["text/plain", "application/json"],
     defaultOutputModes: ["application/json"],
@@ -274,7 +293,7 @@ function buildA2AAgentCard(input: {
         name: "Governed Task Interop",
         description:
           "Accepts peer-authenticated A2A messages through Gateway policy, durable task bindings, and visible chat/task lifecycle state.",
-        tags: ["a2a", "json-rpc", "durable-tasks", "operator-governed"],
+        tags: ["a2a", "json-rpc", ...(httpJsonCallable ? ["http-json"] : []), "durable-tasks", "operator-governed"],
         inputModes: ["text/plain", "application/json"],
         outputModes: ["application/json"],
       },
@@ -324,7 +343,12 @@ function resolvePeerCredentialStatus(
 
 function buildGovernanceReasons(
   config: A2ABridgeRuntimeConfig,
-  state: { inboundJsonRpcEnabled: boolean; outboundNetworkEnabled: boolean; configuredPeerCount: number },
+  state: {
+    inboundJsonRpcEnabled: boolean;
+    inboundHttpJsonEnabled: boolean;
+    outboundNetworkEnabled: boolean;
+    configuredPeerCount: number;
+  },
 ): string[] {
   if (!config.enabled) {
     return [
@@ -339,13 +363,19 @@ function buildGovernanceReasons(
   if (!state.inboundJsonRpcEnabled) {
     reasons.push("Inbound JSON-RPC is not callable until A2A inbound mode and JSON-RPC binding are enabled.");
   }
-  if (state.inboundJsonRpcEnabled && state.configuredPeerCount === 0) {
-    reasons.push("Inbound JSON-RPC requires at least one configured, unexpired, unrevoked peer credential.");
+  if (!state.inboundHttpJsonEnabled) {
+    reasons.push("Inbound HTTP+JSON is not callable until A2A inbound mode and HTTP_JSON binding are enabled.");
+  }
+  if ((state.inboundJsonRpcEnabled || state.inboundHttpJsonEnabled) && state.configuredPeerCount === 0) {
+    reasons.push("Inbound A2A requires at least one configured, unexpired, unrevoked peer credential.");
   }
   if (!state.outboundNetworkEnabled) {
     reasons.push("Outbound A2A is disabled until explicitly configured and allowlisted.");
   }
-  reasons.push("Push notifications, gRPC, and HTTP+JSON stay non-callable capability flags until implemented.");
+  reasons.push(
+    "A2A push notification delivery is callable for configured peers and remains governed by Gateway peer auth, network allowlists, durable task bindings, and external side-effect audit.",
+  );
+  reasons.push("gRPC stays a non-callable capability flag until implemented.");
   return reasons;
 }
 

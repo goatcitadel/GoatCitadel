@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
@@ -66,6 +66,14 @@ const a2aOutboundBodySchema = z.object({
 
 const a2aBindingParamsSchema = z.object({
   a2aTaskId: z.string().min(1),
+});
+
+const a2aHttpJsonTaskParamsSchema = z.object({
+  taskId: z.string().min(1),
+});
+
+const a2aHttpJsonEventsQuerySchema = z.object({
+  lastEventSequence: z.coerce.number().int().min(0).default(0),
 });
 
 const listQuerySchema = z.object({
@@ -325,6 +333,113 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(response);
     },
   );
+
+  fastify.get("/api/v1/a2a/extended-agent-card", a2aJsonRpcRouteAccess, async (request, reply) => {
+    const auth = fastify.services.a2a.authenticatePeerRequest(request);
+    if ("statusCode" in auth) {
+      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+    }
+    const checkedAt = new Date().toISOString();
+    try {
+      return reply.send(
+        fastify.services.a2a.getAuthenticatedExtendedAgentCard(auth, {
+          checkedAt,
+          baseUrl: buildA2ARequestBaseUrl(request.headers),
+        }),
+      );
+    } catch (error) {
+      return sendA2AHttpJsonRouteError(reply, error, request);
+    }
+  });
+
+  fastify.post(
+    "/api/v1/a2a/http-json/tasks",
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX },
+      },
+    },
+    async (request, reply) => {
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      const checkedAt = new Date().toISOString();
+      try {
+        const body: Record<string, unknown> =
+          request.body && typeof request.body === "object" && !Array.isArray(request.body)
+            ? (request.body as Record<string, unknown>)
+            : {};
+        return reply.code(202).send({ task: await fastify.services.a2a.sendHttpJsonMessage(auth, body, checkedAt) });
+      } catch (error) {
+        return sendA2AHttpJsonRouteError(reply, error, request);
+      }
+    },
+  );
+
+  fastify.get("/api/v1/a2a/http-json/tasks/:taskId", a2aJsonRpcRouteAccess, async (request, reply) => {
+    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const auth = fastify.services.a2a.authenticatePeerRequest(request);
+    if ("statusCode" in auth) {
+      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+    }
+    try {
+      return reply.send({ task: fastify.services.a2a.getHttpJsonTask(auth, params.data, new Date().toISOString()) });
+    } catch (error) {
+      return sendA2AHttpJsonRouteError(reply, error, request);
+    }
+  });
+
+  fastify.post("/api/v1/a2a/http-json/tasks/:taskId/cancel", a2aJsonRpcRouteAccess, async (request, reply) => {
+    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const auth = fastify.services.a2a.authenticatePeerRequest(request);
+    if ("statusCode" in auth) {
+      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+    }
+    try {
+      return reply.send({
+        task: await fastify.services.a2a.cancelHttpJsonTask(auth, params.data, new Date().toISOString()),
+      });
+    } catch (error) {
+      return sendA2AHttpJsonRouteError(reply, error, request);
+    }
+  });
+
+  fastify.get("/api/v1/a2a/http-json/tasks/:taskId/events", a2aJsonRpcRouteAccess, async (request, reply) => {
+    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+    const query = a2aHttpJsonEventsQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    const auth = fastify.services.a2a.authenticatePeerRequest(request);
+    if ("statusCode" in auth) {
+      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+    }
+    try {
+      return reply.send(
+        fastify.services.a2a.getHttpJsonTaskEvents(
+          auth,
+          { ...params.data, lastEventSequence: query.data.lastEventSequence },
+          new Date().toISOString(),
+        ),
+      );
+    } catch (error) {
+      return sendA2AHttpJsonRouteError(reply, error, request);
+    }
+  });
 
   fastify.post("/api/v1/a2a/outbound/preview", withRouteAccess(fastify, "operator"), async (request, reply) => {
     const parsed = a2aOutboundBodySchema.safeParse(request.body ?? {});
@@ -736,6 +851,17 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function sendA2AHttpJsonRouteError(reply: FastifyReply, error: unknown, request: FastifyRequest) {
+  if (error && typeof error === "object" && "statusCode" in error && "reason" in error) {
+    const routeError = error as { statusCode: number; reason: string; message?: string };
+    return reply.code(routeError.statusCode).send({
+      error: routeError.message ?? "A2A HTTP+JSON request failed.",
+      reason: routeError.reason,
+    });
+  }
+  return sendRouteError(reply, error, request.log);
+}
 
 function readTaskWorkspaceAccess(request: FastifyRequest): TaskWorkspaceAccessOptions {
   return {

@@ -80,6 +80,7 @@ export interface CodeModeHostileSandboxProof {
 
 export interface RunCodeModeHostileSandboxCanariesOptions extends HostSandboxAdapterSelectionOptions {
   evidenceRef?: string;
+  platformProofs?: CodeModeHostileSandboxPlatformProof[];
   preserveTempRoot?: boolean;
   tempRoot?: string;
   now?: () => Date;
@@ -196,7 +197,10 @@ export async function runCodeModeHostileSandboxCanaries(
     generatedAt,
     options.evidenceRef,
   );
-  const claim = buildHostileSandboxClaimMetadata(metadata.platform, [currentPlatformProof]);
+  const claim = buildHostileSandboxClaimMetadata(metadata.platform, [
+    currentPlatformProof,
+    ...(options.platformProofs ?? []).filter((proof) => proof.platform !== metadata.platform),
+  ]);
   return {
     generatedAt,
     platform: metadata.platform,

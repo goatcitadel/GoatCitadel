@@ -149,7 +149,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64|macos-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
+    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64|macos-arm64|linux-x64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
   );
 }
 

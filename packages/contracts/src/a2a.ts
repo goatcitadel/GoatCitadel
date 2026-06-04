@@ -6,7 +6,7 @@ export type A2ABridgeTaskState = "submitted" | "working" | "input_required" | "c
 
 export type A2ABridgePublicationStatus = "draft_operator_preview" | "private_configured" | "public_discovery";
 
-export type A2ABridgeExposure = "operator_api_only" | "public_discovery" | "a2a_peer_jsonrpc";
+export type A2ABridgeExposure = "operator_api_only" | "public_discovery" | "a2a_peer_jsonrpc" | "a2a_peer_gateway";
 
 export type A2ABridgeReplayPolicy = "preview_only" | "durable_task_binding" | "idempotent_external_side_effect";
 
@@ -74,6 +74,7 @@ export interface A2ABridgeGovernance {
   approvalRequired: boolean;
   outboundNetworkEnabled: boolean;
   inboundJsonRpcEnabled: boolean;
+  inboundHttpJsonEnabled: boolean;
   replayPolicy: A2ABridgeReplayPolicy;
   audit: "gateway_route" | "durable_gateway_audit";
   reasons: string[];
@@ -126,6 +127,8 @@ export interface A2ABridgeStatusResponse {
     agentCard: string;
     taskPreview: string;
     jsonRpc: string;
+    httpJson: string;
+    authenticatedExtendedCard: string;
     publicDiscovery?: string;
     outboundPreview?: string;
     outboundSend?: string;
@@ -196,6 +199,46 @@ export interface A2ABridgeTaskEvent {
   status?: A2ABridgeTaskStatus;
   message?: A2ABridgeMessage;
   artifact?: A2ABridgeArtifact;
+}
+
+export type A2ATaskPushEventKind = A2ABridgeTaskEvent["kind"];
+
+export type A2ATaskPushDeliveryStatus = "pending" | "delivered" | "retry_scheduled" | "dead_lettered" | "blocked";
+
+export interface A2ATaskPushNotificationConfig {
+  taskId: string;
+  peerId: string;
+  url: string;
+  events: A2ATaskPushEventKind[];
+  enabled: boolean;
+  maxAttempts: number;
+  attemptCount: number;
+  lastDeliveryStatus: A2ATaskPushDeliveryStatus;
+  lastDeliveryError?: string;
+  lastDeliveredAt?: string;
+  nextRetryAt?: string;
+  lastEventSequence: number;
+  auth?: {
+    scheme: "bearer";
+    tokenPreview?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface A2ATaskPushDeliveryResult {
+  taskId: string;
+  peerId: string;
+  url: string;
+  eventSequence: number;
+  eventKind: A2ATaskPushEventKind;
+  status: A2ATaskPushDeliveryStatus;
+  attemptCount: number;
+  checkedAt: string;
+  deliveredAt?: string;
+  nextRetryAt?: string;
+  error?: string;
+  auditRef?: string;
 }
 
 export interface A2ATaskBindingRecord {

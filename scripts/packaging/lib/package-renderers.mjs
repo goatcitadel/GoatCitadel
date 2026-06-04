@@ -101,7 +101,11 @@ export function buildReleaseManifest({
 
   const launcher = {
     command: "goatcitadel launch",
-    desktop: includeDesktopHost ? `app/desktop/${desktopArtifactName}` : "macos-app-bundle",
+    desktop: includeDesktopHost
+      ? `app/desktop/${desktopArtifactName}`
+      : targetInfo.platform === "darwin"
+        ? "macos-app-bundle"
+        : "browser-launcher",
   };
   if (targetInfo.platform === "windows") {
     launcher.windows = "bin/goatcitadel.cmd";
@@ -118,7 +122,7 @@ export function buildReleaseManifest({
     checksums,
     launcher,
   };
-  if (targetInfo.platform === "darwin") {
+  if (targetInfo.platform === "darwin" || targetInfo.platform === "linux") {
     manifest.experimental = true;
   }
   return manifest;

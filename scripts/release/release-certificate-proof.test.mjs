@@ -120,6 +120,17 @@ test("release certificate treats verify:fast as direct-only proof", () => {
   );
 });
 
+test("release certificate requires hostile sandbox proof from the exact-SHA release lane", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
+  assert.ok(coveredBlock, "release proof covered lane list should be present");
+  assert.match(coveredBlock[1], /"verify:code-mode:hostile-sandbox"/);
+  assert.match(
+    writer,
+    /\{ name: "verify:code-mode:hostile-sandbox", workflowFile: "verification-agentic-code-mode\.yml", required: true \}/,
+  );
+});
+
 test("release package metadata locks release and packaging scripts with fail-closed commands", () => {
   const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
   assert.match(assembler, /lockedInputDigests/);

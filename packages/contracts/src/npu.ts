@@ -7,6 +7,9 @@ export interface NpuCapabilityReport {
   onnxRuntimeGenAiAvailable: boolean;
   qnnExecutionProviderAvailable: boolean;
   supported: boolean;
+  localInferenceReady?: boolean;
+  streamingChatCompletions?: boolean;
+  fallbackProxyConfigured?: boolean;
   details: string[];
 }
 
@@ -16,6 +19,10 @@ export interface NpuModelManifest {
   family: "llama" | "phi" | "qwen" | "mistral" | "gemma" | "other";
   source: "local" | "huggingface" | "custom";
   path?: string;
+  sha256?: string;
+  readiness?: "ready" | "missing_path" | "hash_mismatch" | "unchecked";
+  backend?: "qnn" | "cpu" | "unknown";
+  fallbackReason?: string;
   default: boolean;
   requiresQnn: boolean;
   contextWindow?: number;

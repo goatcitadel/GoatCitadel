@@ -7,13 +7,13 @@ GoatCitadel now has a packaged runtime contract for installer work.
 - `windows-x64`
 - `windows-arm64`
 - `macos-arm64` (experimental friend-smoke bundle/DMG only)
+- `linux-x64` (experimental source bundle only)
 
-The current tagged release workflow publishes Windows proof only. The macOS arm64 scripts can create an ad-hoc-signed local DMG for friend smoke, but it is not notarized and is not release proof. macOS and Linux release claims remain blocked until their installer artifacts, signing/notarization story, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
+The current tagged release workflow publishes Windows proof only. The macOS arm64 scripts can create an ad-hoc-signed local DMG for friend smoke, and the Linux x64 bundle target can create a local POSIX browser-launcher bundle, but neither target is release proof. macOS and Linux release claims remain blocked until their installer artifacts, signing/notarization story where applicable, checksums, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
 
 Deferred targets:
 
 - `darwin-x64`
-- `linux-x64`
 - `linux-arm64`
 
 ## Bundle layout
@@ -92,9 +92,9 @@ The later LaunchAgent stage should introduce a foreground `goatcitadel service r
 
 Linux package scripts are experimental and are not published by the current release workflow:
 
-- `GoatCitadel-Setup-linux-x64.tar.gz`
+- `pnpm package:bundle --target linux-x64 --skip-desktop`
 
-Do not cite Linux packages as release proof until the workflow emits, signs, and smoke-tests them.
+The Linux x64 bundle emits a POSIX `bin/goatcitadel` launcher that opens the packaged web runtime rather than a native desktop host. It is a local/source bundle target only. Do not cite Linux packages as release proof until the workflow emits, signs, checksums, and smoke-tests them.
 
 ## Build commands
 
@@ -104,6 +104,7 @@ pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
 pnpm package:bundle --target macos-arm64 --skip-desktop
 pnpm package:macos --target macos-arm64
+pnpm package:bundle --target linux-x64 --skip-desktop
 pnpm verify:desktop
 ```
 

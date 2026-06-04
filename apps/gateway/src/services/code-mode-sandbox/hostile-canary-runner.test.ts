@@ -103,6 +103,34 @@ describe("runCodeModeHostileSandboxCanaries", () => {
     expect(proof.claim.blockers).toEqual(expect.arrayContaining(["linux hostile sandbox proof is missing."]));
   });
 
+  it("aggregates external platform proofs before allowing the public claim", async () => {
+    const tempRoot = await createTempRoot();
+    const checkedAt = fixedNow().toISOString();
+
+    const proof = await runCodeModeHostileSandboxCanaries(baseConfig(), {
+      platform: "win32",
+      osRelease: "10.0.22631",
+      resolveCommand: (command) => (command === "powershell.exe" ? "C:\\Windows\\powershell.exe" : undefined),
+      tempRoot,
+      now: fixedNow,
+      prepareLaunch: fakePrepareLaunch,
+      spawnLaunch: writePassingCanaryReport,
+      platformProofs: ["linux", "darwin"].map((platform) => ({
+        platform: platform as "linux" | "darwin",
+        status: "pass" as const,
+        checksPassed: [...CODE_MODE_HOSTILE_SANDBOX_CANARIES],
+        checksFailed: [],
+        checkedAt,
+      })),
+    });
+
+    expect(proof.claim).toMatchObject({
+      claimStatus: "promoted",
+      publicClaimAllowed: true,
+      blockers: [],
+    });
+  });
+
   it("allows the public claim only when Linux, macOS, and Windows all pass", () => {
     const checkedAt = fixedNow().toISOString();
     const claim = buildHostileSandboxClaimMetadata(

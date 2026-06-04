@@ -191,6 +191,7 @@ describe("tasks routes", () => {
         callable: false,
         outboundNetworkEnabled: false,
         inboundJsonRpcEnabled: false,
+        inboundHttpJsonEnabled: false,
       },
     });
     expect(cardJson.agentCard.supportedInterfaces).toEqual(
@@ -286,6 +287,102 @@ describe("tasks routes", () => {
     expect(handleJsonRpc).toHaveBeenCalledWith(
       { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
       expect.objectContaining({ method: "GetTask" }),
+      expect.any(String),
+    );
+  });
+
+  it("protects A2A HTTP+JSON and authenticated extended cards with peer credentials", async () => {
+    const authenticatePeerRequest = vi.fn().mockReturnValue({ peerId: "peer-1", scopes: ["a2a:http-json"] });
+    const task = {
+      id: "a2a-task-1",
+      contextId: "ctx-1",
+      status: { state: "working", timestamp: "2026-06-01T00:00:00.000Z" },
+      messages: [],
+      artifacts: [],
+      metadata: { bridge: "goatcitadel-a2a" },
+    };
+    const getAuthenticatedExtendedAgentCard = vi.fn(() => ({
+      name: "GoatCitadel Mission Control",
+      capabilities: { extendedAgentCard: true },
+      authenticatedPeer: { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      boundary: "gateway_peer_authenticated",
+    }));
+    const sendHttpJsonMessage = vi.fn(async () => task);
+    const getHttpJsonTask = vi.fn(() => task);
+    const cancelHttpJsonTask = vi.fn(async () => ({ ...task, status: { ...task.status, state: "canceled" } }));
+    const getHttpJsonTaskEvents = vi.fn(() => ({
+      task,
+      events: [
+        {
+          sequence: 1,
+          taskId: "a2a-task-1",
+          contextId: "ctx-1",
+          kind: "task.status",
+          timestamp: task.status.timestamp,
+        },
+      ],
+    }));
+    app = buildApp(
+      {},
+      {
+        a2a: {
+          ...createDefaultA2AService(),
+          authenticatePeerRequest,
+          getAuthenticatedExtendedAgentCard,
+          sendHttpJsonMessage,
+          getHttpJsonTask,
+          cancelHttpJsonTask,
+          getHttpJsonTaskEvents,
+        },
+      },
+    );
+    await app.register(tasksRoutes);
+
+    const headers = { authorization: "Bearer peer-token" };
+    const card = await app.inject({ method: "GET", url: "/api/v1/a2a/extended-agent-card", headers });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/http-json/tasks",
+      headers,
+      payload: { contextId: "ctx-1", message: { parts: [{ kind: "text", text: "Run it." }] } },
+    });
+    const read = await app.inject({ method: "GET", url: "/api/v1/a2a/http-json/tasks/a2a-task-1", headers });
+    const events = await app.inject({
+      method: "GET",
+      url: "/api/v1/a2a/http-json/tasks/a2a-task-1/events?lastEventSequence=0",
+      headers,
+    });
+    const canceled = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/http-json/tasks/a2a-task-1/cancel",
+      headers,
+    });
+
+    expect(card.statusCode).toBe(200);
+    expect(card.json()).toMatchObject({ boundary: "gateway_peer_authenticated" });
+    expect(created.statusCode).toBe(202);
+    expect(created.json()).toMatchObject({ task: { id: "a2a-task-1" } });
+    expect(read.statusCode).toBe(200);
+    expect(events.json()).toMatchObject({ events: [expect.objectContaining({ kind: "task.status" })] });
+    expect(canceled.json()).toMatchObject({ task: { status: { state: "canceled" } } });
+    expect(sendHttpJsonMessage).toHaveBeenCalledWith(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      expect.objectContaining({ contextId: "ctx-1" }),
+      expect.any(String),
+    );
+    expect(getHttpJsonTask).toHaveBeenCalledWith(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      { taskId: "a2a-task-1" },
+      expect.any(String),
+    );
+    expect(getHttpJsonTaskEvents).toHaveBeenCalledWith(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      { taskId: "a2a-task-1", lastEventSequence: 0 },
+      expect.any(String),
+    );
+    expect(cancelHttpJsonTask).toHaveBeenCalledWith(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      { taskId: "a2a-task-1" },
       expect.any(String),
     );
   });
@@ -929,9 +1026,14 @@ function createDefaultA2AService() {
     authenticatePeerRequest: vi.fn(() => ({
       statusCode: 503,
       reason: "a2a_inbound_disabled",
-      message: "A2A inbound JSON-RPC is not enabled.",
+      message: "A2A inbound peer access is not enabled.",
     })),
     handleJsonRpc: vi.fn(),
+    getAuthenticatedExtendedAgentCard: vi.fn(),
+    sendHttpJsonMessage: vi.fn(),
+    getHttpJsonTask: vi.fn(),
+    cancelHttpJsonTask: vi.fn(),
+    getHttpJsonTaskEvents: vi.fn(),
     previewOutbound: vi.fn(() => ({ checkedAt: "now", warnings: [], envelope: { jsonrpc: "2.0" } })),
     sendOutbound: vi.fn(),
     getBinding: vi.fn(),

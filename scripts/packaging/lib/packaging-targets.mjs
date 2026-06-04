@@ -35,6 +35,17 @@ export const PACKAGING_TARGETS = Object.freeze({
     desktopArtifactName: "GoatCitadel Mission Control.app",
     bundleDesktopHost: false,
   }),
+  "linux-x64": Object.freeze({
+    target: "linux-x64",
+    platform: "linux",
+    arch: "x64",
+    nodePlatform: "linux",
+    nodeArch: "x64",
+    nodeArchiveType: "tar.gz",
+    nodeExecutableName: "node",
+    desktopArtifactName: "goatcitadel",
+    bundleDesktopHost: false,
+  }),
 });
 
 export function requirePackagingTarget(target, options = {}) {

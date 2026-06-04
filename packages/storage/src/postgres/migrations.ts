@@ -1656,4 +1656,33 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON a2a_task_bindings(local_task_id);
     `,
   },
+  {
+    version: 60,
+    name: "a2a_task_push_configs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS a2a_task_push_configs (
+        a2a_task_id TEXT NOT NULL,
+        peer_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        events_json TEXT NOT NULL DEFAULT '["task.status"]',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        auth_token TEXT,
+        max_attempts BIGINT NOT NULL DEFAULT 3,
+        attempt_count BIGINT NOT NULL DEFAULT 0,
+        last_delivery_status TEXT NOT NULL DEFAULT 'pending',
+        last_delivery_error TEXT,
+        last_delivered_at TEXT,
+        next_retry_at TEXT,
+        last_event_sequence BIGINT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (a2a_task_id, peer_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_a2a_task_push_configs_peer_updated
+        ON a2a_task_push_configs(peer_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_a2a_task_push_configs_retry
+        ON a2a_task_push_configs(last_delivery_status, next_retry_at);
+    `,
+  },
 ];

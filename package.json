@@ -64,6 +64,7 @@
     "verify:extensions:package": "pnpm --filter @goatcitadel/extensions-sdk build && node scripts/verify-extension-package-artifacts.mjs",
     "verify:mcp:conformance": "node --test scripts/mcp-conformance.test.mjs scripts/mcp-server-stdio-runner.test.mjs",
     "verify:fast": "node scripts/verification/run.mjs fast",
+    "verify:a2a:full": "node scripts/verification/run.mjs a2a-full",
     "verify:deep:core": "node scripts/verification/run.mjs deep-core",
     "verify:deep:ecosystem": "node scripts/verification/run.mjs deep-ecosystem",
     "verify:catalog:parity": "node scripts/verification/run.mjs catalog-parity",

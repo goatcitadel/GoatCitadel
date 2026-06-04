@@ -47,6 +47,7 @@ const REQUIRED_TOKEN_FILES = [
 ] as const;
 
 const UI_SCAN_ROOTS = ["apps/mission-control-next/src", "packages/mission-control-shared/src"] as const;
+const MISSION_CONTROL_RAW_COLOR_BUDGET = 92;
 
 const PLACEHOLDER_PATTERNS = [{ id: "unresolved-placeholder", re: /<PLACEHOLDER|TODO_PLACEHOLDER/iu }] as const;
 
@@ -79,6 +80,13 @@ const ANTI_SLOP_PATTERNS = [
     id: "placeholder-copy",
     re: /\bplaceholder\s+text\b/iu,
   },
+] as const;
+
+const RAW_COLOR_LITERAL_PATTERNS = [
+  { id: "raw-hex-color", re: /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/u },
+  { id: "raw-rgb-color", re: /\brgba?\(/iu },
+  { id: "raw-hsl-color", re: /\bhsla?\(/iu },
+  { id: "raw-oklch-color", re: /\boklch\(/iu },
 ] as const;
 
 type DesignQualityHit = { path: string; pattern: string };
@@ -151,6 +159,26 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       owner: "apps/mission-control-next",
       evidence: tokenMissing[0] ?? "apps/mission-control-next/src/styles",
       nextAction: tokenMissing.length > 0 ? `Restore missing token file(s): ${tokenMissing.join(", ")}.` : undefined,
+    }),
+  );
+
+  const rawColorHits = collectRawColorLiteralHits([path.join(root, "apps", "mission-control-next", "src")], {
+    recursive: true,
+    repoRoot: root,
+    exclude: (filePath) => filePath.endsWith("mission-control-next-tokens.css"),
+  });
+  checks.push(
+    check({
+      id: "mission-control.raw-color-budget",
+      label: "Mission Control non-token raw color budget",
+      severity: rawColorHits.length > MISSION_CONTROL_RAW_COLOR_BUDGET ? "P0" : "P3",
+      status: rawColorHits.length > MISSION_CONTROL_RAW_COLOR_BUDGET ? "blocking" : "passing",
+      owner: "apps/mission-control-next",
+      evidence: rawColorHits[0]?.path ?? "apps/mission-control-next/src/styles/mission-control-next-tokens.css",
+      nextAction:
+        rawColorHits.length > MISSION_CONTROL_RAW_COLOR_BUDGET
+          ? `Move raw color literal(s) into mission-control-next-tokens.css or reduce non-token CSS hits to ${MISSION_CONTROL_RAW_COLOR_BUDGET} or fewer; current hits: ${rawColorHits.length}.`
+          : undefined,
     }),
   );
 
@@ -270,15 +298,41 @@ function check(input: {
   };
 }
 
-function collectPatternHits(
+function collectRawColorLiteralHits(
   rootsOrFiles: readonly string[],
-  patterns: readonly { id: string; re: RegExp }[],
-  options: { recursive?: boolean; repoRoot?: string } = {},
+  options: { recursive?: boolean; repoRoot?: string; exclude?: (filePath: string) => boolean } = {},
 ): DesignQualityHit[] {
   const hits: DesignQualityHit[] = [];
   for (const entryPath of rootsOrFiles) {
     const files = options.recursive ? listTextFiles(entryPath) : [entryPath];
     for (const filePath of files) {
+      if (options.exclude?.(filePath)) continue;
+      const text = readText(filePath);
+      if (!text) continue;
+      for (const pattern of RAW_COLOR_LITERAL_PATTERNS) {
+        const re = new RegExp(
+          pattern.re.source,
+          pattern.re.flags.includes("g") ? pattern.re.flags : `${pattern.re.flags}g`,
+        );
+        for (const _match of text.matchAll(re)) {
+          hits.push({ path: normalizeEvidencePath(filePath, options.repoRoot), pattern: pattern.id });
+        }
+      }
+    }
+  }
+  return hits;
+}
+
+function collectPatternHits(
+  rootsOrFiles: readonly string[],
+  patterns: readonly { id: string; re: RegExp }[],
+  options: { recursive?: boolean; repoRoot?: string; exclude?: (filePath: string) => boolean } = {},
+): DesignQualityHit[] {
+  const hits: DesignQualityHit[] = [];
+  for (const entryPath of rootsOrFiles) {
+    const files = options.recursive ? listTextFiles(entryPath) : [entryPath];
+    for (const filePath of files) {
+      if (options.exclude?.(filePath)) continue;
       const text = readText(filePath);
       if (!text) continue;
       for (const pattern of patterns) {
