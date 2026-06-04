@@ -203,7 +203,7 @@ Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; Working
 Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Expand-Archive -LiteralPath '{tmp}\\bundle.zip' -DestinationPath '{app}' -Force"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden
+Filename: "{sys}\\tar.exe"; Parameters: "-xf ""{tmp}\\bundle.zip"" -C ""{app}"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\node_modules\\playwright\\cli.js"" install chromium"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing Chromium runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: chromium
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\dist\\voice-runtime-cli.js"" install --model base.en"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing local voice runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: voice
 Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
