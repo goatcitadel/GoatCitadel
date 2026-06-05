@@ -141,7 +141,12 @@ function listInstallerArtifacts(rootDir) {
       if (!entry.isFile()) {
         continue;
       }
-      if (entry.name.endsWith(".exe") || entry.name.endsWith(".pkg") || entry.name.endsWith(".tar.gz")) {
+      if (
+        entry.name.endsWith(".exe") ||
+        entry.name.endsWith(".msix") ||
+        entry.name.endsWith(".pkg") ||
+        entry.name.endsWith(".tar.gz")
+      ) {
         files.push(absolutePath);
       }
     }
@@ -260,6 +265,7 @@ function buildMetadataRecord(input) {
     buildCommands: [
       "pnpm install --frozen-lockfile",
       "pnpm package:windows-host --target <windows-target>",
+      "pnpm package:windows-msix --cert-path <pfx> --cert-password <password>",
       "pnpm package:bundle --target <target>",
       "pnpm package:windows --target <target>",
       "pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom>",

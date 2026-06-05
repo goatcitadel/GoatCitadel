@@ -68,6 +68,61 @@ test("Windows target metadata remains signed-installer compatible", () => {
   assert.equal(desktopHost?.path, "app/desktop/GoatCitadel-Mission-Control-Windows.exe");
 });
 
+test("Windows release manifest can carry the signed sparse identity package", () => {
+  const target = requirePackagingTarget("windows-x64");
+  const manifest = buildReleaseManifest({
+    targetInfo: target,
+    version: "1.0.0",
+    nodeVersion: "v22.1.0",
+    checksums: {
+      "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix": "abc123",
+    },
+    uiTarget: {
+      packageName: "@goatcitadel/mission-control-next",
+      packageDirName: "mission-control-next",
+      displayName: "Mission Control Next",
+    },
+    includeDesktopHost: true,
+    desktopArtifactName: target.desktopArtifactName,
+    windowsIdentityPackage: {
+      path: "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix",
+      packageName: "GoatCitadel.MissionControl.Windows",
+      applicationId: "App",
+      protocol: "goatcitadel",
+      signed: true,
+    },
+  });
+
+  const identityPackage = manifest.components.find((item) => item.id === "mission-control-windows-identity-package");
+  assert.equal(identityPackage?.kind, "msix-external-location-identity");
+  assert.equal(identityPackage?.path, "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix");
+  assert.equal(identityPackage?.packageName, "GoatCitadel.MissionControl.Windows");
+  assert.equal(identityPackage?.applicationId, "App");
+  assert.equal(identityPackage?.protocol, "goatcitadel");
+  assert.equal(identityPackage?.signed, true);
+});
+
+test("Windows host manifests declare matching external-location package identity", () => {
+  const appManifest = fs.readFileSync(path.join(repoRoot, "apps", "mission-control-windows", "app.manifest"), "utf8");
+  const packageManifest = fs.readFileSync(
+    path.join(repoRoot, "apps", "mission-control-windows", "Package.appxmanifest"),
+    "utf8",
+  );
+  const hostBuilder = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-windows-host.mjs"), "utf8");
+  const releaseWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-installers.yml"), "utf8");
+
+  assert.match(appManifest, /packageName="GoatCitadel\.MissionControl\.Windows"/);
+  assert.match(appManifest, /applicationId="App"/);
+  assert.match(packageManifest, /ProcessorArchitecture="neutral"/);
+  assert.match(packageManifest, /<uap10:AllowExternalContent>true<\/uap10:AllowExternalContent>/);
+  assert.match(packageManifest, /Executable="app\\desktop\\GoatCitadel-Mission-Control-Windows\.exe"/);
+  assert.match(packageManifest, /<uap:Protocol Name="goatcitadel" \/>/);
+  assert.match(hostBuilder, /GOATCITADEL_WINDOWS_MSIX_PUBLISHER/);
+  assert.match(hostBuilder, /-p:ApplicationManifest=/);
+  assert.match(releaseWorkflow, /GOATCITADEL_WINDOWS_MSIX_PUBLISHER/);
+  assert.match(releaseWorkflow, /vars\.WINDOWS_MSIX_PUBLISHER/);
+});
+
 test("POSIX launcher keeps macOS mutable state under Application Support", () => {
   const launcher = renderPosixLauncher();
   assert.match(launcher, /^#!\/usr\/bin\/env sh/);

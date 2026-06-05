@@ -74,7 +74,7 @@ Windows packages use the new C# WinUI 3 / Windows App SDK host as the release-be
 
 The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Start Menu shortcuts, supports an optional desktop shortcut, registers the `goatcitadel://` protocol for the unpackaged lane, and exposes selectable Chromium and voice runtime components. The release manifest identifies the Windows desktop component as `mission-control-windows-host` with `kind: "winui3-windows-app-sdk"`.
 
-Stage B is the package-identity lane. It must add a signed MSIX/package-identity artifact with app identity, notification click routing, protocol registration, install/uninstall cleanup, and signing smoke before the release copy can call the Windows deployment path complete. `pnpm package:windows-msix --emit-plan` prints the remaining proof checklist; the command intentionally fails without `--emit-plan` until that lane is implemented and verified.
+Stage B is the package-identity lane. It builds a sparse MSIX external-location identity package with `pnpm package:windows-msix`, embeds the signed identity package into `app/identity/`, and has the Inno installer register it with `Add-AppxPackage -ExternalLocation` when present. Public Windows releases must sign the identity package and smoke package registration, protocol manifest registration, uninstall cleanup, and signed artifact verification before publication. The public `WINDOWS_MSIX_PUBLISHER` repository variable, or local `GOATCITADEL_WINDOWS_MSIX_PUBLISHER`, must match the signing certificate subject because the WinUI host embeds the same package identity in its executable manifest. Local unsigned manifest-only proof is available with `pnpm package:windows-msix --allow-unsigned`, but unsigned MSIX packages are not bundled into installer payloads.
 
 ## macOS packaging
 
@@ -102,6 +102,7 @@ The Linux x64 bundle emits a POSIX `bin/goatcitadel` launcher that opens the pac
 
 ```text
 pnpm package:windows-host --target windows-x64
+pnpm package:windows-msix --allow-unsigned
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
 pnpm package:desktop --target windows-x64  # Tauri rollback lane only
@@ -128,6 +129,7 @@ Local unsigned rebuild and verification path:
 
 ```text
 pnpm package:windows-host --target windows-x64
+pnpm package:windows-msix --allow-unsigned
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
 Get-FileHash .\artifacts\installers\windows\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256

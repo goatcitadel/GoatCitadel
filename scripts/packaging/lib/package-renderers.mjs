@@ -50,6 +50,7 @@ export function buildReleaseManifest({
   uiTarget,
   includeDesktopHost,
   desktopArtifactName,
+  windowsIdentityPackage = null,
 }) {
   const embeddedNodePath = `app/runtime/node/${targetInfo.nodeExecutableName}`;
   const components = [
@@ -104,6 +105,20 @@ export function buildReleaseManifest({
       required: true,
       path: `app/desktop/${desktopArtifactName}`,
       description: desktopDescription,
+    });
+  }
+
+  if (windowsIdentityPackage) {
+    components.splice(4, 0, {
+      id: "mission-control-windows-identity-package",
+      kind: "msix-external-location-identity",
+      required: true,
+      path: windowsIdentityPackage.path,
+      packageName: windowsIdentityPackage.packageName,
+      applicationId: windowsIdentityPackage.applicationId,
+      protocol: windowsIdentityPackage.protocol,
+      signed: windowsIdentityPackage.signed,
+      description: "Signed sparse MSIX identity package for Windows App SDK notifications, protocol activation, and package identity with external runtime files.",
     });
   }
 

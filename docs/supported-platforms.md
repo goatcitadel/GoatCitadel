@@ -13,7 +13,7 @@ This table is the current `1.0` installer support matrix for GoatCitadel.
 
 ## Notes
 
-- Windows installer artifacts include an embedded Node runtime, the built Mission Control Next assets, and the native WinUI 3 / Windows App SDK Mission Control desktop host. Stage A uses the existing Inno Setup installer around that host; Stage B package identity/MSIX remains pending until the exact workflow proves app identity, protocol registration, notification click routing, signing, and uninstall cleanup.
+- Windows installer artifacts include an embedded Node runtime, the built Mission Control Next assets, the native WinUI 3 / Windows App SDK Mission Control desktop host, and, for signed public release lanes, a sparse MSIX external-location identity package. Package identity is registered during install when the signed identity package is present; notification click routing still requires exact-build workflow or manual smoke before public copy can claim that specific behavior.
 - macOS arm64 DMG packaging is experimental. Manual unsigned smoke uses ad-hoc signing, is not notarized, and may require a Gatekeeper Privacy & Security override. Public release DMG publication is fail-closed on Developer ID signing, notarization, stapling, checksum, and DMG smoke proof in `.github/workflows/release-installers.yml`.
 - Linux x64 bundle packaging is experimental. The release workflow can publish a checksummed tarball after extracting it and verifying the POSIX launcher plus experimental manifest, but it does not include a native desktop host.
 - macOS and Linux stay experimental until a signed/notarized artifact where applicable plus checksum and smoke evidence exists for the exact release SHA and the support matrix is deliberately promoted.

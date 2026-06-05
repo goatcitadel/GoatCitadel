@@ -157,6 +157,8 @@ function renderIss({ target: bundleTarget, architecture, version: bundleVersion,
 #define MyBundleZip "${normalizeForInno(currentBundleZipPath)}"
 #define MyOutputDir "${normalizeForInno(currentOutDir)}"
 #define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Windows.exe"
+#define MyIdentityPackage "app\\identity\\GoatCitadel-Mission-Control-Windows-Identity.msix"
+#define MyIdentityPackageName "GoatCitadel.MissionControl.Windows"
 
 [Setup]
 AppId=com.goatcitadel.installer.${bundleTarget}
@@ -210,11 +212,13 @@ Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\shell\\open\\command"; Valu
 
 [Run]
 Filename: "{sys}\\tar.exe"; Parameters: "-xf ""{tmp}\\bundle.zip"" -C ""{app}"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden
+Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""$package = Join-Path '{app}' '{#MyIdentityPackage}'; if (Test-Path -LiteralPath $package) { Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; Add-AppxPackage -Path $package -ExternalLocation '{app}' }"""; StatusMsg: "Registering GoatCitadel package identity..."; Flags: waituntilterminated runhidden
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\node_modules\\playwright\\cli.js"" install chromium"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing Chromium runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: chromium
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\dist\\voice-runtime-cli.js"" install --model base.en"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing local voice runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: voice
 Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
 
 [UninstallDelete]

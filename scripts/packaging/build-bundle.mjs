@@ -38,6 +38,7 @@ const appRoot = path.join(bundleRoot, "app");
 const gatewayDeployDir = path.join(appRoot, "gateway");
 const missionControlDistDir = path.join(appRoot, "mission-control", "dist");
 const desktopRuntimeDir = path.join(appRoot, "desktop");
+const identityRuntimeDir = path.join(appRoot, "identity");
 const desktopExecutableName = targetInfo.desktopArtifactName;
 const desktopArtifactPath = path.join(
   repoRoot,
@@ -83,6 +84,7 @@ async function main() {
   if (includeDesktopHost) {
     copyDesktopExecutable();
   }
+  const windowsIdentityPackage = copyWindowsIdentityPackage();
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
@@ -102,6 +104,7 @@ async function main() {
     appRoot,
     version,
     nodeVersion,
+    windowsIdentityPackage,
   });
 
   console.log(`Created GoatCitadel bundle: ${bundleRoot}`);
@@ -295,6 +298,7 @@ function writeReleaseManifest({
   appRoot: packagedAppRoot,
   version: bundleVersion,
   nodeVersion: bundledNodeVersion,
+  windowsIdentityPackage,
 }) {
   const checksums = {};
   for (const filePath of listFiles(bundleRootPath)) {
@@ -309,6 +313,7 @@ function writeReleaseManifest({
     uiTarget,
     includeDesktopHost,
     desktopArtifactName: desktopExecutableName,
+    windowsIdentityPackage,
   });
   fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 }
@@ -327,6 +332,43 @@ function copyDesktopExecutable() {
     path.join(path.dirname(desktopArtifactPath), "desktop-manifest.json"),
     path.join(desktopRuntimeDir, "desktop-manifest.json"),
   );
+}
+
+function copyWindowsIdentityPackage() {
+  if (targetInfo.platform !== "windows") {
+    return null;
+  }
+
+  const identityOutDir = path.join(repoRoot, "artifacts", "installers", "windows-msix");
+  const identityManifestPath = path.join(identityOutDir, "identity-manifest.json");
+  if (!fs.existsSync(identityManifestPath)) {
+    return null;
+  }
+
+  const identityManifest = JSON.parse(fs.readFileSync(identityManifestPath, "utf8"));
+  if (!identityManifest.signed) {
+    console.warn(
+      "Skipping unsigned Windows identity package in bundle. Build package:windows-msix with a signing certificate for Stage B installer identity.",
+    );
+    return null;
+  }
+
+  const sourcePackage = path.join(identityOutDir, identityManifest.fileName);
+  if (!fs.existsSync(sourcePackage)) {
+    throw new Error(`Windows identity package manifest exists, but package is missing: ${sourcePackage}`);
+  }
+
+  removeDirectory(identityRuntimeDir);
+  fs.mkdirSync(identityRuntimeDir, { recursive: true });
+  const packageName = "GoatCitadel-Mission-Control-Windows-Identity.msix";
+  copyFile(sourcePackage, path.join(identityRuntimeDir, packageName));
+  copyFile(identityManifestPath, path.join(identityRuntimeDir, "identity-manifest.json"));
+  return {
+    ...identityManifest,
+    fileName: packageName,
+    path: `app/identity/${packageName}`,
+    manifestPath: "app/identity/identity-manifest.json",
+  };
 }
 
 function writeUiTargetManifest(packagedAppRoot) {

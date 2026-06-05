@@ -33,6 +33,7 @@ The release lane treats these files as the minimum rebuild inputs:
 - Rust stable MSVC while the Tauri desktop rollback host remains in `verify:desktop`
 - Inno Setup `6.x` for Windows packaging
 - Authenticode certificate secrets for public `v*` Windows releases
+- `WINDOWS_MSIX_PUBLISHER` repository variable matching the Windows signing certificate subject; it is embedded in both the WinUI executable manifest and the sparse MSIX identity manifest
 - `zip` for the final proof bundle assembly
 - `cosign` keyless signing in the release job
 
@@ -43,6 +44,7 @@ The release workflow uses these commands:
 ```text
 pnpm install --frozen-lockfile
 pnpm package:windows-host --target <windows-target>
+pnpm package:windows-msix --cert-path <pfx> --cert-password <password>
 pnpm package:bundle --target <target>
 pnpm package:windows --target <windows-target>
 pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom-path>

@@ -165,10 +165,14 @@ test("release package metadata locks release and packaging scripts with fail-clo
   assert.match(assembler, /write-release-certificate\.mjs --version <version> --tag <tag>[\s\S]*--require-success/);
 });
 
-test("release artifact signing includes macOS DMGs and Linux tarballs", () => {
+test("release artifact signing includes package identity, macOS DMGs, and Linux tarballs", () => {
   const signer = fs.readFileSync(new URL("./sign-release-artifacts.mjs", import.meta.url), "utf8");
+  const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
+  assert.match(signer, /entry\.name\.endsWith\("\.msix"\)/);
   assert.match(signer, /entry\.name\.endsWith\("\.dmg"\)/);
   assert.match(signer, /entry\.name\.endsWith\("\.tar\.gz"\)/);
+  assert.match(assembler, /entry\.name\.endsWith\("\.msix"\)/);
+  assert.match(assembler, /package:windows-msix --cert-path <pfx> --cert-password <password>/);
   assert.match(signer, /!result\.error && result\.status === 0/);
 });
 

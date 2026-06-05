@@ -31,7 +31,7 @@ Packaged Windows desktop smoke should cover the native host, not only the browse
 - `goatcitadel://open?route=/ops/activity` focuses the app and routes the WebView
 - malformed protocol URLs and external URLs are ignored with an operator-visible diagnostic
 - approval or operator-attention events remain visible in the shell; do not claim Windows notification click proof until an actual notification click routes into the app for the exact build
-- Stage B package identity proof must additionally verify package registration, app identity, protocol registration, notification click routing, signed artifacts, and uninstall cleanup
+- signed package-identity proof must additionally verify package registration, app identity, protocol manifest registration, notification click routing, signed artifacts, and uninstall cleanup
 
 The installer-safe launcher surface is the packaged runtime surface: `help`, `status`, `launch`, `up`, `stop`, and `uninstall`. Source-tree commands that shell out to workspace tooling, such as deep verification lanes, require a raw clone with `pnpm install` unless a release note explicitly says that command has been packaged.
 

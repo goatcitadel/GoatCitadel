@@ -26,15 +26,15 @@ describe("release-installers workflow signing-secret scope (codex #7, #10)", () 
   });
 
   it("scopes the cert+password references to step-level env only (presence check uses the !='' form)", () => {
-    // Three expected references each:
+    // Four expected references each:
     //   1x in the job-level *_PRESENT boolean (`secrets.X != ''`) — fine, this only leaks a boolean
-    //   2x in step-level env on the two signing steps (desktop + installer)
+    //   3x in step-level env on the signing steps (desktop + package identity + installer)
     // No additional references should appear — that would indicate
     // accidental job-level inheritance.
     const baseRefs = workflow.match(/secrets\.WINDOWS_SIGN_CERT_BASE64\b/g) ?? [];
     const passRefs = workflow.match(/secrets\.WINDOWS_SIGN_CERT_PASSWORD\b/g) ?? [];
-    expect(baseRefs.length).toBe(3);
-    expect(passRefs.length).toBe(3);
+    expect(baseRefs.length).toBe(4);
+    expect(passRefs.length).toBe(4);
     // Crucially: the cert/password should never appear under a top-level
     // job `env:` block as a string value (only as `!= ''` boolean form).
     const jobEnvRegion = workflow.split("strategy:", 2)[0] ?? "";
@@ -53,7 +53,7 @@ describe("release-installers workflow signing-secret scope (codex #7, #10)", () 
   it("does not sign manual allow_unsigned smoke artifacts even when signing secrets exist", () => {
     const publicReleaseSigningCondition =
       "if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}";
-    expect(workflow.match(new RegExp(escapeRegExp(publicReleaseSigningCondition), "g")) ?? []).toHaveLength(2);
+    expect(workflow.match(new RegExp(escapeRegExp(publicReleaseSigningCondition), "g")) ?? []).toHaveLength(3);
   });
 
   it("uses unique per-run cert file names", () => {
@@ -63,7 +63,7 @@ describe("release-installers workflow signing-secret scope (codex #7, #10)", () 
   it("removes temporary cert files from every signing step", () => {
     const cleanupCalls =
       workflow.match(/Remove-Item\s+-LiteralPath\s+\$certPath\s+-Force\s+-ErrorAction\s+SilentlyContinue/g) ?? [];
-    expect(cleanupCalls).toHaveLength(2);
+    expect(cleanupCalls).toHaveLength(3);
   });
 });
 

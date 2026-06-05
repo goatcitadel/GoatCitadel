@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,9 @@ const windowsProject = path.join(
   "GoatCitadel.MissionControl.Windows.csproj",
 );
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const PACKAGE_NAME = "GoatCitadel.MissionControl.Windows";
+const APPLICATION_ID = "App";
+const DEFAULT_MSIX_PUBLISHER = "CN=GoatCitadel";
 
 const args = parseArgs(process.argv.slice(2));
 const target = args.target;
@@ -27,6 +31,7 @@ const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "ins
 const outArtifactPath = path.join(outDir, targetInfo.desktopArtifactName);
 const configuration = args.configuration || "Release";
 const msbuildPlatform = targetInfo.arch === "arm64" ? "ARM64" : "x64";
+const msixPublisher = args.msixPublisher ?? process.env.GOATCITADEL_WINDOWS_MSIX_PUBLISHER ?? DEFAULT_MSIX_PUBLISHER;
 
 await main();
 
@@ -44,24 +49,32 @@ async function main() {
     assertDotnet10Sdk();
     removeDirectory(outDir);
     fs.mkdirSync(outDir, { recursive: true });
-    runDotnet([
-      "publish",
-      windowsProject,
-      "--configuration",
-      configuration,
-      "--runtime",
-      targetInfo.windowsRid,
-      "--self-contained",
-      "true",
-      "-p:WindowsAppSDKSelfContained=true",
-      "-p:WindowsPackageType=None",
-      "-p:PublishSingleFile=false",
-      "-p:EnableWindowsTargeting=true",
-      `-p:Platform=${msbuildPlatform}`,
-      "-p:RestoreSources=https://api.nuget.org/v3/index.json",
-      "--output",
-      outDir,
-    ]);
+    const generatedManifestRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-winui-manifest-"));
+    const generatedManifestPath = path.join(generatedManifestRoot, "app.manifest");
+    try {
+      fs.writeFileSync(generatedManifestPath, renderAppManifest({ publisher: msixPublisher }), "utf8");
+      runDotnet([
+        "publish",
+        windowsProject,
+        "--configuration",
+        configuration,
+        "--runtime",
+        targetInfo.windowsRid,
+        "--self-contained",
+        "true",
+        "-p:WindowsAppSDKSelfContained=true",
+        "-p:WindowsPackageType=None",
+        "-p:PublishSingleFile=false",
+        "-p:EnableWindowsTargeting=true",
+        `-p:ApplicationManifest=${generatedManifestPath}`,
+        `-p:Platform=${msbuildPlatform}`,
+        "-p:RestoreSources=https://api.nuget.org/v3/index.json",
+        "--output",
+        outDir,
+      ]);
+    } finally {
+      fs.rmSync(generatedManifestRoot, { recursive: true, force: true });
+    }
   }
 
   if (!fs.existsSync(outArtifactPath)) {
@@ -90,6 +103,11 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (value === "--msix-publisher") {
+      parsed.msixPublisher = argv[index + 1];
+      index += 1;
+      continue;
+    }
     if (value === "--skip-build") {
       parsed.skipBuild = true;
       continue;
@@ -101,7 +119,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-windows-host.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--configuration <Debug|Release>] [--skip-build]",
+    "Usage: node scripts/packaging/build-windows-host.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--configuration <Debug|Release>] [--msix-publisher <subject>] [--skip-build]",
   );
 }
 
@@ -148,12 +166,47 @@ function writeDesktopManifest() {
     rid: targetInfo.windowsRid,
     platform: msbuildPlatform,
     hostKind: targetInfo.windowsHostKind,
+    packageIdentity: {
+      packageName: PACKAGE_NAME,
+      applicationId: APPLICATION_ID,
+      publisher: msixPublisher,
+    },
     executable: path.relative(outDir, outArtifactPath).replaceAll("\\", "/"),
     project: path.relative(repoRoot, windowsProject).replaceAll("\\", "/"),
     createdAt: new Date().toISOString(),
     files,
   };
   fs.writeFileSync(path.join(outDir, "desktop-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function renderAppManifest({ publisher }) {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="GoatCitadel.MissionControl.Windows.app" />
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
+        publisher="${escapeXml(publisher)}"
+        packageName="${PACKAGE_NAME}"
+        applicationId="${APPLICATION_ID}" />
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>
+`;
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function listFiles(rootDir) {

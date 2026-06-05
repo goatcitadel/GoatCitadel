@@ -42,6 +42,10 @@ jobs:
     env:
       WINDOWS_SIGN_CERT_BASE64_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 != '' }}
       WINDOWS_SIGN_CERT_PASSWORD_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD != '' }}
+      # Public package identity publisher. It must match the Authenticode
+      # certificate subject because the WinUI host embeds the same sparse
+      # package identity in its executable manifest.
+      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || 'CN=GoatCitadel' }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +126,22 @@ jobs:
             Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Build and sign Windows package identity
+        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
+        shell: pwsh
+        env:
+          WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          $certName = "goatcitadel-identity-signing-cert-$([Guid]::NewGuid()).pfx"
+          $certPath = Join-Path $env:RUNNER_TEMP $certName
+          try {
+            [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
+            pnpm package:windows-msix --cert-path $certPath --cert-password $env:WINDOWS_SIGN_CERT_PASSWORD
+          } finally {
+            Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build packaged bundle
         run: pnpm package:bundle --target ${{ matrix.target }}
 
@@ -166,11 +186,19 @@ jobs:
           if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
           $desktop = Join-Path $installDir "app/desktop/GoatCitadel-Mission-Control-Windows.exe"
           if (!(Test-Path $desktop)) { throw "Installed desktop executable was not found at $desktop" }
+          $identityPackage = Join-Path $installDir "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix"
+          if (Test-Path $identityPackage) {
+            $identity = Get-AppxPackage GoatCitadel.MissionControl.Windows
+            if (-not $identity) { throw "GoatCitadel package identity was not registered." }
+            $identityManifest = (Get-AppxPackageManifest -Package $identity.PackageFullName).OuterXml
+            if ($identityManifest -notmatch 'goatcitadel') { throw "Registered package identity manifest does not include goatcitadel protocol." }
+          }
           $uninstaller = Join-Path $installDir "unins000.exe"
           if (Test-Path $uninstaller) {
             $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
           }
+          if (Get-AppxPackage GoatCitadel.MissionControl.Windows) { throw "GoatCitadel package identity remained registered after uninstall." }
           if (Test-Path $desktop) { throw "Installed desktop executable remained after uninstall at $desktop" }
           if (Test-Path $installDir) {
             $remainingFiles = Get-ChildItem -LiteralPath $installDir -Recurse -Force -File -ErrorAction SilentlyContinue
@@ -212,6 +240,9 @@ jobs:
           path: |
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+            artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix
+            artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+            artifacts/installers/windows-msix/identity-manifest.json
 
   linux:
     runs-on: ubuntu-latest
@@ -419,8 +450,14 @@ jobs:
         run: |
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256
+          test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          test -f release-artifacts/windows-x64-release-assets/identity-manifest.json
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256
+          test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          test -f release-artifacts/windows-arm64-release-assets/identity-manifest.json
           test -f release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-*-linux-x64.tar.gz
           test -f release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-*-linux-x64.tar.gz.sha256
           test -f release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-*-macos-arm64.dmg
