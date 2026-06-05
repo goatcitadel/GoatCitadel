@@ -34,6 +34,10 @@ test("macos-arm64 target maps to Apple Silicon, Darwin, and the macOS Tauri trip
 test("Windows target metadata remains signed-installer compatible", () => {
   const target = requirePackagingTarget("windows-x64");
   assert.equal(target.tauriTriple, "x86_64-pc-windows-msvc");
+  assert.equal(target.tauriDesktopArtifactName, "GoatCitadel-Mission-Control-Desktop.exe");
+  assert.equal(target.windowsRid, "win-x64");
+  assert.equal(target.windowsHostKind, "winui3-windows-app-sdk");
+  assert.equal(target.desktopArtifactName, "GoatCitadel-Mission-Control-Windows.exe");
   assert.equal(target.platform, "windows");
   assert.equal(target.nodeExecutableName, "node.exe");
   assert.equal(target.bundleDesktopHost, true);
@@ -58,6 +62,10 @@ test("Windows target metadata remains signed-installer compatible", () => {
   });
   assert.equal(Object.hasOwn(manifest, "experimental"), false);
   assert.equal(manifest.launcher.windows, "bin/goatcitadel.cmd");
+  assert.equal(manifest.launcher.desktop, "app/desktop/GoatCitadel-Mission-Control-Windows.exe");
+  const desktopHost = manifest.components.find((item) => item.id === "mission-control-windows-host");
+  assert.equal(desktopHost?.kind, "winui3-windows-app-sdk");
+  assert.equal(desktopHost?.path, "app/desktop/GoatCitadel-Mission-Control-Windows.exe");
 });
 
 test("POSIX launcher keeps macOS mutable state under Application Support", () => {
@@ -150,6 +158,8 @@ test("root package exposes package:macos without changing Windows scripts", () =
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assert.equal(packageJson.scripts["package:macos"], "node scripts/packaging/build-macos-native-installer.mjs");
   assert.equal(packageJson.scripts["package:windows"], "node scripts/packaging/build-windows-native-installer.mjs");
+  assert.equal(packageJson.scripts["package:windows-host"], "node scripts/packaging/build-windows-host.mjs");
+  assert.equal(packageJson.scripts["package:windows-msix"], "node scripts/packaging/build-windows-msix.mjs");
 });
 
 test("launcher source documents the macOS Application Support default", () => {

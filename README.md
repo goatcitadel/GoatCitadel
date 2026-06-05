@@ -156,7 +156,7 @@ iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The source bootstrap clones or updates the repo and adds the `goatcitadel` and `goat` launchers. It does not create packaged Windows desktop shortcuts. Packaged Windows installer assets install the native Mission Control desktop host.
+The source bootstrap clones or updates the repo and adds the `goatcitadel` and `goat` launchers. It does not create packaged Windows desktop shortcuts. Packaged Windows installer assets install the native WinUI 3 / Windows App SDK Mission Control desktop host.
 
 Full setup, update, uninstall, and troubleshooting guidance lives in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
@@ -356,7 +356,8 @@ pnpm verify:visual:regression
 Apps:
 
 - [apps/mission-control-next](./apps/mission-control-next): canonical React/Vite Mission Control shell used by `pnpm dev`
-- [apps/mission-control-desktop](./apps/mission-control-desktop): Tauri desktop host for packaged Mission Control
+- [apps/mission-control-windows](./apps/mission-control-windows): canonical Windows desktop host using C#/.NET, WinUI 3, Windows App SDK, and WebView2
+- [apps/mission-control-desktop](./apps/mission-control-desktop): Tauri rollback host for Windows during migration and experimental macOS packaging work
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
 - [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
 

@@ -119,7 +119,7 @@ function resolveExecutable(command) {
     stdio: "ignore",
     shell: process.platform === "win32",
   });
-  if (!result.error) {
+  if (!result.error && result.status === 0) {
     return executable;
   }
   return null;

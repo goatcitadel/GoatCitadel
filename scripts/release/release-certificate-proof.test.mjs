@@ -114,10 +114,7 @@ test("release certificate treats verify:fast as direct-only proof", () => {
   const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
   assert.ok(coveredBlock, "release proof covered lane list should be present");
   assert.doesNotMatch(coveredBlock[1], /"verify:fast"/);
-  assert.match(
-    writer,
-    /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/,
-  );
+  assert.match(writer, /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/);
 });
 
 test("release certificate requires hostile sandbox proof from the exact-SHA release lane", () => {
@@ -140,12 +137,12 @@ test("release certificate requires direct exact-SHA A2A full proof", () => {
   const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
   assert.ok(coveredBlock, "release proof covered lane list should be present");
   assert.doesNotMatch(coveredBlock[1], /"verify:a2a:full"/);
-  assert.match(
-    writer,
-    /\{ name: "verify:a2a:full", workflowFile: "verification-a2a-full\.yml", required: true \}/,
-  );
+  assert.match(writer, /\{ name: "verify:a2a:full", workflowFile: "verification-a2a-full\.yml", required: true \}/);
 
-  const workflow = fs.readFileSync(new URL("../../.github/workflows/verification-a2a-full.yml", import.meta.url), "utf8");
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-a2a-full.yml", import.meta.url),
+    "utf8",
+  );
   assert.match(workflow, /name:\s*Verification A2A Full/);
   assert.match(workflow, /run:\s*pnpm verify:a2a:full/);
   assert.match(workflow, /if-no-files-found:\s*error/);
@@ -160,6 +157,8 @@ test("release certificate requires direct exact-SHA A2A full proof", () => {
 test("release package metadata locks release and packaging scripts with fail-closed commands", () => {
   const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
   assert.match(assembler, /lockedInputDigests/);
+  assert.match(assembler, /const lockedInputs = await buildLockedInputRecords\(\)/);
+  assert.match(assembler, /buildSlsaAttestation\(\{[\s\S]*lockedInputs/);
   assert.match(assembler, /scripts\/packaging/);
   assert.match(assembler, /scripts\/release/);
   assert.match(assembler, /wait-for-release-proof\.mjs --repository <owner\/repo> --commit <commit-sha>/);
@@ -170,6 +169,17 @@ test("release artifact signing includes macOS DMGs and Linux tarballs", () => {
   const signer = fs.readFileSync(new URL("./sign-release-artifacts.mjs", import.meta.url), "utf8");
   assert.match(signer, /entry\.name\.endsWith\("\.dmg"\)/);
   assert.match(signer, /entry\.name\.endsWith\("\.tar\.gz"\)/);
+  assert.match(signer, /!result\.error && result\.status === 0/);
+});
+
+test("release artifact hashes stream large files instead of buffering them", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
+
+  assert.match(writer, /for await \(const chunk of fs\.createReadStream\(filePath\)\)/);
+  assert.match(assembler, /for await \(const chunk of fs\.createReadStream\(filePath\)\)/);
+  assert.doesNotMatch(writer, /createHash\("sha256"\)\.update\(fs\.readFileSync\(filePath\)\)/);
+  assert.doesNotMatch(assembler, /createHash\("sha256"\)\.update\(fs\.readFileSync\(filePath\)\)/);
 });
 
 test("release package carries security triage docs with package-relative links", () => {

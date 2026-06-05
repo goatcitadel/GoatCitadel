@@ -156,7 +156,7 @@ function renderIss({ target: bundleTarget, architecture, version: bundleVersion,
 #define MyAppURL "https://github.com/goatcitadel/GoatCitadel"
 #define MyBundleZip "${normalizeForInno(currentBundleZipPath)}"
 #define MyOutputDir "${normalizeForInno(currentOutDir)}"
-#define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Desktop.exe"
+#define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Windows.exe"
 
 [Setup]
 AppId=com.goatcitadel.installer.${bundleTarget}
@@ -201,6 +201,12 @@ Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: delet
 [Icons]
 Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"
 Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Registry]
+Root: HKCU; Subkey: "Software\\Classes\\goatcitadel"; ValueType: string; ValueName: ""; ValueData: "URL:GoatCitadel Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\\Classes\\goatcitadel"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\\{#MyDesktopExe},0"
+Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\shell\\open\\command"; ValueType: string; ValueName: ""; ValueData: """{app}\\{#MyDesktopExe}"" ""%1"""
 
 [Run]
 Filename: "{sys}\\tar.exe"; Parameters: "-xf ""{tmp}\\bundle.zip"" -C ""{app}"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden

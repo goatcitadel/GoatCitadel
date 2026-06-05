@@ -65,25 +65,25 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Setup Rust
         run: rustup default stable-msvc
 
-      - name: Check desktop Rust crate
-        working-directory: apps/mission-control-desktop/src-tauri
-        run: cargo check
-
-      - name: Test desktop Rust crate
-        working-directory: apps/mission-control-desktop/src-tauri
-        run: cargo test
+      - name: Run Windows host unit tests
+        run: pnpm windows:test
 
       - name: Verify desktop runtime proof lane
         run: pnpm verify:desktop
 
-      - name: Build desktop executable
-        run: pnpm package:desktop --target ${{ matrix.target }}
+      - name: Build Windows App SDK host
+        run: pnpm package:windows-host --target ${{ matrix.target }}
 
       - name: Require signing secrets for public releases
         if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && (env.WINDOWS_SIGN_CERT_BASE64_PRESENT != 'true' || env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT != 'true') }}
@@ -116,8 +116,8 @@ jobs:
               Sort-Object -Property @{Expression={[Version]($_.Directory.Parent.Name)}; Descending=$true} |
               Select-Object -ExpandProperty FullName -First 1
             if (-not $signtool) { throw "signtool.exe not found in Windows SDK at $sdkRoot" }
-            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
-            & $signtool verify /pa "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe"
+            & $signtool verify /pa "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe"
           } finally {
             Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
           }
@@ -164,7 +164,7 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP "GoatCitadel-${{ matrix.target }}"
           $install = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
-          $desktop = Join-Path $installDir "app/desktop/GoatCitadel-Mission-Control-Desktop.exe"
+          $desktop = Join-Path $installDir "app/desktop/GoatCitadel-Mission-Control-Windows.exe"
           if (!(Test-Path $desktop)) { throw "Installed desktop executable was not found at $desktop" }
           $uninstaller = Join-Path $installDir "unins000.exe"
           if (Test-Path $uninstaller) {

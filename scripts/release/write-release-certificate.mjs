@@ -81,8 +81,8 @@ if (!fs.existsSync(proofZipPath)) {
 const commit = process.env.GITHUB_SHA ?? args.commit ?? null;
 const repository = process.env.GITHUB_REPOSITORY ?? args.repository ?? null;
 const requiredLanes = await resolveRequiredLanes({ commit, repository });
-const releaseAssets = listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir));
-const proofBundle = fileRecord(proofZipPath, path.dirname(proofZipPath));
+const releaseAssets = await Promise.all(listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir)));
+const proofBundle = await fileRecord(proofZipPath, path.dirname(proofZipPath));
 const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSandboxProofPath) : null;
 
 const certificate = {
@@ -368,15 +368,19 @@ function listFiles(rootDir) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function fileRecord(filePath, rootDir) {
+async function fileRecord(filePath, rootDir) {
   return {
     fileName: path.basename(filePath),
     relativePath: path.relative(rootDir, filePath).replaceAll("\\", "/"),
-    sha256: sha256File(filePath),
+    sha256: await sha256File(filePath),
     sizeBytes: fs.statSync(filePath).size,
   };
 }
 
-function sha256File(filePath) {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+async function sha256File(filePath) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }

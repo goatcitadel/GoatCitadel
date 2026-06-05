@@ -8,11 +8,20 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
 const requiredFiles = [
+  "apps/mission-control-windows/GoatCitadel.MissionControl.Windows.csproj",
+  "apps/mission-control-windows/GoatCitadel.MissionControl.Windows.sln",
+  "apps/mission-control-windows/Program.cs",
+  "apps/mission-control-windows/App.xaml",
+  "apps/mission-control-windows/MainWindow.xaml",
+  "apps/mission-control-windows/Services/LauncherService.cs",
+  "apps/mission-control-windows/Services/EventStreamService.cs",
+  "apps/mission-control-windows/Tests/GoatCitadel.MissionControl.Windows.Tests.csproj",
   "apps/mission-control-desktop/package.json",
   "apps/mission-control-desktop/src/main.ts",
   "apps/mission-control-desktop/src-tauri/tauri.conf.json",
   "apps/mission-control-desktop/src-tauri/src/main.rs",
   "scripts/packaging/build-desktop.mjs",
+  "scripts/packaging/build-windows-host.mjs",
 ];
 
 for (const relativePath of requiredFiles) {
@@ -21,6 +30,28 @@ for (const relativePath of requiredFiles) {
     fail(`Missing desktop file: ${relativePath}`);
   }
 }
+
+if (process.platform !== "win32") {
+  fail("WinUI desktop proof must run on Windows.");
+}
+
+assertDotnet10Sdk();
+
+const dotnetTest = spawnSync(
+  "dotnet",
+  [
+    "test",
+    path.join(repoRoot, "apps", "mission-control-windows", "Tests", "GoatCitadel.MissionControl.Windows.Tests.csproj"),
+    "--configuration",
+    "Release",
+    "-p:RestoreSources=https://api.nuget.org/v3/index.json",
+  ],
+  {
+    cwd: repoRoot,
+    encoding: "utf8",
+  },
+);
+assertSuccessfulSpawn(dotnetTest, "Windows App SDK host dotnet test");
 
 const cargoCheck = spawnSync("cargo", ["check"], {
   cwd: path.join(repoRoot, "apps", "mission-control-desktop", "src-tauri"),
@@ -67,6 +98,29 @@ if (parsed.status === "ready" && parsed.desktopEventStream && parsed.desktopEven
 }
 
 console.log("Desktop verification passed.");
+
+function assertDotnet10Sdk() {
+  const result = spawnSync("dotnet", ["--list-sdks"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (result.error && result.error.code === "ENOENT") {
+    fail("No .NET SDK was found. Install the .NET 10 SDK before running desktop verification.");
+  }
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    fail(`dotnet --list-sdks failed:\n${result.stdout || ""}\n${result.stderr || ""}`);
+  }
+  const hasDotnet10 = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some((line) => line.startsWith("10."));
+  if (!hasDotnet10) {
+    fail(`Desktop verification requires the .NET 10 SDK. dotnet --list-sdks returned:\n${result.stdout}`);
+  }
+}
 
 function assertSuccessfulSpawn(result, label) {
   if (result.error) {

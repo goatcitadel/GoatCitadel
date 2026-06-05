@@ -8,7 +8,10 @@ export const PACKAGING_TARGETS = Object.freeze({
     nodeArchiveType: "zip",
     nodeExecutableName: "node.exe",
     tauriTriple: "x86_64-pc-windows-msvc",
-    desktopArtifactName: "GoatCitadel-Mission-Control-Desktop.exe",
+    tauriDesktopArtifactName: "GoatCitadel-Mission-Control-Desktop.exe",
+    windowsRid: "win-x64",
+    windowsHostKind: "winui3-windows-app-sdk",
+    desktopArtifactName: "GoatCitadel-Mission-Control-Windows.exe",
     bundleDesktopHost: true,
   }),
   "windows-arm64": Object.freeze({
@@ -20,7 +23,10 @@ export const PACKAGING_TARGETS = Object.freeze({
     nodeArchiveType: "zip",
     nodeExecutableName: "node.exe",
     tauriTriple: "aarch64-pc-windows-msvc",
-    desktopArtifactName: "GoatCitadel-Mission-Control-Desktop.exe",
+    tauriDesktopArtifactName: "GoatCitadel-Mission-Control-Desktop.exe",
+    windowsRid: "win-arm64",
+    windowsHostKind: "winui3-windows-app-sdk",
+    desktopArtifactName: "GoatCitadel-Mission-Control-Windows.exe",
     bundleDesktopHost: true,
   }),
   "macos-arm64": Object.freeze({

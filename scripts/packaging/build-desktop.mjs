@@ -19,8 +19,11 @@ if (!target || !PACKAGING_TARGETS[target]) {
 }
 
 const targetInfo = requirePackagingTarget(target);
-const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "desktop", target));
-const outArtifactPath = path.join(outDir, targetInfo.desktopArtifactName);
+const defaultOutRoot =
+  targetInfo.platform === "windows" ? path.join(repoRoot, "artifacts", "installers", "desktop-tauri") : path.join(repoRoot, "artifacts", "installers", "desktop");
+const outDir = path.resolve(args.outDir || path.join(defaultOutRoot, target));
+const outArtifactName = targetInfo.tauriDesktopArtifactName ?? targetInfo.desktopArtifactName;
+const outArtifactPath = path.join(outDir, outArtifactName);
 
 await main();
 
@@ -40,6 +43,7 @@ async function main() {
       {
         target,
         triple: targetInfo.tauriTriple,
+        hostKind: "tauri-rollback",
         executable: path.relative(outDir, outArtifactPath).replaceAll("\\", "/"),
         sourceExecutable: path.relative(repoRoot, builtArtifact).replaceAll("\\", "/"),
         createdAt: new Date().toISOString(),

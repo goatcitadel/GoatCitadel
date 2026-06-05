@@ -29,7 +29,8 @@ The release lane treats these files as the minimum rebuild inputs:
 
 - Node `22.x` in GitHub Actions
 - pnpm `10.31.0`
-- Rust stable MSVC for the Tauri desktop host
+- .NET 10 SDK for the WinUI 3 / Windows App SDK host
+- Rust stable MSVC while the Tauri desktop rollback host remains in `verify:desktop`
 - Inno Setup `6.x` for Windows packaging
 - Authenticode certificate secrets for public `v*` Windows releases
 - `zip` for the final proof bundle assembly
@@ -41,7 +42,7 @@ The release workflow uses these commands:
 
 ```text
 pnpm install --frozen-lockfile
-pnpm package:desktop --target <target>
+pnpm package:windows-host --target <windows-target>
 pnpm package:bundle --target <target>
 pnpm package:windows --target <windows-target>
 pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom-path>

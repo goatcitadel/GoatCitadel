@@ -9,6 +9,7 @@ test("fast verification lane keeps required fast commands", () => {
     "verify:repo:hygiene",
     "verify:storage:migration-parity",
     "--filter @goatcitadel/extensions-sdk build",
+    "verify:extensions:package",
     "typecheck",
     "-r --workspace-concurrency=1 test",
     "smoke",

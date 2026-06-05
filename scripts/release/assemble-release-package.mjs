@@ -45,17 +45,21 @@ fs.mkdirSync(sbomOutDir, { recursive: true });
 fs.mkdirSync(docsOutDir, { recursive: true });
 fs.mkdirSync(provenanceOutDir, { recursive: true });
 
-const copiedArtifacts = artifactFiles.map((artifactPath) => copyArtifactWithProofs(artifactPath, artifactOutDir));
+const copiedArtifacts = await Promise.all(
+  artifactFiles.map((artifactPath) => copyArtifactWithProofs(artifactPath, artifactOutDir)),
+);
 const copiedSbomPath = path.join(sbomOutDir, path.basename(sbomFile));
 fs.copyFileSync(sbomFile, copiedSbomPath);
 
 copyDocs(docsOutDir);
 
+const lockedInputs = await buildLockedInputRecords();
 const buildMetadata = buildMetadataRecord({
   version,
   tagName,
   artifacts: copiedArtifacts,
   sbomPath: relativeToReleaseRoot(copiedSbomPath, releaseRoot),
+  lockedInputs,
 });
 const buildMetadataPath = path.join(provenanceOutDir, "build-metadata.json");
 fs.writeFileSync(buildMetadataPath, `${JSON.stringify(buildMetadata, null, 2)}\n`, "utf8");
@@ -64,6 +68,7 @@ const slsaAttestation = buildSlsaAttestation({
   version,
   tagName,
   artifacts: copiedArtifacts,
+  lockedInputs,
 });
 const slsaPath = path.join(provenanceOutDir, "slsa-attestation.json");
 fs.writeFileSync(slsaPath, `${JSON.stringify(slsaAttestation, null, 2)}\n`, "utf8");
@@ -144,7 +149,7 @@ function listInstallerArtifacts(rootDir) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function copyArtifactWithProofs(artifactPath, destinationDir) {
+async function copyArtifactWithProofs(artifactPath, destinationDir) {
   const basename = path.basename(artifactPath);
   const checksumPath = `${artifactPath}.sha256`;
   const signaturePath = `${artifactPath}.sig`;
@@ -165,7 +170,7 @@ function copyArtifactWithProofs(artifactPath, destinationDir) {
   return {
     fileName: basename,
     relativePath: `artifact/${basename}`,
-    checksumSha256: sha256File(artifactPath),
+    checksumSha256: await sha256File(artifactPath),
     sizeBytes: fs.statSync(artifactPath).size,
   };
 }
@@ -177,11 +182,7 @@ function copyDocs(destinationDir) {
     {
       source: path.join(repoRoot, "SECURITY.md"),
       target: "SECURITY.md",
-      rewrite: (content) =>
-        content.replaceAll(
-          "(docs/security/findings-triage.md)",
-          "(security/findings-triage.md)",
-        ),
+      rewrite: (content) => content.replaceAll("(docs/security/findings-triage.md)", "(security/findings-triage.md)"),
     },
     { source: path.join(repoRoot, "docs", "reproducible-release.md"), target: "reproducible-release.md" },
     { source: path.join(repoRoot, "docs", "supported-platforms.md"), target: "supported-platforms.md" },
@@ -234,7 +235,7 @@ function buildMetadataRecord(input) {
   const workflowRef =
     process.env.GITHUB_WORKFLOW_REF ??
     `${process.env.GITHUB_REPOSITORY ?? "local"}/.github/workflows/release-installers.yml@${process.env.GITHUB_SHA ?? "local"}`;
-  const lockedInputs = buildLockedInputRecords();
+  const lockedInputs = input.lockedInputs;
   return {
     version: input.version,
     tag: input.tagName,
@@ -258,7 +259,7 @@ function buildMetadataRecord(input) {
     lockedInputDigests: lockedInputs,
     buildCommands: [
       "pnpm install --frozen-lockfile",
-      "pnpm package:desktop --target <target>",
+      "pnpm package:windows-host --target <windows-target>",
       "pnpm package:bundle --target <target>",
       "pnpm package:windows --target <target>",
       "pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom>",
@@ -274,7 +275,7 @@ function buildMetadataRecord(input) {
 }
 
 function buildSlsaAttestation(input) {
-  const lockedInputs = buildLockedInputRecords();
+  const lockedInputs = input.lockedInputs;
   return {
     _type: "https://in-toto.io/Statement/v1",
     predicateType: "https://slsa.dev/provenance/v1",
@@ -329,11 +330,13 @@ function buildSlsaAttestation(input) {
   };
 }
 
-function buildLockedInputRecords() {
-  return listReleaseLockedInputs().map((filePath) => ({
-    path: filePath,
-    sha256: sha256File(path.join(repoRoot, filePath)),
-  }));
+async function buildLockedInputRecords() {
+  return await Promise.all(
+    listReleaseLockedInputs().map(async (filePath) => ({
+      path: filePath,
+      sha256: await sha256File(path.join(repoRoot, filePath)),
+    })),
+  );
 }
 
 function listReleaseLockedInputs() {
@@ -465,6 +468,10 @@ function runZip(cwd, destinationPath, targetName) {
   throw new Error(`zip exited with code ${result.status}`);
 }
 
-function sha256File(filePath) {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+async function sha256File(filePath) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }

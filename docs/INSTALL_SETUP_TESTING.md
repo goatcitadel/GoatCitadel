@@ -1,6 +1,6 @@
 # GoatCitadel Install, Setup, and Testing
 
-Last updated: 2026-04-24
+Last updated: 2026-06-05
 Target release: `1.0.0`
 
 Related guides:
@@ -22,7 +22,16 @@ Default local install home is under your user home directory:
 - app dir: `~/.GoatCitadel/app`
 - launcher dir: `~/.GoatCitadel/bin`
 
-The packaged Windows `.exe` installer also installs the native Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes and keeps it warm while the app is open. The PowerShell source bootstrap below installs command launchers for a repo checkout; it does not create packaged desktop shortcuts.
+The packaged Windows `.exe` installer also installs the native WinUI 3 / Windows App SDK Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes, hosts Mission Control Next in WebView2, and keeps the runtime warm while the app is open. The PowerShell source bootstrap below installs command launchers for a repo checkout; it does not create packaged desktop shortcuts.
+
+Packaged Windows desktop smoke should cover the native host, not only the browser fallback:
+
+- the Start Menu shortcut opens one WinUI window and loads Mission Control after gateway/UI readiness
+- closing the window hides it to tray; tray Open, Open in Browser, Runtime Status, Restart Runtime, Stop Runtime, Open Logs, Open Install Folder, and Quit work
+- `goatcitadel://open?route=/ops/activity` focuses the app and routes the WebView
+- malformed protocol URLs and external URLs are ignored with an operator-visible diagnostic
+- approval or operator-attention events remain visible in the shell; do not claim Windows notification click proof until an actual notification click routes into the app for the exact build
+- Stage B package identity proof must additionally verify package registration, app identity, protocol registration, notification click routing, signed artifacts, and uninstall cleanup
 
 The installer-safe launcher surface is the packaged runtime surface: `help`, `status`, `launch`, `up`, `stop`, and `uninstall`. Source-tree commands that shell out to workspace tooling, such as deep verification lanes, require a raw clone with `pnpm install` unless a release note explicitly says that command has been packaged.
 
@@ -51,6 +60,7 @@ Required:
 Optional:
 
 - Python 3.10+ for the local NPU sidecar
+- .NET 10 SDK for Windows App SDK host development or `pnpm verify:desktop`
 - Playwright Chromium if you plan to use browser automation or refresh screenshots from a raw source clone
 - Docker Engine with Compose if you want the containerized deployment path
 

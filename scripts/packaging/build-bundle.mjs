@@ -64,7 +64,11 @@ async function main() {
   removeDirectory(bundleRoot);
   fs.mkdirSync(appRoot, { recursive: true });
 
-  runPnpm(["--dir", repoRoot, "--filter", "@goatcitadel/gateway", "deploy", "--prod", "--legacy", gatewayDeployDir]);
+  runPnpm(["--dir", repoRoot, "--filter", "@goatcitadel/gateway", "deploy", "--prod", "--legacy", gatewayDeployDir], {
+    attempts: 3,
+    beforeRetry: () => removeDirectory(gatewayDeployDir),
+    retryDelayMs: 2500,
+  });
   pruneGatewayDeploy(gatewayDeployDir);
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
@@ -153,22 +157,39 @@ function printUsage() {
   );
 }
 
-function runPnpm(pnpmArgs) {
+function runPnpm(pnpmArgs, options = {}) {
+  const attempts = options.attempts ?? 1;
   const cmd = process.platform === "win32" ? WINDOWS_CMD_PATH : "pnpm";
   const cmdArgs =
     process.platform === "win32"
       ? ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...pnpmArgs])]
       : pnpmArgs;
-  const result = spawnSync(cmd, cmdArgs, {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = spawnSync(cmd, cmdArgs, {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status === 0) {
+      return;
+    }
+    if (attempt < attempts) {
+      console.warn(
+        `pnpm ${pnpmArgs.join(" ")} exited with code ${result.status}; retrying ${attempt + 1}/${attempts}.`,
+      );
+      sleepSync(options.retryDelayMs ?? 1000);
+      options.beforeRetry?.();
+      continue;
+    }
+
     throw new Error(`pnpm ${pnpmArgs.join(" ")} exited with code ${result.status}`);
   }
+}
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: requestedNodeVersion, destinationDir }) {
@@ -294,11 +315,14 @@ function writeReleaseManifest({
 
 function copyDesktopExecutable() {
   if (!fs.existsSync(desktopArtifactPath)) {
+    const buildCommand =
+      targetInfo.platform === "windows" ? `pnpm package:windows-host --target ${target}` : `pnpm package:desktop --target ${target}`;
     throw new Error(
-      `Desktop executable is missing: ${desktopArtifactPath}. Run pnpm package:desktop --target ${target} before package:bundle, or pass --skip-desktop for a browser-only bundle.`,
+      `Desktop executable is missing: ${desktopArtifactPath}. Run ${buildCommand} before package:bundle, or pass --skip-desktop for a browser-only bundle.`,
     );
   }
-  copyFile(desktopArtifactPath, path.join(desktopRuntimeDir, desktopExecutableName));
+  removeDirectory(desktopRuntimeDir);
+  copyDirectory(path.dirname(desktopArtifactPath), desktopRuntimeDir);
   copyIfExists(
     path.join(path.dirname(desktopArtifactPath), "desktop-manifest.json"),
     path.join(desktopRuntimeDir, "desktop-manifest.json"),

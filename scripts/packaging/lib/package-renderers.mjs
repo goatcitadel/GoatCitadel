@@ -91,11 +91,19 @@ export function buildReleaseManifest({
   ];
 
   if (includeDesktopHost) {
+    const desktopHostKind = targetInfo.windowsHostKind ?? "native-desktop-host";
+    const desktopHostId =
+      targetInfo.windowsHostKind === "winui3-windows-app-sdk" ? "mission-control-windows-host" : "mission-control-desktop";
+    const desktopDescription =
+      targetInfo.windowsHostKind === "winui3-windows-app-sdk"
+        ? "Windows App SDK / WinUI 3 desktop host for Mission Control, tray controls, runtime recovery, local notifications, and protocol activation."
+        : "Native desktop host for Mission Control, tray controls, runtime recovery, and local notifications.";
     components.splice(3, 0, {
-      id: "mission-control-desktop",
+      id: desktopHostId,
+      kind: desktopHostKind,
       required: true,
       path: `app/desktop/${desktopArtifactName}`,
-      description: "Native desktop host for Mission Control, tray controls, runtime recovery, and local notifications.",
+      description: desktopDescription,
     });
   }
 

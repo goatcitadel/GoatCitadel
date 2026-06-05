@@ -24,7 +24,7 @@ Each release bundle installs to a mutable GoatCitadel home with this split:
   Immutable packaged payload:
   - deployed gateway runtime
   - built Mission Control assets
-  - native Mission Control desktop host
+  - native Mission Control desktop host (WinUI 3 / Windows App SDK on Windows)
   - embedded Node runtime
   - packaged launcher helpers
   - runtime templates
@@ -38,7 +38,7 @@ This keeps the shipped payload separate from operator data so upgrades can repla
 
 ## Entry point
 
-The Windows installer shortcut launches the native Mission Control desktop host by default. The desktop host starts the same packaged gateway and Mission Control web assets through the launcher, keeps the local runtime warm while the app is open, and exposes tray actions for browser fallback, logs, status, restart, and stop.
+The Windows installer shortcut launches the native WinUI 3 / Windows App SDK Mission Control desktop host by default. The host starts the same packaged gateway and Mission Control web assets through the launcher, keeps the local runtime warm while the app is open, restricts WebView2 navigation to loopback GoatCitadel URLs, and exposes tray actions for browser fallback, logs, status, restart, and stop.
 
 Browser and CLI fallback remain supported with:
 
@@ -67,12 +67,14 @@ goatcitadel stop --json
 
 ## Windows packaging
 
-Windows packages use Inno Setup and emit separate installers:
+Windows packages use the new C# WinUI 3 / Windows App SDK host as the release-bearing desktop app. The host pins the stable `Microsoft.WindowsAppSDK` NuGet line; do not move the release lane to preview or experimental SDK packages. Stage A keeps the existing Inno Setup installer while replacing the bundled desktop executable with the WinUI host:
 
 - `GoatCitadel-Setup-windows-x64.exe`
 - `GoatCitadel-Setup-windows-arm64.exe`
 
-The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Start Menu shortcuts, supports an optional desktop shortcut, and exposes selectable Chromium and voice runtime components.
+The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Start Menu shortcuts, supports an optional desktop shortcut, registers the `goatcitadel://` protocol for the unpackaged lane, and exposes selectable Chromium and voice runtime components. The release manifest identifies the Windows desktop component as `mission-control-windows-host` with `kind: "winui3-windows-app-sdk"`.
+
+Stage B is the package-identity lane. It must add a signed MSIX/package-identity artifact with app identity, notification click routing, protocol registration, install/uninstall cleanup, and signing smoke before the release copy can call the Windows deployment path complete. `pnpm package:windows-msix --emit-plan` prints the remaining proof checklist; the command intentionally fails without `--emit-plan` until that lane is implemented and verified.
 
 ## macOS packaging
 
@@ -99,9 +101,10 @@ The Linux x64 bundle emits a POSIX `bin/goatcitadel` launcher that opens the pac
 ## Build commands
 
 ```text
-pnpm package:desktop --target windows-x64
+pnpm package:windows-host --target windows-x64
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
+pnpm package:desktop --target windows-x64  # Tauri rollback lane only
 pnpm package:bundle --target macos-arm64 --skip-desktop
 pnpm package:macos --target macos-arm64
 pnpm package:bundle --target linux-x64 --skip-desktop
@@ -124,7 +127,7 @@ Unsigned or ad-hoc-signed convenience builds are acceptable for internal or earl
 Local unsigned rebuild and verification path:
 
 ```text
-pnpm package:desktop --target windows-x64
+pnpm package:windows-host --target windows-x64
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
 Get-FileHash .\artifacts\installers\windows\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256
@@ -135,7 +138,7 @@ pnpm verify:fast
 
 ## Release workflow
 
-The GitHub Actions installer workflow builds Windows x64/arm64 installers, an experimental Linux x64 tarball, and a macOS arm64 DMG when the notarization credentials are configured. The Windows desktop executable is built before the bundle, checked with `cargo check` and `cargo test`, and copied into `app/desktop/`. Public release publication requires signing before the final Windows installer is uploaded.
+The GitHub Actions installer workflow builds Windows x64/arm64 installers, an experimental Linux x64 tarball, and a macOS arm64 DMG when the notarization credentials are configured. The Windows desktop executable is built before the bundle with `pnpm package:windows-host`, checked with `pnpm windows:test` plus `pnpm verify:desktop`, signed, and copied into `app/desktop/`. While the Tauri host remains rollback code, `verify:desktop` still carries Tauri `cargo check` / `cargo test` alongside Windows App SDK proof. Public release publication requires signing before the final Windows installer is uploaded.
 
 Public-trust signed Windows releases are fail-closed: Authenticode signing secrets must be present, and `signtool verify /pa` must pass for both the desktop executable and the generated installer. The `v1.0.0` GitHub release may attach unsigned Windows x64/arm64 installers as clearly labeled convenience assets from an explicit manual workflow run with `allow_unsigned=true`; those assets are not Authenticode-signed, do not carry `release-certificate.json` public-trust status, and must not be described as signed installer proof. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
 
