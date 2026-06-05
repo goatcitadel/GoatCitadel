@@ -161,11 +161,11 @@ fn main() {
 }
 
 #[tauri::command]
-fn launch_runtime(
+async fn launch_runtime(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopLaunchResult, String> {
-    let output = run_launcher(["launch", "--no-open", "--json", "--wait"])?;
+    let output = run_launcher_async(["launch", "--no-open", "--json", "--wait"]).await?;
     let result: DesktopLaunchResult = serde_json::from_str(&output)
         .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))?;
     {
@@ -180,8 +180,10 @@ fn launch_runtime(
 }
 
 #[tauri::command]
-fn read_runtime_status(state: State<'_, DesktopState>) -> Result<DesktopRuntimeStatus, String> {
-    let output = run_launcher(["status", "--json"])?;
+async fn read_runtime_status(
+    state: State<'_, DesktopState>,
+) -> Result<DesktopRuntimeStatus, String> {
+    let output = run_launcher_async(["status", "--json"]).await?;
     let result: DesktopRuntimeStatus = serde_json::from_str(&output)
         .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))?;
     {
@@ -195,9 +197,9 @@ fn read_runtime_status(state: State<'_, DesktopState>) -> Result<DesktopRuntimeS
 }
 
 #[tauri::command]
-fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
+async fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
     stop_approval_watcher(&state)?;
-    let output = run_launcher(["stop", "--json"])?;
+    let output = run_launcher_async(["stop", "--json"]).await?;
     serde_json::from_str(&output)
         .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))
 }
@@ -635,6 +637,12 @@ fn run_launcher<const N: usize>(args: [&str; N]) -> Result<String, String> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+async fn run_launcher_async<const N: usize>(args: [&'static str; N]) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_launcher(args))
+        .await
+        .map_err(|error| format!("GoatCitadel launcher task failed: {error}"))?
 }
 
 fn resolve_launcher() -> Result<LauncherInvocation, String> {

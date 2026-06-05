@@ -1307,7 +1307,16 @@ async function ensureGatewayReady({ packaged, gatewayUrl, nodeExecutable }) {
     startSourceGateway(gatewayUrl);
   }
   if (!(await waitForHttp(`${gatewayUrl}/health`, 180000))) {
-    throw new Error(`Gateway did not become healthy at ${gatewayUrl}`);
+    const live = await waitForHttp(`${gatewayUrl}/livez`, 1500, 1);
+    throw new Error(
+      [
+        `Gateway did not become healthy at ${gatewayUrl}`,
+        live ? "Gateway process answered /livez but /health did not pass." : "Gateway process did not answer /livez.",
+        buildRuntimeLogSummary("gateway"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 }
 
@@ -1321,7 +1330,11 @@ async function ensureUiReady({ packaged, gatewayUrl, uiUrl, nodeExecutable }) {
     startSourceUi(gatewayUrl, uiUrl);
   }
   if (!(await waitForHttp(`${uiUrl}/health`, 180000))) {
-    throw new Error(`Mission Control did not become healthy at ${uiUrl}`);
+    throw new Error(
+      [`Mission Control did not become healthy at ${uiUrl}`, buildRuntimeLogSummary("mission-control")]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 }
 
@@ -1452,8 +1465,12 @@ function writePidFile(filePath, pid) {
 async function waitForHttp(url, timeoutMs, attempts = 120) {
   const startedAt = Date.now();
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
     try {
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, Math.min(5000, Math.max(250, remainingMs)));
       if (response.ok) {
         return true;
       }
@@ -1468,12 +1485,60 @@ async function waitForHttp(url, timeoutMs, attempts = 120) {
   return false;
 }
 
+async function fetchWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}) for ${url}`);
   }
   return response.json();
+}
+
+function buildRuntimeLogSummary(processName) {
+  const stdoutPath = path.join(runtimeLogDir, `${processName}.stdout.log`);
+  const stderrPath = path.join(runtimeLogDir, `${processName}.stderr.log`);
+  const stderrTail = readLogTail(stderrPath);
+  const stdoutTail = readLogTail(stdoutPath);
+  const details = [];
+  if (stderrTail) {
+    details.push(`Recent ${path.basename(stderrPath)}:\n${stderrTail}`);
+  }
+  if (stdoutTail) {
+    details.push(`Recent ${path.basename(stdoutPath)}:\n${stdoutTail}`);
+  }
+  if (details.length === 0) {
+    return `No recent ${processName} log output was captured under ${runtimeLogDir}.`;
+  }
+  return details.join("\n");
+}
+
+function readLogTail(filePath, maxBytes = 6000) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile() || stats.size <= 0) {
+      return "";
+    }
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const bytesToRead = Math.min(maxBytes, stats.size);
+      const buffer = Buffer.alloc(bytesToRead);
+      fs.readSync(fd, buffer, 0, bytesToRead, stats.size - bytesToRead);
+      return buffer.toString("utf8").trim();
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }
 
 async function sleep(ms) {
