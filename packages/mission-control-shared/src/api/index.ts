@@ -17,3 +17,6 @@ export * from "./browser-sessions.js";
 export * from "./review-readiness.js";
 export * from "./trust.js";
 export * from "./ops-quality.js";
+export * from "./local-ai.js";
+export * from "./model-comparisons.js";
+export * from "./personal-ops.js";

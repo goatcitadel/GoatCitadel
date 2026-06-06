@@ -1036,6 +1036,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
             item.section === "access" ||
             item.section === "personalities" ||
             item.section === "providers" ||
+            item.section === "local-ai" ||
             item.section === "trust-policy",
         ),
       },
@@ -1071,7 +1072,8 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
             item.section === "skills" ||
             item.section === "capabilities" ||
             item.section === "memory" ||
-            item.section === "knowledge",
+            item.section === "knowledge" ||
+            item.section === "notes",
         ),
       },
       {
@@ -1081,6 +1083,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
           (item) =>
             item.section === "files" ||
             item.section === "artifacts" ||
+            item.section === "communications" ||
             item.section === "prompt-packs" ||
             item.section === "curator",
         ),

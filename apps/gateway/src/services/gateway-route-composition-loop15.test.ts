@@ -166,6 +166,7 @@ function createGateway() {
           sessionId === "missing" ? undefined : { sessionId, workspaceId: "workspace-a" },
         ),
       },
+      db: createDatabaseStub(),
       gatewaySql: { prepare: fn(() => ({ run: fn(() => undefined) })) },
     },
     addonsService: { list: fn(() => []) },
@@ -277,6 +278,18 @@ function createGateway() {
     writeMcpAuthState: fn((state: unknown) => ({ state })),
     writeMcpServers: fn((servers: unknown) => ({ servers })),
     writeMcpTools: fn((tools: unknown) => ({ tools })),
+  };
+}
+
+function createDatabaseStub() {
+  return {
+    exec: fn(() => undefined),
+    prepare: fn(() => ({
+      all: fn(() => []),
+      get: fn(() => undefined),
+      run: fn(() => undefined),
+    })),
+    transaction: fn((_mode: string, callback: () => unknown) => callback()),
   };
 }
 

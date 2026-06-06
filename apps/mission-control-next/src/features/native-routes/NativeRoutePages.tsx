@@ -14,8 +14,11 @@ import { CoworkNativePage } from "./cowork/CoworkNativePage";
 import { LibraryAgentsSection } from "./library/LibraryAgentsSection";
 import { LibraryArtifactsSection } from "./library/LibraryArtifactsSection";
 import { LibraryCapabilitiesSection } from "./library/LibraryCapabilitiesSection";
+import { LibraryCommunicationsSection } from "./library/LibraryCommunicationsSection";
 import { LibraryFilesSection } from "./library/LibraryFilesSection";
 import { LibraryKnowledgeSection } from "./library/LibraryKnowledgeSection";
+import { LibraryNotesSection } from "./library/LibraryNotesSection";
+import { LibraryPromptPacksSection } from "./library/LibraryPromptPacksSection";
 import { LibrarySkillsSection } from "./library/LibrarySkillsSection";
 import { routeSectionWithDefault } from "./shared/native-helpers";
 import type { NativeRoutePagesProps } from "./types";
@@ -122,10 +125,16 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <MemoryRoutePage {...props} />;
     case "knowledge":
       return <LibraryKnowledgeSection {...props} />;
+    case "notes":
+      return <LibraryNotesSection {...props} />;
+    case "communications":
+      return <LibraryCommunicationsSection {...props} />;
     case "files":
       return <LibraryFilesSection {...props} />;
     case "artifacts":
       return <LibraryArtifactsSection {...props} />;
+    case "prompt-packs":
+      return <LibraryPromptPacksSection {...props} />;
     default:
       return <LibraryAgentsSection {...props} />;
   }
@@ -178,6 +187,10 @@ function labelForLibrarySection(section: NonNullable<AppRoute["section"]>) {
       return "Memory";
     case "knowledge":
       return "Knowledge";
+    case "notes":
+      return "Notes";
+    case "communications":
+      return "Communications";
     case "files":
       return "Files";
     case "artifacts":
@@ -201,10 +214,16 @@ function descriptionForLibrarySection(section: NonNullable<AppRoute["section"]>,
       return `Durable memory posture and recent memory items for ${workspaceName}.`;
     case "knowledge":
       return `Attachable context sources and knowledge-oriented files for ${workspaceName}.`;
+    case "notes":
+      return `Notes, reminders, and business follow-ups for ${workspaceName}.`;
+    case "communications":
+      return `Inbox, agenda, contacts, and approval-gated outreach for ${workspaceName}.`;
     case "files":
       return `Workspace files available outside the active Code surface.`;
     case "artifacts":
       return `Generated outputs that should be easy to reopen from the native library.`;
+    case "prompt-packs":
+      return `Prompt-pack evaluation and model comparison review for ${workspaceName}.`;
     default:
       return `Reusable agent profiles and routing posture for ${workspaceName}.`;
   }
