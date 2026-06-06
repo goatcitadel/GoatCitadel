@@ -262,6 +262,7 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.orchestration.listRunCheckpoints("run-1", "workspace-1")).toEqual([{ checkpointId: "cp-1" }]);
     expect(deps.orchestration.listRunContexts("run-1")).toEqual([{ contextId: "ctx-1" }]);
     expect(deps.promptPacks).toBe(gateway.promptPackService);
+    expect(deps.modelComparisons.listComparisons(1)).toEqual({ items: [] });
     expect(deps.realtimeEvents).toBe(gateway.realtimeEventService);
     expect(deps.runtimeLifecycle.getRuntimeLifecycle({ limit: 1 })).toEqual({ lifecycle: true });
     expect(deps.runtimeLifecycle.getTranscript("session-1")).toEqual([{ role: "user" }]);
@@ -308,12 +309,19 @@ function createGateway() {
     policyEngine: {
       listCatalog: vi.fn(() => [{ name: "tool.a" }, { toolName: "tool.b" }, { id: "tool.c" }, {}]),
     },
-    promptPackService: { promptPacks: true },
+    promptPackService: {
+      listPromptPackTests: vi.fn(() => []),
+      promptPacks: true,
+    },
     realtimeEventService: {
       getRealtimeEventSequenceBounds: vi.fn(() => ({ newestSequence: 9 })),
     },
     runtimeLifecycleReadService: { getRuntimeLifecycle: vi.fn(() => ({ lifecycle: true })) },
-    storage: { systemSettings: { get: vi.fn() } },
+    storage: {
+      db: createDatabaseStub(),
+      promptPackRuns: { listByTest: vi.fn(() => []) },
+      systemSettings: { get: vi.fn() },
+    },
     createApproval: vi.fn((input: unknown) => ({ approvalId: "approval-1", input })),
     createChatCompletion: vi.fn((input: unknown) => ({ id: "completion-1", input })),
     createChatCompletionStream: vi.fn(() => ["delta"]),
@@ -336,5 +344,17 @@ function createGateway() {
     approvePhase: vi.fn(() => ({ approved: true })),
     verifyBackup: vi.fn(() => ({ verified: true })),
     verifyDatabaseCutover: vi.fn(() => ({ database: "ok" })),
+  };
+}
+
+function createDatabaseStub() {
+  return {
+    exec: vi.fn(),
+    prepare: vi.fn(() => ({
+      all: vi.fn(() => []),
+      get: vi.fn(() => undefined),
+      run: vi.fn(),
+    })),
+    transaction: vi.fn((_mode: string, callback: () => unknown) => callback()),
   };
 }

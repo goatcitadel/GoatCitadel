@@ -95,6 +95,15 @@ import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
 import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
+export {
+  PersonalOpsInMemoryRepository,
+  PersonalOpsStorageRepository,
+  type PersonalOpsNoteListQuery,
+  type PersonalOpsReminderListQuery,
+  type PersonalOpsRepository,
+  type PersonalOpsWorkspaceAccess,
+} from "./personal-ops-repo.js";
+export { ModelComparisonRunRepository } from "./model-comparison-run-repo.js";
 
 export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;

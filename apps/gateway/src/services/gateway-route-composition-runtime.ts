@@ -1,11 +1,14 @@
+import { ModelComparisonRunRepository } from "@goatcitadel/storage";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createCronRoutePort } from "./cron-route-service.js";
 import { createDashboardRoutePort } from "./dashboard-route-service.js";
 import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
+import { createLocalAiRouteService } from "./local-ai-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
+import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
 import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
@@ -38,9 +41,11 @@ export function composeRuntimeAdminRouteDependencies(
   | "gatewayEvents"
   | "health"
   | "hooks"
+  | "localAi"
   | "llamaCpp"
   | "mesh"
   | "mobile"
+  | "modelComparisons"
   | "npu"
   | "onboarding"
   | "orchestration"
@@ -167,6 +172,9 @@ export function composeRuntimeAdminRouteDependencies(
       hooksService: gateway.hooksService,
       normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     }),
+    localAi: createLocalAiRouteService({
+      createApproval: (input) => gateway.createApproval(input),
+    }),
     llamaCpp: createLlamaCppRoutePort({
       llamaCppRuntime: gateway.llamaCppRuntime,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
@@ -178,6 +186,11 @@ export function composeRuntimeAdminRouteDependencies(
     mobile: createMobileRoutePort({
       storage: gateway.storage,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    }),
+    modelComparisons: new ModelComparisonService({
+      repository: new ModelComparisonRunRepository(gateway.storage.db),
+      listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
+      listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
     }),
     npu: createNpuRoutePort({
       npuSidecar: gateway.npuSidecar,

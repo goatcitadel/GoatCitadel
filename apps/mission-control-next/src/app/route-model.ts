@@ -7,6 +7,8 @@ export type LibrarySection =
   | "capabilities"
   | "memory"
   | "knowledge"
+  | "notes"
+  | "communications"
   | "files"
   | "artifacts"
   | "prompt-packs"
@@ -32,6 +34,7 @@ export type SettingsSection =
   | "budget"
   | "onboarding"
   | "runtime"
+  | "local-ai"
   | "workspaces"
   | "addons"
   | "integrations"
@@ -275,6 +278,20 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "knowledge",
     },
     {
+      id: "library-notes",
+      label: "Notes",
+      description: "Business notes, checklists, reminders, and follow-ups.",
+      area: "library",
+      section: "notes",
+    },
+    {
+      id: "library-communications",
+      label: "Communications",
+      description: "Inbox, calendar agenda, contacts, and approval-gated drafts.",
+      area: "library",
+      section: "communications",
+    },
+    {
       id: "library-files",
       label: "Files",
       description: "Browse uploaded and workspace files outside Code.",
@@ -291,7 +308,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "library-prompt-packs",
       label: "Prompt Packs",
-      description: "Author, export, benchmark, and review prompt packs.",
+      description: "Author, export, benchmark, review prompt packs, and inspect model comparisons.",
       area: "library",
       section: "prompt-packs",
     },
@@ -440,6 +457,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "runtime",
     },
     {
+      id: "settings-local-ai",
+      label: "Local AI",
+      description: "Hardware readiness, model fit, local endpoints, and serve jobs.",
+      area: "settings",
+      section: "local-ai",
+    },
+    {
       id: "settings-workspaces",
       label: "Workspaces",
       description: "Workspace context, guidance, and extension posture.",
@@ -582,6 +606,22 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "library",
+    section: "notes",
+    status: "ship",
+    releaseAction: "Capture notes and reminders with workspace scoping and operator-visible state.",
+    verification: "verify:surface:regression, focused personal-ops route tests",
+    note: "Notes are release-bearing as personal business context, separate from durable learned memory.",
+  },
+  {
+    area: "library",
+    section: "communications",
+    status: "ship",
+    releaseAction: "Inspect inbox, agenda, contacts, and approval-gated mail drafts.",
+    verification: "verify:surface:regression, focused communications route tests",
+    note: "Communications is release-bearing only through governed integrations and approval-gated outbound effects.",
+  },
+  {
+    area: "library",
     section: "files",
     status: "ship",
     releaseAction: "Browse uploaded and workspace files from the Library lane.",
@@ -600,9 +640,9 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "library",
     section: "prompt-packs",
     status: "ship",
-    releaseAction: "Author, export, benchmark, and review prompt packs.",
+    releaseAction: "Author, export, benchmark, review prompt packs, and inspect model comparison judgments.",
     verification: "verify:surface:regression, prompt:gates",
-    note: "Prompt-pack workflows remain release-bearing.",
+    note: "Prompt-pack workflows remain release-bearing, including operator-visible model comparison review.",
   },
   {
     area: "library",
@@ -774,6 +814,14 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Configure mesh, local runtimes, backups, and serving posture.",
     verification: "verify:surface:regression, verify:runtime:truth",
     note: "Runtime settings are release-bearing when experimental sidecars stay labeled.",
+  },
+  {
+    area: "settings",
+    section: "local-ai",
+    status: "ship",
+    releaseAction: "Inspect local hardware readiness, model-fit recommendations, and approval-gated local model jobs.",
+    verification: "verify:surface:regression, verify:runtime:truth",
+    note: "Local AI remains honest about advisory fit and does not claim autonomous installs or mature local inference.",
   },
   {
     area: "settings",

@@ -716,6 +716,8 @@ export function iconForSettingsSection(section: string) {
       return Gauge;
     case "providers":
       return SlidersHorizontal;
+    case "local-ai":
+      return Gauge;
     case "personalities":
       return Sparkles;
     case "access":
@@ -753,6 +755,8 @@ export function labelForSettingsSection(section: string) {
       return "Budget";
     case "providers":
       return "Providers & Models";
+    case "local-ai":
+      return "Local AI";
     case "personalities":
       return "Personalities";
     case "access":
@@ -790,6 +794,8 @@ export function descriptionForSettingsSection(section: string) {
       return "Set the runtime budget mode and inspect cost evidence.";
     case "providers":
       return "Choose active routing, inspect provider and model posture, and manage secrets.";
+    case "local-ai":
+      return "Inspect local hardware readiness, model fit, downloads, serve jobs, and endpoint registration.";
     case "personalities":
       return "Manage Chat tone presets and choose the global Chat default.";
     case "access":

@@ -106,6 +106,7 @@ import {
   type KnowledgeRoutePort,
   type KnowledgeRouteService,
 } from "./knowledge-route-service.js";
+import type { LocalAiRouteService } from "./local-ai-route-service.js";
 import {
   createLlamaCppRouteService,
   type LlamaCppRoutePort,
@@ -115,10 +116,12 @@ import { createLlmRouteService, type LlmRoutePort, type LlmRouteService } from "
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { MemoryRouteService } from "./memory-route-service.js";
 import { McpRouteService, type McpRoutePort } from "./mcp-route-service.js";
+import type { ModelComparisonService } from "./model-comparison-service.js";
 import { createMediaRouteService, type MediaRoutePort, type MediaRouteService } from "./media-route-service.js";
 import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } from "./mesh-route-service.js";
 import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
+import type { PersonalOpsRouteService } from "./personal-ops-route-service.js";
 import {
   createOnboardingRouteService,
   type OnboardingRoutePort,
@@ -200,14 +203,17 @@ export interface GatewayRouteServices {
   integrations: IntegrationRouteService;
   integrationWebhooks: IntegrationWebhookRouteService;
   knowledge: KnowledgeRouteService;
+  localAi: LocalAiRouteService;
   llamaCpp: LlamaCppRouteService;
   llm: LlmRouteService;
   memory: MemoryRouteService;
   mcp: McpRouteService;
+  modelComparisons: ModelComparisonService;
   media: MediaRouteService;
   mesh: MeshRouteService;
   mobile: MobileRouteService;
   npu: NpuRouteService;
+  personalOps: PersonalOpsRouteService;
   onboarding: OnboardingRouteService;
   obsidian: ObsidianRouteService;
   orchestration: OrchestrationRouteService;
@@ -263,14 +269,17 @@ export interface GatewayRouteServiceDependencies {
   integrations: IntegrationRoutePort;
   integrationWebhooks: IntegrationWebhookRoutePort;
   knowledge: KnowledgeRoutePort;
+  localAi: LocalAiRouteService;
   llamaCpp: LlamaCppRoutePort;
   llm: LlmRoutePort;
   memory: MemoryLifecycleService;
   mcp: McpRoutePort;
+  modelComparisons: ModelComparisonService;
   media: MediaRoutePort;
   mesh: MeshRoutePort;
   mobile: MobileRoutePort;
   npu: NpuRoutePort;
+  personalOps: PersonalOpsRouteService;
   onboarding: OnboardingRoutePort;
   obsidian: ObsidianRoutePort;
   orchestration: OrchestrationRoutePort;
@@ -327,14 +336,17 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     integrations: createIntegrationRouteService(deps.integrations),
     integrationWebhooks: createIntegrationWebhookRouteService(deps.integrationWebhooks),
     knowledge: createKnowledgeRouteService(deps.knowledge),
+    localAi: deps.localAi,
     llamaCpp: createLlamaCppRouteService(deps.llamaCpp),
     llm: createLlmRouteService(deps.llm),
     memory: new MemoryRouteService(deps.memory),
     mcp: new McpRouteService(deps.mcp),
+    modelComparisons: deps.modelComparisons,
     media: createMediaRouteService(deps.media),
     mesh: createMeshRouteService(deps.mesh),
     mobile: createMobileRouteService(deps.mobile),
     npu: createNpuRouteService(deps.npu),
+    personalOps: deps.personalOps,
     onboarding: createOnboardingRouteService(deps.onboarding),
     obsidian: createObsidianRouteService(deps.obsidian),
     orchestration: new OrchestrationRouteService(deps.orchestration),

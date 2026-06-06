@@ -24,9 +24,11 @@ Status meanings:
 | `/library/capabilities` | `ship` | Inspect capability availability, degraded posture, and callable/inspectable truth. |
 | `/library/memory` | `ship` | Route memory lifecycle through `MemoryLifecycleService` with operator provenance. |
 | `/library/knowledge` | `ship` | Inspect knowledge sources with source visibility and provenance links. |
+| `/library/notes` | `ship` | Capture workspace-scoped notes, checklists, reminders, and follow-up state outside learned-memory promotion. |
+| `/library/communications` | `ship` | Inspect mail, agenda, contacts, and approval-gated drafts without storing raw credentials or sending without approval. |
 | `/library/files` | `ship` | Browse uploaded and workspace files. |
 | `/library/artifacts` | `ship` | Reopen artifacts and expose linked run/source/decision provenance. |
-| `/library/prompt-packs` | `ship` | Author, export, benchmark, and review prompt packs. |
+| `/library/prompt-packs` | `ship` | Author, export, benchmark, review prompt packs, and inspect model-comparison judgments. |
 | `/library/curator` | `experimental` | Skill-health proposals only; not release automation. |
 | `/ops/activity` | `ship` | Inspect retained events and Ops attention signals. |
 | `/ops/sessions` | `ship` | Inspect session timelines, summaries, and operator evidence. |
@@ -48,6 +50,7 @@ Status meanings:
 | `/settings/budget` | `ship` | Set budget mode and review cost evidence. |
 | `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |
+| `/settings/local-ai` | `ship` | Inspect local hardware readiness, model-fit recommendations, and approval-gated local model jobs without claiming autonomous installs or mature local inference. |
 | `/settings/workspaces` | `ship` | Configure workspace context, guidance, and extension posture. |
 | `/settings/addons` | `experimental` | Add-on posture plus staged/exportable capability-pack evidence and evidence-only materialization receipts; no full marketplace or asset-activation lifecycle claim. |
 | `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
