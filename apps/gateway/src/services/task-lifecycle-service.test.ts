@@ -1074,6 +1074,42 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     expect(updateCalls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("accepts current bulk revision guards", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a" });
+
+    const results = service.bulkUpdateTasks({
+      action: "reassign",
+      taskIds: [a.taskId],
+      assignedAgentId: "agent-current",
+      expectedUpdatedAtByTaskId: {
+        [a.taskId]: a.updatedAt,
+      },
+    });
+
+    expect(results[0]).toMatchObject({ taskId: a.taskId, assignedAgentId: "agent-current" });
+  });
+
+  it("rejects stale bulk revision guards before applying partial updates", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a" });
+    const b = service.createTask({ title: "b" });
+    service.updateTask(b.taskId, { title: "b changed" });
+
+    expect(() =>
+      service.bulkUpdateTasks({
+        action: "reassign",
+        taskIds: [a.taskId, b.taskId],
+        assignedAgentId: "agent-stale",
+        expectedUpdatedAtByTaskId: {
+          [a.taskId]: a.updatedAt,
+          [b.taskId]: b.updatedAt,
+        },
+      }),
+    ).toThrow(/changed after this bulk update was prepared/i);
+    expect(service.getTask(a.taskId).assignedAgentId).toBeUndefined();
+  });
+
   it("unblock action publishes task_updated so subscribers see the transition", () => {
     const { service, publishRealtime } = createService();
     const a = service.createTask({ title: "a", status: "blocked" });

@@ -34,6 +34,7 @@ import type {
   MemoryQmdStatsResponse,
   MemoryRetrievalBenchmarkRequest,
   MemoryRetrievalBenchmarkResponse,
+  MemoryRetrievalStatusResponse,
   MemoryRecallRequest,
   MemoryRecallResponse,
   MemorySearchQuery,
@@ -132,6 +133,10 @@ export async function fetchMemoryQmdStats(
   return request<MemoryQmdStatsResponse & { recent: MemoryContextPack[] }>(
     `/api/v1/memory/qmd/stats?${search.toString()}`,
   );
+}
+
+export async function fetchMemoryRetrievalStatus(): Promise<MemoryRetrievalStatusResponse> {
+  return request<MemoryRetrievalStatusResponse>("/api/v1/memory/retrieval/status");
 }
 
 export async function runMemoryRetrievalBenchmark(

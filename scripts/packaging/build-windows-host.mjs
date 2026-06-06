@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
+import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -14,7 +15,6 @@ const windowsProject = path.join(
   "mission-control-windows",
   "GoatCitadel.MissionControl.Windows.csproj",
 );
-const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 const PACKAGE_NAME = "GoatCitadel.MissionControl.Windows";
 const APPLICATION_ID = "App";
 const DEFAULT_MSIX_PUBLISHER = "CN=GoatCitadel";
@@ -142,7 +142,9 @@ function assertDotnet10Sdk() {
     .map((line) => line.trim())
     .some((line) => line.startsWith("10."));
   if (!hasDotnet10) {
-    throw new Error(`The WinUI Windows host targets .NET 10 LTS, but dotnet --list-sdks did not report a 10.x SDK:\n${result.stdout}`);
+    throw new Error(
+      `The WinUI Windows host targets .NET 10 LTS, but dotnet --list-sdks did not report a 10.x SDK:\n${result.stdout}`,
+    );
   }
 }
 
@@ -204,7 +206,7 @@ function renderAppManifest({ publisher }) {
 function escapeXml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
-    .replaceAll("\"", "&quot;")
+    .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
@@ -227,19 +229,9 @@ function listFiles(rootDir) {
 }
 
 function removeDirectory(targetPath) {
-  if (!fs.existsSync(targetPath)) {
-    return;
-  }
-  try {
-    fs.rmSync(targetPath, { recursive: true, force: true });
-    return;
-  } catch {
-    const result = spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "rmdir", "/s", "/q", targetPath], {
-      cwd: repoRoot,
-      stdio: "ignore",
-    });
-    if (result.error || result.status !== 0) {
-      throw new Error(`Unable to remove existing directory: ${targetPath}`);
-    }
-  }
+  removeDirectorySafely(targetPath, {
+    repoRoot,
+    allowedRoot: path.join(repoRoot, "artifacts", "installers", "desktop"),
+    cwd: process.cwd(),
+  });
 }

@@ -32,11 +32,17 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
-export type BulkTaskAction =
-  | { action: "unblock"; taskIds: string[] }
-  | { action: "retry"; taskIds: string[]; reason: string }
-  | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
-  | { action: "close"; taskIds: string[] };
+type BulkTaskRevisionGuard = {
+  expectedUpdatedAtByTaskId?: Record<string, string>;
+};
+
+export type BulkTaskAction = BulkTaskRevisionGuard &
+  (
+    | { action: "unblock"; taskIds: string[] }
+    | { action: "retry"; taskIds: string[]; reason: string }
+    | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
+    | { action: "close"; taskIds: string[] }
+  );
 
 type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents">;
 
@@ -250,9 +256,13 @@ export class TaskLifecycleService {
   }
 
   public bulkUpdateTasks(input: BulkTaskAction, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
-    return input.taskIds.map((taskId) => {
+    const currentTasks = input.taskIds.map((taskId) => this.requireTaskInWorkspace(taskId, options));
+    for (const task of currentTasks) {
+      assertBulkTaskRevisionIsCurrent(input, task);
+    }
+    return currentTasks.map((current) => {
+      const taskId = current.taskId;
       if (input.action === "unblock") {
-        const current = this.requireTaskInWorkspace(taskId, options);
         const retryBudget = current.retryBudget
           ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
           : undefined;
@@ -1014,6 +1024,17 @@ export function buildTaskRealtimeLinks(
     ...(task?.proactiveContext?.proactiveRunId ? { proactiveRunId: task.proactiveContext.proactiveRunId } : {}),
     ...(task?.proactiveContext?.approvalId ? { approvalId: task.proactiveContext.approvalId } : {}),
   };
+}
+
+function assertBulkTaskRevisionIsCurrent(input: BulkTaskAction, task: TaskRecord): void {
+  const expectedUpdatedAt = input.expectedUpdatedAtByTaskId?.[task.taskId];
+  if (!expectedUpdatedAt || expectedUpdatedAt === task.updatedAt) {
+    return;
+  }
+  throw new ValidationError({
+    field: "expectedUpdatedAtByTaskId",
+    message: `Task ${task.taskId} changed after this bulk update was prepared.`,
+  });
 }
 
 function isTaskInAgenticRun(task: TaskRecord, runId: string, control?: { includeParentRunLinks?: boolean }): boolean {

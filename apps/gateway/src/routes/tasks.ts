@@ -13,6 +13,7 @@ import type { TaskWorkspaceAccessOptions } from "../services/task-lifecycle-serv
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
+const KANBAN_GENERAL_RATE_LIMIT_MAX = 500;
 const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
 const DEFAULT_WORKSPACE_ID = "default";
 
@@ -258,15 +259,25 @@ const verifyArtifactsBodySchema = z.object({
   claims: z.array(artifactClaimSchema).min(1).max(MAX_TASK_ARTIFACT_CLAIMS),
 });
 
+const bulkRevisionGuardShape = {
+  expectedUpdatedAtByTaskId: z.record(z.string(), z.string().datetime()).optional(),
+};
+
 const bulkActionBodySchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("unblock"), taskIds: z.array(z.string().min(1)).min(1) }),
-  z.object({ action: z.literal("retry"), taskIds: z.array(z.string().min(1)).min(1), reason: z.string().min(1) }),
+  z.object({ action: z.literal("unblock"), taskIds: z.array(z.string().min(1)).min(1), ...bulkRevisionGuardShape }),
+  z.object({
+    action: z.literal("retry"),
+    taskIds: z.array(z.string().min(1)).min(1),
+    reason: z.string().min(1),
+    ...bulkRevisionGuardShape,
+  }),
   z.object({
     action: z.literal("reassign"),
     taskIds: z.array(z.string().min(1)).min(1),
     assignedAgentId: z.string().min(1),
+    ...bulkRevisionGuardShape,
   }),
-  z.object({ action: z.literal("close"), taskIds: z.array(z.string().min(1)).min(1) }),
+  z.object({ action: z.literal("close"), taskIds: z.array(z.string().min(1)).min(1), ...bulkRevisionGuardShape }),
 ]);
 
 const deleteTaskQuerySchema = z.object({
@@ -335,23 +346,33 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/a2a/extended-agent-card", a2aJsonRpcRouteAccess, async (request, reply) => {
-    const auth = fastify.services.a2a.authenticatePeerRequest(request);
-    if ("statusCode" in auth) {
-      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
-    }
-    const checkedAt = new Date().toISOString();
-    try {
-      return reply.send(
-        fastify.services.a2a.getAuthenticatedExtendedAgentCard(auth, {
-          checkedAt,
-          baseUrl: buildA2ARequestBaseUrl(request.headers),
-        }),
-      );
-    } catch (error) {
-      return sendA2AHttpJsonRouteError(reply, error, request);
-    }
-  });
+  fastify.get(
+    "/api/v1/a2a/extended-agent-card",
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_GENERAL_RATE_LIMIT_MAX },
+      },
+    },
+    async (request, reply) => {
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      const checkedAt = new Date().toISOString();
+      try {
+        return reply.send(
+          fastify.services.a2a.getAuthenticatedExtendedAgentCard(auth, {
+            checkedAt,
+            baseUrl: buildA2ARequestBaseUrl(request.headers),
+          }),
+        );
+      } catch (error) {
+        return sendA2AHttpJsonRouteError(reply, error, request);
+      }
+    },
+  );
 
   fastify.post(
     "/api/v1/a2a/http-json/tasks",
@@ -380,67 +401,97 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/a2a/http-json/tasks/:taskId", a2aJsonRpcRouteAccess, async (request, reply) => {
-    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    const auth = fastify.services.a2a.authenticatePeerRequest(request);
-    if ("statusCode" in auth) {
-      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
-    }
-    try {
-      return reply.send({ task: fastify.services.a2a.getHttpJsonTask(auth, params.data, new Date().toISOString()) });
-    } catch (error) {
-      return sendA2AHttpJsonRouteError(reply, error, request);
-    }
-  });
+  fastify.get(
+    "/api/v1/a2a/http-json/tasks/:taskId",
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_GENERAL_RATE_LIMIT_MAX },
+      },
+    },
+    async (request, reply) => {
+      const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      try {
+        return reply.send({ task: fastify.services.a2a.getHttpJsonTask(auth, params.data, new Date().toISOString()) });
+      } catch (error) {
+        return sendA2AHttpJsonRouteError(reply, error, request);
+      }
+    },
+  );
 
-  fastify.post("/api/v1/a2a/http-json/tasks/:taskId/cancel", a2aJsonRpcRouteAccess, async (request, reply) => {
-    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    const auth = fastify.services.a2a.authenticatePeerRequest(request);
-    if ("statusCode" in auth) {
-      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
-    }
-    try {
-      return reply.send({
-        task: await fastify.services.a2a.cancelHttpJsonTask(auth, params.data, new Date().toISOString()),
-      });
-    } catch (error) {
-      return sendA2AHttpJsonRouteError(reply, error, request);
-    }
-  });
+  fastify.post(
+    "/api/v1/a2a/http-json/tasks/:taskId/cancel",
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX },
+      },
+    },
+    async (request, reply) => {
+      const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      try {
+        return reply.send({
+          task: await fastify.services.a2a.cancelHttpJsonTask(auth, params.data, new Date().toISOString()),
+        });
+      } catch (error) {
+        return sendA2AHttpJsonRouteError(reply, error, request);
+      }
+    },
+  );
 
-  fastify.get("/api/v1/a2a/http-json/tasks/:taskId/events", a2aJsonRpcRouteAccess, async (request, reply) => {
-    const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
-    const query = a2aHttpJsonEventsQuerySchema.safeParse(request.query);
-    if (!params.success || !query.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-        },
-      });
-    }
-    const auth = fastify.services.a2a.authenticatePeerRequest(request);
-    if ("statusCode" in auth) {
-      return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
-    }
-    try {
-      return reply.send(
-        fastify.services.a2a.getHttpJsonTaskEvents(
-          auth,
-          { ...params.data, lastEventSequence: query.data.lastEventSequence },
-          new Date().toISOString(),
-        ),
-      );
-    } catch (error) {
-      return sendA2AHttpJsonRouteError(reply, error, request);
-    }
-  });
+  fastify.get(
+    "/api/v1/a2a/http-json/tasks/:taskId/events",
+    {
+      ...a2aJsonRpcRouteAccess,
+      config: {
+        ...(a2aJsonRpcRouteAccess.config ?? {}),
+        rateLimit: { max: KANBAN_GENERAL_RATE_LIMIT_MAX },
+      },
+    },
+    async (request, reply) => {
+      const params = a2aHttpJsonTaskParamsSchema.safeParse(request.params);
+      const query = a2aHttpJsonEventsQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        });
+      }
+      const auth = fastify.services.a2a.authenticatePeerRequest(request);
+      if ("statusCode" in auth) {
+        return reply.code(auth.statusCode).send({ error: auth.message, reason: auth.reason });
+      }
+      try {
+        return reply.send(
+          fastify.services.a2a.getHttpJsonTaskEvents(
+            auth,
+            { ...params.data, lastEventSequence: query.data.lastEventSequence },
+            new Date().toISOString(),
+          ),
+        );
+      } catch (error) {
+        return sendA2AHttpJsonRouteError(reply, error, request);
+      }
+    },
+  );
 
   fastify.post("/api/v1/a2a/outbound/preview", withRouteAccess(fastify, "operator"), async (request, reply) => {
     const parsed = a2aOutboundBodySchema.safeParse(request.body ?? {});

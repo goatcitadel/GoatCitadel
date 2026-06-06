@@ -3,6 +3,20 @@ export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
 export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints" | "semantic_vector" | "hybrid_rank";
+export type MemoryRetrievalModeStatus =
+  | "disabled"
+  | "fallback_only"
+  | "lexical_recency"
+  | "semantic_hints"
+  | "semantic_vector"
+  | "hybrid_rank";
+export type MemoryRerankStatus = "none" | "hybrid_rank" | "distillation";
+export type MemoryFallbackModeStatus =
+  | "disabled"
+  | "available"
+  | "short_prompt_or_disabled"
+  | "no_candidates"
+  | "distiller_fallback";
 
 export interface MemoryRetrievalMatchSignals {
   lexicalScore: number;
@@ -137,6 +151,35 @@ export interface MemoryRetrievalBenchmarkResponse {
   semanticCoverageNote: string;
   items: MemoryRetrievalBenchmarkItem[];
   warnings: string[];
+}
+
+export interface MemoryRetrievalStatusResponse {
+  checkedAt: string;
+  enabled: boolean;
+  retrievalMode: MemoryRetrievalModeStatus;
+  rerankAvailable: boolean;
+  rerankMode: MemoryRerankStatus;
+  fallbackMode: MemoryFallbackModeStatus;
+  lastRefresh?: string;
+  lastError?: string;
+  qmd: {
+    enabled: boolean;
+    applyToChat: boolean;
+    applyToOrchestration: boolean;
+    minPromptChars: number;
+    cacheTtlSeconds: number;
+    distillerProviderId?: string;
+    distillerModel?: string;
+    distillerTimeoutMs: number;
+  };
+  recent: {
+    totalRuns: number;
+    generatedRuns: number;
+    cacheHitRuns: number;
+    fallbackRuns: number;
+    failedRuns: number;
+    retrievalStrategies: MemoryRetrievalStrategy[];
+  };
 }
 
 export type ContextManifestScope = "chat_turn";

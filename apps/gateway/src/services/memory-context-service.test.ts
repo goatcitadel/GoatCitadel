@@ -473,6 +473,84 @@ describe("MemoryContextService", () => {
       efficiencyLabel: "neutral",
     });
   });
+
+  it("summarizes retrieval status from config, recent citations, and fallback runs", async () => {
+    const storage = createStorage();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+    );
+    storage.memoryContexts.upsert({
+      cacheKey: "status-cache",
+      scope: "chat",
+      queryHash: "query",
+      sourcesHash: "sources",
+      contextText: "context",
+      citations: [
+        {
+          candidateId: "m:status",
+          sourceType: "memory_item",
+          sourceRef: "status",
+          score: 0.8,
+          provenance: {
+            relationScope: "self",
+            freshness: "fresh",
+            selectionReason: "selected by hybrid rank",
+            retrievalStrategy: "hybrid_rank",
+          },
+        },
+      ],
+      quality: { status: "fallback", reason: "memory distiller timed out" },
+      originalTokenEstimate: 10,
+      distilledTokenEstimate: 8,
+      expiresAt: "2026-05-15T00:05:00.000Z",
+    });
+    storage.memoryQmdRuns.append({
+      scope: "chat",
+      status: "fallback",
+      durationMs: 12,
+      candidateCount: 1,
+      citationsCount: 1,
+      originalTokenEstimate: 10,
+      distilledTokenEstimate: 8,
+      savingsPercent: 20,
+      errorText: "memory distiller timed out",
+    });
+
+    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+      enabled: true,
+      retrievalMode: "hybrid_rank",
+      rerankAvailable: true,
+      rerankMode: "hybrid_rank",
+      fallbackMode: "distiller_fallback",
+      lastRefresh: "2026-05-15T00:00:00.000Z",
+      lastError: "memory distiller timed out",
+      recent: {
+        totalRuns: 1,
+        fallbackRuns: 1,
+        retrievalStrategies: ["hybrid_rank"],
+      },
+    });
+  });
+
+  it("reports disabled retrieval status without pretending fallback is active", async () => {
+    const service = new MemoryContextService(
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot(), { memoryEnabled: false }) as never,
+      vi.fn(),
+    );
+
+    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+      enabled: false,
+      retrievalMode: "disabled",
+      rerankAvailable: false,
+      rerankMode: "none",
+      fallbackMode: "disabled",
+    });
+  });
 });
 
 async function createWorkspaceRoot(): Promise<string> {
@@ -585,17 +663,20 @@ function createStorage(
           createdAt: "2026-05-15T00:00:00.000Z",
         });
       },
+      list(limit = 100) {
+        return runs.slice(0, limit);
+      },
       stats(from: string, to: string) {
         return {
           from,
           to,
-          totalRuns: 0,
-          generatedRuns: 0,
-          cacheHitRuns: 0,
-          fallbackRuns: 0,
-          failedRuns: 0,
-          originalTokenEstimate: 0,
-          distilledTokenEstimate: 0,
+          totalRuns: runs.length,
+          generatedRuns: runs.filter((record) => record.status === "generated").length,
+          cacheHitRuns: runs.filter((record) => record.status === "cache_hit").length,
+          fallbackRuns: runs.filter((record) => record.status === "fallback").length,
+          failedRuns: runs.filter((record) => record.status === "failed").length,
+          originalTokenEstimate: sumNumberField(runs, "originalTokenEstimate"),
+          distilledTokenEstimate: sumNumberField(runs, "distilledTokenEstimate"),
           savingsPercent: 0,
           netTokenDelta: 0,
           compressionPercent: 0,
@@ -626,6 +707,13 @@ function createStorage(
       },
     },
   };
+}
+
+function sumNumberField(records: Array<Record<string, unknown>>, key: string): number {
+  return records.reduce((sum, record) => {
+    const value = record[key];
+    return sum + (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  }, 0);
 }
 
 function createTranscriptEvent(input: {

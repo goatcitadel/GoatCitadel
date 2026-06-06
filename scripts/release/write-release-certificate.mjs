@@ -91,6 +91,7 @@ const certificate = {
   version,
   tag: tagName,
   commit,
+  targetCommit: commit,
   repository,
   generatedAt: new Date().toISOString(),
   releaseWorkflow: {
@@ -103,6 +104,7 @@ const certificate = {
         : null,
   },
   requiredLanes,
+  exactShaStatus: summarizeRequiredLaneExactSha(requiredLanes, commit),
   releaseProofCoverage: {
     workflowFile: RELEASE_PROOF_WORKFLOW_FILE,
     coveredLanes: RELEASE_PROOF_COVERED_LANES,
@@ -307,6 +309,50 @@ function formatLaneFailure(lane) {
   const workflow = lane.proofWorkflowFile ?? lane.workflowFile;
   const url = lane.workflowRunUrl ? ` ${lane.workflowRunUrl}` : "";
   return `${lane.name}=${lane.status} via ${workflow}${url}`;
+}
+
+function summarizeRequiredLaneExactSha(requiredLanes, commit) {
+  if (!commit) {
+    return {
+      status: "unknown",
+      targetCommit: null,
+      matched: 0,
+      checked: 0,
+      mismatched: [],
+      missingProof: requiredLanes.map((lane) => lane.name),
+    };
+  }
+  const mismatched = [];
+  const missingProof = [];
+  let matched = 0;
+  let checked = 0;
+  for (const lane of requiredLanes) {
+    const proofRun = lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+    const headSha = proofRun?.headSha ?? null;
+    if (!headSha) {
+      missingProof.push(lane.name);
+      continue;
+    }
+    checked += 1;
+    if (headSha === commit) {
+      matched += 1;
+      continue;
+    }
+    mismatched.push({
+      name: lane.name,
+      proofWorkflowFile: lane.proofWorkflowFile ?? lane.workflowFile,
+      proofSource: lane.proofSource,
+      headSha,
+    });
+  }
+  return {
+    status: mismatched.length === 0 && missingProof.length === 0 ? "matched" : "incomplete",
+    targetCommit: commit,
+    matched,
+    checked,
+    mismatched,
+    missingProof,
+  };
 }
 
 function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLanes }) {

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -96,7 +97,9 @@ try {
   for (const relativeManifestPath of extractedTemplateManifests) {
     readJson(path.join(extractedTemplateRoot, relativeManifestPath));
   }
+  const skillBundleTarballName = verifyPortableSkillBundlePackageSurvivesExtraction(tempDir);
   console.log(`Verified extensions-sdk package artifact: ${path.basename(tarball)}`);
+  console.log(`Verified portable skill-bundle package fixture: ${skillBundleTarballName}`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
@@ -150,6 +153,135 @@ function findPackedTarball(tempDir, stdout) {
   return candidates[0];
 }
 
+function verifyPortableSkillBundlePackageSurvivesExtraction(tempDir) {
+  const bundleDir = path.join(tempDir, "portable-skill-bundle");
+  const extractDir = path.join(tempDir, "portable-skill-extract");
+  fs.mkdirSync(path.join(bundleDir, "references"), { recursive: true });
+  fs.mkdirSync(path.join(bundleDir, "scripts"), { recursive: true });
+
+  const files = [
+    {
+      path: "SKILL.md",
+      kind: "skill",
+      content: [
+        "---",
+        "name: Package Proof Skill",
+        "description: Portable package fixture for manifest survival proof.",
+        "---",
+        "",
+        "This fixture proves portable skill-bundle assets survive packaging intact.",
+        "",
+      ].join("\n"),
+    },
+    {
+      path: "references/operator.md",
+      kind: "reference",
+      content: "# Operator reference\n\nReview evidence only.\n",
+    },
+    {
+      path: "scripts/review.ps1",
+      kind: "script",
+      content: "Write-Output 'review-only fixture'\n",
+      callable: false,
+    },
+  ];
+
+  for (const file of files) {
+    fs.writeFileSync(path.join(bundleDir, file.path), file.content, "utf8");
+  }
+  const manifest = {
+    manifestVersion: "goatcitadel.skill-bundle.v1",
+    name: "Package Proof Skill",
+    provenance: {
+      source: "verify:extensions:package",
+      generatedAt: "1970-01-01T00:00:00.000Z",
+    },
+    trust: {
+      disposition: "review_only",
+      callableCatalogImpact: "none",
+    },
+    scriptDisposition: "review_only_non_callable",
+    assets: files.map((file) => ({
+      path: file.path,
+      kind: file.kind,
+      sha256: sha256(file.content),
+      ...(file.kind === "script" ? { callable: false } : {}),
+    })),
+  };
+  fs.writeFileSync(
+    path.join(bundleDir, "goatcitadel.skill-bundle.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+
+  const tarball = path.join(tempDir, "portable-skill-bundle.tgz");
+  const pack = spawnSync("tar", ["-czf", tarball, "-C", bundleDir, "."], {
+    encoding: "utf8",
+    shell: false,
+  });
+  if (pack.error) {
+    fail(pack.error.message);
+  }
+  if (pack.status !== 0) {
+    fail(pack.stderr || pack.stdout || "portable skill-bundle tar creation failed.");
+  }
+
+  fs.mkdirSync(extractDir, { recursive: true });
+  const extract = spawnSync("tar", ["-xzf", tarball, "-C", extractDir], {
+    encoding: "utf8",
+    shell: false,
+  });
+  if (extract.error) {
+    fail(extract.error.message);
+  }
+  if (extract.status !== 0) {
+    fail(extract.stderr || extract.stdout || "portable skill-bundle extraction failed.");
+  }
+
+  const extractedManifestPath = path.join(extractDir, "goatcitadel.skill-bundle.json");
+  if (!fs.existsSync(extractedManifestPath)) {
+    fail("portable skill-bundle package is missing goatcitadel.skill-bundle.json after extraction.");
+  }
+  const extractedManifest = readJson(extractedManifestPath);
+  if (extractedManifest.manifestVersion !== "goatcitadel.skill-bundle.v1") {
+    fail("portable skill-bundle manifestVersion did not survive extraction.");
+  }
+  if (extractedManifest.scriptDisposition !== "review_only_non_callable") {
+    fail("portable skill-bundle script disposition did not survive extraction.");
+  }
+  if (extractedManifest.trust?.callableCatalogImpact !== "none") {
+    fail("portable skill-bundle callable catalog impact did not survive extraction.");
+  }
+  const extractedAssets = Array.isArray(extractedManifest.assets) ? extractedManifest.assets : [];
+  if (extractedAssets.length !== files.length) {
+    fail(
+      `portable skill-bundle asset count drifted after extraction: expected ${files.length}, found ${extractedAssets.length}.`,
+    );
+  }
+  for (const file of files) {
+    const asset = extractedAssets.find((candidate) => candidate?.path === file.path);
+    if (!asset) {
+      fail(`portable skill-bundle manifest is missing asset ${file.path}.`);
+    }
+    const extractedPath = path.join(extractDir, file.path);
+    if (!fs.existsSync(extractedPath)) {
+      fail(`portable skill-bundle package is missing asset ${file.path} after extraction.`);
+    }
+    const extractedContent = fs.readFileSync(extractedPath, "utf8");
+    if (asset.sha256 !== sha256(extractedContent)) {
+      fail(`portable skill-bundle asset hash mismatch after extraction for ${file.path}.`);
+    }
+    if (file.kind === "script" && asset.callable !== false) {
+      fail(`portable skill-bundle script asset ${file.path} must remain non-callable after extraction.`);
+    }
+  }
+  return path.basename(tarball);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function resolvePnpmPackCommand() {
   return process.platform === "win32" ? "cmd.exe" : "pnpm";
 }
@@ -163,7 +295,9 @@ function resolvePnpmPackArgs(tempDir) {
 
 function quoteCmdSafeArg(value) {
   if (/[\s"]/u.test(value)) {
-    fail("Temporary pack destination contains whitespace or quote characters unsupported by the Windows pnpm pack verifier.");
+    fail(
+      "Temporary pack destination contains whitespace or quote characters unsupported by the Windows pnpm pack verifier.",
+    );
   }
   return value;
 }

@@ -7,6 +7,7 @@ import type {
   MemoryItemRecord,
   MemoryQualityIssueRecord,
   MemoryRetrievalBenchmarkResponse,
+  MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
 import { EmptyState, FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
@@ -239,6 +240,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
   const sectionErrors = memory.data?.sectionErrors;
+  const retrievalStatus = memory.data?.memoryRetrievalStatus ?? null;
   const memoryAdminState = memory.data?.memoryAdminState ?? "unknown";
   const memoryAdminTruthUnknown = memoryAdminState === "unknown";
   const memoryCanMutate = memoryAdminState === "enabled";
@@ -414,7 +416,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             >
               Admin {memoryAdminState}
             </StatusChip>
+            <StatusChip tone={retrievalStatus?.enabled ? "success" : retrievalStatus ? "muted" : "warning"}>
+              Retrieval {formatRetrievalMode(retrievalStatus)}
+            </StatusChip>
+            <StatusChip tone={formatFallbackTone(retrievalStatus)}>
+              Fallback {formatFallbackMode(retrievalStatus)}
+            </StatusChip>
           </div>
+          <SectionTruthNotice message={sectionErrors?.memoryRetrievalStatus ?? null} />
           <SectionTruthNotice
             message={
               sectionErrors?.memoryItems ??
@@ -1554,6 +1563,27 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
 
 function formatFeedbackTarget(kind: string, ref: string | undefined): string {
   return ref ? `${kind}:${shortId(ref)}` : kind;
+}
+
+function formatRetrievalMode(status: MemoryRetrievalStatusResponse | null): string {
+  if (!status) {
+    return "unknown";
+  }
+  return status.retrievalMode.replaceAll("_", " ");
+}
+
+function formatFallbackMode(status: MemoryRetrievalStatusResponse | null): string {
+  if (!status) {
+    return "unknown";
+  }
+  return status.fallbackMode.replaceAll("_", " ");
+}
+
+function formatFallbackTone(status: MemoryRetrievalStatusResponse | null): "success" | "warning" | "muted" {
+  if (!status || !status.enabled) {
+    return "muted";
+  }
+  return status.fallbackMode === "available" ? "success" : "warning";
 }
 
 function formatMemoryQualityIssueKind(kind: MemoryQualityIssueRecord["kind"]): string {

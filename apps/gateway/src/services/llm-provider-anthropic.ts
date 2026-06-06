@@ -87,13 +87,18 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     let messageModel: string | undefined;
     let finishReason: string | undefined;
     let usage: Record<string, unknown> | undefined;
+    let receivedMessageStart = false;
 
     for await (const event of streamJsonSseResponse(response)) {
       const eventType = typeof event.type === "string" ? event.type : "";
       if (eventType === "message_start" && isRecord(event.message)) {
+        receivedMessageStart = true;
         messageId = typeof event.message.id === "string" ? event.message.id : messageId;
         messageModel = typeof event.message.model === "string" ? event.message.model : messageModel;
         continue;
+      }
+      if (eventType === "error") {
+        throw new Error(buildAnthropicStreamError(event, receivedMessageStart));
       }
 
       if (eventType === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
@@ -578,6 +583,24 @@ function mapAnthropicStopReason(stopReason: string | undefined): string {
     default:
       return "stop";
   }
+}
+
+function buildAnthropicStreamError(event: Record<string, unknown>, receivedMessageStart: boolean): string {
+  const error = isRecord(event.error) ? event.error : event;
+  const message =
+    typeof error.message === "string" && error.message.trim()
+      ? error.message.trim()
+      : typeof event.message === "string" && event.message.trim()
+        ? event.message.trim()
+        : "Anthropic stream returned an error event.";
+  const type =
+    typeof error.type === "string" && error.type.trim()
+      ? error.type.trim()
+      : typeof event.error_type === "string" && event.error_type.trim()
+        ? event.error_type.trim()
+        : undefined;
+  const phase = receivedMessageStart ? "after message_start" : "before message_start";
+  return `Anthropic stream error ${phase}: ${type ? `${type}: ` : ""}${message}`;
 }
 
 function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort"]): number {

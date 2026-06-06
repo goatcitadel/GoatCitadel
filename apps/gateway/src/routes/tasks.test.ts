@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ValidationError, type A2ATaskExportPreviewRequest } from "@goatcitadel/contracts";
@@ -384,6 +385,23 @@ describe("tasks routes", () => {
       { peerId: "peer-1", scopes: ["a2a:http-json"] },
       { taskId: "a2a-task-1" },
       expect.any(String),
+    );
+  });
+
+  it("keeps A2A peer routes with literal rate limits visible to CodeQL", () => {
+    const source = readFileSync(new URL("./tasks.ts", import.meta.url), "utf8");
+
+    expect(source).toMatch(
+      /fastify\.get\(\s*"\/api\/v1\/a2a\/extended-agent-card"[\s\S]*?rateLimit: \{ max: KANBAN_GENERAL_RATE_LIMIT_MAX \}/,
+    );
+    expect(source).toMatch(
+      /fastify\.get\(\s*"\/api\/v1\/a2a\/http-json\/tasks\/:taskId"[\s\S]*?rateLimit: \{ max: KANBAN_GENERAL_RATE_LIMIT_MAX \}/,
+    );
+    expect(source).toMatch(
+      /fastify\.post\(\s*"\/api\/v1\/a2a\/http-json\/tasks\/:taskId\/cancel"[\s\S]*?rateLimit: \{ max: KANBAN_MUTATION_RATE_LIMIT_MAX \}/,
+    );
+    expect(source).toMatch(
+      /fastify\.get\(\s*"\/api\/v1\/a2a\/http-json\/tasks\/:taskId\/events"[\s\S]*?rateLimit: \{ max: KANBAN_GENERAL_RATE_LIMIT_MAX \}/,
     );
   });
 
@@ -859,6 +877,10 @@ describe("tasks routes", () => {
         action: "reassign",
         taskIds: ["task-1", "task-2"],
         assignedAgentId: "agent-2",
+        expectedUpdatedAtByTaskId: {
+          "task-1": "2026-06-06T16:00:00.000Z",
+          "task-2": "2026-06-06T16:00:01.000Z",
+        },
       },
     });
 
@@ -868,6 +890,10 @@ describe("tasks routes", () => {
         action: "reassign",
         taskIds: ["task-1", "task-2"],
         assignedAgentId: "agent-2",
+        expectedUpdatedAtByTaskId: {
+          "task-1": "2026-06-06T16:00:00.000Z",
+          "task-2": "2026-06-06T16:00:01.000Z",
+        },
       },
       { workspaceId: undefined },
     );

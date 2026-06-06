@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -14,7 +15,12 @@ const PACKAGE_NAME = "GoatCitadel.MissionControl.Windows";
 const APPLICATION_ID = "App";
 const DISPLAY_NAME = "GoatCitadel Mission Control";
 const IDENTITY_FILE_NAME = "GoatCitadel-Mission-Control-Windows-Identity.msix";
-const WINDOWS_SDK_BIN = path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Windows Kits", "10", "bin");
+const WINDOWS_SDK_BIN = path.join(
+  process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+  "Windows Kits",
+  "10",
+  "bin",
+);
 const WINDOWS_SDK_APP_CERT_KIT = path.join(
   process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
   "Windows Kits",
@@ -86,7 +92,9 @@ async function main() {
         "Signing is required for package:windows-msix. Pass --cert-path/--cert-password, set WINDOWS_SIGN_CERT_BASE64/WINDOWS_SIGN_CERT_PASSWORD, or pass --allow-unsigned for local manifest-only proof.",
       );
     } else {
-      console.warn("Built unsigned Windows identity package for local proof only. Do not publish unsigned MSIX assets.");
+      console.warn(
+        "Built unsigned Windows identity package for local proof only. Do not publish unsigned MSIX assets.",
+      );
     }
   } finally {
     signing?.cleanup?.();
@@ -267,7 +275,11 @@ function resolveWindowsSdkTool(toolName, { allowAppCertificationKit = false } = 
 function toMsixVersion(value) {
   const normalized = value.replace(/^v/i, "").split(/[+-]/)[0];
   const parts = normalized.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 65535) || parts.length < 1 || parts.length > 4) {
+  if (
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 65535) ||
+    parts.length < 1 ||
+    parts.length > 4
+  ) {
     throw new Error(`Invalid MSIX version: ${value}`);
   }
   while (parts.length < 4) {
@@ -290,9 +302,11 @@ function run(command, commandArgs) {
 }
 
 function removeDirectory(targetPath) {
-  if (fs.existsSync(targetPath)) {
-    fs.rmSync(targetPath, { recursive: true, force: true });
-  }
+  removeDirectorySafely(targetPath, {
+    repoRoot,
+    allowedRoot: outDir,
+    cwd: process.cwd(),
+  });
 }
 
 async function sha256File(filePath) {
@@ -304,9 +318,5 @@ async function sha256File(filePath) {
 }
 
 function escapeXml(value) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

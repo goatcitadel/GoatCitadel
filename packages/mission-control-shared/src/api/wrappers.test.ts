@@ -239,6 +239,7 @@ describe("shared API wrappers", () => {
     );
     await expectCall(memory.fetchMemoryContext("ctx/1"), "/api/v1/memory/context/ctx%2F1");
     await expectCall(memory.fetchMemoryQmdStats("a", "b", 10), "/api/v1/memory/qmd/stats?from=a&to=b&limit=10");
+    await expectCall(memory.fetchMemoryRetrievalStatus(), "/api/v1/memory/retrieval/status");
     await expectCall(
       memory.runMemoryRetrievalBenchmark({ prompts: ["runtime truth"], workspace: "goatcitadel" }),
       "/api/v1/memory/retrieval-benchmark",

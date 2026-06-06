@@ -9,6 +9,7 @@ import type {
   MemoryQmdStatsResponse,
   MemoryRelationScope,
   MemoryRetrievalMatchSignals,
+  MemoryRetrievalStatusResponse,
   MemoryRetrievalStrategy,
 } from "@goatcitadel/contracts";
 import {
@@ -378,6 +379,52 @@ export class MemoryContextService {
     return this.storage.memoryQmdRuns.stats(from, to);
   }
 
+  public retrievalStatus(now = new Date()): MemoryRetrievalStatusResponse {
+    const checkedAt = now.toISOString();
+    const qmd = this.config.assistant.memory.qmd;
+    const enabled = Boolean(this.config.assistant.memory.enabled && qmd.enabled);
+    const recentContexts = this.listRecent(20);
+    const recentRuns = this.storage.memoryQmdRuns.list(20);
+    const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const stats = this.storage.memoryQmdRuns.stats(from, checkedAt);
+    const retrievalStrategies = collectRecentRetrievalStrategies(recentContexts);
+    const lastError = recentRuns.find((run) => run.errorText?.trim())?.errorText;
+    const lastRefresh = recentRuns[0]?.createdAt ?? recentContexts[0]?.createdAt;
+    const fallbackMode = resolveMemoryFallbackMode(
+      enabled,
+      recentRuns[0]?.errorText,
+      recentContexts[0]?.quality.reason,
+    );
+    return {
+      checkedAt,
+      enabled,
+      retrievalMode: resolveMemoryRetrievalMode(enabled, retrievalStrategies),
+      rerankAvailable: enabled,
+      rerankMode: enabled ? "hybrid_rank" : "none",
+      fallbackMode,
+      lastRefresh,
+      lastError,
+      qmd: {
+        enabled: qmd.enabled,
+        applyToChat: qmd.applyToChat,
+        applyToOrchestration: qmd.applyToOrchestration,
+        minPromptChars: qmd.minPromptChars,
+        cacheTtlSeconds: qmd.cacheTtlSeconds,
+        distillerProviderId: qmd.distiller.providerId,
+        distillerModel: qmd.distiller.model,
+        distillerTimeoutMs: qmd.distiller.timeoutMs,
+      },
+      recent: {
+        totalRuns: stats.totalRuns,
+        generatedRuns: stats.generatedRuns,
+        cacheHitRuns: stats.cacheHitRuns,
+        fallbackRuns: stats.fallbackRuns,
+        failedRuns: stats.failedRuns,
+        retrievalStrategies,
+      },
+    };
+  }
+
   private async collectSources(input: MemoryContextComposeRequest): Promise<MemorySourceInput[]> {
     const sources: MemorySourceInput[] = [];
     const relationScope = resolveMemoryRelationScope(input);
@@ -450,6 +497,62 @@ export class MemoryContextService {
     }
     return [...sessionIds];
   }
+}
+
+function collectRecentRetrievalStrategies(recentContexts: MemoryContextPack[]): MemoryRetrievalStrategy[] {
+  const strategies = new Set<MemoryRetrievalStrategy>();
+  for (const context of recentContexts) {
+    for (const citation of context.citations) {
+      const strategy = citation.provenance?.retrievalStrategy;
+      if (strategy) {
+        strategies.add(strategy);
+      }
+    }
+  }
+  return [...strategies].sort();
+}
+
+function resolveMemoryRetrievalMode(
+  enabled: boolean,
+  retrievalStrategies: MemoryRetrievalStrategy[],
+): MemoryRetrievalStatusResponse["retrievalMode"] {
+  if (!enabled) {
+    return "disabled";
+  }
+  if (retrievalStrategies.includes("hybrid_rank")) {
+    return "hybrid_rank";
+  }
+  if (retrievalStrategies.includes("semantic_vector")) {
+    return "semantic_vector";
+  }
+  if (retrievalStrategies.includes("semantic_hints")) {
+    return "semantic_hints";
+  }
+  if (retrievalStrategies.includes("lexical_recency")) {
+    return "lexical_recency";
+  }
+  return "hybrid_rank";
+}
+
+function resolveMemoryFallbackMode(
+  enabled: boolean,
+  latestRunError: string | undefined,
+  latestQualityReason: string | undefined,
+): MemoryRetrievalStatusResponse["fallbackMode"] {
+  if (!enabled) {
+    return "disabled";
+  }
+  const reason = latestRunError ?? latestQualityReason ?? "";
+  if (/qmd_disabled|prompt_too_short/i.test(reason)) {
+    return "short_prompt_or_disabled";
+  }
+  if (/no_candidates/i.test(reason)) {
+    return "no_candidates";
+  }
+  if (reason.trim()) {
+    return "distiller_fallback";
+  }
+  return "available";
 }
 
 function enrichMemoryPack(

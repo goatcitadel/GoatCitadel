@@ -546,6 +546,14 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.get(
+    "/api/v1/memory/retrieval/status",
+    withRouteAccess(fastify, "authenticated-read"),
+    async (_request, reply) => {
+      return reply.send(memory.getRetrievalStatus());
+    },
+  );
+
   fastify.post("/api/v1/memory/retrieval-benchmark", operatorOnly, async (request, reply) => {
     const parsed = retrievalBenchmarkSchema.safeParse(request.body);
     if (!parsed.success) {

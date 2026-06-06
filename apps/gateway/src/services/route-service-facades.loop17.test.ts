@@ -33,6 +33,7 @@ describe("route service facades", () => {
       "getMaintenancePolicy",
       "getMaintenanceRunProvenance",
       "getMaintenanceStatus",
+      "getRetrievalStatus",
       "listMaintenanceRecommendations",
       "listMaintenanceRuns",
       "listMemoryItemHistory",
@@ -87,6 +88,7 @@ describe("route service facades", () => {
       method: "getContextStats",
       args: ["2026-05-01", "2026-05-14"],
     });
+    expect(service.getRetrievalStatus()).toEqual({ method: "getRetrievalStatus", args: [] });
     expect(service.listRecentContexts(7)).toEqual({ method: "listRecentContexts", args: [7] });
     expect(service.recall({ mode: "summary" } as never)).toEqual({
       method: "recallMemory",

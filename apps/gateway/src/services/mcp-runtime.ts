@@ -243,9 +243,10 @@ async function performMcpRuntimeToolCall(
       const result = response.result ?? {};
       const content = Array.isArray(result.content) ? result.content : [];
       const contentItems = normalizeMcpContentItems(content, result);
-      const contentText = extractMcpContentText(content);
+      const contentText = extractMcpContentTextFromItems(contentItems);
       const output: Record<string, unknown> = {
         ...result,
+        content: contentItems.length > 0 ? contentItems : undefined,
         contentText: contentText || undefined,
       };
       if (result.isError === true) {
@@ -302,9 +303,10 @@ async function performHttpMcpRuntimeToolCall(
       const result = response.result ?? {};
       const content = Array.isArray(result.content) ? result.content : [];
       const contentItems = normalizeMcpContentItems(content, result);
-      const contentText = extractMcpContentText(content);
+      const contentText = extractMcpContentTextFromItems(contentItems);
       const output: Record<string, unknown> = {
         ...result,
+        content: contentItems.length > 0 ? contentItems : undefined,
         contentText: contentText || undefined,
       };
       if (result.isError === true) {
@@ -1129,15 +1131,6 @@ function resolveSpawnCommand(
   return command;
 }
 
-function extractMcpContentText(content: unknown[]): string {
-  const text = content
-    .map((item) => extractMcpContentPart(item))
-    .filter((item) => item.length > 0)
-    .join("\n")
-    .trim();
-  return text;
-}
-
 function normalizeMcpContentItems(content: unknown[], result: Record<string, unknown>): McpNormalizedContentItem[] {
   const items: McpNormalizedContentItem[] = [];
   for (const item of content) {
@@ -1146,8 +1139,8 @@ function normalizeMcpContentItems(content: unknown[], result: Record<string, unk
       items.push(normalized);
     }
   }
-  if (items.length === 0 && Object.keys(result).length > 0) {
-    items.push({ type: "json", data: result });
+  if (items.length === 0 && hasNonStructuredFallbackResult(result)) {
+    items.push({ type: "text", text: `MCP tool result JSON: ${safeMcpJsonText(result)}` });
   }
   return items;
 }
@@ -1161,6 +1154,26 @@ function normalizeMcpContentItem(item: unknown): McpNormalizedContentItem | unde
     return undefined;
   }
   const type = typeof item.type === "string" ? item.type : undefined;
+  if (type === "resource_link") {
+    return {
+      type: "text",
+      text: formatMcpFallbackText("MCP resource link", {
+        uri: readString(item.uri),
+        name: readString(item.name),
+        mimeType: readString(item.mimeType) ?? readString(item.mime_type),
+      }),
+    };
+  }
+  if (type === "audio") {
+    return {
+      type: "text",
+      text: formatMcpFallbackText("MCP audio content", {
+        mimeType: readString(item.mimeType) ?? readString(item.mime_type),
+        name: readString(item.name),
+        transcript: readString(item.transcript) ?? readString(item.text),
+      }),
+    };
+  }
   if (type === "image" || type === "image_url") {
     const data = readString(item.data) ?? readString(item.dataBase64);
     const url = readString(item.url);
@@ -1192,22 +1205,40 @@ function normalizeMcpContentItem(item: unknown): McpNormalizedContentItem | unde
       };
     }
     return {
-      type: "resource",
-      uri,
-      mimeType: readString(resource.mimeType) ?? readString(resource.mime_type),
-      text: text ? sanitizeMcpRuntimeError(text) : undefined,
-      blob,
-      name: readString(resource.name),
+      type: "text",
+      text: formatMcpFallbackText("MCP resource content", {
+        uri,
+        mimeType: readString(resource.mimeType) ?? readString(resource.mime_type),
+        name: readString(resource.name),
+        text: text ? sanitizeMcpRuntimeError(text) : undefined,
+        blob: blob ? `[base64 blob ${blob.length} chars]` : undefined,
+      }),
     };
   }
   if (type === "json") {
-    return { type: "json", data: item.data ?? item };
+    return { type: "text", text: `MCP JSON content: ${safeMcpJsonText(item.data ?? item)}` };
   }
   if (type === "text" || typeof item.text === "string" || isRecord(item.text)) {
     const text = extractMcpContentPart(item);
     return text ? { type: "text", text: sanitizeMcpRuntimeError(text) } : undefined;
   }
-  return { type: "json", data: item };
+  return { type: "text", text: `MCP ${type ?? "unknown"} content: ${safeMcpJsonText(item)}` };
+}
+
+function extractMcpContentTextFromItems(contentItems: McpNormalizedContentItem[]): string {
+  return contentItems
+    .map((item) => {
+      if (item.type === "text" || item.type === "error") {
+        return item.text;
+      }
+      if (item.type === "image") {
+        return item.name ?? item.resourceUri ?? item.url ?? "";
+      }
+      return "";
+    })
+    .filter((item) => item.length > 0)
+    .join("\n")
+    .trim();
 }
 
 function extractMcpContentPart(value: unknown): string {
@@ -1241,6 +1272,24 @@ function sanitizeMcpRuntimeError(value: string): string {
     .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
     .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
     .slice(0, 4096);
+}
+
+function formatMcpFallbackText(label: string, fields: Record<string, string | undefined>): string {
+  const lines = [label];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value) {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+  return sanitizeMcpRuntimeError(lines.join("\n")).slice(0, 4096);
+}
+
+function safeMcpJsonText(value: unknown): string {
+  return sanitizeMcpRuntimeError(stringifyUnknown(value) ?? "undefined").slice(0, 4096);
+}
+
+function hasNonStructuredFallbackResult(result: Record<string, unknown>): boolean {
+  return Object.keys(result).some((key) => key !== "content" && key !== "structuredContent" && key !== "isError");
 }
 
 function readString(value: unknown): string | undefined {

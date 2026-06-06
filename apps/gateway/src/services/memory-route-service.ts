@@ -21,6 +21,7 @@ type MemoryRoutePort = Pick<
   | "getMaintenancePolicy"
   | "getMaintenanceRunProvenance"
   | "getMaintenanceStatus"
+  | "getRetrievalStatus"
   | "listMaintenanceRecommendations"
   | "listMaintenanceRuns"
   | "listMemoryItemHistory"
@@ -100,6 +101,10 @@ export class MemoryRouteService {
 
   public getQmdStats(from: string, to: string) {
     return this.memory.getContextStats(from, to);
+  }
+
+  public getRetrievalStatus() {
+    return this.memory.getRetrievalStatus();
   }
 
   public runRetrievalBenchmark(input: Parameters<MemoryRoutePort["runRetrievalBenchmark"]>[0]) {

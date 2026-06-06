@@ -122,6 +122,31 @@ const memorySnapshot = vi.hoisted(() => ({
         },
       ],
     },
+    memoryRetrievalStatus: {
+      checkedAt: "2026-04-22T00:00:00.000Z",
+      enabled: true,
+      retrievalMode: "hybrid_rank",
+      rerankAvailable: true,
+      rerankMode: "hybrid_rank",
+      fallbackMode: "available",
+      lastRefresh: "2026-04-22T00:00:00.000Z",
+      qmd: {
+        enabled: true,
+        applyToChat: true,
+        applyToOrchestration: true,
+        minPromptChars: 8,
+        cacheTtlSeconds: 300,
+        distillerTimeoutMs: 12_000,
+      },
+      recent: {
+        totalRuns: 4,
+        generatedRuns: 4,
+        cacheHitRuns: 0,
+        fallbackRuns: 0,
+        failedRuns: 0,
+        retrievalStrategies: ["hybrid_rank"],
+      },
+    },
     memoryItems: [
       {
         itemId: "mem-1",
@@ -314,6 +339,7 @@ const memorySnapshot = vi.hoisted(() => ({
       settings: null,
       files: null,
       qmdStats: null,
+      memoryRetrievalStatus: null,
       memoryItems: null,
       memoryEntities: null,
       memoryRelations: null,
@@ -498,6 +524,8 @@ describe("MemoryRoutePage", () => {
     );
 
     expect(markup).toContain("Memory items");
+    expect(markup).toContain("Retrieval hybrid rank");
+    expect(markup).toContain("Fallback available");
     expect(markup).toContain("Retrieval hints");
     expect(markup).toContain("release checklist, verification cadence");
     expect(markup).toContain("Lifecycle");

@@ -175,6 +175,53 @@ describe("memory routes", () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it("returns additive memory retrieval status truth", async () => {
+    const getRetrievalStatus = vi.fn(() => ({
+      checkedAt: "2026-06-06T12:00:00.000Z",
+      enabled: true,
+      retrievalMode: "hybrid_rank",
+      rerankAvailable: true,
+      rerankMode: "hybrid_rank",
+      fallbackMode: "available",
+      lastRefresh: "2026-06-06T11:59:00.000Z",
+      qmd: {
+        enabled: true,
+        applyToChat: true,
+        applyToOrchestration: true,
+        minPromptChars: 12,
+        cacheTtlSeconds: 300,
+        distillerTimeoutMs: 12_000,
+      },
+      recent: {
+        totalRuns: 3,
+        generatedRuns: 1,
+        cacheHitRuns: 1,
+        fallbackRuns: 1,
+        failedRuns: 0,
+        retrievalStrategies: ["hybrid_rank"],
+      },
+    }));
+    const built = buildApp({ getRetrievalStatus });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory/retrieval/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getRetrievalStatus).toHaveBeenCalledTimes(1);
+    expect(response.json()).toMatchObject({
+      retrievalMode: "hybrid_rank",
+      rerankAvailable: true,
+      fallbackMode: "available",
+      recent: {
+        retrievalStrategies: ["hybrid_rank"],
+      },
+    });
+  });
+
   it("routes explicit recall, feedback, and trace-memory candidate flows through the memory service", async () => {
     const recall = vi.fn(async () => ({ mode: "summary", feedback: [], traceCandidates: [] }));
     const listFeedback = vi.fn(() => [{ feedbackId: "fb-1" }]);

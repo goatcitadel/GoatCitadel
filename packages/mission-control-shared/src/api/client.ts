@@ -589,6 +589,7 @@ export {
   fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats,
   fetchMemoryQualityIssues,
+  fetchMemoryRetrievalStatus,
   fetchMemoryRelations,
   fetchTraceMemoryCandidates,
   fetchStructuredMemoryHistory,

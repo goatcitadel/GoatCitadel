@@ -89,8 +89,18 @@ describe("comms service governance", () => {
     });
   });
 
-  it("strips hidden reasoning blocks before final channel delivery while preserving code examples", async () => {
+  it("strips hidden reasoning blocks before final channel delivery, including fenced-code delivery text", async () => {
     const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () =>
+        ({
+          connectionId: "conn-1",
+          kind: "channel",
+          key: "discord",
+          label: "Discord",
+          config: {},
+        }) as IntegrationConnection,
+    );
 
     await commsSend(host, {
       connectionId: "conn-1",
@@ -100,7 +110,8 @@ describe("comms service governance", () => {
         "<thinking>private chain of thought</thinking>",
         "authorization: Bearer secret-token-value-1234567890",
         "```xml",
-        "<thinking>literal example</thinking>",
+        "<thinking>literal example with sk-abcdefghijklmnopqrstuvwx</thinking>",
+        "@everyone should not page from code fences",
         "```",
         '[tool_call]{"name":"secret"}[/tool_call]',
         "Done.",
@@ -114,14 +125,16 @@ describe("comms service governance", () => {
         "",
         "authorization: Bearer [REDACTED]",
         "```xml",
-        "<thinking>literal example</thinking>",
+        "",
+        "@ everyone should not page from code fences",
         "```",
         "",
         "Done.",
       ].join("\n"),
       outboundSanitizer: {
-        removedBlockCount: 2,
+        removedBlockCount: 3,
         redactedSecretCount: 1,
+        neutralizedMentionCount: 1,
         policy: "strip_internal_reasoning_blocks_redact_secrets",
       },
     });

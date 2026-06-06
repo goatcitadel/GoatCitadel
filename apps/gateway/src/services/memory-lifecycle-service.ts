@@ -54,6 +54,7 @@ import type {
   MemoryRetrievalBenchmarkItem,
   MemoryRetrievalBenchmarkRequest,
   MemoryRetrievalBenchmarkResponse,
+  MemoryRetrievalStatusResponse,
   MemoryRetrievalStrategy,
   MemoryRecallRequest,
   MemoryRecallResponse,
@@ -1180,6 +1181,10 @@ export class MemoryLifecycleService {
 
   public getContextStats(from: string, to: string): MemoryQmdStatsResponse {
     return this.deps.context.stats(from, to);
+  }
+
+  public getRetrievalStatus(): MemoryRetrievalStatusResponse {
+    return this.deps.context.retrievalStatus();
   }
 
   public listMemoryFeedback(

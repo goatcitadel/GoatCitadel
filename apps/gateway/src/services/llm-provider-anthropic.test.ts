@@ -262,6 +262,44 @@ describe("anthropicProviderAdapter", () => {
     ]);
   });
 
+  it("fails Anthropic streams that return an error before message_start without yielding chunks", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              `data: ${JSON.stringify({
+                type: "error",
+                error: { type: "overloaded_error", message: "provider overloaded" },
+              })}`,
+              "",
+              "data: [DONE]",
+              "",
+            ].join("\n"),
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+
+    const chunks: Array<Record<string, unknown>> = [];
+    await expect(async () => {
+      for await (const chunk of anthropicProviderAdapter.chatCompletionsStream(
+        { messages: [{ role: "user", content: "stream" }], timeoutMs: -1 },
+        resolved,
+        "claude-test",
+        host,
+      )) {
+        chunks.push(chunk);
+      }
+    }).rejects.toThrow("Anthropic stream error before message_start: overloaded_error: provider overloaded");
+    expect(chunks).toEqual([]);
+  });
+
   it("preserves streamed thinking signatures and treats empty tool_use input as pending json", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

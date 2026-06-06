@@ -15,6 +15,7 @@ import {
   fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus,
   fetchMemoryQualityIssues,
+  fetchMemoryRetrievalStatus,
   fetchMemoryRelations,
   fetchMemoryQmdStats,
   fetchTraceMemoryCandidates,
@@ -44,6 +45,7 @@ type MemoryOperatorSectionErrors = {
   settings: string | null;
   files: string | null;
   qmdStats: string | null;
+  memoryRetrievalStatus: string | null;
   memoryItems: string | null;
   memoryEntities: string | null;
   memoryRelations: string | null;
@@ -63,6 +65,7 @@ type MemoryOperatorSectionErrors = {
 type MemoryOperatorSnapshot = {
   files: Awaited<ReturnType<typeof fetchMemoryFiles>>["items"];
   qmdStats: Awaited<ReturnType<typeof fetchMemoryQmdStats>> | null;
+  memoryRetrievalStatus: Awaited<ReturnType<typeof fetchMemoryRetrievalStatus>> | null;
   memoryItems: Awaited<ReturnType<typeof fetchMemoryItems>>["items"];
   memoryEntities: Awaited<ReturnType<typeof fetchMemoryEntities>>["items"];
   memoryRelations: Awaited<ReturnType<typeof fetchMemoryRelations>>["items"];
@@ -101,7 +104,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
 
   const load = useCallback(async () => {
     const sectionErrors = createEmptySectionErrors();
-    const [settings, filesRes, qmdStats] = await Promise.all([
+    const [settings, filesRes, qmdStats, memoryRetrievalStatus] = await Promise.all([
       fetchSettings().catch((settingsError) => {
         sectionErrors.settings = getErrorMessage(settingsError);
         return null;
@@ -112,6 +115,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       }),
       fetchMemoryQmdStats(undefined, undefined, 8).catch((qmdError) => {
         sectionErrors.qmdStats = getErrorMessage(qmdError);
+        return null;
+      }),
+      fetchMemoryRetrievalStatus().catch((statusError) => {
+        sectionErrors.memoryRetrievalStatus = getErrorMessage(statusError);
         return null;
       }),
     ]);
@@ -180,6 +187,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     return {
       files: filesRes.items,
       qmdStats,
+      memoryRetrievalStatus,
       memoryItems: memoryAdminEnabled ? itemsRes.items : [],
       memoryEntities: memoryAdminEnabled ? entitiesRes.items : [],
       memoryRelations: memoryAdminEnabled ? relationsRes.items : [],
@@ -638,6 +646,7 @@ function createEmptySectionErrors(): MemoryOperatorSectionErrors {
     settings: null,
     files: null,
     qmdStats: null,
+    memoryRetrievalStatus: null,
     memoryItems: null,
     memoryEntities: null,
     memoryRelations: null,

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimIdempotentExternalSideEffect,
@@ -117,6 +118,13 @@ function sideEffectRun(overrides: Partial<ReturnType<ExternalSideEffectRunStore[
 }
 
 describe("external-side-effect-runner-service", () => {
+  it("keeps deterministic external side-effect digests off constant-key HMAC helpers", () => {
+    const source = readFileSync(new URL("./external-side-effect-runner-service.ts", import.meta.url), "utf8");
+
+    expect(source).toMatch(/pbkdf2Sync\(\s*canonicalPayload,\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY,/);
+    expect(source).not.toMatch(/createHmac\("sha256",\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY\)/);
+  });
+
   it("records audit-only external side-effect intents with replay posture", () => {
     const createEnvelope = vi.fn(() => ({
       envelopeId: "envelope-1",
@@ -620,6 +628,117 @@ describe("external-side-effect-runner-service", () => {
       {
         status: "failed_before_boundary",
         errorText: "request build failed",
+      },
+      "2026-05-31T00:00:00.000Z",
+    );
+  });
+
+  it("does not reopen idempotency for retry when post-boundary bookkeeping fails", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    sideEffectRunStore.markCompleted.mockImplementation(() => {
+      throw new Error("run mirror unavailable");
+    });
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "operator-key",
+          actorScope: "conn-1",
+          payloadHash: "hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "sent" },
+      label: "Activepieces webhook trigger",
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        return { output: { workflowRunId: "run-1" } };
+      },
+    });
+
+    expect(result.status).toBe("executed");
+    expect(mutationStore.markCompleted).toHaveBeenCalled();
+    expect(mutationStore.markFailed).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      {
+        status: "unknown_external_outcome",
+        errorText: "run mirror unavailable",
+      },
+      "2026-05-31T00:00:00.000Z",
+    );
+  });
+
+  it("keeps post-boundary execution failures non-retryable when local started-state persistence fails", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {
+      throw new Error("started mirror unavailable");
+    });
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "operator-key",
+          actorScope: "conn-1",
+          payloadHash: "hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "sent" },
+      label: "Activepieces webhook trigger",
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        throw new Error("external system returned 502 after send");
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.output).toMatchObject({
+      resumable: false,
+      resumeState: "manual_review_unknown_external_outcome",
+    });
+    expect(mutationStore.markFailed).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      {
+        status: "unknown_external_outcome",
+        errorText: "external system returned 502 after send",
       },
       "2026-05-31T00:00:00.000Z",
     );

@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { pbkdf2Sync } from "node:crypto";
 import type {
   ExternalSideEffectRunRecord,
   ExternalSideEffectRunStatus,
@@ -11,6 +11,8 @@ import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
+const EXTERNAL_SIDE_EFFECT_DIGEST_ITERATIONS = 120_000;
+const EXTERNAL_SIDE_EFFECT_DIGEST_BYTES = 32;
 
 export interface ExternalSideEffectRunStore {
   createOrGet(
@@ -362,8 +364,15 @@ export async function runIdempotentExternalSideEffect<TValue>(
   let externalCallStarted = false;
   const markExternalCallStarted = () => {
     if (!externalCallStarted) {
-      markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
       externalCallStarted = true;
+      try {
+        markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
+      } catch (error) {
+        // The in-memory boundary flag is authoritative for this request. A
+        // local run-store write failure must not turn a sent external request
+        // into a retryable pre-boundary failure.
+        void error;
+      }
     }
   };
   const executionClaim: ExternalSideEffectExecutionContext = {
@@ -377,8 +386,8 @@ export async function runIdempotentExternalSideEffect<TValue>(
   try {
     const value = await input.execute(executionClaim);
     markExternalCallStarted();
-    markIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
-    markExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
+    safeMarkIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
+    safeMarkExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
     return {
       status: "executed",
       claim: {
@@ -389,12 +398,16 @@ export async function runIdempotentExternalSideEffect<TValue>(
       value,
     };
   } catch (error) {
-    markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
-    markExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, externalCallStarted, input.checkedAt);
+    if (!externalCallStarted) {
+      markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
+    }
+    safeMarkExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, externalCallStarted, input.checkedAt);
     const failedClaim = {
       ...claim,
       resumable: false,
-      resumeState: "manual_retry_after_recorded_failure" as const,
+      resumeState: externalCallStarted
+        ? ("manual_review_unknown_external_outcome" as const)
+        : ("manual_retry_after_recorded_failure" as const),
     };
     return {
       status: "failed",
@@ -575,6 +588,46 @@ function markExternalSideEffectRunStarted(
   }
 }
 
+function safeMarkIdempotentExternalSideEffectCompleted(
+  mutationStore: MutationIdempotencyStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  checkedAt: string,
+): void {
+  try {
+    markIdempotentExternalSideEffectCompleted(mutationStore, claim, checkedAt);
+  } catch {
+    // The external boundary has already been crossed. Do not reopen this
+    // idempotency key for automatic retry just because local bookkeeping failed.
+  }
+}
+
+function safeMarkExternalSideEffectRunCompleted(
+  store: ExternalSideEffectRunStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  value: unknown,
+  checkedAt: string,
+): void {
+  try {
+    markExternalSideEffectRunCompleted(store, claim, value, checkedAt);
+  } catch (error) {
+    safeMarkExternalSideEffectRunFailed(store, claim, error, true, checkedAt);
+  }
+}
+
+function safeMarkExternalSideEffectRunFailed(
+  store: ExternalSideEffectRunStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  error: unknown,
+  externalCallStarted: boolean,
+  checkedAt: string,
+): void {
+  try {
+    markExternalSideEffectRunFailed(store, claim, error, externalCallStarted, checkedAt);
+  } catch {
+    // Best effort only: callers still receive the original execution result.
+  }
+}
+
 function markExternalSideEffectRunCompleted(
   store: ExternalSideEffectRunStore | undefined,
   claim: ExternalSideEffectClaimResult,
@@ -751,7 +804,13 @@ function hashStableIntentParts(parts: Array<string | undefined>): string {
 }
 
 function domainSeparatedDigestHex(canonicalPayload: string): string {
-  return createHmac("sha256", EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY).update(canonicalPayload).digest("hex");
+  return pbkdf2Sync(
+    canonicalPayload,
+    EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY,
+    EXTERNAL_SIDE_EFFECT_DIGEST_ITERATIONS,
+    EXTERNAL_SIDE_EFFECT_DIGEST_BYTES,
+    "sha256",
+  ).toString("hex");
 }
 
 function hashStableJson(value: unknown): string {

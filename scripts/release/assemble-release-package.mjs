@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { removeDirectorySafely } from "../packaging/safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -39,7 +40,11 @@ const docsOutDir = path.join(releaseRoot, "docs");
 const provenanceOutDir = path.join(releaseRoot, "provenance");
 const archivePath = path.join(outDir, `GoatCitadel-v${version}-release-package.zip`);
 
-fs.rmSync(releaseRoot, { recursive: true, force: true });
+removeDirectorySafely(releaseRoot, {
+  repoRoot,
+  allowedRoot: outDir,
+  cwd: process.cwd(),
+});
 fs.mkdirSync(artifactOutDir, { recursive: true });
 fs.mkdirSync(sbomOutDir, { recursive: true });
 fs.mkdirSync(docsOutDir, { recursive: true });

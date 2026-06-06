@@ -591,7 +591,7 @@ describe("integration-action-service", () => {
         replayOutcome: "claimed",
         replayAttempt: "new",
         resumable: false,
-        resumeState: "manual_retry_after_recorded_failure",
+        resumeState: "manual_review_unknown_external_outcome",
         idempotencyKey: "operator-key",
       },
       durableWriteback: {
@@ -599,15 +599,10 @@ describe("integration-action-service", () => {
         replayPolicy: "idempotent_external",
         replayOutcome: "claimed",
         resumable: false,
-        resumeState: "manual_retry_after_recorded_failure",
+        resumeState: "manual_review_unknown_external_outcome",
       },
     });
-    expect(markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        idempotencyKey: "operator-key",
-        actorScope: connection.connectionId,
-      }),
-    );
+    expect(markFailed).not.toHaveBeenCalled();
     expect(sideEffectRunStore.markExternalCallStarted).toHaveBeenCalledWith(
       "extfx-provider-failure",
       undefined,

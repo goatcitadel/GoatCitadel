@@ -117,6 +117,14 @@ test("release certificate treats verify:fast as direct-only proof", () => {
   assert.match(writer, /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/);
 });
 
+test("release certificate records additive exact-SHA summary fields", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  assert.match(writer, /targetCommit:\s*commit/);
+  assert.match(writer, /exactShaStatus:\s*summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
+  assert.match(writer, /function summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
+  assert.match(writer, /status:\s*mismatched\.length === 0 && missingProof\.length === 0 \? "matched" : "incomplete"/);
+});
+
 test("release certificate requires hostile sandbox proof from the exact-SHA release lane", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);

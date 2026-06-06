@@ -15,7 +15,33 @@ import {
   updateConnectionSchema,
 } from "./integrations-shared.js";
 
+const RATE_LIMIT_READ_MAX = 500;
+const RATE_LIMIT_MUTATION_MAX = 180;
+const RATE_LIMIT_AUTH_MAX = 60;
+
 export function registerIntegrationControlRoutes(fastify: FastifyInstance): void {
+  const pairingReadRoute = {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  };
+  const pairingMutationRoute = {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_AUTH_MAX,
+      },
+    },
+  };
+  const integrationMutationRoute = {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_MUTATION_MAX,
+      },
+    },
+  };
+
   fastify.get("/api/v1/integrations/catalog", async (request, reply) => {
     const parsed = catalogQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -99,50 +125,59 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     return reply.send({ deleted });
   });
 
-  fastify.post("/api/v1/integrations/connections/:connectionId/actions/:actionId", async (request, reply) => {
-    const params = connectionActionParamsSchema.safeParse(request.params);
-    const parsed = connectionActionBodySchema.safeParse(request.body ?? {});
-    if (!params.success || !parsed.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: parsed.success ? undefined : parsed.error.flatten(),
-        },
-      });
-    }
-    try {
-      const idempotencyKey = parsed.data.idempotencyKey ?? request.idempotencyKey;
-      return reply.send(
-        await fastify.services.integrations.invokeIntegrationConnectionAction(
-          params.data.connectionId,
-          params.data.actionId,
-          idempotencyKey ? { ...parsed.data, idempotencyKey } : parsed.data,
-        ),
-      );
-    } catch (error) {
-      const message = (error as Error).message;
-      const lowered = message.toLowerCase();
-      const notFound = lowered.includes("unknown integration connection");
-      const unsupported = lowered.includes("unsupported integration action");
-      return reply.code(notFound || unsupported ? 404 : 409).send({ error: message });
-    }
-  });
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/actions/:actionId",
+    integrationMutationRoute,
+    async (request, reply) => {
+      const params = connectionActionParamsSchema.safeParse(request.params);
+      const parsed = connectionActionBodySchema.safeParse(request.body ?? {});
+      if (!params.success || !parsed.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: parsed.success ? undefined : parsed.error.flatten(),
+          },
+        });
+      }
+      try {
+        const idempotencyKey = parsed.data.idempotencyKey ?? request.idempotencyKey;
+        return reply.send(
+          await fastify.services.integrations.invokeIntegrationConnectionAction(
+            params.data.connectionId,
+            params.data.actionId,
+            idempotencyKey ? { ...parsed.data, idempotencyKey } : parsed.data,
+          ),
+        );
+      } catch (error) {
+        const message = (error as Error).message;
+        const lowered = message.toLowerCase();
+        const notFound = lowered.includes("unknown integration connection");
+        const unsupported = lowered.includes("unsupported integration action");
+        return reply.code(notFound || unsupported ? 404 : 409).send({ error: message });
+      }
+    },
+  );
 
-  fastify.get("/api/v1/integrations/connections/:connectionId/discord/pairings", async (request, reply) => {
-    const params = connectionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    try {
-      return reply.send(fastify.services.integrations.listDiscordPairings(params.data.connectionId));
-    } catch (error) {
-      const message = (error as Error).message;
-      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
-    }
-  });
+  fastify.get(
+    "/api/v1/integrations/connections/:connectionId/discord/pairings",
+    pairingReadRoute,
+    async (request, reply) => {
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      try {
+        return reply.send(fastify.services.integrations.listDiscordPairings(params.data.connectionId));
+      } catch (error) {
+        const message = (error as Error).message;
+        return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+      }
+    },
+  );
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/discord/pairings/:pairingId/approve",
+    pairingMutationRoute,
     async (request, reply) => {
       const params = discordPairingParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -161,6 +196,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/discord/pairings/:pairingId/revoke",
+    pairingMutationRoute,
     async (request, reply) => {
       const params = discordPairingParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -283,7 +319,9 @@ function buildExternalSideEffectHealthSummary(
     lastStatusCheckAt,
     manualReconciliationCount: items.filter(
       (item) =>
-        item.resumeState === "manual_retry_after_recorded_failure" || item.status === "unknown_external_outcome",
+        item.resumeState === "manual_retry_after_recorded_failure" ||
+        item.resumeState === "manual_review_unknown_external_outcome" ||
+        item.status === "unknown_external_outcome",
     ).length,
     posture: {
       readOnly: true,

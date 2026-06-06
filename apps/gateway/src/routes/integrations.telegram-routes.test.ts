@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerTelegramIntegrationRoutes } from "./integrations-telegram-routes.js";
@@ -23,6 +24,15 @@ describe("integrations Telegram route tails", () => {
     registerTelegramIntegrationRoutes(app);
     return app;
   }
+
+  it("keeps Telegram pairing and target-directory routes behind CodeQL-visible rate limits", () => {
+    const source = fs.readFileSync(new URL("./integrations-telegram-routes.ts", import.meta.url), "utf8");
+    expect(source).toMatch(/const RATE_LIMIT_AUTH_MAX = 60/);
+    expect(source).toMatch(/"\/api\/v1\/channels\/connections\/:connectionId\/target-directory",\s*channelReadRoute/);
+    expect(source).toMatch(
+      /"\/api\/v1\/channels\/connections\/:connectionId\/telegram\/pairing\/approve",\s*pairingMutationRoute/,
+    );
+  });
 
   it("validates Telegram target discovery input and requires a usable token source", async () => {
     createApp();

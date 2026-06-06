@@ -255,6 +255,9 @@ rl.on("line", (line) => {
       content: [
         { type: "resource", resource: { uri: "file:///tmp/report.json", mimeType: "application/json", text: JSON.stringify({ ok: true }) } },
         { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        { type: "resource_link", uri: "file:///tmp/related.md", name: "Related notes", mimeType: "text/markdown" },
+        { type: "audio", mimeType: "audio/wav", transcript: "operator audio transcript" },
+        { type: "future_block", payload: { ok: true } },
       ],
     });
   }
@@ -717,7 +720,7 @@ describe("mcp runtime", () => {
     }
   });
 
-  it("normalizes resource and image MCP content items without flattening resources into text", async () => {
+  it("normalizes MCP content items into model-safe text, image, and error blocks", async () => {
     const server = createTestServer(MCP_CONTENT_ITEMS_SCRIPT);
 
     const result = await invokeMcpRuntimeTool(server, {
@@ -728,12 +731,13 @@ describe("mcp runtime", () => {
     expect(result.ok).toBe(true);
     expect(result.contentItems).toEqual([
       {
-        type: "resource",
-        uri: "file:///tmp/report.json",
-        mimeType: "application/json",
-        text: '{"ok":true}',
-        blob: undefined,
-        name: undefined,
+        type: "text",
+        text: [
+          "MCP resource content",
+          "uri: file:///tmp/report.json",
+          "mimeType: application/json",
+          'text: {"ok":true}',
+        ].join("\n"),
       },
       {
         type: "image",
@@ -743,7 +747,28 @@ describe("mcp runtime", () => {
         resourceUri: undefined,
         name: undefined,
       },
+      {
+        type: "text",
+        text: [
+          "MCP resource link",
+          "uri: file:///tmp/related.md",
+          "name: Related notes",
+          "mimeType: text/markdown",
+        ].join("\n"),
+      },
+      {
+        type: "text",
+        text: ["MCP audio content", "mimeType: audio/wav", "transcript: operator audio transcript"].join("\n"),
+      },
+      {
+        type: "text",
+        text: 'MCP future_block content: {"type":"future_block","payload":{"ok":true}}',
+      },
     ]);
+    expect(result.output).toMatchObject({
+      contentText: expect.stringContaining("MCP resource content"),
+      content: result.contentItems,
+    });
   });
 
   it("quarantines malformed MCP media and resource placeholders as operator-visible errors", async () => {

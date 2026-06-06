@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
@@ -493,6 +494,21 @@ describe("auth routes", () => {
     }
     await app.close();
     app = null;
+  });
+
+  it("keeps token, device, and companion lifecycle routes behind CodeQL-visible rate limits", () => {
+    const source = fs.readFileSync(new URL("./auth.ts", import.meta.url), "utf8");
+    expect(source).toMatch(/const RATE_LIMIT_AUTH_MAX = 60/);
+    expect(source).toMatch(/fastify\.post\("\/api\/v1\/auth\/sse-token", operatorAuthRoute/);
+    expect(source).toMatch(
+      /fastify\.post\(\s*"\/api\/v1\/auth\/device-requests"[\s\S]*?rateLimit:\s*\{[\s\S]*?max:\s*5/,
+    );
+    expect(source).toMatch(/fastify\.post\("\/api\/v1\/auth\/companion\/session\/exchange", deviceAuthRoute/);
+    expect(source).toMatch(/fastify\.post\("\/api\/v1\/auth\/companion\/session\/refresh", publicAuthRoute/);
+    expect(source).toMatch(
+      /fastify\.post\("\/api\/v1\/auth\/companion\/sessions\/:sessionId\/revoke", operatorMutationRoute/,
+    );
+    expect(source).toMatch(/fastify\.get\("\/api\/v1\/auth\/device-requests\/:requestId\/status", publicAuthRoute/);
   });
 
   it("returns 400 for SSE token bridge in auth mode none", async () => {

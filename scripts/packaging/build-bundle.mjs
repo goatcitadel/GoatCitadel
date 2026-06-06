@@ -12,11 +12,8 @@ import {
   PACKAGING_TARGETS,
   requirePackagingTarget,
 } from "./lib/packaging-targets.mjs";
-import {
-  buildReleaseManifest,
-  renderPosixLauncher,
-  renderWindowsLaunchers,
-} from "./lib/package-renderers.mjs";
+import { buildReleaseManifest, renderPosixLauncher, renderWindowsLaunchers } from "./lib/package-renderers.mjs";
+import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -40,14 +37,7 @@ const missionControlDistDir = path.join(appRoot, "mission-control", "dist");
 const desktopRuntimeDir = path.join(appRoot, "desktop");
 const identityRuntimeDir = path.join(appRoot, "identity");
 const desktopExecutableName = targetInfo.desktopArtifactName;
-const desktopArtifactPath = path.join(
-  repoRoot,
-  "artifacts",
-  "installers",
-  "desktop",
-  target,
-  desktopExecutableName,
-);
+const desktopArtifactPath = path.join(repoRoot, "artifacts", "installers", "desktop", target, desktopExecutableName);
 const runtimeNodeDir = path.join(appRoot, "runtime", "node");
 const templatesRoot = path.join(appRoot, "templates");
 const nodeVersion = args.nodeVersion || process.version;
@@ -164,9 +154,7 @@ function runPnpm(pnpmArgs, options = {}) {
   const attempts = options.attempts ?? 1;
   const cmd = process.platform === "win32" ? WINDOWS_CMD_PATH : "pnpm";
   const cmdArgs =
-    process.platform === "win32"
-      ? ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...pnpmArgs])]
-      : pnpmArgs;
+    process.platform === "win32" ? ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...pnpmArgs])] : pnpmArgs;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const result = spawnSync(cmd, cmdArgs, {
       cwd: repoRoot,
@@ -261,7 +249,9 @@ async function verifyNodeArchiveChecksum({ archiveName, archiveUrl, archiveBuffe
     const checksums = await response.text();
     const line = checksums
       .split(/\r?\n/)
-      .find((candidate) => candidate.trim().endsWith(` ${archiveName}`) || candidate.trim().endsWith(` *${archiveName}`));
+      .find(
+        (candidate) => candidate.trim().endsWith(` ${archiveName}`) || candidate.trim().endsWith(` *${archiveName}`),
+      );
     expected = line?.trim().split(/\s+/)[0]?.toLowerCase();
     if (!expected) {
       throw new Error(`Node runtime checksum for ${archiveName} was not found in ${checksumsUrl}`);
@@ -321,7 +311,9 @@ function writeReleaseManifest({
 function copyDesktopExecutable() {
   if (!fs.existsSync(desktopArtifactPath)) {
     const buildCommand =
-      targetInfo.platform === "windows" ? `pnpm package:windows-host --target ${target}` : `pnpm package:desktop --target ${target}`;
+      targetInfo.platform === "windows"
+        ? `pnpm package:windows-host --target ${target}`
+        : `pnpm package:desktop --target ${target}`;
     throw new Error(
       `Desktop executable is missing: ${desktopArtifactPath}. Run ${buildCommand} before package:bundle, or pass --skip-desktop for a browser-only bundle.`,
     );
@@ -443,24 +435,11 @@ function pruneGatewayDeploy(targetDir) {
 }
 
 function removeDirectory(targetPath) {
-  if (!fs.existsSync(targetPath)) {
-    return;
-  }
-  try {
-    fs.rmSync(targetPath, { recursive: true, force: true });
-    return;
-  } catch {
-    if (process.platform !== "win32") {
-      throw new Error(`Unable to remove existing directory: ${targetPath}`);
-    }
-    const result = spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "rmdir", "/s", "/q", targetPath], {
-      cwd: repoRoot,
-      stdio: "ignore",
-    });
-    if (result.error || result.status !== 0) {
-      throw new Error(`Unable to remove existing directory: ${targetPath}`);
-    }
-  }
+  removeDirectorySafely(targetPath, {
+    repoRoot,
+    allowedRoot: outDir,
+    cwd: process.cwd(),
+  });
 }
 
 function copyDirectory(sourceDir, destinationDir) {

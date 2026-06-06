@@ -18,7 +18,25 @@ interface TelegramDiscoveryTokenInput {
   botTokenEnv?: string;
 }
 
+const RATE_LIMIT_READ_MAX = 500;
+const RATE_LIMIT_AUTH_MAX = 60;
+
 export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): void {
+  const channelReadRoute = {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  };
+  const pairingMutationRoute = {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_AUTH_MAX,
+      },
+    },
+  };
+
   fastify.post("/api/v1/integrations/telegram/discover-targets", async (request, reply) => {
     const parsed = telegramDiscoverTargetsSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
@@ -40,87 +58,97 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
     }
   });
 
-  fastify.get("/api/v1/channels/connections/:connectionId/target-directory", async (request, reply) => {
-    const params = connectionParamsSchema.safeParse(request.params);
-    const query = channelTargetDirectoryQuerySchema.safeParse(request.query);
-    if (!params.success || !query.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-        },
-      });
-    }
-    try {
-      const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
-      if (connection.key !== "telegram") {
-        return reply.code(400).send({ error: "Target directory v1 is available for Telegram connections." });
+  fastify.get(
+    "/api/v1/channels/connections/:connectionId/target-directory",
+    channelReadRoute,
+    async (request, reply) => {
+      const params = connectionParamsSchema.safeParse(request.params);
+      const query = channelTargetDirectoryQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        });
       }
-      const token = resolveTelegramDiscoveryToken(fastify, { connectionId: params.data.connectionId });
-      const discoveredTargets =
-        token && query.data.refresh
-          ? await discoverTelegramTargets({
-              token,
-              setupCode: readConfigString(connection.config, "setupCode"),
-              fetcher: (url, init) => fetch(url, init),
-            })
-          : [];
-      const directory = buildTelegramTargetDirectory({
-        connectionId: params.data.connectionId,
-        connectionConfig: connection.config,
-        discoveredTargets,
-      });
-      return reply.send({
-        directory,
-        ...(query.data.query ? { resolution: resolveChannelTarget(directory, query.data.query) } : {}),
-      });
-    } catch (error) {
-      return reply.code(502).send({ error: (error as Error).message });
-    }
-  });
+      try {
+        const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+        if (connection.key !== "telegram") {
+          return reply.code(400).send({ error: "Target directory v1 is available for Telegram connections." });
+        }
+        const token = resolveTelegramDiscoveryToken(fastify, { connectionId: params.data.connectionId });
+        const discoveredTargets =
+          token && query.data.refresh
+            ? await discoverTelegramTargets({
+                token,
+                setupCode: readConfigString(connection.config, "setupCode"),
+                fetcher: (url, init) => fetch(url, init),
+              })
+            : [];
+        const directory = buildTelegramTargetDirectory({
+          connectionId: params.data.connectionId,
+          connectionConfig: connection.config,
+          discoveredTargets,
+        });
+        return reply.send({
+          directory,
+          ...(query.data.query ? { resolution: resolveChannelTarget(directory, query.data.query) } : {}),
+        });
+      } catch (error) {
+        return reply.code(502).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.get("/api/v1/channels/personalities", async (_request, reply) => {
     return reply.send(resolveRoutePersonalityCatalog(fastify.services));
   });
 
-  fastify.post("/api/v1/channels/connections/:connectionId/telegram/pairing/approve", async (request, reply) => {
-    const params = connectionParamsSchema.safeParse(request.params);
-    const parsed = telegramPairingApproveSchema.safeParse(request.body);
-    if (!params.success || !parsed.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: parsed.success ? undefined : parsed.error.flatten(),
-        },
-      });
-    }
-    try {
-      const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
-      if (connection.key !== "telegram") {
-        return reply.code(400).send({ error: "Telegram pairing approval is only available for Telegram connections." });
+  fastify.post(
+    "/api/v1/channels/connections/:connectionId/telegram/pairing/approve",
+    pairingMutationRoute,
+    async (request, reply) => {
+      const params = connectionParamsSchema.safeParse(request.params);
+      const parsed = telegramPairingApproveSchema.safeParse(request.body);
+      if (!params.success || !parsed.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: parsed.success ? undefined : parsed.error.flatten(),
+          },
+        });
       }
-      const approval = approveTelegramPairingCode(connection.config, parsed.data.code);
-      if (!approval.approved || !approval.configPatch) {
-        return reply.code(404).send({ error: "Pairing code was not found or has expired." });
+      try {
+        const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+        if (connection.key !== "telegram") {
+          return reply
+            .code(400)
+            .send({ error: "Telegram pairing approval is only available for Telegram connections." });
+        }
+        const approval = approveTelegramPairingCode(connection.config, parsed.data.code);
+        if (!approval.approved || !approval.configPatch) {
+          return reply.code(404).send({ error: "Pairing code was not found or has expired." });
+        }
+        const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
+          config: {
+            ...connection.config,
+            ...approval.configPatch,
+          },
+          lastSyncAt: new Date().toISOString(),
+          lastError: undefined,
+        });
+        return reply.send({
+          approved: true,
+          actorId: approval.actorId,
+          displayName: approval.displayName,
+          connectionId: updated.connectionId,
+        });
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
       }
-      const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
-        config: {
-          ...connection.config,
-          ...approval.configPatch,
-        },
-        lastSyncAt: new Date().toISOString(),
-        lastError: undefined,
-      });
-      return reply.send({
-        approved: true,
-        actorId: approval.actorId,
-        displayName: approval.displayName,
-        connectionId: updated.connectionId,
-      });
-    } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
-    }
-  });
+    },
+  );
 }
 
 function resolveTelegramDiscoveryToken(

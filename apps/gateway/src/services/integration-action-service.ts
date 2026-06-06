@@ -771,6 +771,7 @@ function readExternalResumeState(
   return value === "not_resumable" ||
     value === "completed" ||
     value === "manual_retry_after_recorded_failure" ||
+    value === "manual_review_unknown_external_outcome" ||
     value === "in_progress" ||
     value === "payload_mismatch" ||
     value === "idempotency_unavailable"

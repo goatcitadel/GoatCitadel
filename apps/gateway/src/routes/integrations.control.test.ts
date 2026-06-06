@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { IntegrationPluginRecord } from "@goatcitadel/contracts";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
@@ -17,6 +18,23 @@ describe("integrations control routes", () => {
   afterEach(async () => {
     await cleanupIntegrationTestApp(app);
     app = null;
+  });
+
+  it("keeps Discord pairing routes behind CodeQL-visible rate limits", () => {
+    const source = fs.readFileSync(new URL("./integrations-control-routes.ts", import.meta.url), "utf8");
+    expect(source).toMatch(/const RATE_LIMIT_AUTH_MAX = 60/);
+    expect(source).toMatch(
+      /fastify\.get\(\s*"\/api\/v1\/integrations\/connections\/:connectionId\/discord\/pairings",\s*pairingReadRoute/,
+    );
+    expect(source).toMatch(
+      /"\/api\/v1\/integrations\/connections\/:connectionId\/discord\/pairings\/:pairingId\/approve",\s*pairingMutationRoute/,
+    );
+    expect(source).toMatch(
+      /"\/api\/v1\/integrations\/connections\/:connectionId\/discord\/pairings\/:pairingId\/revoke",\s*pairingMutationRoute/,
+    );
+    expect(source).toMatch(
+      /"\/api\/v1\/integrations\/connections\/:connectionId\/actions\/:actionId",\s*integrationMutationRoute/,
+    );
   });
 
   it("rejects channel inbound payloads with oversized content-length", async () => {

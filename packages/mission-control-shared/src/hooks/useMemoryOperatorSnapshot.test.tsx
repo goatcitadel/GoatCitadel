@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMemoryMaintenanceStatus: vi.fn(),
   fetchMemoryQualityIssues: vi.fn(),
   fetchMemoryQmdStats: vi.fn(),
+  fetchMemoryRetrievalStatus: vi.fn(),
   fetchMemoryRelations: vi.fn(),
   fetchTraceMemoryCandidates: vi.fn(),
   fetchSettings: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("../api/client", () => ({
   fetchMemoryMaintenanceStatus: apiMocks.fetchMemoryMaintenanceStatus,
   fetchMemoryQualityIssues: apiMocks.fetchMemoryQualityIssues,
   fetchMemoryQmdStats: apiMocks.fetchMemoryQmdStats,
+  fetchMemoryRetrievalStatus: apiMocks.fetchMemoryRetrievalStatus,
   fetchMemoryRelations: apiMocks.fetchMemoryRelations,
   fetchTraceMemoryCandidates: apiMocks.fetchTraceMemoryCandidates,
   fetchSettings: apiMocks.fetchSettings,
@@ -136,6 +138,31 @@ describe("useMemoryOperatorSnapshot", () => {
           citations: [],
         },
       ],
+    });
+    apiMocks.fetchMemoryRetrievalStatus.mockResolvedValue({
+      checkedAt: "2026-04-22T00:00:00.000Z",
+      enabled: true,
+      retrievalMode: "hybrid_rank",
+      rerankAvailable: true,
+      rerankMode: "hybrid_rank",
+      fallbackMode: "available",
+      lastRefresh: "2026-04-22T00:00:00.000Z",
+      qmd: {
+        enabled: true,
+        applyToChat: true,
+        applyToOrchestration: true,
+        minPromptChars: 8,
+        cacheTtlSeconds: 300,
+        distillerTimeoutMs: 12_000,
+      },
+      recent: {
+        totalRuns: 4,
+        generatedRuns: 4,
+        cacheHitRuns: 0,
+        fallbackRuns: 0,
+        failedRuns: 0,
+        retrievalStrategies: ["hybrid_rank"],
+      },
     });
     apiMocks.fetchMemoryItems.mockResolvedValue({
       items: [
@@ -429,6 +456,8 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.memoryFeedback.map((item) => item.kind)).toEqual(["useful"]);
     expect(latest?.data?.memoryQualityIssues.map((item) => item.kind)).toEqual(["source_drift"]);
     expect(latest?.data?.traceMemoryCandidates.map((item) => item.status)).toEqual(["proposed"]);
+    expect(latest?.data?.memoryRetrievalStatus?.retrievalMode).toBe("hybrid_rank");
+    expect(latest?.data?.memoryRetrievalStatus?.fallbackMode).toBe("available");
     expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
     expect(apiMocks.fetchMemoryEntities).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
@@ -578,6 +607,7 @@ describe("useMemoryOperatorSnapshot", () => {
   it("records optional section errors without disabling the whole snapshot", async () => {
     apiMocks.fetchMemoryFiles.mockRejectedValue(new Error("files unavailable"));
     apiMocks.fetchMemoryQmdStats.mockRejectedValue("qmd unavailable");
+    apiMocks.fetchMemoryRetrievalStatus.mockRejectedValue(new Error("retrieval status unavailable"));
     apiMocks.fetchMemoryItemHistory.mockRejectedValue(new Error("history unavailable"));
     apiMocks.fetchMemoryMaintenanceStatus.mockRejectedValue(new Error("status unavailable"));
     apiMocks.fetchMemoryMaintenanceRecommendations.mockRejectedValue(new Error("recommendations unavailable"));
@@ -596,6 +626,8 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.error).toBeNull();
     expect(latest?.data?.sectionErrors.files).toBe("files unavailable");
     expect(latest?.data?.sectionErrors.qmdStats).toBe("Something went wrong.");
+    expect(latest?.data?.sectionErrors.memoryRetrievalStatus).toBe("retrieval status unavailable");
+    expect(latest?.data?.memoryRetrievalStatus).toBeNull();
     expect(latest?.data?.sectionErrors.memoryHistory).toBe("history unavailable");
     expect(latest?.data?.sectionErrors.maintenanceStatus).toBe("status unavailable");
     expect(latest?.data?.sectionErrors.maintenanceRecommendations).toBe("recommendations unavailable");

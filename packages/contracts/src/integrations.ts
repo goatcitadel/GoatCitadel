@@ -136,6 +136,7 @@ export type IntegrationExternalWritebackResumeState =
   | "not_resumable"
   | "completed"
   | "manual_retry_after_recorded_failure"
+  | "manual_review_unknown_external_outcome"
   | "in_progress"
   | "payload_mismatch"
   | "idempotency_unavailable";
