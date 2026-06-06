@@ -1,4 +1,5 @@
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
+import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
   CalendarCreateEventInput,
   CalendarListQuery,
@@ -67,6 +68,11 @@ export async function commsSend(
   input: ChannelSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   throwIfCommsAborted(input.signal);
+  const connection = host.getIntegrationConnection(input.connectionId);
+  const sanitized = sanitizeChannelOutboundMessage(input.message ?? "", {
+    neutralizeMentions: shouldNeutralizeChannelMentions(connection.key),
+    maxLength: connection.key === "discord" ? 2000 : undefined,
+  });
   const attachments = await resolveChannelSendAttachments(
     { attachments: input.attachments, attachmentIds: input.attachmentIds },
     { readChatAttachmentContent: (attachmentId) => host.readChatAttachmentContent(attachmentId) },
@@ -79,9 +85,18 @@ export async function commsSend(
       args: {
         connectionId: input.connectionId,
         target: input.target,
-        message: input.message,
+        message: sanitized.message,
         attachments,
         interactiveActions: input.interactiveActions,
+        outboundSanitizer: hasOutboundSanitizerEffect(sanitized)
+          ? {
+              removedBlockCount: sanitized.removedBlockCount,
+              redactedSecretCount: sanitized.redactedSecretCount,
+              neutralizedMentionCount: sanitized.neutralizedMentionCount,
+              truncated: sanitized.truncated,
+              policy: "strip_internal_reasoning_blocks_redact_secrets",
+            }
+          : undefined,
         replyTo: input.replyToMessageId,
         replyToMessageId: input.replyToMessageId,
         replyToMessageGuid: input.replyToMessageId,
@@ -96,6 +111,19 @@ export async function commsSend(
       signal: input.signal,
     },
     "comms_send",
+  );
+}
+
+function shouldNeutralizeChannelMentions(channelKey: string): boolean {
+  return ["discord", "google-chat", "mattermost", "slack", "teams", "webhook"].includes(channelKey);
+}
+
+function hasOutboundSanitizerEffect(result: ReturnType<typeof sanitizeChannelOutboundMessage>): boolean {
+  return (
+    result.removedBlockCount > 0 ||
+    result.redactedSecretCount > 0 ||
+    result.neutralizedMentionCount > 0 ||
+    result.truncated
   );
 }
 

@@ -18,6 +18,7 @@ export class ChatSessionBranchStateRepository {
   private readonly upsertStmt;
   private readonly compareAndSetStmt;
   private readonly insertIfMissingStmt;
+  private readonly deleteStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare(`
@@ -48,6 +49,10 @@ export class ChatSessionBranchStateRepository {
         FROM chat_session_branch_state
         WHERE session_id = @sessionId
       )
+    `);
+    this.deleteStmt = db.prepare(`
+      DELETE FROM chat_session_branch_state
+      WHERE session_id = ?
     `);
   }
 
@@ -108,6 +113,11 @@ export class ChatSessionBranchStateRepository {
     }) as { changes?: number };
     return (result.changes ?? 0) > 0;
   }
+
+  public clear(sessionId: string): boolean {
+    const result = this.deleteStmt.run(sessionId) as { changes?: number };
+    return (result.changes ?? 0) > 0;
+  }
 }
 
 function mapRow(row: ChatSessionBranchStateRow): ChatSessionBranchStateRecord {
@@ -117,5 +127,3 @@ function mapRow(row: ChatSessionBranchStateRow): ChatSessionBranchStateRecord {
     updatedAt: row.updated_at,
   };
 }
-
-

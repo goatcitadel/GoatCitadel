@@ -364,7 +364,12 @@ describe("buildAgenticRuntimeAvailability", () => {
     expect(response.items.map((item) => [item.capabilityId, item.status, item.callable, item.reasons])).toEqual(
       expect.arrayContaining([
         ["provider:codex", "callable", true, []],
-        ["plugin:local", "callable", true, []],
+        [
+          "plugin:local",
+          "blocked",
+          false,
+          ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
+        ],
         [
           "plugin:unknown",
           "blocked",

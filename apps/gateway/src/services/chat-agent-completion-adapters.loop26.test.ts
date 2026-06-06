@@ -150,6 +150,7 @@ describe("chat-agent-completion-adapters edge cases", () => {
             tool_calls: [{ function: { name: "browser.search", arguments: "{}" } }],
           },
           delta: {
+            provider_native_content: [{ type: "thinking", thinking: "private", signature: "sig-1" }],
             content: { text: "world" },
             tool_calls: [
               {
@@ -178,6 +179,7 @@ describe("chat-agent-completion-adapters edge cases", () => {
           message: {
             role: "assistant",
             content: "Hello from messageworld",
+            provider_native_content: [{ type: "thinking", thinking: "private", signature: "sig-1" }],
             tool_calls: [
               {
                 id: "call-b",

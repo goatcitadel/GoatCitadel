@@ -35,6 +35,7 @@ export class ChatMessageRepository {
   private readonly listBeforeSeqStmt;
   private readonly getStmt;
   private readonly getCursorStmt;
+  private readonly deleteByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(
@@ -222,6 +223,22 @@ export class ChatMessageRepository {
     return messagesById;
   }
 
+  public deleteByMessageIds(sessionId: string, messageIds: string[]): number {
+    const uniqueMessageIds = [...new Set(messageIds.map((item) => item.trim()).filter(Boolean))];
+    if (uniqueMessageIds.length === 0) {
+      return 0;
+    }
+
+    let deleted = 0;
+    for (let index = 0; index < uniqueMessageIds.length; index += 400) {
+      const batch = uniqueMessageIds.slice(index, index + 400);
+      const stmt = this.getDeleteByMessageIdsStmt(batch.length);
+      const result = stmt.run(sessionId, ...batch);
+      deleted += result.changes ?? 0;
+    }
+    return deleted;
+  }
+
   public list(sessionId: string, limit = 200, cursor?: string): ChatMessageRecord[] {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
     const rows = cursor
@@ -335,6 +352,21 @@ export class ChatMessageRepository {
       WHERE message_id IN (${placeholders})
     `);
     this.listByMessageIdsStmtCache.set(size, stmt);
+    return stmt;
+  }
+
+  private getDeleteByMessageIdsStmt(size: number) {
+    const cached = this.deleteByMessageIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      DELETE FROM chat_messages
+      WHERE session_id = ?
+        AND message_id IN (${placeholders})
+    `);
+    this.deleteByMessageIdsStmtCache.set(size, stmt);
     return stmt;
   }
 }

@@ -12,6 +12,7 @@ import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
   applyNonStreamingTransformLlmOutput,
   applyStreamingTransformLlmOutput,
+  buildProviderRetryCooldownExhaustedError,
   buildMemoryContextSystemMessage,
   calculateSavings,
   createChatCompletionDeadline,
@@ -20,6 +21,7 @@ import {
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
   shouldAttemptCrossProviderFallback,
+  shouldReportProviderRetryCooldownExhausted,
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
@@ -377,6 +379,10 @@ export async function createChatCompletion(
 
   if (!response) {
     const completedAt = Date.now();
+    const finalError =
+      lastError && shouldReportProviderRetryCooldownExhausted(lastError)
+        ? buildProviderRetryCooldownExhaustedError(lastError, { providerId: primaryProviderId, model: primaryModel })
+        : lastError;
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -389,19 +395,20 @@ export async function createChatCompletion(
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
-      runtimeError: lastError
+      runtimeError: finalError
         ? {
-            name: lastError.name,
-            message: lastError.message,
-            retryable: shouldRetryTransientProviderError(lastError),
+            name: finalError.name,
+            message: finalError.message,
+            retryable: false,
           }
         : undefined,
       context: {
-        error: lastError?.message,
+        error: finalError?.message,
+        retryCooldownExhausted: Boolean(lastError && finalError !== lastError),
       },
     });
-    recordFailedChatRuntime(host, request, primaryRuntimeTarget, completionStartedAt, completedAt, lastError?.message);
-    throw lastError ?? new Error("chat completion failed");
+    recordFailedChatRuntime(host, request, primaryRuntimeTarget, completionStartedAt, completedAt, finalError?.message);
+    throw finalError ?? new Error("chat completion failed");
   }
   const completionCompletedAt = Date.now();
   host.recordDevDiagnostic({
@@ -872,6 +879,10 @@ export async function* createChatCompletionStream(
 
   if (!streamed) {
     const completedAt = Date.now();
+    const finalError =
+      lastError && shouldReportProviderRetryCooldownExhausted(lastError)
+        ? buildProviderRetryCooldownExhaustedError(lastError, { providerId: primaryProviderId, model: primaryModel })
+        : lastError;
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -884,13 +895,14 @@ export async function* createChatCompletionStream(
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
-      runtimeError: lastError
+      runtimeError: finalError
         ? {
-            name: lastError.name,
-            message: lastError.message,
-            retryable: shouldRetryTransientProviderError(lastError),
+            name: finalError.name,
+            message: finalError.message,
+            retryable: false,
           }
         : undefined,
+      context: { retryCooldownExhausted: Boolean(lastError && finalError !== lastError) },
     });
     recordStreamRuntime(
       host,
@@ -900,9 +912,9 @@ export async function* createChatCompletionStream(
       completionStartedAt,
       completedAt,
       "failed",
-      lastError?.message,
+      finalError?.message,
     );
-    throw lastError ?? new Error("chat completion stream failed");
+    throw finalError ?? new Error("chat completion stream failed");
   }
 
   // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.

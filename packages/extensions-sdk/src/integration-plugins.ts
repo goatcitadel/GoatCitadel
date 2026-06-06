@@ -33,6 +33,14 @@ export const IntegrationPluginAuthorManifestSchema = z.object({
       dashboardVariant: z.enum(["default", "compact", "high_contrast"]).optional(),
     })
     .optional(),
+  toolOverrides: z
+    .array(
+      z.object({
+        toolName: z.string().min(1),
+        override: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 
 export function validateIntegrationPluginAuthorManifest(input: unknown): IntegrationPluginAuthorManifest {
@@ -40,6 +48,7 @@ export function validateIntegrationPluginAuthorManifest(input: unknown): Integra
   return {
     ...manifest,
     capabilities: Array.from(new Set(manifest.capabilities.map((item) => item.trim()).filter(Boolean))),
+    toolOverrides: manifest.toolOverrides?.map((entry) => ({ ...entry, toolName: entry.toolName.trim() })),
   } satisfies IntegrationPluginAuthorManifest;
 }
 

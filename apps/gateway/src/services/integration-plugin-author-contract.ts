@@ -79,6 +79,13 @@ export function buildInstalledIntegrationPluginRecord(
     integrityStatus: installMetadata.sourceMetadata.integrityStatus,
     trustWarnings: installMetadata.trustWarnings,
     theme: installMetadata.manifest?.theme ?? input.existing?.theme,
+    toolOverrides: installMetadata.manifest?.toolOverrides
+      ? installMetadata.manifest.toolOverrides.map((entry) => ({
+          toolName: entry.toolName.trim(),
+          override: entry.override,
+          status: "pending_owner_approval" as const,
+        }))
+      : input.existing?.toolOverrides,
   };
 }
 

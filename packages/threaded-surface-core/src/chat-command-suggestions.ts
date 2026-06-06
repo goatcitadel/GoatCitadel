@@ -19,6 +19,9 @@ interface ModelCommandCandidate {
   model: string;
   providerLabel: string;
   active: boolean;
+  score: number;
+  providerIndex: number;
+  modelIndex: number;
 }
 
 export function buildModelCommandSuggestions({
@@ -44,22 +47,14 @@ export function buildModelCommandSuggestions({
   });
   const matches: ModelCommandCandidate[] = [];
 
-  for (const provider of orderedProviders) {
-    const models = [...provider.models].sort((left, right) => {
-      const leftScore = scoreMatch(left, query);
-      const rightScore = scoreMatch(right, query);
-      if (leftScore !== rightScore) {
-        return rightScore - leftScore;
-      }
-      return left.localeCompare(right);
-    });
-
-    for (const model of models) {
+  for (const [providerIndex, provider] of orderedProviders.entries()) {
+    for (const [modelIndex, model] of provider.models.entries()) {
       const normalizedModel = model.trim();
       if (!normalizedModel) {
         continue;
       }
-      if (query && !normalizedModel.toLowerCase().includes(query)) {
+      const score = scoreModelCandidate(provider, normalizedModel, query, activeProviderId);
+      if (query && score <= 0) {
         continue;
       }
       matches.push({
@@ -67,31 +62,97 @@ export function buildModelCommandSuggestions({
         model: normalizedModel,
         providerLabel: provider.label,
         active: provider.providerId === activeProviderId,
+        score,
+        providerIndex,
+        modelIndex,
       });
-      if (matches.length >= limit) {
-        return toSuggestionItems(matches);
-      }
     }
   }
 
-  return toSuggestionItems(matches);
+  matches.sort((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+    if (left.providerIndex !== right.providerIndex) {
+      return left.providerIndex - right.providerIndex;
+    }
+    return query ? left.modelIndex - right.modelIndex : left.model.localeCompare(right.model);
+  });
+
+  return toSuggestionItems(matches.slice(0, limit));
 }
 
-function scoreMatch(model: string, query: string): number {
+function scoreModelCandidate(
+  provider: ChatModelProviderOption,
+  model: string,
+  query: string,
+  activeProviderId?: string,
+): number {
+  const activeBonus = provider.providerId === activeProviderId ? 4 : 0;
+  const availabilityScore = scoreProviderAvailability(provider);
   if (!query) {
-    return 1;
+    return 1 + activeBonus + availabilityScore;
   }
-  const normalized = model.toLowerCase();
-  if (normalized === query) {
-    return 4;
+  const normalizedModel = model.trim().toLowerCase();
+  const haystack = `${provider.label} ${provider.providerId} ${normalizedModel}`.toLowerCase();
+  const compactHaystack = haystack.replace(/[^a-z0-9]+/g, "");
+  const compactQuery = query.replace(/[^a-z0-9]+/g, "");
+  if (!compactQuery) {
+    return 1 + activeBonus + availabilityScore;
   }
-  if (normalized.startsWith(query)) {
-    return 3;
+  if (normalizedModel === query || compactHaystack === compactQuery) {
+    return 100 + activeBonus + availabilityScore;
   }
-  if (normalized.includes(query)) {
-    return 2;
+  if (normalizedModel.startsWith(query) || compactHaystack.startsWith(compactQuery)) {
+    return 80 + activeBonus + availabilityScore;
   }
-  return 0;
+  if (haystack.includes(query) || compactHaystack.includes(compactQuery)) {
+    return 60 + activeBonus + availabilityScore;
+  }
+  const queryParts = query.split(/[^a-z0-9]+/).filter(Boolean);
+  if (queryParts.length > 1) {
+    return /\s/.test(query) && queryParts.every((part) => haystack.includes(part) || compactHaystack.includes(part))
+      ? 55 + activeBonus + availabilityScore
+      : 0;
+  }
+  if (/[^a-z0-9]/.test(query)) {
+    return 0;
+  }
+  const fuzzyScore = scoreOrderedCharacters(compactHaystack, compactQuery);
+  return fuzzyScore > 0 ? fuzzyScore + activeBonus + availabilityScore : 0;
+}
+
+function scoreProviderAvailability(provider: ChatModelProviderOption): number {
+  if (provider.disabled) {
+    return -50;
+  }
+  switch (provider.modelProbeState) {
+    case "ready":
+      return 8;
+    case "error":
+      return -40;
+    case "empty":
+      return -30;
+    default:
+      return 0;
+  }
+}
+
+function scoreOrderedCharacters(haystack: string, query: string): number {
+  let cursor = 0;
+  let gapPenalty = 0;
+  for (const char of query) {
+    const next = haystack.indexOf(char, cursor);
+    if (next < 0) {
+      return 0;
+    }
+    gapPenalty += Math.max(0, next - cursor);
+    cursor = next + 1;
+  }
+  return Math.max(1, 40 - gapPenalty);
 }
 
 function toSuggestionItems(matches: ModelCommandCandidate[]): CommandSuggestionItem[] {

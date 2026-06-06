@@ -115,6 +115,7 @@ export class ChatTurnTraceRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(private readonly db: DatabaseClient) {
@@ -285,6 +286,22 @@ export class ChatTurnTraceRepository {
     return rows.map(mapRow);
   }
 
+  public deleteByTurnIds(sessionId: string, turnIds: string[]): number {
+    const uniqueTurnIds = [...new Set(turnIds.map((item) => item.trim()).filter(Boolean))];
+    if (uniqueTurnIds.length === 0) {
+      return 0;
+    }
+
+    let deleted = 0;
+    for (let index = 0; index < uniqueTurnIds.length; index += 400) {
+      const batch = uniqueTurnIds.slice(index, index + 400);
+      const stmt = this.getDeleteByTurnIdsStmt(batch.length);
+      const result = stmt.run(sessionId, ...batch);
+      deleted += result.changes ?? 0;
+    }
+    return deleted;
+  }
+
   public listSiblingsByParentTurnIds(
     sessionId: string,
     parentTurnIds: Array<string | undefined>,
@@ -352,6 +369,21 @@ export class ChatTurnTraceRepository {
       ORDER BY parent_turn_id ASC, started_at ASC, turn_id ASC
     `);
     this.listSiblingsByParentTurnIdsStmtCache.set(size, stmt);
+    return stmt;
+  }
+
+  private getDeleteByTurnIdsStmt(size: number) {
+    const cached = this.deleteByTurnIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      DELETE FROM chat_turn_traces
+      WHERE session_id = ?
+        AND turn_id IN (${placeholders})
+    `);
+    this.deleteByTurnIdsStmtCache.set(size, stmt);
     return stmt;
   }
 }

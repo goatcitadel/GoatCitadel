@@ -62,6 +62,8 @@ const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
 ];
 const TASK_PRIORITY_OPTIONS: TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 const TASK_DELIVERABLE_TYPE_OPTIONS: TaskDeliverableRecord["deliverableType"][] = ["artifact", "file", "url"];
+const COWORK_TASK_PAGE_LIMIT = 100;
+const COWORK_TASK_PAGE_CAP = 20;
 
 export function CoworkNativePage({
   route,
@@ -113,11 +115,11 @@ export function CoworkNativePage({
     const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     const [tasks, deletedTasks, operators] = await Promise.all([
-      nativeLoad("Cowork tasks", fetchTasksByView("active", undefined, activeWorkspaceId), {
+      nativeLoad("Cowork tasks", fetchTasksByViewPaged("active", activeWorkspaceId), {
         items: [],
         view: "active",
       }),
-      nativeLoad("Deleted tasks", fetchTasksByView("trash", undefined, activeWorkspaceId), {
+      nativeLoad("Deleted tasks", fetchTasksByViewPaged("trash", activeWorkspaceId), {
         items: [],
         view: "trash",
       }),
@@ -819,6 +821,26 @@ export function CoworkNativePage({
       {content}
     </NativePageFrame>
   );
+}
+
+async function fetchTasksByViewPaged(
+  view: "active" | "trash",
+  workspaceId?: string,
+): Promise<{ items: TaskRecord[]; nextCursor?: string; view: "active" | "trash" }> {
+  const items: TaskRecord[] = [];
+  let nextCursor: string | undefined;
+  for (let page = 0; page < COWORK_TASK_PAGE_CAP; page += 1) {
+    const result = await fetchTasksByView(view, undefined, workspaceId, {
+      limit: COWORK_TASK_PAGE_LIMIT,
+      cursor: nextCursor,
+    });
+    items.push(...result.items);
+    nextCursor = result.nextCursor;
+    if (!nextCursor) {
+      break;
+    }
+  }
+  return { items, nextCursor, view };
 }
 
 function NativeLane({

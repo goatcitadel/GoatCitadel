@@ -261,6 +261,34 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_MALFORMED_CONTENT_ITEMS_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "test-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    reply(message.id, {
+      content: [
+        { type: "image", mimeType: "image/png" },
+        { type: "image_url", url: "[image placeholder]" },
+        { type: "resource", resource: { mimeType: "application/pdf" } },
+      ],
+    });
+  }
+});
+`;
+
 const MCP_TOOL_ERROR_SCRIPT = String.raw`
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -714,6 +742,31 @@ describe("mcp runtime", () => {
         url: undefined,
         resourceUri: undefined,
         name: undefined,
+      },
+    ]);
+  });
+
+  it("quarantines malformed MCP media and resource placeholders as operator-visible errors", async () => {
+    const server = createTestServer(MCP_MALFORMED_CONTENT_ITEMS_SCRIPT);
+
+    const result = await invokeMcpRuntimeTool(server, {
+      toolName: "browser.extract",
+      arguments: {},
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.contentItems).toEqual([
+      {
+        type: "error",
+        text: "MCP image content item was quarantined because it did not include persisted media data or an accessible artifact reference.",
+      },
+      {
+        type: "error",
+        text: "MCP image content item was quarantined because it did not include persisted media data or an accessible artifact reference.",
+      },
+      {
+        type: "error",
+        text: "MCP resource content item was quarantined because it did not include persisted content or an accessible artifact reference.",
       },
     ]);
   });

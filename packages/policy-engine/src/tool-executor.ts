@@ -14,7 +14,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { clampInt, coerceRetryAfterMs } from "@goatcitadel/contracts";
+import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -1534,37 +1534,46 @@ async function executeCommsTool(
     return commsUnsend(toolName, connectionKey, connectionConfig, args, allowlist, target, grantAllowlist);
   }
   const channelKey = toolName === "channel.send" ? connectionKey : toolName.slice(0, -".send".length);
+  const sanitizedMessage = sanitizeCommsMessageForChannel(message, channelKey);
   const attachments = normalizeChannelAttachments(args.attachments);
-  const renderedMessage = renderChannelMessage(message, attachments);
+  const renderedMessage = renderChannelMessage(sanitizedMessage, attachments);
   switch (channelKey) {
     case "slack":
-      return slackSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return slackSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "discord":
-      return discordSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return discordSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "line":
       return lineSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "mattermost":
-      return mattermostSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return mattermostSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "nextcloud-talk":
-      return nextcloudTalkSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return nextcloudTalkSend(
+        connectionConfig,
+        args,
+        allowlist,
+        target,
+        sanitizedMessage,
+        attachments,
+        grantAllowlist,
+      );
     case "imessage":
-      return imessageSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return imessageSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "signal":
       return signalSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "telegram":
-      return telegramSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return telegramSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "ntfy":
       return ntfySend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "teams":
-      return teamsSend(connectionConfig, args, allowlist, message, attachments, grantAllowlist);
+      return teamsSend(connectionConfig, args, allowlist, sanitizedMessage, attachments, grantAllowlist);
     case "google-chat":
-      return googleChatSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return googleChatSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "whatsapp":
-      return whatsappSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return whatsappSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "zalo":
       return zaloSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "zalouser":
-      return zalouserSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
+      return zalouserSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     default:
       break;
   }
@@ -1587,6 +1596,13 @@ async function executeCommsTool(
     throw new Error(`${toolName} failed (${res.response.status})`);
   }
   return `${toolName}-${Date.now()}`;
+}
+
+function sanitizeCommsMessageForChannel(message: string, channelKey: string): string {
+  return sanitizeChannelOutboundMessage(message, {
+    neutralizeMentions: ["discord", "google-chat", "mattermost", "slack", "teams", "webhook"].includes(channelKey),
+    maxLength: channelKey === "discord" ? 2000 : undefined,
+  }).message;
 }
 
 async function commsReact(
@@ -2063,6 +2079,7 @@ async function buildDiscordMessageRequest(
   if (message.trim()) {
     payload.content = message;
   }
+  payload.allowed_mentions = { parse: [] };
   if (embeds.length > 0) {
     payload.embeds = embeds;
   }

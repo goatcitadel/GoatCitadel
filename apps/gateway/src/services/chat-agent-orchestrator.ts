@@ -2065,6 +2065,7 @@ export class ChatAgentOrchestrator {
           conversationMessages.push(
             createAssistantToolCallMessage({
               content: extractMessageContent(message),
+              providerNativeContent: extractProviderNativeContent(message),
               toolCalls: toolCalls.map((toolCall) => ({
                 id: toolCall.id,
                 type: "function",
@@ -5098,6 +5099,7 @@ function createAssistantToolCallMessage(input: {
   toolName?: string;
   argumentsJson?: string;
   content?: string;
+  providerNativeContent?: Array<Record<string, unknown>>;
   toolCalls?: Array<Record<string, unknown>>;
 }): ChatCompletionMessage {
   const toolCalls = input.toolCalls ?? [
@@ -5113,8 +5115,19 @@ function createAssistantToolCallMessage(input: {
   return {
     role: "assistant",
     content: input.content ?? "",
+    ...(input.providerNativeContent && input.providerNativeContent.length > 0
+      ? { provider_native_content: input.providerNativeContent }
+      : {}),
     tool_calls: toolCalls,
   } as ChatCompletionMessage;
+}
+
+function extractProviderNativeContent(message: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+  return Array.isArray(message?.provider_native_content)
+    ? message.provider_native_content.filter(
+        (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+      )
+    : [];
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {

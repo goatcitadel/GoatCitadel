@@ -48,4 +48,24 @@ describe("ResearchSearchBrokerService", () => {
     ]);
     expect(response.results).toEqual([]);
   });
+
+  it("exposes Parallel as a configured advisory provider without claiming live search", () => {
+    vi.stubEnv("GOATCITADEL_SEARCH_PARALLEL_API_KEY", "configured");
+    const service = new ResearchSearchBrokerService();
+
+    const response = service.search({
+      query: "GoatCitadel release evidence",
+      engines: ["parallel"],
+    });
+
+    expect(response.engineStatuses).toEqual([
+      expect.objectContaining({
+        engine: "parallel",
+        status: "degraded",
+        message: expect.stringContaining("live broker execution is not enabled"),
+      }),
+    ]);
+    expect(response.results).toEqual([]);
+    expect(response.warnings.join(" ")).toContain("advisory-only");
+  });
 });

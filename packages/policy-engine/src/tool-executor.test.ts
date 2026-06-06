@@ -1648,6 +1648,7 @@ describe("executeTool", () => {
     expect(discordCall?.[1]?.body).toBeInstanceOf(FormData);
     const formData = discordCall?.[1]?.body as FormData;
     expect(String(formData.get("payload_json") ?? "")).toContain('"content":"Deployment artifacts attached."');
+    expect(String(formData.get("payload_json") ?? "")).toContain('"allowed_mentions":{"parse":[]}');
     expect(String(formData.get("payload_json") ?? "")).toContain("https://example.com/screenshot.png");
     const uploadedFile = formData.get("files[0]");
     expect(uploadedFile).toBeInstanceOf(File);
@@ -1655,6 +1656,69 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "discord-msg-123",
+    });
+  });
+
+  it("sanitizes Discord outbound messages before delivery and disables mentions", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "discord-msg-sanitized" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-discord",
+          key: "discord",
+          config: {
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-discord-sanitized",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-discord",
+          message: ["Deploy ready @everyone", "<thinking>internal provider trace</thinking>"].join("\n"),
+        },
+        agentId: "operator",
+        sessionId: "sess-discord-sanitized",
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["discord.com"],
+        },
+      },
+      commsStorage,
+    );
+
+    const call = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    const body = JSON.parse(String(call?.[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      content: "Deploy ready @ everyone",
+      allowed_mentions: { parse: [] },
     });
   });
 

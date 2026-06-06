@@ -810,6 +810,33 @@ describe("shared UI primitives", () => {
     expect(JSON.stringify(disabled.toJSON())).toContain("Pick model");
   });
 
+  it("uses fuzzy combobox matching for compact model searches", () => {
+    const renderer = create(
+      <GCCombobox
+        value=""
+        onChange={vi.fn()}
+        placeholder="Pick model"
+        options={[
+          { value: "claude-opus-4.1", label: "Claude Opus 4.1" },
+          { value: "gpt-5.4", label: "GPT-5.4" },
+          { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+        ]}
+      />,
+    );
+
+    act(() => {
+      renderer.root.findByProps({ "aria-haspopup": "dialog" }).props.onKeyDown({
+        key: "ArrowDown",
+        preventDefault: vi.fn(),
+      });
+      renderer.root.findByProps({ role: "combobox" }).props.onValueChange("g54");
+    });
+
+    expect(
+      Array.from(new Set(renderer.root.findAllByProps({ role: "option" }).map((option) => option.props.value))),
+    ).toEqual(["GPT-5.4 gpt-5.4", "GPT-5.4 Mini gpt-5.4-mini"]);
+  });
+
   it("covers segmented-control disabled and wraparound keyboard paths", () => {
     const onChange = vi.fn();
     const preventDefault = vi.fn();

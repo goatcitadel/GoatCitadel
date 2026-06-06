@@ -1162,23 +1162,41 @@ function normalizeMcpContentItem(item: unknown): McpNormalizedContentItem | unde
   }
   const type = typeof item.type === "string" ? item.type : undefined;
   if (type === "image" || type === "image_url") {
+    const data = readString(item.data) ?? readString(item.dataBase64);
+    const url = readString(item.url);
+    const resourceUri = readString(item.resourceUri) ?? readString(item.uri);
+    if ((!data && !url && !resourceUri) || isPlaceholderReference(url) || isPlaceholderReference(resourceUri)) {
+      return {
+        type: "error",
+        text: "MCP image content item was quarantined because it did not include persisted media data or an accessible artifact reference.",
+      };
+    }
     return {
       type: "image",
       mimeType: readString(item.mimeType) ?? readString(item.mime_type),
-      data: readString(item.data) ?? readString(item.dataBase64),
-      url: readString(item.url),
-      resourceUri: readString(item.resourceUri) ?? readString(item.uri),
+      data,
+      url,
+      resourceUri,
       name: readString(item.name),
     };
   }
   if (type === "resource" || item.resource !== undefined) {
     const resource = isRecord(item.resource) ? item.resource : item;
+    const uri = readString(resource.uri);
+    const text = readString(resource.text);
+    const blob = readString(resource.blob);
+    if ((!uri && !text && !blob) || isPlaceholderReference(uri)) {
+      return {
+        type: "error",
+        text: "MCP resource content item was quarantined because it did not include persisted content or an accessible artifact reference.",
+      };
+    }
     return {
       type: "resource",
-      uri: readString(resource.uri),
+      uri,
       mimeType: readString(resource.mimeType) ?? readString(resource.mime_type),
-      text: readString(resource.text) ? sanitizeMcpRuntimeError(readString(resource.text) ?? "") : undefined,
-      blob: readString(resource.blob),
+      text: text ? sanitizeMcpRuntimeError(text) : undefined,
+      blob,
       name: readString(resource.name),
     };
   }
@@ -1227,6 +1245,17 @@ function sanitizeMcpRuntimeError(value: string): string {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isPlaceholderReference(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "about:blank" || normalized.startsWith("placeholder:")) {
+    return true;
+  }
+  return /^[<[{(]?\s*(?:image|media|attachment|artifact|resource|file)(?:[\s_-]+placeholder)?\s*[>\]})]?$/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

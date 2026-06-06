@@ -69,6 +69,7 @@ import {
   isChatTurnTerminalStatus,
   NotFoundError,
   providerAllowsForeignModelIds,
+  sanitizeChannelOutboundMessage,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
@@ -2153,6 +2154,121 @@ export class GatewayService {
       });
       return this.listChatMessagesFromTranscript(sessionId, safeLimit, cursor);
     }
+  }
+
+  public async undoChatTurns(
+    sessionId: string,
+    count = 1,
+    options: { operatorId?: string } = {},
+  ): Promise<{
+    undoneCount: number;
+    requestedCount: number;
+    removedTurnIds: string[];
+    removedMessageCount: number;
+    activeLeafTurnId?: string;
+  }> {
+    this.getSession(sessionId);
+    const safeCount = Math.max(1, Math.min(20, Math.floor(count)));
+    return this.withChatTurnWriteLease(sessionId, "chat.undo", async () => {
+      const state = await this.loadChatTurnSessionState(sessionId);
+      if (!state.activeLeafTurnId) {
+        return {
+          undoneCount: 0,
+          requestedCount: safeCount,
+          removedTurnIds: [],
+          removedMessageCount: 0,
+        };
+      }
+
+      const selectedPathTurnIds = buildSelectedPathTurnIds(state.turnLineageById, state.activeLeafTurnId);
+      const removedTurnIds = selectedPathTurnIds.slice(-safeCount);
+      const removedTraces = removedTurnIds
+        .map((turnId) => state.tracesById.get(turnId))
+        .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
+      if (removedTraces.length === 0) {
+        return {
+          undoneCount: 0,
+          requestedCount: safeCount,
+          removedTurnIds: [],
+          removedMessageCount: 0,
+          activeLeafTurnId: state.activeLeafTurnId,
+        };
+      }
+
+      const activeTrace = removedTraces.find((trace) => isChatTurnActiveStatus(trace.status));
+      if (activeTrace) {
+        throw new ConflictError({
+          message: `Chat turn ${activeTrace.turnId} is ${activeTrace.status}; cancel or finish it before undoing.`,
+        });
+      }
+
+      const remainingPathTurnIds = selectedPathTurnIds.slice(
+        0,
+        Math.max(0, selectedPathTurnIds.length - removedTurnIds.length),
+      );
+      const nextActiveLeafTurnId = remainingPathTurnIds.at(-1);
+      const removedMessageIds = removedTraces.flatMap((trace) => [
+        trace.userMessageId,
+        ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
+      ]);
+      const now = new Date().toISOString();
+      const mutation = this.storage.runImmediateTransaction(() => {
+        const removedMessageCount = this.storage.chatMessages.deleteByMessageIds(sessionId, removedMessageIds);
+        const removedTraceCount = this.storage.chatTurnTraces.deleteByTurnIds(sessionId, removedTurnIds);
+        if (nextActiveLeafTurnId) {
+          this.storage.chatSessionBranchState.setActiveLeaf(sessionId, nextActiveLeafTurnId, now);
+        } else {
+          this.storage.chatSessionBranchState.clear(sessionId);
+        }
+        return { removedMessageCount, removedTraceCount };
+      });
+
+      this.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.turns_undone",
+        message: "Undid completed chat turns from the active session branch.",
+        sessionId,
+        turnId: nextActiveLeafTurnId,
+        context: {
+          requestedCount: safeCount,
+          undoneCount: removedTraces.length,
+          removedTurnIds,
+          removedMessageCount: mutation.removedMessageCount,
+          removedTraceCount: mutation.removedTraceCount,
+          activeLeafTurnId: nextActiveLeafTurnId,
+          operatorId: options.operatorId,
+        },
+      });
+      this.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: "chat_thread_undone",
+          sessionId,
+          requestedCount: safeCount,
+          undoneCount: removedTraces.length,
+          removedTurnIds,
+          activeLeafTurnId: nextActiveLeafTurnId,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId,
+            ...(nextActiveLeafTurnId ? { turnId: nextActiveLeafTurnId } : {}),
+          },
+        },
+      );
+
+      return {
+        undoneCount: removedTraces.length,
+        requestedCount: safeCount,
+        removedTurnIds,
+        removedMessageCount: mutation.removedMessageCount,
+        activeLeafTurnId: nextActiveLeafTurnId,
+      };
+    });
   }
 
   public async loadChatTurnSessionState(sessionId: string): Promise<{
@@ -8947,10 +9063,11 @@ function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload
 }
 
 function buildChannelDeliveryPayload(input: ChannelSendInput): Record<string, unknown> {
+  const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");
   return {
     connectionId: input.connectionId,
     target: input.target,
-    message: input.message,
+    message: sanitized.message,
     attachments: input.attachments,
     attachmentIds: input.attachmentIds,
     interactiveActions: input.interactiveActions,

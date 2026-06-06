@@ -131,6 +131,24 @@ export function shouldAttemptCrossProviderFallback(error: Error): boolean {
   return classifyProviderFailure(error) !== "context_overflow" && classifyProviderFailure(error) !== "cancelled";
 }
 
+export function shouldReportProviderRetryCooldownExhausted(error: Error): boolean {
+  return classifyProviderFailure(error) === "rate_limited";
+}
+
+export function buildProviderRetryCooldownExhaustedError(
+  error: Error,
+  input: { providerId?: string; model?: string },
+): Error {
+  const target = [input.providerId, input.model].filter(Boolean).join("/");
+  const detail = target ? ` for ${target}` : "";
+  const wrapped = new Error(
+    `Provider retry/cooldown budget exhausted${detail} before visible output. Last provider error: ${error.message}`,
+  );
+  wrapped.name = "ProviderRetryCooldownExhaustedError";
+  (wrapped as Error & { cause?: unknown }).cause = error;
+  return wrapped;
+}
+
 export async function delayChatCompletionRetry(
   deadline: number | undefined,
   timeoutMs: number | undefined,

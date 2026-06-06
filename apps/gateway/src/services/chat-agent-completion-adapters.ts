@@ -24,6 +24,7 @@ export interface CompletionStreamAggregate {
   content: string;
   usage?: Record<string, unknown>;
   toolCalls: Map<number, CompletionStreamToolCallState>;
+  providerNativeContent: Array<Record<string, unknown>>;
 }
 
 export function readToolCalls(
@@ -210,6 +211,7 @@ export function createCompletionStreamAggregate(): CompletionStreamAggregate {
   return {
     content: "",
     toolCalls: new Map<number, CompletionStreamToolCallState>(),
+    providerNativeContent: [],
   };
 }
 
@@ -256,6 +258,13 @@ export function absorbCompletionStreamChunk(
     const delta = choice.delta as Record<string, unknown> | undefined;
     if (!delta || typeof delta !== "object") {
       continue;
+    }
+    if (Array.isArray(delta.provider_native_content)) {
+      aggregate.providerNativeContent.push(
+        ...delta.provider_native_content.filter(
+          (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+        ),
+      );
     }
     const deltaText = extractContentTextFromDelta(delta.content);
     if (deltaText) {
@@ -322,6 +331,9 @@ export function buildCompletionFromAggregate(aggregate: CompletionStreamAggregat
         message: {
           role: "assistant",
           content: aggregate.content,
+          ...(aggregate.providerNativeContent.length > 0
+            ? { provider_native_content: aggregate.providerNativeContent }
+            : {}),
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
         finish_reason: aggregate.finishReason ?? "stop",

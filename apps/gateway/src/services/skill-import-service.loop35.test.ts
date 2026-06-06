@@ -377,6 +377,43 @@ describe("SkillImportService loop 35 import behavior", () => {
     expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("sha256 does not match manifest")]));
   });
 
+  it("rejects portable skill bundle manifests with duplicate normalized asset paths", async () => {
+    const skillDir = path.join(rootDir, "portable-duplicate");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skill = [
+      "---",
+      "name: Duplicate Bundle",
+      "description: Portable local bundle fixture with duplicate assets.",
+      "---",
+      "",
+      "Review the manifest-backed bundle before activation.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), skill, "utf8");
+    fs.writeFileSync(
+      path.join(skillDir, "goatcitadel.skill-bundle.json"),
+      JSON.stringify({
+        manifestVersion: "goatcitadel.skill-bundle.v1",
+        scriptDisposition: "review_only_non_callable",
+        assets: [
+          { path: "SKILL.md", kind: "skill", sha256: sha256(skill) },
+          { path: "./SKILL.md", kind: "skill", sha256: sha256(skill) },
+        ],
+      }),
+      "utf8",
+    );
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("declared more than once")]));
+  });
+
   it("rejects portable skill bundle manifests that escape allowed paths", async () => {
     const skillDir = path.join(rootDir, "portable-local");
     fs.mkdirSync(skillDir, { recursive: true });

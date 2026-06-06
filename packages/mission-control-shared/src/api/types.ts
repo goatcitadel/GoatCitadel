@@ -115,6 +115,11 @@ export interface TaskRecord {
       access: "read_only";
     }>;
   };
+  agenticContext?: {
+    runId?: string;
+    durableRunId?: string;
+    status?: string;
+  };
 }
 
 export interface TaskActivityRecord {
@@ -160,6 +165,7 @@ export interface RealtimeEvent {
     sessionId?: string;
     turnId?: string;
     runId?: string;
+    durableRunId?: string;
     proactiveRunId?: string;
     approvalId?: string;
     taskId?: string;

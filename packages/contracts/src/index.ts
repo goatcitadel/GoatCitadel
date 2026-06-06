@@ -56,6 +56,7 @@ export * from "./media.js";
 export * from "./assembly.js";
 export * from "./mcp.js";
 export * from "./channels.js";
+export * from "./channel-sanitizer.js";
 export * from "./channel-access.js";
 export * from "./channel-wizard.js";
 export * from "./channel-probes.js";

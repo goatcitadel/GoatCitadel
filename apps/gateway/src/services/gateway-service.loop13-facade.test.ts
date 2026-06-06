@@ -305,6 +305,153 @@ afterEach(() => {
 });
 
 describe("GatewayService Loop 13 chat facade forwarding", () => {
+  it("undoes completed chat turns from the active selected branch", async () => {
+    const deleteMessages = vi.fn(() => 4);
+    const deleteTraces = vi.fn(() => 2);
+    const setActiveLeaf = vi.fn();
+    const clearBranch = vi.fn();
+    const publishRealtime = vi.fn();
+    const recordDevDiagnostic = vi.fn();
+    const traces = [
+      {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        userMessageId: "user-1",
+        assistantMessageId: "assistant-1",
+        status: "completed",
+      },
+      {
+        turnId: "turn-2",
+        sessionId: "session-1",
+        userMessageId: "user-2",
+        assistantMessageId: "assistant-2",
+        parentTurnId: "turn-1",
+        status: "completed",
+      },
+      {
+        turnId: "turn-3",
+        sessionId: "session-1",
+        userMessageId: "user-3",
+        assistantMessageId: "assistant-3",
+        parentTurnId: "turn-2",
+        status: "completed",
+      },
+    ] as ChatTurnTraceRecord[];
+    const { gateway } = createGatewayHarness({
+      getSession: vi.fn(() => ({ sessionId: "session-1" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces,
+        tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
+        turnLineageById: new Map(
+          traces.map((trace) => [trace.turnId, { turnId: trace.turnId, parentTurnId: trace.parentTurnId }]),
+        ),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        activeLeafTurnId: "turn-3",
+      })),
+      publishRealtime,
+      recordDevDiagnostic,
+      storage: {
+        runImmediateTransaction: (callback: () => unknown) => callback(),
+        chatMessages: { deleteByMessageIds: deleteMessages },
+        chatTurnTraces: { deleteByTurnIds: deleteTraces },
+        chatSessionBranchState: { setActiveLeaf, clear: clearBranch },
+      },
+    });
+
+    await expect(gateway.undoChatTurns("session-1", 2, { operatorId: "operator-test" })).resolves.toMatchObject({
+      undoneCount: 2,
+      removedTurnIds: ["turn-2", "turn-3"],
+      removedMessageCount: 4,
+      activeLeafTurnId: "turn-1",
+    });
+
+    expect(deleteMessages).toHaveBeenCalledWith("session-1", ["user-2", "assistant-2", "user-3", "assistant-3"]);
+    expect(deleteTraces).toHaveBeenCalledWith("session-1", ["turn-2", "turn-3"]);
+    expect(setActiveLeaf).toHaveBeenCalledWith("session-1", "turn-1", expect.any(String));
+    expect(clearBranch).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ event: "chat.turns_undone" }));
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "chat_thread_updated",
+      "chat",
+      expect.objectContaining({ type: "chat_thread_undone", activeLeafTurnId: "turn-1" }),
+      expect.objectContaining({ eventAuthority: "retained_stream" }),
+    );
+  });
+
+  it("clears the chat branch state when undo removes the whole selected path", async () => {
+    const clearBranch = vi.fn();
+    const traces = [
+      {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        userMessageId: "user-1",
+        status: "completed",
+      },
+    ] as ChatTurnTraceRecord[];
+    const { gateway } = createGatewayHarness({
+      getSession: vi.fn(() => ({ sessionId: "session-1" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces,
+        tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
+        turnLineageById: new Map([["turn-1", { turnId: "turn-1" }]]),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        activeLeafTurnId: "turn-1",
+      })),
+      publishRealtime: vi.fn(),
+      recordDevDiagnostic: vi.fn(),
+      storage: {
+        runImmediateTransaction: (callback: () => unknown) => callback(),
+        chatMessages: { deleteByMessageIds: vi.fn(() => 1) },
+        chatTurnTraces: { deleteByTurnIds: vi.fn(() => 1) },
+        chatSessionBranchState: { setActiveLeaf: vi.fn(), clear: clearBranch },
+      },
+    });
+
+    await expect(gateway.undoChatTurns("session-1", 1)).resolves.toMatchObject({
+      undoneCount: 1,
+      activeLeafTurnId: undefined,
+    });
+
+    expect(clearBranch).toHaveBeenCalledWith("session-1");
+  });
+
+  it("blocks undo while the selected tail has an active turn", async () => {
+    const traces = [
+      {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        userMessageId: "user-1",
+        status: "running",
+      },
+    ] as ChatTurnTraceRecord[];
+    const { gateway } = createGatewayHarness({
+      getSession: vi.fn(() => ({ sessionId: "session-1" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces,
+        tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
+        turnLineageById: new Map([["turn-1", { turnId: "turn-1" }]]),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        activeLeafTurnId: "turn-1",
+      })),
+      storage: {
+        runImmediateTransaction: vi.fn(),
+        chatMessages: { deleteByMessageIds: vi.fn() },
+        chatTurnTraces: { deleteByTurnIds: vi.fn() },
+        chatSessionBranchState: { setActiveLeaf: vi.fn(), clear: vi.fn() },
+      },
+    });
+
+    await expect(gateway.undoChatTurns("session-1", 1)).rejects.toThrow(
+      "Chat turn turn-1 is running; cancel or finish it before undoing.",
+    );
+  });
+
   it("forwards chat session and command calls with the route-facing dependency host", async () => {
     const { gateway } = createGatewayHarness({
       clearChatTurnWriteLease: vi.fn(),

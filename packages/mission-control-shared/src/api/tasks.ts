@@ -10,13 +10,22 @@ function withWorkspaceQuery(path: string, workspaceId?: string): string {
   return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(trimmed)}`;
 }
 
+interface FetchTasksOptions {
+  limit?: number;
+  cursor?: string;
+}
+
 export async function fetchTasks(
   status?: TaskRecord["status"],
   workspaceId?: string,
+  options: FetchTasksOptions = {},
 ): Promise<{ items: TaskRecord[]; nextCursor?: string }> {
-  const query = new URLSearchParams({ limit: "100", view: "active" });
+  const query = new URLSearchParams({ limit: String(options.limit ?? 100), view: "active" });
   if (status) {
     query.set("status", status);
+  }
+  if (options.cursor?.trim()) {
+    query.set("cursor", options.cursor.trim());
   }
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
@@ -28,10 +37,14 @@ export async function fetchTasksByView(
   view: "active" | "trash" | "all",
   status?: TaskRecord["status"],
   workspaceId?: string,
+  options: FetchTasksOptions = {},
 ): Promise<{ items: TaskRecord[]; nextCursor?: string; view: "active" | "trash" | "all" }> {
-  const query = new URLSearchParams({ limit: "100", view });
+  const query = new URLSearchParams({ limit: String(options.limit ?? 100), view });
   if (status) {
     query.set("status", status);
+  }
+  if (options.cursor?.trim()) {
+    query.set("cursor", options.cursor.trim());
   }
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());

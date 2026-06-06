@@ -78,6 +78,22 @@ describe("buildModelCommandSuggestions", () => {
       }).map((item) => item.command),
     ).toEqual(["/model anthropic/claude-sonnet-4.5", "/model anthropic/claude-opus-4.1"]);
   });
+
+  it("supports fuzzy model search across compact provider and model tokens", () => {
+    expect(
+      buildModelCommandSuggestions({
+        draft: "/model g54",
+        providers,
+      }).map((item) => item.command),
+    ).toEqual(["/model openai/gpt-5.4-mini"]);
+
+    expect(
+      buildModelCommandSuggestions({
+        draft: "/model ant opu",
+        providers,
+      }).map((item) => item.command),
+    ).toEqual(["/model anthropic/claude-opus-4.1"]);
+  });
 });
 
 describe("buildOrchestrationCommandSuggestions", () => {

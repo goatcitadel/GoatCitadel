@@ -1007,8 +1007,9 @@ export function buildTaskRealtimeLinks(
     ...(task?.taskId || fallbackTaskId ? { taskId: task?.taskId ?? fallbackTaskId } : {}),
     ...(task?.workspaceId ? { workspaceId: task.workspaceId } : {}),
     ...(task?.proactiveContext?.sessionId ? { sessionId: task.proactiveContext.sessionId } : {}),
-    ...(task?.proactiveContext?.durableRunId || task?.agenticContext?.runId
-      ? { runId: task.proactiveContext?.durableRunId ?? task.agenticContext?.runId }
+    ...(task?.agenticContext?.runId ? { runId: task.agenticContext.runId } : {}),
+    ...(task?.proactiveContext?.durableRunId || task?.agenticContext?.durableRunId
+      ? { durableRunId: task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId }
       : {}),
     ...(task?.proactiveContext?.proactiveRunId ? { proactiveRunId: task.proactiveContext.proactiveRunId } : {}),
     ...(task?.proactiveContext?.approvalId ? { approvalId: task.proactiveContext.approvalId } : {}),

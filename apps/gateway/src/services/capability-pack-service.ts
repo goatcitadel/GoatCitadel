@@ -626,10 +626,16 @@ function validateCapabilityPackManifest(manifest: CapabilityPackManifest): void 
   if (!manifest.provenance.publisher?.trim()) {
     throw new Error("Capability pack manifest provenance publisher is required.");
   }
+  const seenAssetIds = new Set<string>();
   for (const asset of manifest.assets) {
-    if (!asset.id?.trim() || !asset.label?.trim()) {
+    const assetId = asset.id?.trim();
+    if (!assetId || !asset.label?.trim()) {
       throw new Error("Capability pack assets require id and label.");
     }
+    if (seenAssetIds.has(assetId)) {
+      throw new Error(`Capability pack asset ${assetId} is declared more than once.`);
+    }
+    seenAssetIds.add(assetId);
     if (!["skill", "addon", "mcp_template", "plugin", "runtime_preset"].includes(asset.kind)) {
       throw new Error(`Capability pack asset ${asset.id} kind is invalid.`);
     }

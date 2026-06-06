@@ -45,7 +45,17 @@ export function GCCombobox({
     if (!q) {
       return options.slice(0, 100);
     }
-    return options.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(q)).slice(0, 100);
+    return options
+      .map((option) => ({ option, score: scoreFuzzyOption(option, q) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => {
+        if (left.score !== right.score) {
+          return right.score - left.score;
+        }
+        return left.option.label.localeCompare(right.option.label);
+      })
+      .map((entry) => entry.option)
+      .slice(0, 100);
   }, [options, query]);
 
   useEffect(() => {
@@ -157,7 +167,7 @@ export function GCCombobox({
           inputRef.current?.focus();
         }}
       >
-        <Command className="rounded-lg border-0 bg-transparent p-0">
+        <Command className="rounded-lg border-0 bg-transparent p-0" shouldFilter={false}>
           <CommandInput
             ref={inputRef}
             className="gc-combobox-input"
@@ -171,7 +181,12 @@ export function GCCombobox({
             aria-controls={listboxId}
             aria-activedescendant={highlightedOption ? `${listboxId}-option-${highlightedOption.value}` : undefined}
           />
-          <CommandList className="gc-combobox-list mc-gc-combobox-list" id={listboxId} role="listbox" aria-label="Options">
+          <CommandList
+            className="gc-combobox-list mc-gc-combobox-list"
+            id={listboxId}
+            role="listbox"
+            aria-label="Options"
+          >
             <CommandEmpty className="gc-combobox-empty">No matches.</CommandEmpty>
             <CommandGroup>
               {filtered.map((option, index) => (
@@ -200,4 +215,54 @@ export function GCCombobox({
       </PopoverContent>
     </Popover>
   );
+}
+
+function scoreFuzzyOption(option: GCComboboxOption, query: string): number {
+  const haystack = `${option.label} ${option.value}`.toLowerCase();
+  const compactHaystack = haystack.replace(/[^a-z0-9]+/g, "");
+  const compactQuery = query.replace(/[^a-z0-9]+/g, "");
+  if (!compactQuery) {
+    return 1;
+  }
+  if (haystack === query || compactHaystack === compactQuery) {
+    return 100;
+  }
+  if (haystack.startsWith(query) || compactHaystack.startsWith(compactQuery)) {
+    return 80;
+  }
+  if (haystack.includes(query) || compactHaystack.includes(compactQuery)) {
+    return 60;
+  }
+  const queryParts = query.split(/[^a-z0-9]+/).filter(Boolean);
+  if (queryParts.length > 1) {
+    return /\s/.test(query) && queryParts.every((part) => haystack.includes(part) || compactHaystack.includes(part))
+      ? 55
+      : 0;
+  }
+  const acronym = haystack
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("");
+  if (acronym.startsWith(compactQuery)) {
+    return 50;
+  }
+  if (/[^a-z0-9]/.test(query)) {
+    return 0;
+  }
+  return scoreOrderedCharacters(compactHaystack, compactQuery);
+}
+
+function scoreOrderedCharacters(haystack: string, query: string): number {
+  let cursor = 0;
+  let gapPenalty = 0;
+  for (const char of query) {
+    const next = haystack.indexOf(char, cursor);
+    if (next < 0) {
+      return 0;
+    }
+    gapPenalty += Math.max(0, next - cursor);
+    cursor = next + 1;
+  }
+  return Math.max(1, 40 - gapPenalty);
 }

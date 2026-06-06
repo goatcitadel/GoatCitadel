@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   buildInstalledIntegrationPluginRecord,
@@ -94,6 +95,35 @@ describe("integration plugin author contract", () => {
     expect(updated.installedAt).toBe("2026-03-30T10:00:00.000Z");
     expect(updated.updatedAt).toBe("2026-03-30T12:00:00.000Z");
     expect(updated.source).toBe(source);
+  });
+
+  it("preserves manifest tool overrides as pending owner approval entries", () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-manifest-"));
+    try {
+      fs.writeFileSync(
+        path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME),
+        JSON.stringify({
+          pluginId: "override-plugin",
+          label: "Override Plugin",
+          version: "1.0.0",
+          capabilities: ["channel.send"],
+          toolOverrides: [{ toolName: "channel.send", override: true }],
+        }),
+        "utf8",
+      );
+
+      const created = buildInstalledIntegrationPluginRecord({
+        now: "2026-03-30T10:00:00.000Z",
+        pluginId: "override-plugin",
+        source,
+      });
+
+      expect(created.toolOverrides).toEqual([
+        { toolName: "channel.send", override: true, status: "pending_owner_approval" },
+      ]);
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
   });
 
   it("keeps legacy installs compatible while surfacing trust warnings for unverified sources", () => {

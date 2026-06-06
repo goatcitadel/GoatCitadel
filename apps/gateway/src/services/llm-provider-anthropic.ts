@@ -78,6 +78,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
         toolCallIndex: number;
       }
     >();
+    const nativeContentBuffers = new Map<number, Record<string, unknown>>();
     // Anthropic content-block indices include text blocks and may be sparse;
     // downstream aggregation keys tool calls by a contiguous tool-call index, so
     // assign each tool_use block its own stable ordinal as it starts.
@@ -101,10 +102,18 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           toolUseBuffers.set(event.index, {
             id: String(block.id ?? `tool_${event.index}`),
             name: String(block.name ?? ""),
-            partialJson: typeof block.input === "string" ? block.input : JSON.stringify(block.input ?? {}),
+            partialJson:
+              typeof block.input === "string"
+                ? block.input
+                : isRecord(block.input) && Object.keys(block.input).length > 0
+                  ? JSON.stringify(block.input)
+                  : "",
             toolCallIndex: nextToolCallIndex,
           });
           nextToolCallIndex += 1;
+        }
+        if (isAnthropicReplayContentBlock(block)) {
+          nativeContentBuffers.set(event.index, { ...block });
         }
         continue;
       }
@@ -132,10 +141,35 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
             existing.partialJson += String(event.delta.partial_json ?? "");
           }
         }
+        if (typeof event.index === "number") {
+          const existing = nativeContentBuffers.get(event.index);
+          if (existing && event.delta.type === "thinking_delta") {
+            existing.thinking = `${String(existing.thinking ?? "")}${String(event.delta.thinking ?? "")}`;
+          }
+          if (existing && event.delta.type === "signature_delta") {
+            existing.signature = String(event.delta.signature ?? existing.signature ?? "");
+          }
+        }
         continue;
       }
 
       if (eventType === "content_block_stop" && typeof event.index === "number") {
+        const nativeContent = nativeContentBuffers.get(event.index);
+        if (nativeContent) {
+          nativeContentBuffers.delete(event.index);
+          yield {
+            id: messageId,
+            model: messageModel,
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  provider_native_content: [nativeContent],
+                },
+              },
+            ],
+          };
+        }
         const toolUse = toolUseBuffers.get(event.index);
         if (toolUse) {
           toolUseBuffers.delete(event.index);
@@ -166,7 +200,13 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
       }
 
       if (eventType === "message_delta") {
-        finishReason = typeof event.stop_reason === "string" ? event.stop_reason : finishReason;
+        const delta = isRecord(event.delta) ? event.delta : undefined;
+        finishReason =
+          typeof delta?.stop_reason === "string"
+            ? delta.stop_reason
+            : typeof event.stop_reason === "string"
+              ? event.stop_reason
+              : finishReason;
         usage = isRecord(event.usage) ? event.usage : usage;
         continue;
       }
@@ -233,6 +273,8 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
 
 function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
   const { system, messages } = buildAnthropicMessagesInput(request.messages);
+  const reasoningEffort = request.reasoning?.effort;
+  const thinkingEnabled = Boolean(reasoningEffort && reasoningEffort !== "none");
   const payload: Record<string, unknown> = {
     model,
     messages,
@@ -248,13 +290,16 @@ function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: st
   const anthropicTools = mapAnthropicTools(request.tools);
   if (anthropicTools !== undefined) payload.tools = anthropicTools;
   const anthropicToolChoice = mapAnthropicToolChoice(request.tool_choice);
-  if (anthropicToolChoice !== undefined) payload.tool_choice = anthropicToolChoice;
+  if (anthropicToolChoice !== undefined) {
+    payload.tool_choice =
+      thinkingEnabled && isAnthropicForcedToolChoice(anthropicToolChoice) ? { type: "auto" } : anthropicToolChoice;
+  }
   if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
   if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (request.reasoning?.effort && request.reasoning.effort !== "none") {
+  if (thinkingEnabled) {
     payload.thinking = {
       type: "enabled",
-      budget_tokens: anthropicThinkingBudgetForEffort(request.reasoning.effort),
+      budget_tokens: anthropicThinkingBudgetForEffort(reasoningEffort ?? "low"),
     };
   }
   return payload;
@@ -344,7 +389,10 @@ function buildAnthropicMessagesInput(messages: ChatCompletionRequest["messages"]
 
     if (message.role === "assistant") {
       const assistantRecord = toPlainRecord(message);
-      const assistantContent = mapAnthropicMessageContent(message.content);
+      const providerNativeContent = Array.isArray(assistantRecord?.provider_native_content)
+        ? assistantRecord.provider_native_content.map((block) => mapAnthropicContentBlock(block)).filter(isRecord)
+        : [];
+      const assistantContent = [...providerNativeContent, ...mapAnthropicMessageContent(message.content)];
       if (assistantRecord && Array.isArray(assistantRecord.tool_calls)) {
         for (const toolCall of assistantRecord.tool_calls) {
           if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
@@ -478,6 +526,7 @@ function adaptAnthropicMessageResponse(json: Record<string, unknown>): ChatCompl
         },
       })),
   );
+  const providerNativeContent = content.filter(isAnthropicReplayContentBlock).map((block) => ({ ...block }));
 
   return {
     id: typeof json.id === "string" ? json.id : undefined,
@@ -489,6 +538,7 @@ function adaptAnthropicMessageResponse(json: Record<string, unknown>): ChatCompl
         message: {
           role: "assistant",
           content: text,
+          ...(providerNativeContent.length > 0 ? { provider_native_content: providerNativeContent } : {}),
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
         finish_reason: mapAnthropicStopReason(typeof json.stop_reason === "string" ? json.stop_reason : undefined),
@@ -496,6 +546,14 @@ function adaptAnthropicMessageResponse(json: Record<string, unknown>): ChatCompl
     ],
     usage: normalizeAnthropicUsage(isRecord(json.usage) ? json.usage : undefined),
   };
+}
+
+function isAnthropicReplayContentBlock(block: Record<string, unknown>): boolean {
+  return block.type === "thinking" || block.type === "redacted_thinking";
+}
+
+function isAnthropicForcedToolChoice(toolChoice: Record<string, unknown>): boolean {
+  return toolChoice.type === "any" || toolChoice.type === "tool";
 }
 
 function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Record<string, unknown> | undefined {

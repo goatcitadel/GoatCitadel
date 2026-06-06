@@ -45,6 +45,7 @@ describe("TaskLifecycleService agentic runtime", () => {
       agenticContext: {
         boardId: "cowork:default",
         runId: "run-1",
+        durableRunId: "durable-run-1",
         childRunIds: ["run-1:researcher"],
         parentSessionId: "sess-1",
         surface: "cowork",
@@ -116,7 +117,7 @@ describe("TaskLifecycleService agentic runtime", () => {
       ]),
     );
     expect(tree.controls.find((control) => control.action === "pause")?.enabled).toBe(true);
-    expect(tree.controls.find((control) => control.action === "pause")?.runtimeEffect).toBe("state_only");
+    expect(tree.controls.find((control) => control.action === "pause")?.runtimeEffect).toBe("runtime_pause");
 
     const control = service.invokeAgenticControl("run-1", {
       action: "kill_child",
@@ -154,7 +155,7 @@ describe("TaskLifecycleService agentic runtime", () => {
       "tasks",
       expect.any(Object),
       expect.objectContaining({
-        links: expect.objectContaining({ runId: "run-1" }),
+        links: expect.objectContaining({ runId: "run-1", durableRunId: "durable-run-1" }),
       }),
     );
   });

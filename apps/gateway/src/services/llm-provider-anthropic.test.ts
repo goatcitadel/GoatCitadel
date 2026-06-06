@@ -40,6 +40,7 @@ describe("anthropicProviderAdapter", () => {
           model: "claude-test",
           stop_reason: "tool_use",
           content: [
+            { type: "thinking", thinking: "private chain", signature: "sig-1" },
             { type: "text", text: "Need a lookup." },
             { type: "tool_use", id: "tool_1", name: "lookup", input: { query: "goat" } },
             { type: "tool_use", id: "tool_1", name: "lookup", input: { query: "duplicate" } },
@@ -57,6 +58,7 @@ describe("anthropicProviderAdapter", () => {
         {
           role: "assistant",
           content: "",
+          provider_native_content: [{ type: "thinking", thinking: "prior chain", signature: "sig-prior" }],
           tool_calls: [
             {
               id: "call_existing",
@@ -108,7 +110,7 @@ describe("anthropicProviderAdapter", () => {
       stop_sequences: ["STOP"],
       metadata: { route: "anthropic-test" },
       output_config: { format: { type: "json_object" } },
-      tool_choice: { type: "tool", name: "lookup" },
+      tool_choice: { type: "auto" },
       thinking: { type: "enabled", budget_tokens: 8192 },
     });
     expect(payload.system).toEqual([
@@ -125,6 +127,7 @@ describe("anthropicProviderAdapter", () => {
     expect(payload.messages).toContainEqual({
       role: "assistant",
       content: [
+        { type: "thinking", thinking: "prior chain", signature: "sig-prior" },
         {
           type: "tool_use",
           id: "call_existing",
@@ -142,6 +145,7 @@ describe("anthropicProviderAdapter", () => {
           message: {
             role: "assistant",
             content: "Need a lookup.",
+            provider_native_content: [{ type: "thinking", thinking: "private chain", signature: "sig-1" }],
             tool_calls: [
               {
                 id: "tool_1",
@@ -254,6 +258,120 @@ describe("anthropicProviderAdapter", () => {
         model: "claude-test",
         choices: [{ index: 0, delta: {}, finish_reason: "length" }],
         usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+      }),
+    ]);
+  });
+
+  it("preserves streamed thinking signatures and treats empty tool_use input as pending json", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              `data: ${JSON.stringify({ type: "message_start", message: { id: "msg_thinking", model: "claude-test" } })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_start",
+                index: 0,
+                content_block: { type: "thinking", thinking: "" },
+              })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "thinking_delta", thinking: "private chain" },
+              })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "signature_delta", signature: "sig-stream" },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_start",
+                index: 1,
+                content_block: { type: "tool_use", id: "tool_stream", name: "lookup", input: {} },
+              })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 1,
+                delta: { type: "input_json_delta", partial_json: '{"query":"goat"}' },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 1 })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "message_delta",
+                delta: { stop_reason: "tool_use" },
+                usage: { input_tokens: 8, output_tokens: 4 },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "message_stop" })}`,
+              "",
+              "data: [DONE]",
+              "",
+            ].join("\n"),
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of anthropicProviderAdapter.chatCompletionsStream(
+      { messages: [{ role: "user", content: "stream" }], timeoutMs: -1 },
+      resolved,
+      "claude-test",
+      host,
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      {
+        id: "msg_thinking",
+        model: "claude-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              provider_native_content: [{ type: "thinking", thinking: "private chain", signature: "sig-stream" }],
+            },
+          },
+        ],
+      },
+      {
+        id: "msg_thinking",
+        model: "claude-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "tool_stream",
+                  type: "function",
+                  function: { name: "lookup", arguments: '{"query":"goat"}' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expect.objectContaining({
+        id: "msg_thinking",
+        model: "claude-test",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
       }),
     ]);
   });

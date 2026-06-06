@@ -6,7 +6,8 @@ export type ResearchSearchEngine =
   | "startpage"
   | "ecosia"
   | "qwant"
-  | "wolframalpha";
+  | "wolframalpha"
+  | "parallel";
 
 export type ResearchSearchEngineStatus = "ready" | "degraded" | "unavailable" | "blocked";
 

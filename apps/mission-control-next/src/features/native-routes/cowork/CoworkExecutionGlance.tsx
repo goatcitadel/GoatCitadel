@@ -161,7 +161,9 @@ export function buildCoworkExecutionSnapshot(input: {
   );
   const approvalLinkedTasks = input.tasks.filter((item) => Boolean(item.proactiveContext?.approvalId));
   const durableRunIds = new Set(
-    input.tasks.map((item) => item.proactiveContext?.durableRunId).filter((item): item is string => Boolean(item)),
+    input.tasks
+      .flatMap((item) => [item.proactiveContext?.durableRunId, item.agenticContext?.durableRunId])
+      .filter((item): item is string => Boolean(item)),
   );
   const waitingWakeCount = input.tasks.filter((item) => Boolean(item.proactiveContext?.nextWakeAt)).length;
   const resumedCount = input.tasks.filter((item) => Boolean(item.proactiveContext?.stopReason)).length;

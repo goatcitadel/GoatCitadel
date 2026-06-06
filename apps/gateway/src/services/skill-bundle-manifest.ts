@@ -85,11 +85,17 @@ export async function validateSkillBundleManifestDirectory(skillDir: string): Pr
 
   let assetsVerified = 0;
   const assetPaths: string[] = [];
+  const seenAssetPaths = new Set<string>();
   for (const asset of manifest.assets) {
     const normalized = validateAsset(asset, errors);
     if (!normalized) {
       continue;
     }
+    if (seenAssetPaths.has(normalized)) {
+      errors.push(`${normalized} is declared more than once in the manifest`);
+      continue;
+    }
+    seenAssetPaths.add(normalized);
     assetPaths.push(normalized);
     const assetPath = path.join(skillDir, ...normalized.split("/"));
     try {

@@ -307,6 +307,34 @@ describe("createChatCompletionStream", () => {
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
+  it("reports stream retry/cooldown exhaustion explicitly for rate limits before output", async () => {
+    const host = createHost(async function* () {
+      yield* [] as Iterable<never>;
+      throw new Error("provider failed (429): too many requests");
+    }, []);
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.chunks).toEqual([]);
+    expect(result.error?.name).toBe("ProviderRetryCooldownExhaustedError");
+    expect(result.error?.message).toContain("Provider retry/cooldown budget exhausted for primary/primary-model");
+    expect(result.error?.message).toContain("provider failed (429): too many requests");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.failed",
+        runtimeStatus: "failed",
+        runtimeError: expect.objectContaining({
+          name: "ProviderRetryCooldownExhaustedError",
+          retryable: false,
+        }),
+        context: expect.objectContaining({
+          retryCooldownExhausted: true,
+        }),
+      }),
+    );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("blocks streaming chat completion when gateway.dispatch.before intercepts", async () => {
     const host = createHost(async function* () {
       yield {
@@ -700,6 +728,34 @@ describe("createChatCompletion", () => {
         runtimeStatus: "failed",
         runtimeError: expect.objectContaining({
           message: "provider exhausted",
+        }),
+      }),
+    );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("reports completion retry/cooldown exhaustion explicitly for rate limits", async () => {
+    const host = createCompletionHost({
+      fallbacks: [],
+      completion: async () => {
+        throw new Error("provider failed (429): rate limit");
+      },
+    });
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow(
+      "Provider retry/cooldown budget exhausted for primary/primary-model",
+    );
+
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion.failed",
+        runtimeStatus: "failed",
+        runtimeError: expect.objectContaining({
+          name: "ProviderRetryCooldownExhaustedError",
+          retryable: false,
+        }),
+        context: expect.objectContaining({
+          retryCooldownExhausted: true,
         }),
       }),
     );

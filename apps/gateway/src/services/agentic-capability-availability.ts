@@ -215,8 +215,9 @@ function mapPluginIntegrityStatus(
 ): AgenticPluginProviderRuntimeStatus["integrityStatus"] {
   switch (plugin.integrityStatus ?? plugin.sourceMetadata?.integrityStatus ?? "unknown") {
     case "verified":
-    case "not_applicable":
       return "verified";
+    case "not_applicable":
+      return "unverified";
     case "missing":
     case "mismatch":
       return "corrupt";

@@ -9,6 +9,7 @@ const DEFAULT_ENGINES: ResearchSearchEngine[] = [
   "ecosia",
   "qwant",
   "wolframalpha",
+  "parallel",
 ];
 
 const BLOCKED_ENGINE_ALIASES = new Map<string, string>([
@@ -34,6 +35,7 @@ const API_ENV_BY_ENGINE: Record<ResearchSearchEngine, string[]> = {
   ecosia: ["GOATCITADEL_SEARCH_ECOSIA_API_KEY"],
   qwant: ["GOATCITADEL_SEARCH_QWANT_API_KEY"],
   wolframalpha: ["GOATCITADEL_SEARCH_WOLFRAMALPHA_APP_ID", "WOLFRAM_ALPHA_APP_ID"],
+  parallel: ["GOATCITADEL_SEARCH_PARALLEL_API_KEY", "PARALLEL_API_KEY"],
 };
 
 export class ResearchSearchBrokerService {

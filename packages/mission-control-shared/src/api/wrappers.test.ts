@@ -526,6 +526,10 @@ describe("shared API wrappers", () => {
       tasks.fetchTasksByView("trash", undefined, "w"),
       "/api/v1/tasks?limit=100&view=trash&workspaceId=w",
     );
+    await expectCall(
+      tasks.fetchTasksByView("active", undefined, "w", { limit: 50, cursor: "cursor-1" }),
+      "/api/v1/tasks?limit=50&view=active&cursor=cursor-1&workspaceId=w",
+    );
     await expectCall(tasks.createTask({ title: "Task" }), "/api/v1/tasks", { method: "POST" });
     await expectCall(tasks.updateTask("task/1", { title: "New" }), "/api/v1/tasks/task%2F1", { method: "PATCH" });
     await expectCall(

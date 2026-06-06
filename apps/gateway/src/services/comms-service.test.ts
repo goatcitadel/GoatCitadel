@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
   ChatAttachmentRecord,
   IntegrationConnection,
@@ -85,6 +86,51 @@ describe("comms service governance", () => {
         localOperatorOverrideId: "override-1",
         surface: "cowork",
       },
+    });
+  });
+
+  it("strips hidden reasoning blocks before final channel delivery while preserving code examples", async () => {
+    const host = createHost();
+
+    await commsSend(host, {
+      connectionId: "conn-1",
+      target: "#ops",
+      message: [
+        "Visible answer.",
+        "<thinking>private chain of thought</thinking>",
+        "authorization: Bearer secret-token-value-1234567890",
+        "```xml",
+        "<thinking>literal example</thinking>",
+        "```",
+        '[tool_call]{"name":"secret"}[/tool_call]',
+        "Done.",
+      ].join("\n"),
+    });
+
+    const request = host.invokeAndUnwrap.mock.calls[0]![0] as ToolInvokeRequest;
+    expect(request.args).toMatchObject({
+      message: [
+        "Visible answer.",
+        "",
+        "authorization: Bearer [REDACTED]",
+        "```xml",
+        "<thinking>literal example</thinking>",
+        "```",
+        "",
+        "Done.",
+      ].join("\n"),
+      outboundSanitizer: {
+        removedBlockCount: 2,
+        redactedSecretCount: 1,
+        policy: "strip_internal_reasoning_blocks_redact_secrets",
+      },
+    });
+  });
+
+  it("keeps ordinary discussion of thinking when it is not a hidden provider block", () => {
+    expect(sanitizeChannelOutboundMessage("We should think through rollback before sending.")).toMatchObject({
+      message: "We should think through rollback before sending.",
+      removedBlockCount: 0,
     });
   });
 

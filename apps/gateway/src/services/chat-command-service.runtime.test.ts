@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseChatCommand, type ChatCommandDependencies } from "./chat-command-service.js";
+import { listChatCommandCatalog, parseChatCommand, type ChatCommandDependencies } from "./chat-command-service.js";
 
 function createDeps(): ChatCommandDependencies {
   let prefs = {
@@ -63,6 +63,13 @@ function createDeps(): ChatCommandDependencies {
     })),
     getSettings: vi.fn(() => ({ llm: { activeProviderId: "primary", activeModel: "primary-model" } })),
     runMemoryMaintenanceNow: vi.fn(() => ({ runId: "dream-1" })),
+    undoChatTurns: vi.fn(async (_sessionId: string, count: number) => ({
+      undoneCount: count,
+      requestedCount: count,
+      removedTurnIds: Array.from({ length: count }, (_item, index) => `turn-${index + 1}`),
+      removedMessageCount: count * 2,
+      activeLeafTurnId: "turn-kept",
+    })),
     runChatResearch: vi.fn(async (_sessionId: string, input: { query: string }) => ({
       summary: `Research: ${input.query}`,
       citations: [],
@@ -125,6 +132,14 @@ function createDeps(): ChatCommandDependencies {
 }
 
 describe("chat command runtime dispatch", () => {
+  it("lists every runtime preference command that the parser accepts", () => {
+    const commands = new Set(listChatCommandCatalog().map((item) => item.command));
+
+    expect(commands.has("/speed")).toBe(true);
+    expect(commands.has("/subagents")).toBe(true);
+    expect(commands.has("/undo")).toBe(true);
+  });
+
   it("dispatches preference, workflow, skill, mcp, project, and approval commands through deps", async () => {
     const deps = createDeps();
 
@@ -137,6 +152,7 @@ describe("chat command runtime dispatch", () => {
       "/memory on",
       "/dream",
       "/dream status",
+      "/undo 2",
       "/think deep",
       "/speed fast",
       "/subagents auto_when_useful",
@@ -178,6 +194,7 @@ describe("chat command runtime dispatch", () => {
       model: "backup-model",
     });
     expect(deps.updateChatSessionProactivePolicy).toHaveBeenCalledWith("session-1", { proactiveMode: "suggest" });
+    expect(deps.undoChatTurns).toHaveBeenCalledWith("session-1", 2, { operatorId: undefined });
     expect(deps.runChatDelegation).toHaveBeenCalledWith(
       "session-1",
       expect.objectContaining({ objective: "verify the release", roles: ["qa", "ops"] }),
@@ -191,6 +208,27 @@ describe("chat command runtime dispatch", () => {
     expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "reject", {
       resolvedBy: "chat-command",
     });
+  });
+
+  it("defaults /undo to one turn, bounds the count, and stamps the operator", async () => {
+    const deps = createDeps();
+
+    await expect(parseChatCommand(deps, "session-1", "/undo", { authActorId: "operator-test" })).resolves.toMatchObject(
+      {
+        ok: true,
+        message: expect.stringContaining("Undid 1 turn"),
+      },
+    );
+    await expect(parseChatCommand(deps, "session-1", "/undo 0")).resolves.toMatchObject({
+      ok: false,
+      message: "Usage: /undo [N], where N is between 1 and 20.",
+    });
+    await expect(parseChatCommand(deps, "session-1", "/undo many")).resolves.toMatchObject({
+      ok: false,
+      message: "Usage: /undo [N]",
+    });
+
+    expect(deps.undoChatTurns).toHaveBeenCalledWith("session-1", 1, { operatorId: "operator-test" });
   });
 
   it("stamps approval slash commands with the request actor when provided", async () => {

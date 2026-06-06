@@ -374,6 +374,19 @@ describe("CapabilityPackService portable packs", () => {
         assets: [],
       }),
     ).toThrow("must declare at least one asset");
+
+    expect(() =>
+      service.previewLocalPack({
+        ...localPackManifest(),
+        assets: [
+          localPackManifest().assets[0]!,
+          {
+            ...localPackManifest().assets[1]!,
+            id: localPackManifest().assets[0]!.id,
+          },
+        ],
+      }),
+    ).toThrow("is declared more than once");
   });
 });
 

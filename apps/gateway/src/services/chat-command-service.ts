@@ -186,6 +186,17 @@ export interface ChatCommandDependencies {
     },
   ): Promise<ResearchSummaryRecord>;
   runMemoryMaintenanceNow(input: { workspaceId: string; triggerSource: "manual" }): { runId: string };
+  undoChatTurns(
+    sessionId: string,
+    count: number,
+    options?: { operatorId?: string },
+  ): Promise<{
+    undoneCount: number;
+    requestedCount: number;
+    removedTurnIds: string[];
+    removedMessageCount: number;
+    activeLeafTurnId?: string;
+  }>;
   runPromptPackFromChat(sessionId: string, selector: string): Promise<unknown[]>;
   scorePromptPackLatestRunByCode(input: {
     sessionId?: string;
@@ -302,7 +313,14 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     },
     { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
     { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
+    { command: "/undo", usage: "/undo [N]", description: "Remove the last N completed turns from this session." },
     { command: "/think", usage: "/think off|minimal|standard|extended|deep", description: "Set thinking depth." },
+    { command: "/speed", usage: "/speed standard|fast", description: "Set response speed preference." },
+    {
+      command: "/subagents",
+      usage: "/subagents off|ask_when_useful|auto_when_useful",
+      description: "Set governed subagent delegation behavior.",
+    },
     { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
     {
       command: "/proactive",
@@ -644,6 +662,37 @@ export async function parseChatCommand(
       };
     }
     return { ok: false, command, args, message: "Usage: /dream | /dream status" };
+  }
+
+  if (command === "/undo") {
+    const requested = args[0] ?? "1";
+    if (args.length > 1 || !/^\d+$/.test(requested)) {
+      return { ok: false, command, args, message: "Usage: /undo [N]" };
+    }
+    const count = Number.parseInt(requested, 10);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 20) {
+      return { ok: false, command, args, message: "Usage: /undo [N], where N is between 1 and 20." };
+    }
+    const result = await deps.undoChatTurns(sessionId, count, {
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+    });
+    if (result.undoneCount === 0) {
+      return {
+        ok: true,
+        command,
+        args,
+        message: "No completed turns were available to undo.",
+      };
+    }
+    const active = result.activeLeafTurnId
+      ? ` Active turn is now ${result.activeLeafTurnId}.`
+      : " Session is now empty.";
+    return {
+      ok: true,
+      command,
+      args,
+      message: `Undid ${result.undoneCount} turn${result.undoneCount === 1 ? "" : "s"} and removed ${result.removedMessageCount} message${result.removedMessageCount === 1 ? "" : "s"}.${active}`,
+    };
   }
 
   if (command === "/think") {

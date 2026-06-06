@@ -758,8 +758,14 @@ describe("NativeRoutePages library coverage", () => {
 
     routeMocks.fetchTasksByView.mockClear();
     await click(findButton(cowork.root, "Refresh"));
-    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("active", undefined, "default");
-    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("trash", undefined, "default");
+    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("active", undefined, "default", {
+      cursor: undefined,
+      limit: 100,
+    });
+    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("trash", undefined, "default", {
+      cursor: undefined,
+      limit: 100,
+    });
 
     await click(findButton(cowork.root, "Create task"));
     expect(collectText(cowork.root)).toContain("Task title is required.");
