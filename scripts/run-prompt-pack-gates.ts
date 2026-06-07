@@ -39,7 +39,6 @@ async function main(): Promise<void> {
       throw new Error(`Selected pack ${pack.packId} is missing target codes: ${missing.join(", ")}`);
     }
 
-    // eslint-disable-next-line no-console
     console.log(`[gate] using target codes: ${targetCodes.join(", ")}`);
 
     const queue: PromptPackTestRecord[] = [];
@@ -68,7 +67,6 @@ async function main(): Promise<void> {
     }> = [];
 
     for (const test of queue) {
-      // eslint-disable-next-line no-console
       console.log(`[gate] running ${test.code} ...`);
       const runResp = await app.inject({
         method: "POST",
@@ -157,9 +155,7 @@ async function main(): Promise<void> {
       "utf8",
     );
 
-    // eslint-disable-next-line no-console
     console.log(`[gate] done. output: ${outPath}`);
-    // eslint-disable-next-line no-console
     console.log(
       `[gate] summary: runFailures=${report.summary.runFailureCount} fail=${report.summary.failCount} review=${report.summary.reviewCount}` +
         ` needsScore=${report.summary.needsScoreCount} stale=${report.summary.staleLatestAutoScoreCount}` +
@@ -167,7 +163,6 @@ async function main(): Promise<void> {
         ` avg=${report.summary.averageWeightedScore.toFixed(1)} passRate=${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
     );
     if (!isEnvEnabled(PROMPT_PACK_V2_GATING_ENABLED_ENV)) {
-      // eslint-disable-next-line no-console
       console.log(
         `[gate] release gating disabled via ${PROMPT_PACK_V2_GATING_ENABLED_ENV}; leaving exit code unchanged.`,
       );
@@ -495,7 +490,6 @@ function safeJson<T>(value: string): T {
 }
 
 main().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error(`[gate] failed: ${(error as Error).message}`);
   process.exitCode = 1;
 });

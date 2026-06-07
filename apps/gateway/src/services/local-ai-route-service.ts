@@ -453,7 +453,6 @@ function scoreCatalogItemForBackend(
     fit = "not_recommended";
     limitations.push(`${backend} is not a supported native backend on ${hardware.os.platform}.`);
   } else if (hardware.memory.totalBytes <= 0 || estimatedMemoryBytes <= 0) {
-    fit = "borderline";
     limitations.push("Memory fit is approximate because the hardware or model estimate is incomplete.");
   } else {
     const ratio = hardware.memory.totalBytes / estimatedMemoryBytes;
@@ -637,16 +636,15 @@ function gib(value: number): number {
   return Math.round(value * GIB);
 }
 
-function normalizeProviderId(
-  providerId: string | undefined,
-  backend: LocalAiBackendKind,
-  model: string,
-): string {
+function normalizeProviderId(providerId: string | undefined, backend: LocalAiBackendKind, model: string): string {
   const trimmed = providerId?.trim();
   if (trimmed) {
     return trimmed;
   }
-  return `local-ai-${backend}-${model.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").toLowerCase()}`;
+  return `local-ai-${backend}-${model
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .toLowerCase()}`;
 }
 
 function platformSupportForBackend(backend: LocalAiBackendKind, osPlatform: string): LocalAiPlatformSupport {

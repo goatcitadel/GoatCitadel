@@ -16,6 +16,18 @@
       "docs.*",
       "knowledge.*"
     ],
+    "loopDetection": {
+      "enabled": true,
+      "historySize": 8,
+      "warningThreshold": 3,
+      "criticalThreshold": 4,
+      "globalThreshold": 6,
+      "detectors": {
+        "repeated_same_call": true,
+        "no_progress_polling": true,
+        "ping_pong": true
+      }
+    },
     "deny": [
       "fs.write",
       "fs.delete",

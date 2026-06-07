@@ -711,7 +711,7 @@ export async function runAgenticGovernanceLane(context) {
 // becomes the sole gate the lane actually exercises. Deny-by-default posture for
 // `mcp.invoke` is covered separately by the policy-engine deny-wins tests.
 async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
-  await writeJson(path.join(runtimeRoot, "config", "tool-policy.json"), {
+  const toolPolicy = {
     profiles: { danger: ["*"] },
     tools: {
       approvalMode: "bypass",
@@ -736,7 +736,20 @@ async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
       riskyShellPatterns: ["rm", "rmdir", "del", "format", "shutdown", "reboot", "git push", "git reset --hard"],
       requireApprovalForRiskyShell: true,
     },
-  });
+  };
+  await writeJson(path.join(runtimeRoot, "config", "tool-policy.json"), toolPolicy);
+
+  const unifiedPath = path.join(runtimeRoot, "config", "goatcitadel.json");
+  try {
+    const unified = await readJson(unifiedPath);
+    if (unified && typeof unified === "object" && !Array.isArray(unified)) {
+      await writeJson(unifiedPath, { ...unified, toolPolicy });
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
 }
 
 async function runAutonomousActivationGrantGovernanceScenario(context) {
@@ -5090,7 +5103,7 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
             `${sanitizeFilePart(provider.providerId)}-${sanitizeFilePart(scenario)}.json`,
           );
           await writeJson(resultPath, response.body);
-          const status = deriveProviderStatus(response.body);
+          const status = deriveProviderStatus(response.body, { providerConfigured: true });
           return {
             status,
             providerId: provider.providerId,
@@ -5365,7 +5378,7 @@ function getNextCoreNavigationRoutes(verificationTarget) {
   ].map((slug) => getVerificationRoute(verificationTarget, slug));
 }
 
-function deriveProviderStatus(payload) {
+export function deriveProviderStatus(payload, { providerConfigured = false } = {}) {
   if (payload?.ok) {
     return "passed";
   }
@@ -5375,27 +5388,29 @@ function deriveProviderStatus(payload) {
   if (
     /provider is not configured|missing .*api key|no longer available to new users/.test(error)
   ) {
-    return "not_configured";
+    return providerConfigured ? "failed" : "not_configured";
   }
   // Configured but rejected: a credential WAS supplied and the provider refused it
-  // (bad/expired key, auth error, billing). This must stay visible as degraded rather
-  // than being swallowed as not_configured, so the lane cannot read green when every
-  // configured provider is actually broken.
+  // (bad/expired key, auth error, billing). This must fail the lane rather than
+  // being swallowed as not_configured, so every configured-provider break stays visible.
   if (
     /invalid api key|authentication failed|authentication_error|unauthorized|authorized_error|insufficient credits|payment required/.test(
       error,
     )
   ) {
-    return "degraded";
+    return "failed";
   }
   if (
-    /unsupported|not supported|json_schema|tool_choice|tools are not available|response_format|unavailable now/.test(
+    /json_schema|tool_choice|tools are not available|response_format|protocol|invalid request|bad request/.test(
       error,
     )
   ) {
-    return "degraded";
+    return "failed";
   }
   if (/not found|404/.test(error)) {
+    return "failed";
+  }
+  if (/unsupported|not supported|unavailable now/.test(error)) {
     return "degraded";
   }
   return "failed";

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   AgentSubagentDefaultsSchema,
@@ -134,6 +135,26 @@ describe("ToolPolicyConfigSchema", () => {
       sandbox: { writeJailRoots: [], readOnlyRoots: [] },
     };
     const result = ToolPolicyConfigSchema.parse(input);
+    expect(result.tools.loopDetection).toMatchObject({
+      enabled: true,
+      historySize: 8,
+      warningThreshold: 3,
+      criticalThreshold: 4,
+      globalThreshold: 6,
+      detectors: {
+        repeated_same_call: true,
+        no_progress_polling: true,
+        ping_pong: true,
+      },
+    });
+  });
+
+  it("keeps the shipped tool policy example loop detection enabled", () => {
+    const shippedPolicy = JSON.parse(
+      readFileSync(new URL("../../../config/tool-policy.example.json", import.meta.url), "utf8"),
+    );
+    const result = ToolPolicyConfigSchema.parse(shippedPolicy);
+
     expect(result.tools.loopDetection).toMatchObject({
       enabled: true,
       historySize: 8,

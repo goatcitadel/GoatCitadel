@@ -140,6 +140,42 @@ describe("comms service governance", () => {
     });
   });
 
+  it("preserves attachment reader host context while hydrating channel attachments", async () => {
+    const host = {
+      ...createHost(),
+      contentPrefix: "bound",
+      async readChatAttachmentContent(this: { contentPrefix: string }, attachmentId: string) {
+        return {
+          record: {
+            attachmentId,
+            fileName: `${this.contentPrefix}.txt`,
+            mimeType: "text/plain",
+          } as ChatAttachmentRecord,
+          bytes: Buffer.from(`${this.contentPrefix}:hello`),
+        };
+      },
+    };
+
+    await commsSend(host, {
+      connectionId: "conn-1",
+      target: "#ops",
+      message: "with attachment",
+      attachmentIds: ["attachment-1"],
+    });
+
+    const request = host.invokeAndUnwrap.mock.calls[0]![0] as ToolInvokeRequest;
+    expect(request.args).toMatchObject({
+      attachments: [
+        {
+          attachmentId: "attachment-1",
+          title: "bound.txt",
+          mimeType: "text/plain",
+          dataBase64: Buffer.from("bound:hello").toString("base64"),
+        },
+      ],
+    });
+  });
+
   it("keeps ordinary discussion of thinking when it is not a hidden provider block", () => {
     expect(sanitizeChannelOutboundMessage("We should think through rollback before sending.")).toMatchObject({
       message: "We should think through rollback before sending.",

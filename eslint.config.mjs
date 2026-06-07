@@ -65,10 +65,22 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
     },
   },
+  {
+    files: [
+      "apps/gateway/src/**/*cli.ts",
+      "apps/gateway/src/config-sync.ts",
+      "fixtures/**/*.ts",
+      "scripts/**/*.ts",
+      "workspace/fixtures/**/*.ts",
+    ],
+    rules: {
+      "no-console": "off",
+    },
+  },
   // React Hooks correctness for the shipped Mission Control surfaces. Scoped to
   // mission-control-next + mission-control-shared (the retired legacy app is excluded).
-  // rules-of-hooks is an error (it catches real bugs); exhaustive-deps is a warning so it
-  // surfaces the async-effect cluster without failing the CI lint gate.
+  // The CI lint gate uses --max-warnings 0, so both hook correctness lanes must
+  // fail loudly instead of producing warning-only async guard drift.
   {
     files: [
       "apps/mission-control-next/**/*.{ts,tsx}",
@@ -77,7 +89,7 @@ export default tseslint.config(
     plugins: { "react-hooks": reactHooks },
     rules: {
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      "react-hooks/exhaustive-deps": "error",
     },
   },
 );

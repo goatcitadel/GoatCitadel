@@ -81,6 +81,7 @@ jobs:
         run: rustup default stable-msvc
 
       - name: Run Windows host unit tests
+        timeout-minutes: 15
         run: pnpm windows:test
 
       - name: Verify desktop runtime proof lane

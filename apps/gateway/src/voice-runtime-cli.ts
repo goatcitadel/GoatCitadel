@@ -1,4 +1,3 @@
-/* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout and stderr. */
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { loadLocalEnvFile } from "./env-file.js";

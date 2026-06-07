@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Scale, Waypoints } from "lucide-react";
 import type { ModelComparisonRun } from "@goatcitadel/contracts";
-import {
-  judgeModelComparison,
-  listModelComparisons,
-} from "@goatcitadel/mission-control-shared/api/model-comparisons";
+import { judgeModelComparison, listModelComparisons } from "@goatcitadel/mission-control-shared/api/model-comparisons";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -49,7 +46,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
 
-  const comparisons = data?.comparisons ?? [];
+  const comparisons = useMemo(() => data?.comparisons ?? [], [data?.comparisons]);
   const selectedComparison = comparisons.find((item) => item.comparisonId === selectedComparisonId) ?? null;
   const selectedResults = useMemo(
     () => selectedComparison?.results.filter((result) => result.testId === selectedTestId) ?? [],
@@ -79,10 +76,14 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
       : (selectedComparison.candidates[0]?.candidateId ?? "");
     setSelectedTestId(nextTestId);
     setWinnerCandidateId(nextWinner);
-    setScoreDraft((current) =>
-      Object.fromEntries(
-        selectedComparison.candidates.map((candidate) => [candidate.candidateId, current[candidate.candidateId] ?? "3"]),
-      ) as ScoreDraft,
+    setScoreDraft(
+      (current) =>
+        Object.fromEntries(
+          selectedComparison.candidates.map((candidate) => [
+            candidate.candidateId,
+            current[candidate.candidateId] ?? "3",
+          ]),
+        ) as ScoreDraft,
     );
   }, [selectedComparison, selectedTestId, winnerCandidateId]);
 
@@ -176,7 +177,9 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
         <div className="mc-next-settings-stack">
           <NativeCard
             title={selectedComparison?.title ?? "Model comparison detail"}
-            subtitle={selectedComparison ? `${selectedComparison.packId} - ${selectedComparison.status}` : "Select a run."}
+            subtitle={
+              selectedComparison ? `${selectedComparison.packId} - ${selectedComparison.status}` : "Select a run."
+            }
           >
             {selectedComparison ? (
               <>

@@ -73,9 +73,12 @@ export async function commsSend(
     neutralizeMentions: shouldNeutralizeChannelMentions(connection.key),
     maxLength: connection.key === "discord" ? 2000 : undefined,
   });
+  const readChatAttachmentContent = (
+    Reflect.get(host, "readChatAttachmentContent") as CommsHost["readChatAttachmentContent"]
+  ).bind(host);
   const attachments = await resolveChannelSendAttachments(
     { attachments: input.attachments, attachmentIds: input.attachmentIds },
-    { readChatAttachmentContent: (attachmentId) => host.readChatAttachmentContent(attachmentId) },
+    { readChatAttachmentContent },
   );
   throwIfCommsAborted(input.signal);
   return invokeCommsTool(

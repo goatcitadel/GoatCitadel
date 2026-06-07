@@ -15,7 +15,7 @@
     "desktop:dev": "pnpm --filter @goatcitadel/mission-control-desktop dev:desktop",
     "desktop:build": "pnpm --filter @goatcitadel/mission-control-desktop build:desktop",
     "windows:dev": "dotnet run --project apps/mission-control-windows/GoatCitadel.MissionControl.Windows.csproj",
-    "windows:test": "dotnet test apps/mission-control-windows/Tests/GoatCitadel.MissionControl.Windows.Tests.csproj -p:RestoreSources=https://api.nuget.org/v3/index.json",
+    "windows:test": "dotnet test apps/mission-control-windows/Tests/GoatCitadel.MissionControl.Windows.Tests.csproj -p:RestoreSources=https://api.nuget.org/v3/index.json --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type none",
     "package:bundle": "node scripts/packaging/build-bundle.mjs",
     "package:desktop": "node scripts/packaging/build-desktop.mjs",
     "package:windows-host": "node scripts/packaging/build-windows-host.mjs",

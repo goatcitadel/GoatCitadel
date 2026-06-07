@@ -33,12 +33,10 @@ async function main(): Promise<void> {
       .slice(0, options.limit);
 
     if (queuedRuns.length === 0) {
-      // eslint-disable-next-line no-console
       console.log(`[rescore] no latest runs found for pack ${pack.packId}.`);
       return;
     }
 
-    // eslint-disable-next-line no-console
     console.log(`[rescore] pack ${pack.packId} (${pack.name}) -> ${queuedRuns.length} latest runs`);
     let failures = 0;
     for (const run of queuedRuns) {
@@ -46,7 +44,6 @@ async function main(): Promise<void> {
         await rescoreRun(app, run, options);
       } catch (error) {
         failures += 1;
-        // eslint-disable-next-line no-console
         console.error(`[rescore] ${run.runId} failed: ${formatError(error)}`);
       }
     }
@@ -107,7 +104,6 @@ function printRescoreSummary(
   if (result.score.degradedReasons.length > 0) {
     comparison.push(`degraded=${result.score.degradedReasons.join(",")}`);
   }
-  // eslint-disable-next-line no-console
   console.log(comparison.join(" | "));
 }
 
@@ -164,7 +160,6 @@ function requireValue(argv: string[], index: number, flag: string): string {
 }
 
 function printUsage(): void {
-  // eslint-disable-next-line no-console
   console.log(
     "Usage: pnpm tsx scripts/rescore-prompt-pack.ts --run-id <runId> [--compare-latest-v1]\n" +
       "   or: pnpm tsx scripts/rescore-prompt-pack.ts --pack-id <packId> [--limit <n>] [--compare-latest-v1]",
@@ -179,7 +174,6 @@ function formatError(error: unknown): string {
 }
 
 void main().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error(`[rescore] ${formatError(error)}`);
   printUsage();
   process.exitCode = 1;

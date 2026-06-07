@@ -1,4 +1,3 @@
-/* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout. */
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
