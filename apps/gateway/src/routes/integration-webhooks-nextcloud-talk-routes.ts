@@ -106,7 +106,7 @@ export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): vo
         dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "nextcloud-talk",
           connectionId,
-          idempotencyKey: deriveNextcloudTalkWebhookIdempotencyKey(connectionId, rawBody),
+          idempotencyKey: deriveNextcloudTalkWebhookIdempotencyKey(connectionId, rawBody, parsed.eventId),
           eventType: parsed.eventType,
           bindingTarget: parsed.room,
           allowedSenders: resolveAllowedSenders(connection.config),

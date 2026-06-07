@@ -1091,9 +1091,13 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
   });
 
   it("rejects stale bulk revision guards before applying partial updates", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
     const { service } = createService();
     const a = service.createTask({ title: "a" });
     const b = service.createTask({ title: "b" });
+    
+    vi.setSystemTime(new Date("2026-05-01T12:00:01.000Z"));
     service.updateTask(b.taskId, { title: "b changed" });
 
     expect(() =>
@@ -1108,6 +1112,7 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
       }),
     ).toThrow(/changed after this bulk update was prepared/i);
     expect(service.getTask(a.taskId).assignedAgentId).toBeUndefined();
+    vi.useRealTimers();
   });
 
   it("unblock action publishes task_updated so subscribers see the transition", () => {

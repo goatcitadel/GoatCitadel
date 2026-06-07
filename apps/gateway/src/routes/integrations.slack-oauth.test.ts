@@ -212,6 +212,7 @@ describe("integrations Slack OAuth routes", () => {
       clientSecret: "client-secret",
       redirectUri: "https://goatcitadel.test/slack/callback",
       stateSecret: "state-secret",
+      origin: "http://localhost:5173",
     });
     vi.stubGlobal(
       "fetch",
@@ -252,6 +253,7 @@ describe("integrations Slack OAuth routes", () => {
     expect(response.body).toContain("Citadel &lt;Ops&gt; &amp; &quot;QA&quot;");
     expect(response.body).toContain("goatcitadel.slackOAuth.connected");
     expect(response.body).not.toContain("<Ops>");
+    expect(response.body).toContain('window.opener.postMessage({"type":"goatcitadel.slackOAuth.connected","connectionId":"11111111-1111-1111-1111-111111111111","teamName":"Citadel \\u003cOps> & \\"QA\\"","teamId":"T123"}, "http://localhost:5173");');
   });
 
   it("surfaces Slack OAuth exchange failures as gateway errors", async () => {

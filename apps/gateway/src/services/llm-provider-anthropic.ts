@@ -6,7 +6,7 @@ import type {
   LlmProviderRequestTarget,
   LlmProviderResolution,
 } from "./llm-provider-adapter.js";
-import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
+import { applyEstimatedCostToChatResponseWithSource, applyEstimatedCostToStreamChunkWithSource } from "./llm-pricing.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
@@ -33,7 +33,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     }
 
     const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
-    return applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
+    return applyEstimatedCostToChatResponseWithSource(adaptAnthropicMessageResponse(json), {
       providerId: resolved.provider.providerId,
       model,
     });
@@ -62,7 +62,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/event-stream") || !response.body) {
       const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
-      yield applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
+      yield applyEstimatedCostToChatResponseWithSource(adaptAnthropicMessageResponse(json), {
         providerId: resolved.provider.providerId,
         model,
       });
@@ -217,7 +217,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
       }
 
       if (eventType === "message_stop") {
-        yield applyEstimatedCostToStreamChunk(
+        yield applyEstimatedCostToStreamChunkWithSource(
           {
             id: messageId,
             model: messageModel,
@@ -299,6 +299,20 @@ function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: st
     payload.tool_choice =
       thinkingEnabled && isAnthropicForcedToolChoice(anthropicToolChoice) ? { type: "auto" } : anthropicToolChoice;
   }
+  if (request.parallel_tool_calls === false) {
+    const currentToolChoice = payload.tool_choice as Record<string, unknown> | undefined;
+    if (currentToolChoice) {
+      payload.tool_choice = {
+        ...currentToolChoice,
+        disable_parallel_tool_use: true,
+      };
+    } else if (payload.tools !== undefined) {
+      payload.tool_choice = {
+        type: "auto",
+        disable_parallel_tool_use: true,
+      };
+    }
+  }
   if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (thinkingEnabled) {
@@ -350,7 +364,10 @@ function mapAnthropicToolChoice(toolChoice: ChatCompletionRequest["tool_choice"]
     if (toolChoice === "required") {
       return { type: "any" };
     }
-    return { type: toolChoice };
+    if (toolChoice === "auto" || toolChoice === "any") {
+      return { type: toolChoice };
+    }
+    return { type: "auto" };
   }
   if (isRecord(toolChoice) && toolChoice.type === "function") {
     const fn = isRecord(toolChoice.function) ? toolChoice.function : undefined;
@@ -567,10 +584,14 @@ function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Re
   }
   const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
   const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
+  const cacheCreation = typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
   return {
     prompt_tokens: inputTokens,
     completion_tokens: outputTokens,
     total_tokens: inputTokens + outputTokens,
+    ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
+    ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
   };
 }
 

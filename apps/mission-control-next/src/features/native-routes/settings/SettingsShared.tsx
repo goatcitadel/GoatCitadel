@@ -3,7 +3,7 @@
 // decomposition. Keep this file focused on layout/utility surface; section-
 // specific helpers (providers, personalities, channels, MCP, tools, addons)
 // stay in `../SettingsNativePage.tsx` until their dedicated section files land.
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { type ComponentType, type ReactNode } from "react";
 import {
   AlertTriangle,
   Cable,
@@ -25,6 +25,19 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { ThreePartChip, EmptyState, type ChipTone } from "../primitives";
+import {
+  getErrorMessage,
+  nativeLoad,
+  nativeLoadIssues,
+  useAsyncLoad,
+  type LoadState,
+  type NativeLoadIssue,
+  type NativeLoadResult,
+  type Notice,
+} from "../shared/native-helpers";
+
+export { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad };
+export type { LoadState, NativeLoadIssue, NativeLoadResult, Notice };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,65 +55,11 @@ export type SettingsSectionProps = SettingsNativePageProps & {
   section: string;
 };
 
-export type LoadState<T> = {
-  loading: boolean;
-  error: string | null;
-  data: T | null;
-};
-
-export type Notice = {
-  tone: "success" | "warning" | "error" | "info";
-  message: string;
-};
-
-export type NativeLoadIssue = {
-  label: string;
-  message: string;
-};
-
-export type NativeLoadResult<T> = {
-  data: T;
-  issue: NativeLoadIssue | null;
-};
-
 export type SettingsWizardStepState = "complete" | "active" | "pending";
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-
-function readErrorString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function isErrorRecord(error: unknown): error is Record<string, unknown> {
-  return typeof error === "object" && error !== null;
-}
-
-export function getErrorMessage(error: unknown): string {
-  const errorMessage = error instanceof Error ? readErrorString(error.message) : null;
-  if (errorMessage) {
-    return errorMessage;
-  }
-  const stringMessage = readErrorString(error);
-  if (stringMessage) {
-    return stringMessage;
-  }
-  if (isErrorRecord(error)) {
-    const message = readErrorString(error.message) ?? readErrorString(error.error) ?? readErrorString(error.detail);
-    const code = readErrorString(error.code);
-    if (message && code) {
-      return `${message} (${code})`;
-    }
-    if (message) {
-      return message;
-    }
-    if (code) {
-      return `Request failed (${code})`;
-    }
-  }
-  return "Something went wrong.";
-}
 
 export function formatEffectiveConfigSourceLabel(source: string | undefined): string {
   if (source === "env") {
@@ -119,89 +78,6 @@ export function formatEffectiveConfigSourceLabel(source: string | undefined): st
     return "managed";
   }
   return "unknown";
-}
-
-export async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
-  try {
-    return {
-      data: await promise,
-      issue: null,
-    };
-  } catch (error) {
-    return {
-      data: fallback,
-      issue: {
-        label,
-        message: getErrorMessage(error),
-      },
-    };
-  }
-}
-
-export function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
-  return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
-}
-
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
-export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<unknown> = [loader]) {
-  const [state, setState] = useState<LoadState<T>>({
-    loading: true,
-    error: null,
-    data: null,
-  });
-  // Monotonic request id mirrors `useShellStatus.refreshIdRef`: a later reload
-  // bumps the id so an earlier (slower) response is dropped, and unmount bumps
-  // it so no in-flight response calls setState after teardown. This prevents
-  // last-writer-wins races on workspace switch and setState-after-unmount.
-  const requestIdRef = useRef(0);
-
-  const reload = useCallback(async () => {
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    const isCurrentRequest = () => requestIdRef.current === requestId;
-    setState((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const data = await loader();
-      if (!isCurrentRequest()) {
-        return;
-      }
-      setState({
-        loading: false,
-        error: null,
-        data,
-      });
-    } catch (error) {
-      if (!isCurrentRequest()) {
-        return;
-      }
-      setState({
-        loading: false,
-        error: getErrorMessage(error),
-        data: null,
-      });
-    }
-    // The dependency list is part of this custom hook's caller contract so
-    // sections can reload on route/workspace changes without duplicating the
-    // stale-response guard.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-
-  useEffect(() => {
-    void reload();
-    return () => {
-      // Supersede any in-flight reload so its resolution is ignored once this
-      // effect (and typically the component) tears down.
-      requestIdRef.current += 1;
-    };
-  }, [reload]);
-
-  return {
-    ...state,
-    reload,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +114,7 @@ export function SettingsPageFrame({
   description,
   children,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string }>;
   kicker: string;
   title: string;
   description: string;

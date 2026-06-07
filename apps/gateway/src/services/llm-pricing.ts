@@ -130,8 +130,13 @@ export function estimateUsageCostUsd(input: EstimateUsageCostInput): number | un
 
   const totalInputTokens = readUsageNumber(usage.prompt_tokens) ?? readUsageNumber(usage.input_tokens) ?? 0;
   const totalOutputTokens = readUsageNumber(usage.completion_tokens) ?? readUsageNumber(usage.output_tokens) ?? 0;
+  const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : undefined;
   const cachedInputTokens =
-    readUsageNumber(usage.cached_prompt_tokens) ?? readUsageNumber(usage.cached_input_tokens) ?? 0;
+    readUsageNumber(usage.cached_prompt_tokens) ??
+    readUsageNumber(usage.cached_input_tokens) ??
+    (promptDetails ? readUsageNumber(promptDetails.cached_tokens) : undefined) ??
+    readUsageNumber(usage.cache_read_input_tokens) ??
+    0;
   const billableInputTokens = Math.max(0, totalInputTokens - cachedInputTokens);
   const cachedRate = pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion;
   const totalCostUsd =
@@ -189,6 +194,71 @@ export function applyEstimatedCostToStreamChunk(
   };
 }
 
+export function applyEstimatedCostToChatResponseWithSource(
+  response: ChatCompletionResponse,
+  input: { providerId?: string; model?: string },
+): ChatCompletionResponse {
+  const providerReportedCost = hasUsageCost(response.usage);
+  return annotateChatResponseUsageCostSource(
+    applyEstimatedCostToChatResponse(response, input),
+    providerReportedCost ? "provider_reported" : "estimated",
+  );
+}
+
+export function applyEstimatedCostToStreamChunkWithSource(
+  chunk: Record<string, unknown>,
+  input: { providerId?: string; model?: string },
+): Record<string, unknown> {
+  const providerReportedCost = hasUsageCost(chunk.usage);
+  return annotateStreamChunkUsageCostSource(
+    applyEstimatedCostToStreamChunk(chunk, input),
+    providerReportedCost ? "provider_reported" : "estimated",
+  );
+}
+
+function annotateChatResponseUsageCostSource(
+  response: ChatCompletionResponse,
+  source: "provider_reported" | "estimated",
+): ChatCompletionResponse {
+  if (!isRecord(response.usage) || !hasUsageCost(response.usage) || hasUsageCostSource(response.usage)) {
+    return response;
+  }
+  return {
+    ...response,
+    usage: {
+      ...response.usage,
+      cost_source: source,
+    },
+  };
+}
+
+function annotateStreamChunkUsageCostSource(
+  chunk: Record<string, unknown>,
+  source: "provider_reported" | "estimated",
+): Record<string, unknown> {
+  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage) || hasUsageCostSource(chunk.usage)) {
+    return chunk;
+  }
+  return {
+    ...chunk,
+    usage: {
+      ...chunk.usage,
+      cost_source: source,
+    },
+  };
+}
+
+function hasUsageCost(usage: unknown): boolean {
+  if (!isRecord(usage)) {
+    return false;
+  }
+  return readUsageNumber(usage.cost_usd) !== undefined || readUsageNumber(usage.total_cost_usd) !== undefined;
+}
+
+function hasUsageCostSource(usage: Record<string, unknown>): boolean {
+  return Boolean(firstNonEmptyString(usage.cost_source, usage.costSource));
+}
+
 function findPricing(providerId: string, model: string | undefined): TextModelPricing | undefined {
   const normalizedModel = normalizeModelId(model);
   if (!normalizedModel) {
@@ -222,6 +292,18 @@ function readUsageNumber(value: unknown): number | undefined {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) {
       return parsed;
+    }
+  }
+  return undefined;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
     }
   }
   return undefined;

@@ -18,6 +18,7 @@ export interface SlackOAuthConfig {
   stateSecret?: string;
   scopes?: string;
   brokerAuthorizeUrl?: string;
+  origin?: string;
 }
 
 export interface SlackOAuthStartResult {
@@ -86,10 +87,15 @@ export function buildSlackOAuthStart(input: SlackOAuthConfig): SlackOAuthStartRe
     };
   }
 
-  const state = signSlackOAuthState(
-    { nonce: randomBytes(16).toString("base64url"), issuedAt: Date.now() },
-    stateSecret,
-  );
+  const statePayload: Record<string, unknown> = {
+    nonce: randomBytes(16).toString("base64url"),
+    issuedAt: Date.now(),
+  };
+  if (input.origin) {
+    statePayload.origin = input.origin;
+  }
+
+  const state = signSlackOAuthState(statePayload, stateSecret);
   const authorizationUrl = new URL(brokerAuthorizeUrl || "https://slack.com/oauth/v2/authorize");
   authorizationUrl.searchParams.set("client_id", clientId);
   authorizationUrl.searchParams.set("scope", scopes.join(","));

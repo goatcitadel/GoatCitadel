@@ -515,4 +515,32 @@ describe("integration-diagnostics-service contract behavior", () => {
       expect.objectContaining({ authorizationHeader: "Bearer token-1" }),
     );
   });
+
+  it("warns when '*' is present in connection-level allowlist or global networkAllowlist", () => {
+    const host = createPort();
+    // 1. Global allowlist check
+    host.config.toolPolicy.sandbox.networkAllowlist = ["*", "example.com"];
+    const connectionNormal = createIntegrationConnection("google-chat", "channel", {
+      webhookUrl: "https://hooks.example.test/google",
+    });
+    const checksNormal = buildIntegrationConnectionChecks(host, connectionNormal);
+    const globalWarn = checksNormal.find((item) => item.key === "global_allowlist_wildcard");
+    expect(globalWarn).toMatchObject({
+      status: "warn",
+      message: expect.stringContaining("Global network allowlist contains '*'"),
+    });
+
+    // 2. Connection-level allowlist check
+    host.config.toolPolicy.sandbox.networkAllowlist = ["example.com"];
+    const connectionWildcard = createIntegrationConnection("google-chat", "channel", {
+      webhookUrl: "https://hooks.example.test/google",
+      urlAllowlist: ["*", "another.com"],
+    });
+    const checksWildcard = buildIntegrationConnectionChecks(host, connectionWildcard);
+    const connectionWarn = checksWildcard.find((item) => item.key === "allowlist_wildcard_urlAllowlist");
+    expect(connectionWarn).toMatchObject({
+      status: "warn",
+      message: expect.stringContaining("Connection-level urlAllowlist contains a wildcard"),
+    });
+  });
 });

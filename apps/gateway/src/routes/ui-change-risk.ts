@@ -56,13 +56,23 @@ function evaluateItem(pageId: string, field: string, from: unknown, to: unknown)
     };
   }
 
-  if (normalizedField.includes("allowlist") && !next.trim()) {
-    return {
-      field,
-      level: "warning",
-      reasonCodes: ["allowlist_empty"],
-      hint: "Empty allowlist blocks outbound networking.",
-    };
+  if (normalizedField.includes("allowlist")) {
+    if (!next.trim()) {
+      return {
+        field,
+        level: "warning",
+        reasonCodes: ["allowlist_empty"],
+        hint: "Empty allowlist blocks outbound networking.",
+      };
+    }
+    if (next.includes("*")) {
+      return {
+        field,
+        level: "warning",
+        reasonCodes: ["allowlist_wildcard"],
+        hint: "Wildcard '*' allowlist entry opens access to all public hosts.",
+      };
+    }
   }
 
   if (normalizedField.includes("baseurl") || normalizedField.includes("providerbaseurl")) {

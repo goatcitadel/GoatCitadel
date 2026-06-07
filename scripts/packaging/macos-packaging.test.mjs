@@ -123,6 +123,20 @@ test("Windows host manifests declare matching external-location package identity
   assert.match(releaseWorkflow, /vars\.WINDOWS_MSIX_PUBLISHER/);
 });
 
+test("Windows native installer replaces payload without deleting packaged runtime state", () => {
+  const installerBuilder = fs.readFileSync(
+    path.join(repoRoot, "scripts", "packaging", "build-windows-native-installer.mjs"),
+    "utf8",
+  );
+
+  assert.match(installerBuilder, /\[InstallDelete\]/);
+  assert.match(installerBuilder, /Type: filesandordirs; Name: "\{app\}\\\\app"/);
+  assert.match(installerBuilder, /Type: filesandordirs; Name: "\{app\}\\\\bin"/);
+  assert.doesNotMatch(installerBuilder, /InstallDelete\][\s\S]*runtime-root/);
+  assert.match(installerBuilder, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage/);
+  assert.match(installerBuilder, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage/);
+});
+
 test("POSIX launcher keeps macOS mutable state under Application Support", () => {
   const launcher = renderPosixLauncher();
   assert.match(launcher, /^#!\/usr\/bin\/env sh/);

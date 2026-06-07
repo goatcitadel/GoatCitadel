@@ -1589,13 +1589,44 @@ function requiredString(value: string | undefined, label: string): string {
   return value;
 }
 
+function validateWhatsAppBaseUrl(url: string): void {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    const isAllowedMetaHost =
+      hostname === "graph.facebook.com" ||
+      hostname.endsWith(".facebook.com") ||
+      hostname === "facebook.com" ||
+      hostname.endsWith(".meta.com") ||
+      hostname === "meta.com";
+    
+    const isLoopback =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]";
+
+    if (!isAllowedMetaHost && !isLoopback) {
+      throw new Error(`WhatsApp outbound URL host "${parsed.hostname}" is not an allowed Meta or localhost domain.`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("is not an allowed Meta or localhost domain")) {
+      throw error;
+    }
+    throw new Error(`Invalid WhatsApp baseUrl: ${url}`);
+  }
+}
+
 function normalizeWhatsAppProbeBaseUrl(baseUrl: string | undefined, apiVersion: string | undefined): string {
   const trimmedBaseUrl = asString(baseUrl);
+  let result: string;
   if (trimmedBaseUrl) {
-    return trimmedBaseUrl.replace(/\/+$/, "");
+    result = trimmedBaseUrl.replace(/\/+$/, "");
+  } else {
+    const normalizedVersion = asString(apiVersion) ?? "v23.0";
+    result = `https://graph.facebook.com/${normalizedVersion.replace(/^\/+/, "").replace(/\/+$/, "")}`;
   }
-  const normalizedVersion = asString(apiVersion) ?? "v23.0";
-  return `https://graph.facebook.com/${normalizedVersion.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+  validateWhatsAppBaseUrl(result);
+  return result;
 }
 
 function normalizeWhatsAppProbeTarget(target: string | undefined): string | undefined {

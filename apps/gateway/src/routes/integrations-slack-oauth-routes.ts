@@ -41,8 +41,21 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
     });
   });
 
-  fastify.post("/api/v1/integrations/slack/oauth/start", slackOAuthRouteOptions, async (_request, reply) => {
-    const start = buildSlackOAuthStart(readSlackOAuthConfig());
+  fastify.post("/api/v1/integrations/slack/oauth/start", slackOAuthRouteOptions, async (request, reply) => {
+    const rawOrigin = request.headers.origin || request.headers.referer;
+    let origin: string | undefined;
+    if (typeof rawOrigin === "string" && rawOrigin.trim().length > 0) {
+      try {
+        origin = new URL(rawOrigin).origin;
+      } catch {
+        // ignore malformed URLs
+      }
+    }
+
+    const start = buildSlackOAuthStart({
+      ...readSlackOAuthConfig(),
+      origin,
+    });
     if (!start.configured) {
       return reply.code(400).send({
         error: "Slack OAuth is not configured.",
@@ -64,6 +77,29 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
     if (!verifySlackOAuthState(parsed.data.state, config.stateSecret)) {
       return reply.code(400).send({ error: "Invalid or expired Slack OAuth state." });
     }
+
+    let targetOrigin = "http://localhost:5173";
+    try {
+      const allowedOrigins = resolveAllowedOrigins();
+      const firstAllowed = Array.from(allowedOrigins)[0];
+      if (firstAllowed) {
+        targetOrigin = firstAllowed;
+      }
+
+      const [encoded] = parsed.data.state.split(".");
+      if (encoded) {
+        const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+        if (typeof decoded.origin === "string" && /^https?:\/\//i.test(decoded.origin)) {
+          const originUrl = new URL(decoded.origin).origin;
+          if (allowedOrigins.has(originUrl)) {
+            targetOrigin = originUrl;
+          }
+        }
+      }
+    } catch {
+      // fallback to default targetOrigin
+    }
+
     try {
       const payload = await exchangeSlackOAuthCode({
         code: parsed.data.code,
@@ -91,7 +127,7 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
         install: summarizeSlackOAuthInstall(connection),
       };
       if (request.headers.accept?.includes("text/html")) {
-        return reply.type("text/html").send(renderSlackOAuthSuccessPage(result));
+        return reply.type("text/html").send(renderSlackOAuthSuccessPage(result, targetOrigin));
       }
       return reply.send(result);
     } catch (error) {
@@ -167,7 +203,7 @@ function mergeSlackOAuthConfig(
 function renderSlackOAuthSuccessPage(result: {
   connection: IntegrationConnection;
   install: ReturnType<typeof summarizeSlackOAuthInstall>;
-}): string {
+}, targetOrigin: string): string {
   const payload = JSON.stringify({
     type: "goatcitadel.slackOAuth.connected",
     connectionId: result.connection.connectionId,
@@ -194,7 +230,7 @@ function renderSlackOAuthSuccessPage(result: {
     </main>
     <script>
       if (window.opener) {
-        window.opener.postMessage(${payload}, "*");
+        window.opener.postMessage(${payload}, ${JSON.stringify(targetOrigin)});
         window.setTimeout(() => window.close(), 700);
       }
     </script>
@@ -209,4 +245,35 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function resolveAllowedOrigins(): Set<string> {
+  const defaults = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://127.0.0.1:8787",
+  ];
+  const envRaw = process.env.GOATCITADEL_ALLOWED_ORIGINS;
+  if (!envRaw?.trim()) {
+    return new Set(defaults);
+  }
+  const fromEnv = envRaw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((rawOrigin) => {
+      try {
+        const origin = new URL(rawOrigin);
+        if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+          return "";
+        }
+        return origin.origin;
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+  return new Set(fromEnv.length > 0 ? fromEnv : defaults);
 }

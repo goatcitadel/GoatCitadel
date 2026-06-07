@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -783,6 +784,8 @@ export class LlmService {
       case "openai-codex-responses":
       case "openai-responses":
         return this.executeOpenAiResponses(request, resolved, model);
+      case "bedrock-messages":
+        throw new Error("AWS Bedrock messages API style is not yet supported in this version");
       default:
         return this.executeChatCompletions(request, resolved, model);
     }
@@ -808,6 +811,8 @@ export class LlmService {
       case "openai-responses":
         yield* this.executeOpenAiResponsesStream(request, resolved, model);
         return;
+      case "bedrock-messages":
+        throw new Error("AWS Bedrock messages API style is not yet supported in this version");
       default:
         yield* this.executeChatCompletionsStream(request, resolved, model);
         return;
@@ -1340,7 +1345,11 @@ export class LlmService {
   }
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
-    const key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
+    let key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
+    if (resolved.apiKey) {
+      const hash = createHash("sha256").update(resolved.apiKey).digest("hex").slice(0, 16);
+      key += `::auth_${hash}`;
+    }
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(key);
     if (cached) {
@@ -2389,7 +2398,6 @@ function buildOpenAiResponsesPayload(
   if (request.tools !== undefined) payload.tools = mapOpenAiResponsesTools(request.tools);
   if (request.tool_choice !== undefined) payload.tool_choice = mapOpenAiResponsesToolChoice(request.tool_choice);
   if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
-  if (request.stop !== undefined) payload.stop = request.stop;
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (request.service_tier && !isOpenAICodexResponsesProvider(provider)) payload.service_tier = request.service_tier;
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;

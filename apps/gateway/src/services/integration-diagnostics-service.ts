@@ -107,6 +107,34 @@ export function buildIntegrationConnectionChecks(
     });
   };
 
+  // Check for "*" wildcard in any connection-level allowlist configuration fields
+  for (const [configKey, configValue] of Object.entries(config)) {
+    if (configKey.toLowerCase().includes("allowlist") || configKey.toLowerCase().includes("whitelist")) {
+      const list = Array.isArray(configValue)
+        ? configValue.map(String)
+        : typeof configValue === "string"
+          ? configValue.split(",").map((s) => s.trim())
+          : [];
+      if (list.includes("*")) {
+        checks.push({
+          key: `allowlist_wildcard_${configKey}`,
+          status: "warn",
+          message: `Connection-level ${configKey} contains a wildcard "*". Wildcard rules only widen access to public hosts, and do not bypass local/private network protections.`,
+        });
+      }
+    }
+  }
+
+  // Check if global network allowlist contains wildcard
+  const globalAllowlist = deps.config.toolPolicy.sandbox.networkAllowlist ?? [];
+  if (globalAllowlist.includes("*")) {
+    checks.push({
+      key: "global_allowlist_wildcard",
+      status: "warn",
+      message: "Global network allowlist contains '*'. This enables outbound connections to all public hosts, but local/private addresses remain protected by sandbox guards.",
+    });
+  }
+
   if (connection.kind === "channel") {
     checks.push({
       key: "actions",

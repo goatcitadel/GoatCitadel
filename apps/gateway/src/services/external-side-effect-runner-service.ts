@@ -1,4 +1,4 @@
-import { pbkdf2Sync } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   ExternalSideEffectRunRecord,
   ExternalSideEffectRunStatus,
@@ -11,8 +11,6 @@ import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
-const EXTERNAL_SIDE_EFFECT_DIGEST_ITERATIONS = 120_000;
-const EXTERNAL_SIDE_EFFECT_DIGEST_BYTES = 32;
 
 export interface ExternalSideEffectRunStore {
   createOrGet(
@@ -804,13 +802,11 @@ function hashStableIntentParts(parts: Array<string | undefined>): string {
 }
 
 function domainSeparatedDigestHex(canonicalPayload: string): string {
-  return pbkdf2Sync(
-    canonicalPayload,
-    EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY,
-    EXTERNAL_SIDE_EFFECT_DIGEST_ITERATIONS,
-    EXTERNAL_SIDE_EFFECT_DIGEST_BYTES,
-    "sha256",
-  ).toString("hex");
+  return createHash("sha256")
+    .update(EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY)
+    .update("\0")
+    .update(canonicalPayload)
+    .digest("hex");
 }
 
 function hashStableJson(value: unknown): string {

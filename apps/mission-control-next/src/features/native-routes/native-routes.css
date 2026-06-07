@@ -373,6 +373,18 @@
   line-height: 1.45;
 }
 
+@media (max-width: 576px) {
+  .mc-next-memory-disabled-guide {
+    gap: 0.28rem;
+    margin-top: 0.36rem;
+    padding: 0.42rem;
+  }
+
+  .mc-next-memory-disabled-guide p {
+    line-height: 1.4;
+  }
+}
+
 .mc-next-memory-shell .mc-next-runtime-metric-grid {
   grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   gap: 0.36rem;

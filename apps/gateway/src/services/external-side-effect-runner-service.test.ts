@@ -118,10 +118,11 @@ function sideEffectRun(overrides: Partial<ReturnType<ExternalSideEffectRunStore[
 }
 
 describe("external-side-effect-runner-service", () => {
-  it("keeps deterministic external side-effect digests off constant-key HMAC helpers", () => {
+  it("keeps deterministic external side-effect digests fast and off constant-key HMAC helpers", () => {
     const source = readFileSync(new URL("./external-side-effect-runner-service.ts", import.meta.url), "utf8");
 
-    expect(source).toMatch(/pbkdf2Sync\(\s*canonicalPayload,\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY,/);
+    expect(source).toMatch(/createHash\("sha256"\)[\s\S]*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY/);
+    expect(source).not.toMatch(/pbkdf2Sync\(\s*canonicalPayload,\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY,/);
     expect(source).not.toMatch(/createHmac\("sha256",\s*EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY\)/);
   });
 

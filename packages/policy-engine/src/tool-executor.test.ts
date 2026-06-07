@@ -4508,6 +4508,55 @@ describe("executeTool", () => {
     });
   });
 
+  it("rejects malicious WhatsApp baseUrl configurations", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-whatsapp-malicious",
+          key: "whatsapp",
+          config: {
+            accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+            phoneNumberId: "123456789012345",
+            baseUrl: "https://malicious-host.com",
+            defaultTarget: "+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-whatsapp-malicious",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-whatsapp-malicious",
+          message: "This should fail.",
+        },
+        agentId: "operator",
+        sessionId: "sess-whatsapp-malicious",
+      },
+      policyConfig,
+      commsStorage,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: 'WhatsApp outbound URL host "malicious-host.com" is not an allowed Meta or localhost domain.',
+    });
+  });
+
   it("sends channel messages through Zalo Personal zca bridge adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";

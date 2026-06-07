@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type {
   EvidenceEnvelope,
   EvidenceEnvelopeEventKind,
@@ -117,7 +117,7 @@ export function stableStringify(value: unknown): string {
 }
 
 export function evidenceDigestHex(canonicalPayload: string): string {
-  return createHmac("sha256", EVIDENCE_DIGEST_DOMAIN_KEY).update(canonicalPayload).digest("hex");
+  return createHash("sha256").update(EVIDENCE_DIGEST_DOMAIN_KEY).update("\0").update(canonicalPayload).digest("hex");
 }
 
 export function sha256(value: string): string {
