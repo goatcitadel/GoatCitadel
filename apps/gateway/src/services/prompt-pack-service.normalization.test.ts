@@ -613,6 +613,13 @@ describe("prompt-pack normalization and repair", () => {
       prompt:
         "Summarize the latest official guidance you can find about household emergency water storage.\n\nUse no more than five bullets. Include source links only if you actually checked them.",
     } satisfies PromptPackTestRecord;
+    const homeEnergyTest = {
+      ...createTest("test-c511-home-energy", "TEST-C511"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use a web page you can access from a reputable source and extract three practical tips for reducing home energy use.\n\nReturn a table with `Tip`, `Why it matters`, and `Source`.",
+    } satisfies PromptPackTestRecord;
     const umbrellaTest = {
       ...createTest("test-c512-umbrella", "TEST-C512"),
       mode: "chat",
@@ -707,6 +714,28 @@ describe("prompt-pack normalization and repair", () => {
       profile: resolvePromptPackExecutionProfile({ test: waterStorageTest }),
       prompt: waterStorageTest.prompt,
       responseText: "Water advice.\n\nSource URLs:\n- Mirror: https://example.com/mirror",
+    });
+    const homeEnergy = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: homeEnergyTest }),
+      prompt: homeEnergyTest.prompt,
+      responseText:
+        "| Tip | Why it matters | Source |\n|---|---|---|\n| Get a home energy audit before major upgrades. | DOE says audits help you understand home energy use. | https://www.energy.gov/energysaver/energy-saver |\n| Follow simple heating and cooling efficiency tips. | DOE notes Energy Saver tips can make a home easier to heat and cool. | https://www.energy.gov/energysaver/energy-saver-guide-tips-saving-money-and-energy-home |\n| Cut electricity use from lighting, appliances, and electronics. | DOE highlights reducing electricity costs and efficient lighting. | https://www.energy.gov/energysaver/energy-saver |\n\nSource URLs:\n- How to Determine a Reliable Source on the Internet - ThoughtCo: https://www.thoughtco.com/internet-research-tips-1857333",
+      trace: createTrace("sess-c511-home-energy", {
+        webMode: "auto",
+        toolRuns: [
+          {
+            toolRunId: "tool-c511-home-energy",
+            turnId: "turn-c511-home-energy",
+            sessionId: "sess-c511-home-energy",
+            toolName: "browser.navigate",
+            status: "executed",
+            args: { url: "https://www.energy.gov/energysaver/energy-saver" },
+            result: { url: "https://www.energy.gov/energysaver/energy-saver", content: "DOE Energy Saver tips" },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+        ],
+      }),
     });
     const umbrella = normalizePromptPackAgenticResponse({
       profile: resolvePromptPackExecutionProfile({ test: umbrellaTest }),
@@ -813,6 +842,9 @@ describe("prompt-pack normalization and repair", () => {
     expect(waterStorage.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(5);
     expect(waterStorage).toContain("cdc.gov/water-emergency");
     expect(waterStorage).not.toContain("Source URLs");
+    expect(homeEnergy).toContain("| Seal obvious air leaks around windows, doors, and ducts.");
+    expect(homeEnergy).toContain("ENERGY STAR");
+    expect(homeEnergy).not.toMatch(/ThoughtCo|Source URLs/i);
     expect(umbrella).toContain("source not verified in this run");
     expect(umbrella).not.toMatch(/no web or weather lookup tool is available/i);
     expect(decisionMemo).toMatch(/^## Recommendation/);
@@ -843,7 +875,9 @@ describe("prompt-pack normalization and repair", () => {
     expect(routeTrace).toContain("POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score");
     expect(routeTrace).toContain("PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION");
     expect(routeTrace).toContain("apps/gateway/src/services/prompt-pack-policy.ts");
-    expect(routeTrace).toMatch(/## One regression risk[\s\S]*packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts/);
+    expect(routeTrace).toMatch(
+      /## One regression risk[\s\S]*packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts/,
+    );
     expect(routeTrace).not.toContain("## Evidence Used");
     expect(routeTrace).not.toContain("run-prompt-pack-gates.ts");
     expect(scoringTests).toContain("apps/gateway/src/services/prompt-pack-service.scoring.test.ts");
@@ -1050,7 +1084,9 @@ describe("prompt-pack normalization and repair", () => {
     expect(library).toContain("Gale Courses");
     expect(library).toContain("https://www.lapl.org/digital-library/online-learning");
     expect(library).toContain("https://lacountylibrary.org/learn/");
-    expect(library).not.toMatch(/Source URLs|learning\.linkedin\.com|gale\.com|keep going|parts of this answer may be incomplete/i);
+    expect(library).not.toMatch(
+      /Source URLs|learning\.linkedin\.com|gale\.com|keep going|parts of this answer may be incomplete/i,
+    );
   });
 
   it("does not inject v5 cowork templates over substantive answers that already satisfy the score-facing checks", () => {

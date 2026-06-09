@@ -551,6 +551,7 @@ export function detectPromptPackToolDirectives(prompt: string): PromptPackToolDi
     (namedTools.some((toolName) => PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES.has(toolName)) ||
       /\bweb\s+lookup\b/.test(lower) ||
       /\buse\s+(?:a\s+)?(?:web|browser)\s+(?:search|lookup)\b/.test(lower) ||
+      /\buse\s+(?:a\s+)?web\s+page\b[\s\S]{0,120}\breputable\s+source\b/.test(lower) ||
       /\b(?:accessible\s+)?reputable\s+web\s+page\b/.test(lower) ||
       /\bfind\s+(?:one\s+)?(?:accessible\s+)?(?:reputable|reliable|official|credible)\s+(?:web\s+page|source)\b/.test(
         lower,

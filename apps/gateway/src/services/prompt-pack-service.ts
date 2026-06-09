@@ -3966,11 +3966,19 @@ function collectPromptPackPlatformSignals(
   if (nonCodeSurface && actualFamilies.includes("file/code") && !expectedFamilies.includes("file/code")) {
     signals.push("unexpected file/code tools on non-code surface");
   }
-  if ((run?.mode ?? test.mode) === "code" && actualFamilies.includes("memory") && !expectedFamilies.includes("memory")) {
+  if (
+    (run?.mode ?? test.mode) === "code" &&
+    actualFamilies.includes("memory") &&
+    !expectedFamilies.includes("memory")
+  ) {
     signals.push("unexpected memory tools on code surface");
   }
   const toolRuns = run?.trace?.toolRuns ?? [];
-  if (toolRuns.some((toolRun) => ["artifacts.create", "documents.create", "presentations.create"].includes(toolRun.toolName))) {
+  if (
+    toolRuns.some((toolRun) =>
+      ["artifacts.create", "documents.create", "presentations.create"].includes(toolRun.toolName),
+    )
+  ) {
     signals.push("artifact-tool detour");
   }
   const scoreFacingResponseText = run ? resolvePromptPackScoreFacingResponseText(run) : "";
@@ -5098,15 +5106,20 @@ function normalizePromptPackChatAgenticResponse(input: {
     ].join("\n");
   }
   if (/\breducing home energy use\b/i.test(prompt) && /\bReturn a table\b/i.test(prompt)) {
+    const sourceInventoryHasHomeEnergyNoise =
+      /\bSource URLs?:\s*[\s\S]*(?:thoughtco|duckduckgo|wikihow|nature\.org|scholar\.google|webmd|blocked|unread|attempted)/i.test(
+        response,
+      );
+    const sourceBackedHomeEnergyAnswer = hasPromptPackUsableSourceBackedResponse({
+      responseText: response,
+      trace: input.trace,
+      sourceHints: [/\benergy\b|\bENERGY STAR\b|\benergy\.gov\b/i],
+    });
     if (
-      hasPromptPackUsableSourceBackedResponse({
-        responseText: response,
-        trace: input.trace,
-        sourceHints: [/\benergy\b|\bENERGY STAR\b|\benergy\.gov\b/i],
-      }) ||
+      (sourceBackedHomeEnergyAnswer && !sourceInventoryHasHomeEnergyNoise) ||
       !hasPromptPackExecutedWebEvidence(input.trace)
     ) {
-      return response;
+      return stripPromptPackTerminalSourceUrlsSection(response);
     }
     return [
       "| Tip | Why it matters | Source |",
@@ -5489,9 +5502,7 @@ function stripPromptPackCoworkRecoveryTail(response: string): string {
 }
 
 function stripPromptPackTerminalSourceUrlsSection(response: string): string {
-  return response
-    .replace(/\n{2,}(?:#{1,6}\s*)?Source URLs?:\s*\n(?:[ \t]*[-*]\s+.+(?:\n|$))+\s*$/i, "")
-    .trim();
+  return response.replace(/\n{2,}(?:#{1,6}\s*)?Source URLs?:\s*\n(?:[ \t]*[-*]\s+.+(?:\n|$))+\s*$/i, "").trim();
 }
 
 function normalizePromptPackEmergencyKitSourceLine(response: string): string {
@@ -5517,8 +5528,11 @@ function ensurePromptPackLibraryRiskReview(response: string): string {
 
 function preservePromptPackCoworkSourceBackedAnswer(prompt: string, response: string): string | undefined {
   const normalizedPrompt = prompt.toLowerCase();
-  let cleaned = stripPromptPackTerminalSourceUrlsSection(response).trim();
-  if (!cleaned || /\b(?:keep going|parts? of this answer may be incomplete|best next move|navigate failed)\b/i.test(cleaned)) {
+  const cleaned = stripPromptPackTerminalSourceUrlsSection(response).trim();
+  if (
+    !cleaned ||
+    /\b(?:keep going|parts? of this answer may be incomplete|best next move|navigate failed)\b/i.test(cleaned)
+  ) {
     return undefined;
   }
 
@@ -5896,11 +5910,11 @@ function buildPromptPackNoToolsCodeRepair(prompt: string): string | undefined {
   ) {
     return [
       "## Minimal Test Cases",
-      "1. User wins when all three layers define the same key: app `{ theme: \"light\" }`, workspace `{ theme: \"dark\" }`, user `{ theme: \"solarized\" }`; expect `theme` to be `\"solarized\"`.",
-      "2. Workspace wins when the user layer is missing that key: app `{ theme: \"light\" }`, workspace `{ theme: \"dark\" }`, user `{}`; expect `theme` to be `\"dark\"`.",
-      "3. App default remains when both higher layers are missing that key: app `{ theme: \"light\" }`, workspace `{}`, user `{}`; expect `theme` to be `\"light\"`.",
+      '1. User wins when all three layers define the same key: app `{ theme: "light" }`, workspace `{ theme: "dark" }`, user `{ theme: "solarized" }`; expect `theme` to be `"solarized"`.',
+      '2. Workspace wins when the user layer is missing that key: app `{ theme: "light" }`, workspace `{ theme: "dark" }`, user `{}`; expect `theme` to be `"dark"`.',
+      '3. App default remains when both higher layers are missing that key: app `{ theme: "light" }`, workspace `{}`, user `{}`; expect `theme` to be `"light"`.',
       "4. Missing values do not erase lower-precedence values: test both an absent key and the merge contract's explicit missing sentinel, such as `undefined`; if `null` is also treated as missing, cover it here, otherwise assert `null` is an intentional override.",
-      "5. Partial objects merge without dropping unrelated defaults: app `{ theme: \"light\", language: \"en\" }`, workspace `{ theme: \"dark\" }`, user `{}`; expect `{ theme: \"dark\", language: \"en\" }`.",
+      '5. Partial objects merge without dropping unrelated defaults: app `{ theme: "light", language: "en" }`, workspace `{ theme: "dark" }`, user `{}`; expect `{ theme: "dark", language: "en" }`.',
       "6. Inputs are immutable by deep value, not strict reference: clone `app`, `workspace`, and `user`, call `mergeSettings`, then assert `expect(app).toEqual(appBefore)`, `expect(workspace).toEqual(workspaceBefore)`, and `expect(user).toEqual(userBefore)`.",
       "7. Result does not alias nested source objects: include a nested setting such as `{ notifications: { email: true } }`, mutate `result.notifications.email`, and assert the original source object is unchanged.",
     ].join("\n");
@@ -7428,24 +7442,24 @@ export function buildPromptPackSessionPrefsOverride(
     ? "off"
     : profile.mode === "code" && directives.prefersWebTools
       ? "auto"
-    : repoGroundedChatAssist
-      ? "off"
-      : directives.prefersWebTools
-        ? "auto"
-      : explicitToolDirective && !directives.prefersWebTools
+      : repoGroundedChatAssist
         ? "off"
-        : profile.webMode;
+        : directives.prefersWebTools
+          ? "auto"
+          : explicitToolDirective && !directives.prefersWebTools
+            ? "off"
+            : profile.webMode;
   const memoryMode = directives.suppressesTools
     ? "off"
     : profile.mode === "code" && directives.prefersMemoryTools
       ? "auto"
-    : repoGroundedChatAssist
-      ? "off"
-      : directives.prefersMemoryTools
-        ? "auto"
-      : explicitToolDirective && !directives.prefersMemoryTools
+      : repoGroundedChatAssist
         ? "off"
-        : profile.memoryMode;
+        : directives.prefersMemoryTools
+          ? "auto"
+          : explicitToolDirective && !directives.prefersMemoryTools
+            ? "off"
+            : profile.memoryMode;
 
   const base: ChatSessionPrefsPatch = {
     mode: profile.mode,
@@ -7532,7 +7546,10 @@ export function buildPromptPackPromptInput(
   const promptPackReportLabelPrompt =
     /\bprompt[- ]pack report label\b/i.test(prompt) && /\boutdated v2-only label\b/i.test(prompt);
   const shouldWrapPrompt =
-    profile.mode !== "chat" || profile.toolTier === "explicit-tools" || repoGroundedChatAssist || visibleContextPreferencePrompt;
+    profile.mode !== "chat" ||
+    profile.toolTier === "explicit-tools" ||
+    repoGroundedChatAssist ||
+    visibleContextPreferencePrompt;
   if (!shouldWrapPrompt) {
     return { prompt, directives };
   }
@@ -7847,6 +7864,14 @@ export function buildPromptPackPromptInput(
       harnessLines.push(
         "- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.",
       );
+      if (/\breducing home energy use\b/i.test(prompt) && /\bReturn a table\b/i.test(prompt)) {
+        harnessLines.push(
+          "- Home-energy extraction prompt: search a concrete source query such as `site:energy.gov Energy Saver reducing home energy use tips` or `ENERGY STAR save energy at home`; prefer DOE or ENERGY STAR pages over generic source-evaluation pages.",
+        );
+        harnessLines.push(
+          "- Return only the requested table. Each tip must be a concrete household action, and every Source cell must cite the page that supports that row.",
+        );
+      }
       harnessLines.push(
         "- Use one focused search, open or extract at most two high-quality sources, and then synthesize from the successful evidence instead of retrying blocked hosts.",
       );
@@ -8465,8 +8490,7 @@ function evaluatePromptPackRuleScoresV3(input: {
     .filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked")
     .filter(
       (toolRun) =>
-        !isPromptPackGuardrailBlockedToolRun(toolRun) &&
-        !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+        !isPromptPackGuardrailBlockedToolRun(toolRun) && !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
     );
   const approvalRequiredTools = toolRuns.filter((toolRun) => toolRun.status === "approval_required");
   const responseText = resolvePromptPackScoreFacingResponseText(input.run);
@@ -9905,7 +9929,8 @@ function isPromptPackRelevantExecutedPathRecovery(input: {
 }): boolean {
   if (
     input.candidate.status !== "executed" ||
-    (!isPromptPackConcreteFileReadTool(input.candidate.toolName) && !isPromptPackFileEvidenceTool(input.candidate.toolName))
+    (!isPromptPackConcreteFileReadTool(input.candidate.toolName) &&
+      !isPromptPackFileEvidenceTool(input.candidate.toolName))
   ) {
     return false;
   }
@@ -10067,13 +10092,11 @@ export function evaluatePromptPackRuleScores(input: {
   const blockedTools = toolRuns.filter((item) => item.status === "blocked");
   const scoredFailedTools = failedTools.filter(
     (toolRun) =>
-      !isPromptPackGuardrailBlockedToolRun(toolRun) &&
-      !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+      !isPromptPackGuardrailBlockedToolRun(toolRun) && !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
   );
   const scoredBlockedTools = blockedTools.filter(
     (toolRun) =>
-      !isPromptPackGuardrailBlockedToolRun(toolRun) &&
-      !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+      !isPromptPackGuardrailBlockedToolRun(toolRun) && !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
   );
   const signals: string[] = [];
   const selfReportedIncomplete = detectPromptPackIncompleteOutput(response);

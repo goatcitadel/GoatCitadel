@@ -353,7 +353,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
-    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Inspect files and fix the issue.", "agentic_surface")).toMatchObject({
+    expect(
+      buildPromptPackSessionPrefsOverride(codeProfile, "Inspect files and fix the issue.", "agentic_surface"),
+    ).toMatchObject({
       mode: "code",
       orchestrationEnabled: false,
       orchestrationVisibility: "explicit",
@@ -543,25 +545,28 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
         "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.",
       ),
     ).toEqual(expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract"]));
-    expect(
-      buildPromptPackSessionToolAllowlist(
-        resolvePromptPackExecutionProfile({
-          test: {
-            testId: "test-v5-home-energy-chat",
-            packId: "pack-1",
-            code: "TEST-C511",
-            title: "Chat Home Energy Extraction",
-            prompt:
-              "Find one accessible reputable web page about reducing home energy use. Use it to extract three practical tips. Return a table with Tip, Why it matters, Source.",
-            orderIndex: 8,
-            mode: "chat",
-            toolTier: "explicit-tools",
-            createdAt: "2026-05-05T00:00:00.000Z",
-          },
-        }),
-        "Find one accessible reputable web page about reducing home energy use. Use it to extract three practical tips. Return a table with Tip, Why it matters, Source.",
-      ),
-    ).toEqual(expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract", "time.now"]));
+    const homeEnergyPrompt =
+      "Use a web page you can access from a reputable source and extract three practical tips for reducing home energy use.\n\nReturn a table with `Tip`, `Why it matters`, and `Source`.";
+    const homeEnergyProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-v5-home-energy-chat",
+        packId: "pack-1",
+        code: "TEST-C511",
+        title: "Chat Home Energy Extraction",
+        prompt: homeEnergyPrompt,
+        orderIndex: 8,
+        mode: "chat",
+        toolTier: "explicit-tools",
+        createdAt: "2026-05-05T00:00:00.000Z",
+      },
+    });
+
+    expect(buildPromptPackSessionToolAllowlist(homeEnergyProfile, homeEnergyPrompt)).toEqual(
+      expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract", "time.now"]),
+    );
+    const homeEnergyPromptInput = buildPromptPackPromptInput(homeEnergyPrompt, homeEnergyProfile).prompt;
+    expect(homeEnergyPromptInput).toContain("- Required tool families: web lookup tools");
+    expect(homeEnergyPromptInput).toContain("Home-energy extraction prompt");
   });
 
   it("resumes stale benchmark runs when status is requested", () => {
@@ -647,9 +652,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       "tests.run",
       "lint.run",
     ]);
-    expect(buildPromptPackSessionToolAllowlist(codeProfile, "Write a report document with repo evidence.")).not.toContain(
-      "documents.create",
-    );
+    expect(
+      buildPromptPackSessionToolAllowlist(codeProfile, "Write a report document with repo evidence."),
+    ).not.toContain("documents.create");
 
     expect(
       buildPromptPackSessionToolAllowlist(
@@ -1433,9 +1438,7 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       }
     ).ensurePromptPackSessionToolGrants("session-mixed-grants", coworkProfile, prompt);
 
-    const grantedPatterns = createGrant.mock.calls.map(
-      ([grant]) => (grant as { toolPattern: string }).toolPattern,
-    );
+    const grantedPatterns = createGrant.mock.calls.map(([grant]) => (grant as { toolPattern: string }).toolPattern);
     expect(grantedPatterns).toEqual(
       expect.arrayContaining(["fs.read", "file.read_range", "browser.navigate", "browser.extract"]),
     );
