@@ -3731,4 +3731,29 @@ describe("v3 rule-score calibration", () => {
 
     expect(evaluation.ruleScores.formatAdherence).toBeGreaterThanOrEqual(3);
   });
+
+  it("applies the capped usability score when a format violation signal is present", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-v3-cal-table-violation", "TEST-V3-CAL-TABLE-VIOLATION"),
+      mode: "chat",
+      toolTier: "no-tools",
+      prompt:
+        "Return a table with columns Status and Description summarising the current integration health for each connected service.",
+    };
+    const evaluation = evaluatePromptPackRuleScoresV3({
+      prompt: test.prompt,
+      run: {
+        ...createRun("run-v3-cal-table-violation", "completed", "2026-05-05T00:00:00.000Z"),
+        testId: test.testId,
+        toolTier: "no-tools",
+        responseText:
+          "The integration health summary: all connected services are currently operational with no reported incidents.",
+        trace: createTrace("sess-v3-cal-table-violation"),
+      },
+      profile: resolvePromptPackExecutionProfile({ test }),
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+    });
+
+    expect(evaluation.ruleScores.formatAdherence).toBe(0);
+  });
 });

@@ -6697,7 +6697,10 @@ export function evaluatePromptPackRuleScoresV3(input: {
         !isPromptPackGuardrailBlockedToolRun(toolRun) && !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
     );
   const approvalRequiredTools = toolRuns.filter((toolRun) => toolRun.status === "approval_required");
-  const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
+  const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run); // cheap: short-circuits on run.integrity; v2 evaluation computes it independently
+  // Only score recoveryQuality when the run actually hit a failure condition.
+  // Scoring it on clean runs produced a constant rule=2 vs judge=4 disagreement
+  // that inflated major_disagreement reviews with no signal value.
   const hasRecoveryContext =
     input.run.status === "failed" ||
     failedTools.length > 0 ||
@@ -6719,16 +6722,22 @@ export function evaluatePromptPackRuleScoresV3(input: {
     v2.reviewReasons.includes(reason) ||
     v2.degradedReasons.includes(reason);
 
+  // off_target_meta_analysis belongs here because v2 caps usability for it;
+  // flooring formatAdherence at 3 would erase that cap.
+  const hasFormatViolationSignal =
+    hasReason("missing_required_json") ||
+    hasReason("missing_required_table") ||
+    hasReason("off_target_meta_analysis");
+
   const ruleScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {
     taskSuccess: v2.ruleScores.taskSuccess,
     truthfulness: v2.ruleScores.honesty,
     evidenceGrounding: requiresEvidence
       ? clampPromptPackV3DimensionScore(v2.ruleScores.honesty ?? 0)
       : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.honesty ?? 3, 3)),
-    formatAdherence:
-      hasReason("missing_required_json") || hasReason("missing_required_table") || hasReason("off_target_meta_analysis")
-        ? clampPromptPackV3DimensionScore(v2.ruleScores.usability ?? 0)
-        : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.usability ?? 3, 3)),
+    formatAdherence: hasFormatViolationSignal
+      ? clampPromptPackV3DimensionScore(v2.ruleScores.usability ?? 0)
+      : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.usability ?? 3, 3)),
     operatorUsefulness: clampPromptPackV3DimensionScore(
       Math.round(((v2.ruleScores.taskSuccess ?? 0) + (v2.ruleScores.usability ?? 0)) / 2),
     ),
