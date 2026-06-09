@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -135,6 +135,7 @@ describe("prompt-pack scoring, judging, and integrity", () => {
     expect(evaluation.signals).toContain("missing_file_specific_evidence");
     expect(evaluation.signals).not.toContain("file_specific_evidence_present");
     expect(evaluation.signals).toContain("required_tool_usage_present");
+    expect(evaluation.signals).not.toContain("tool_failures_not_acknowledged");
     expect(evaluation.scores.robustnessScore).not.toBe(0);
     expect(run.responseText).toContain("Patch points");
   });
