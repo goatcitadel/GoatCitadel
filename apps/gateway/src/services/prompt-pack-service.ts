@@ -6514,6 +6514,18 @@ export function resolvePromptPackEffectiveJudgeStatusV2(input: {
   return input.judgeEvaluation.judgeStatus;
 }
 
+// Detects "I cannot use/browse/fetch ... the web/tools"-style capability claims. The verb is
+// optional so noun-led phrasings ("don't have access to a web browsing tool") still anchor on
+// the tool-context noun class. Bare "search" is intentionally NOT in the noun class ("search
+// tool*" is) so honest "could not find it through search" wording stays unmatched.
+const PROMPT_PACK_TOOL_UNAVAILABLE_VERB_CLAIM =
+  /\b(?:cannot|can't|could ?n[o']t|was unable to|am unable to|don'?t have access to|do not have access to)\s+(?:access|reach|use|invoke|call|browse|fetch|search)?\b[^.\n]{0,60}\b(?:web|brows\w*|fetch\w*|search(?:es|ing)? tool\w*|live lookup\w*|internet|tools?\b)/i;
+// Detects "web browsing is unavailable"-style claims. Bare "web"/"internet" must be followed by
+// a tool-context word (browsing/tool/access/...) so content claims like "tickets on the web were
+// not available" or "recent web data was not available" do not match.
+const PROMPT_PACK_TOOL_UNAVAILABLE_NOUN_CLAIM =
+  /\b(?:(?:web|internet)[- ](?:brows\w*|search\w*|access|tool\w*|lookup\w*|capabilit\w+|function\w*)|brows\w*|fetch\w*|search(?:[- ](?:tool\w*|access|capabilit\w+|lookup\w*|function\w*))?)\s+(?:is|are|was|were)?\s*\b(?:unavailable|not available|disabled|not enabled)\b/i;
+
 export function evaluatePromptPackRuleScoresV2(input: {
   prompt: string;
   run: PromptPackRunRecord;
@@ -6573,12 +6585,8 @@ export function evaluatePromptPackRuleScoresV2(input: {
   // tier allowed tools and the trace shows the model never attempted a single call
   // (honest "tool was blocked" reports leave failed/blocked runs in the trace).
   const claimsToolUnavailable =
-    /\b(?:cannot|can't|could ?n[o']t|was unable to|am unable to)\s+(?:access|reach|use|invoke|call)\b[^.\n]{0,60}\b(?:web|brows\w*|fetch\w*|search|live|internet|tool)\b/i.test(
-      responseText,
-    ) ||
-    /\b(?:web|brows\w*|fetch\w*|search)[^.\n]{0,40}\b(?:unavailable|not available|disabled|not enabled)\b/i.test(
-      responseText,
-    );
+    PROMPT_PACK_TOOL_UNAVAILABLE_VERB_CLAIM.test(responseText) ||
+    PROMPT_PACK_TOOL_UNAVAILABLE_NOUN_CLAIM.test(responseText);
   if (
     claimsToolUnavailable &&
     input.profile.toolTier !== "no-tools" &&
