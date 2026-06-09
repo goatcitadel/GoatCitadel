@@ -37,7 +37,7 @@ export {
   statusChipClass,
   summarizePromptPackTestOutcomes,
 } from "./PromptPacksWorkbenchPage.helpers";
-export type { DetailTab, PromptBlockRow, PromptInlineSegment } from "./PromptPacksWorkbenchPage.helpers";
+export type { PromptBlockRow, PromptInlineSegment } from "./PromptPacksWorkbenchPage.helpers";
 export { AssessmentThresholdBar, DiagnosticChipGroup, PromptSourceEditor } from "./PromptPacksWorkbenchPage.components";
 
 interface PromptPacksWorkbenchPageProps {
@@ -103,36 +103,34 @@ export function PromptPacksWorkbenchPage({
         isFallbackRefreshing={state.isFallbackRefreshing}
       />
 
-      <div className="mc-pp-layout">
-        <aside className="mc-pp-sidebar">
-          <PromptPackLibraryPanel
-            isOpsVariant={state.isOpsVariant}
-            packs={state.packs}
-            selectedPackId={state.selectedPackId}
-            onSelectPack={(packId) => {
-              state.setSelectedPackId(packId);
-              state.setDetailTab("prompt");
-            }}
-          />
+      <section className="mc-pp-command-deck" aria-label="Prompt pack setup">
+        <PromptPackLibraryPanel
+          isOpsVariant={state.isOpsVariant}
+          packs={state.packs}
+          selectedPackId={state.selectedPackId}
+          compact
+          onSelectPack={state.selectPack}
+        />
 
-          <RunSettingsPanel
-            isOpsVariant={state.isOpsVariant}
-            providerOptions={state.providerOptions}
-            selectedProviderId={state.selectedProviderId}
-            selectedModel={state.selectedModel}
-            reuseLastModel={state.reuseLastModel}
-            autoScoreOnRun={state.autoScoreOnRun}
-            executionStyle={state.executionStyle}
-            lastSuccessfulModel={state.lastSuccessfulModel}
-            selectedRunModel={state.selectedRunModel}
-            executionStyleDescription={state.executionStyleDescription}
-            onSelectProvider={state.setSelectedProviderId}
-            onSelectModel={state.setSelectedModel}
-            onSetReuseLastModel={state.setReuseLastModel}
-            onSetAutoScoreOnRun={state.setAutoScoreOnRun}
-            onSetExecutionStyle={state.setExecutionStyle}
-          />
+        <RunSettingsPanel
+          isOpsVariant={state.isOpsVariant}
+          providerOptions={state.providerOptions}
+          selectedProviderId={state.selectedProviderId}
+          selectedModel={state.selectedModel}
+          reuseLastModel={state.reuseLastModel}
+          autoScoreOnRun={state.autoScoreOnRun}
+          executionStyle={state.executionStyle}
+          lastSuccessfulModel={state.lastSuccessfulModel}
+          selectedRunModel={state.selectedRunModel}
+          executionStyleDescription={state.executionStyleDescription}
+          onSelectProvider={state.setSelectedProviderId}
+          onSelectModel={state.setSelectedModel}
+          onSetReuseLastModel={state.setReuseLastModel}
+          onSetAutoScoreOnRun={state.setAutoScoreOnRun}
+          onSetExecutionStyle={state.setExecutionStyle}
+        />
 
+        <div className="mc-pp-command-secondary">
           <AdvancedQualityOpsPanel
             benchmarkTestCodes={state.benchmarkTestCodes}
             benchmarkProvidersInput={state.benchmarkProvidersInput}
@@ -175,8 +173,10 @@ export function PromptPacksWorkbenchPage({
               onImport={() => void state.handleImport()}
             />
           ) : null}
-        </aside>
+        </div>
+      </section>
 
+      <div className="mc-pp-layout">
         <PromptPackTestsColumn
           selectedPackName={state.selectedPack?.name}
           testsLength={state.tests.length}
@@ -189,10 +189,7 @@ export function PromptPacksWorkbenchPage({
           activeRun={state.activeRun}
           running={state.running}
           onSetTestResultFilter={state.setTestResultFilter}
-          onSelectTest={(testId) => {
-            state.setSelectedTestId(testId);
-            state.setDetailTab("prompt");
-          }}
+          onSelectTest={state.setSelectedTestId}
           onRunOne={(test) => void state.runOne(test, "single")}
         />
 
@@ -210,59 +207,55 @@ export function PromptPacksWorkbenchPage({
                 activeRun={state.activeRun}
                 running={state.running}
                 executionStyle={state.executionStyle}
-                detailTab={state.detailTab}
                 onRunSelected={() => state.selectedTest && void state.runOne(state.selectedTest, "single")}
                 onOpenSelectedRun={state.openSelectedRun}
                 onCopySelectedRunLink={() => void state.copySelectedRunLink()}
-                onSetDetailTab={state.setDetailTab}
               />
 
-              <div className="mc-pp-tab-panel">
-                {state.detailTab === "prompt" ? (
-                  <PromptTab
-                    selectedTest={state.selectedTest}
-                    selectedPlaceholders={state.selectedPlaceholders}
-                    selectedMissingPlaceholders={state.selectedMissingPlaceholders}
-                    placeholderValues={state.placeholderValues}
-                    selectedDiagnosticMetadata={state.selectedDiagnosticMetadata}
-                    onPlaceholderChange={(key, value) =>
-                      state.setPlaceholderValues((current) => ({
-                        ...current,
-                        [key]: value,
-                      }))
-                    }
-                  />
-                ) : null}
+              <div className="mc-pp-merged-evidence">
+                <PromptTab
+                  selectedTest={state.selectedTest}
+                  selectedPlaceholders={state.selectedPlaceholders}
+                  selectedMissingPlaceholders={state.selectedMissingPlaceholders}
+                  placeholderValues={state.placeholderValues}
+                  selectedDiagnosticMetadata={state.selectedDiagnosticMetadata}
+                  onPlaceholderChange={(key, value) =>
+                    state.setPlaceholderValues((current) => ({
+                      ...current,
+                      [key]: value,
+                    }))
+                  }
+                />
 
-                {state.detailTab === "output" ? (
-                  <OutputTab
-                    selectedRun={state.selectedRun}
-                    selectedRunModelUsage={state.selectedRunModelUsage}
-                    executionStyle={state.executionStyle}
-                  />
-                ) : null}
+                <OutputTab
+                  selectedRun={state.selectedRun}
+                  selectedRunModelUsage={state.selectedRunModelUsage}
+                  executionStyle={state.executionStyle}
+                />
 
-                {state.detailTab === "assessment" ? (
-                  <AssessmentTab selectedAssessment={state.selectedAssessment} />
-                ) : null}
+                <AssessmentTab selectedAssessment={state.selectedAssessment} />
 
-                {state.detailTab === "review" ? (
-                  <ReviewTab
-                    v2UiEnabled={state.v2UiEnabled}
-                    scoreDraft={state.scoreDraft}
-                    draftWeightedScore={state.draftWeightedScore}
-                    draftVerdict={state.draftVerdict}
-                    completedDraftDimensions={state.completedDraftDimensions}
-                    selectedRun={state.selectedRun}
-                    savingScore={state.savingScore}
-                    autoScoring={state.autoScoring}
-                    onSetScoreDraft={state.setScoreDraft}
-                    onSubmitScore={() => void state.submitScore()}
-                    onAutoScoreSelected={() => void state.autoScoreSelected()}
-                  />
-                ) : null}
+                <ReviewTab
+                  v2UiEnabled={state.v2UiEnabled}
+                  scoreDraft={state.scoreDraft}
+                  draftWeightedScore={state.draftWeightedScore}
+                  draftVerdict={state.draftVerdict}
+                  completedDraftDimensions={state.completedDraftDimensions}
+                  selectedRun={state.selectedRun}
+                  savingScore={state.savingScore}
+                  autoScoring={state.autoScoring}
+                  onSetScoreDraft={state.setScoreDraft}
+                  onSubmitScore={() => void state.submitScore()}
+                  onAutoScoreSelected={() => void state.autoScoreSelected()}
+                />
 
-                {state.detailTab === "insights" ? (
+                <details className="mc-pp-panel mc-pp-panel-collapsible mc-pp-merged-insights">
+                  <summary>
+                    <div>
+                      <h4>Insights and regression evidence</h4>
+                      <p>Pack-level trends, benchmark summaries, and replay regression stay secondary.</p>
+                    </div>
+                  </summary>
                   <InsightsTab
                     report={state.report}
                     testOutcomeSummary={state.testOutcomeSummary}
@@ -271,7 +264,7 @@ export function PromptPacksWorkbenchPage({
                     benchmarkStatus={state.benchmarkStatus}
                     regressionStatus={state.regressionStatus}
                   />
-                ) : null}
+                </details>
               </div>
             </>
           ) : (

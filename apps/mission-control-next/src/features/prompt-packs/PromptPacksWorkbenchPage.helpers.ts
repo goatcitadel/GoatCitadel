@@ -2,6 +2,7 @@ import type {
   PromptPackAutoScoreRecord,
   PromptPackExecutionStyle,
   PromptPackLatestAssessmentRecordV2,
+  PromptPackReportRecord,
   PromptPackRunRecord,
   PromptPackScoringSchemaVersion,
   PromptPackTestRecord,
@@ -16,15 +17,43 @@ import type { AppRoute } from "@next/app/route-model";
 
 export const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
-export type DetailTab = "prompt" | "output" | "assessment" | "review" | "insights";
-
-export const DETAIL_TABS: Array<{ id: DetailTab; label: string }> = [
-  { id: "prompt", label: "Prompt" },
-  { id: "output", label: "Output" },
-  { id: "assessment", label: "Assessment" },
-  { id: "review", label: "Review" },
-  { id: "insights", label: "Insights" },
-];
+/**
+ * Pass-readiness blockers for a pack report. Shared between the workbench
+ * summary card and the Insights panel so both surfaces agree on what blocks
+ * a full pass; the detail strings rendered next to it stay caller-local.
+ */
+export function computePassReadiness(
+  summary: PromptPackReportRecord["summary"] | null | undefined,
+): { blockers: string[]; complete: boolean } {
+  if (!summary) {
+    return { blockers: [], complete: false };
+  }
+  const notRunCount = Math.max(
+    summary.totalTests - summary.completedRuns - summary.failedRuns - (summary.approvalPausedRuns ?? 0),
+    0,
+  );
+  const completedValidLatestRuns = Math.max(summary.completedRuns - summary.invalidLatestRuns, 0);
+  const scoredCoverageDenominator = Math.max(
+    completedValidLatestRuns,
+    summary.autoScoredRuns + summary.needsScoreCount,
+  );
+  const missingCurrentScores = Math.max(scoredCoverageDenominator - summary.autoScoredRuns, 0);
+  const blockers = [
+    summary.totalTests === 0 ? "No tests loaded" : undefined,
+    notRunCount > 0 ? `${notRunCount} not run` : undefined,
+    summary.failedRuns > 0 ? `${summary.failedRuns} failed run(s)` : undefined,
+    summary.runFailureCount > 0 ? `${summary.runFailureCount} runtime failure(s)` : undefined,
+    summary.invalidLatestRuns > 0 ? `${summary.invalidLatestRuns} invalid latest run(s)` : undefined,
+    missingCurrentScores > 0 ? `${missingCurrentScores} completed run(s) without current auto-score` : undefined,
+    summary.staleLatestAutoScoreCount > 0 ? `${summary.staleLatestAutoScoreCount} stale score row(s)` : undefined,
+    summary.failCount > 0 ? `${summary.failCount} fail verdict(s)` : undefined,
+    summary.reviewCount > 0 ? `${summary.reviewCount} review verdict(s)` : undefined,
+    summary.judgeErrorCount > 0 ? `${summary.judgeErrorCount} judge error(s)` : undefined,
+    summary.degradedScoreCount > 0 ? `${summary.degradedScoreCount} degraded score(s)` : undefined,
+    summary.effectivePassRate < 1 ? "Scored pass rate below 100%" : undefined,
+  ].filter((item): item is string => Boolean(item));
+  return { blockers, complete: blockers.length === 0 };
+}
 
 const PROMPT_PACK_V2_DIMENSION_LABELS = [
   ["taskSuccess", "Task success"],

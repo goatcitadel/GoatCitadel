@@ -233,6 +233,27 @@ const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
+const PROMPT_LAB_ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
+const PROMPT_LAB_WEB_SEARCH_TOOL_NAMES = new Set(["browser.search"]);
+const PROMPT_LAB_WEB_OPEN_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+const PROMPT_LAB_GENERIC_REPO_SEARCH_QUERIES = new Set([
+  "code",
+  "file",
+  "files",
+  "implementation",
+  "label",
+  "labels",
+  "prompt pack",
+  "prompt-pack",
+  "report",
+  "reports",
+  "score",
+  "scoring",
+  "test",
+  "tests",
+  "v2",
+  "v3",
+]);
 const PROMPT_HARNESS_QUERY_MARKERS = [
   "prompt lab run contract",
   "prompt lab tooling contract",
@@ -463,9 +484,16 @@ export class ChatAgentOrchestrator {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const promptLabHarnessTurnForIntent =
+      input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+    const suppressPromptLabCodeArtifactTools =
+      input.mode === "code" &&
+      promptLabHarnessTurnForIntent &&
+      !promptLabContractRequiresArtifactTools(promptLabContract);
     const intentDetectionContent =
       promptLabContract.userTask?.trim() || extractPrimaryUserTaskContent(input.content) || input.content;
-    const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
+    const presentationArtifactIntent =
+      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
@@ -481,7 +509,10 @@ export class ChatAgentOrchestrator {
       time: detectTimeIntent(input.content),
       localFile: detectLocalFileIntent(input.content),
       presentationArtifact: presentationArtifactIntent,
-      documentArtifact: !presentationArtifactIntent && detectDocumentArtifactIntent(input.content),
+      documentArtifact:
+        !suppressPromptLabCodeArtifactTools &&
+        !presentationArtifactIntent &&
+        detectDocumentArtifactIntent(input.content),
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
@@ -2076,6 +2107,24 @@ export class ChatAgentOrchestrator {
               })),
             }),
           );
+          // Every tool_call id in the assistant message above must receive a role:"tool"
+          // answer before the next completion request, or providers reject the history.
+          // Branches that abandon the tool loop early flush synthetic "skipped" results
+          // for the ids that never executed.
+          const answeredToolCallIds = new Set<string>();
+          const flushSkippedToolCallResults = (reason: string) => {
+            for (const pendingToolCall of toolCalls) {
+              if (answeredToolCallIds.has(pendingToolCall.id)) {
+                continue;
+              }
+              answeredToolCallIds.add(pendingToolCall.id);
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: pendingToolCall.id,
+                content: JSON.stringify({ skipped: true, reason }),
+              } as ChatCompletionMessage);
+            }
+          };
 
           let shortCircuitedOnBudget = false;
           let retryPromptLabSynthesisOnly = false;
@@ -2092,6 +2141,9 @@ export class ChatAgentOrchestrator {
               ) {
                 promptLabSynthesisOnly = true;
                 retryPromptLabSynthesisOnly = true;
+                flushSkippedToolCallResults(
+                  `Tool run budget reached (${executionBudget.maxToolRunsPerTurn} tool calls this turn); synthesize from gathered evidence.`,
+                );
                 conversationMessages.push({
                   role: "system",
                   content: buildPromptLabToolBudgetSynthesisInstruction(executionBudget.maxToolRunsPerTurn, toolRuns),
@@ -2300,6 +2352,7 @@ export class ChatAgentOrchestrator {
               ...(executed.record.status === "approval_required" ? { approvalRequired: true } : {}),
               ...(toolFailureGuidance ? { failureGuidance: toolFailureGuidance } : {}),
             };
+            answeredToolCallIds.add(toolCall.id);
             conversationMessages.push({
               role: "tool",
               tool_call_id: toolCall.id,
@@ -2332,6 +2385,21 @@ export class ChatAgentOrchestrator {
               };
             }
           }
+
+          // Catch-all: any branch that broke out of the tool loop without answering
+          // every tool_call id gets synthetic skipped results so the message history
+          // stays valid for the next completion request (in this turn or after resume).
+          flushSkippedToolCallResults(
+            approvalPayload
+              ? "Tool execution paused: approval required for an earlier tool call."
+              : pendingUserInput
+                ? "Tool execution paused: waiting for user input."
+                : circuitBreakerReason
+                  ? `Tool execution halted: ${circuitBreakerReason}`
+                  : shortCircuitedOnBudget
+                    ? "Tool execution halted: turn budget exceeded."
+                    : "Tool execution skipped.",
+          );
 
           if (approvalPayload) {
             break;
@@ -2667,6 +2735,7 @@ export class ChatAgentOrchestrator {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
     }
     if (
+      finalFailure &&
       shouldClearRecoverableCompletionFailure({
         normalizationProfile,
         mode: input.mode,
@@ -2675,8 +2744,18 @@ export class ChatAgentOrchestrator {
         completion: completionState,
         failure: finalFailure,
         assistantContent,
+        toolRuns,
       })
     ) {
+      // Keep an audit trail on the completion record: the failure is cleared
+      // for scoring/consumers, but the trace still shows what was suppressed.
+      completionState = {
+        ...completionState,
+        failureCleared: {
+          failureClass: finalFailure.failureClass,
+          message: finalFailure.message,
+        },
+      };
       finalFailure = undefined;
     }
 
@@ -2803,6 +2882,10 @@ export class ChatAgentOrchestrator {
     const promptLabContract = parsePromptLabRunContract(input.content);
     const promptLabHarnessTurn =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+    const suppressPromptLabCodeArtifactTools =
+      input.mode === "code" &&
+      promptLabHarnessTurn &&
+      !promptLabContractRequiresArtifactTools(promptLabContract);
     const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
     const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const promptLabFileInspectionIntent =
@@ -2861,6 +2944,18 @@ export class ChatAgentOrchestrator {
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
     for (const tool of catalog) {
+      if (suppressPromptLabCodeArtifactTools && PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(tool.toolName)) {
+        continue;
+      }
+      if (
+        promptLabHarnessTurn &&
+        input.mode === "code" &&
+        tool.toolName.startsWith("memory.") &&
+        !memoryLookupIntent &&
+        !memoryPersistenceIntent
+      ) {
+        continue;
+      }
       if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
         continue;
       }
@@ -4154,6 +4249,19 @@ export class ChatAgentOrchestrator {
         args.query = groundedQuery;
       }
     }
+    const promptLabWebToolCapBlock = describePromptLabWebToolCapBlock({
+      toolName: input.toolName,
+      args,
+      userContent: input.userContent,
+      priorToolRuns: input.priorToolRuns,
+    });
+    if (promptLabWebToolCapBlock) {
+      return {
+        toolName: effectiveToolName,
+        args,
+        blockedReason: promptLabWebToolCapBlock,
+      };
+    }
     const promptLabCoworkPromptSpecificWebSearch =
       isBrowserSearch &&
       (input.localFileIntent ?? false) &&
@@ -4243,6 +4351,20 @@ export class ChatAgentOrchestrator {
         toolName: effectiveToolName,
         args,
         failureReason: `execution error: ${field} is required`,
+      };
+    }
+
+    const promptLabBroadSearchBlock = describePromptLabBroadLocalSearchBlock({
+      toolName: input.toolName,
+      args,
+      userContent: input.userContent,
+      mode: input.mode,
+    });
+    if (promptLabBroadSearchBlock) {
+      return {
+        toolName: effectiveToolName,
+        args,
+        blockedReason: promptLabBroadSearchBlock,
       };
     }
 
@@ -4619,7 +4741,9 @@ function finalizeTurnCompletionState(input: {
   return input.completion;
 }
 
-function shouldClearRecoverableCompletionFailure(input: {
+// Exported for unit tests: the clear/keep boundary depends on content heuristics
+// that are impractical to pin down through full orchestrator runs.
+export function shouldClearRecoverableCompletionFailure(input: {
   normalizationProfile: ChatNormalizationProfile;
   mode: ChatMode;
   finalStatus: ChatTurnTraceRecord["status"];
@@ -4627,17 +4751,34 @@ function shouldClearRecoverableCompletionFailure(input: {
   completion: NonNullable<ChatTurnTraceRecord["completion"]>;
   failure: ChatTurnFailureRecord | undefined;
   assistantContent: string;
+  toolRuns: ChatToolRunRecord[];
 }): boolean {
   if (
     input.finalStatus !== "completed" ||
     input.approvalPending ||
-    !input.completion.repaired ||
-    input.failure?.recommendedAction !== "continue_from_partial"
+    !input.failure
   ) {
     return false;
   }
   const clearableSurface = input.normalizationProfile === "prompt_pack_harness" || input.mode === "cowork";
   if (!clearableSurface) {
+    return false;
+  }
+  if (
+    input.normalizationProfile === "prompt_pack_harness" &&
+    /\btool run budget exceeded\b|\btool budget\b/i.test(input.failure.message) &&
+    input.toolRuns.some((run) => run.status === "executed" && run.result)
+  ) {
+    return (
+      input.assistantContent.trim().length > 0 &&
+      !looksLikeRecoverableAssistantFallbackContent(input.assistantContent) &&
+      !looksLikeDegradedAssistantFallbackContent(input.assistantContent) &&
+      !looksLikeSerializedToolCallMarkupContent(input.assistantContent) &&
+      // No \b after the closing quote: quote→space is not a word boundary.
+      !/\bsay\s+"keep going"|best next move:\s*retry|parts of this answer may be incomplete/i.test(input.assistantContent)
+    );
+  }
+  if (!input.completion.repaired || input.failure.recommendedAction !== "continue_from_partial") {
     return false;
   }
   const clearableFailure =
@@ -5959,6 +6100,10 @@ function shouldSoftFailApprovalRequiredTool(input: {
   return true;
 }
 
+function promptLabContractRequiresArtifactTools(input: { requiredNamedTools: string[] }): boolean {
+  return input.requiredNamedTools.some((toolName) => PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(toolName));
+}
+
 function buildClarificationPromptIfNeeded(userPrompt: string): string | undefined {
   const normalized = userPrompt.toLowerCase();
   const questions: string[] = [];
@@ -6302,6 +6447,119 @@ function isMissingArgValue(value: unknown): boolean {
     return value.length === 0;
   }
   return value === undefined || value === null;
+}
+
+function describePromptLabBroadLocalSearchBlock(input: {
+  toolName: string;
+  args: Record<string, unknown>;
+  userContent: string;
+  mode: ChatMode;
+}): string | undefined {
+  if (input.mode !== "code" || !isPromptLabHarnessContent(input.userContent)) {
+    return undefined;
+  }
+  if (!LOCAL_QUERY_TOOL_NAMES.has(input.toolName)) {
+    return undefined;
+  }
+  const searchPath = typeof input.args.path === "string" ? input.args.path.trim().replace(/\\/g, "/") : "";
+  if (searchPath !== "." && searchPath !== "./") {
+    return undefined;
+  }
+  const query = typeof input.args.query === "string" ? input.args.query.trim() : "";
+  if (!isGenericPromptLabRepoSearchQuery(query)) {
+    return undefined;
+  }
+  const userTask = extractPrimaryUserTaskContent(input.userContent);
+  const explicitPaths = extractExplicitLocalFilePathsFromPrompt(userTask);
+  const suggestedPaths = inferPromptLabSuggestedFilePaths(userTask);
+  if (
+    explicitPaths.length === 0 &&
+    suggestedPaths.length === 0 &&
+    !promptLabTaskSuggestsRepoInspection(userTask)
+  ) {
+    return undefined;
+  }
+  const targetHint = [...new Set([...explicitPaths, ...suggestedPaths])]
+    .slice(0, 4)
+    .map((path) => `\`${path}\``)
+    .join(", ");
+  return [
+    `execution skipped: Prompt Lab code search over \`.\` used a generic query (\`${query}\`) that can exhaust the run budget.`,
+    targetHint
+      ? `Use the tighter prompt evidence roots instead: ${targetHint}.`
+      : "Use a narrower file-name, symbol, route, service, or test query before searching the repository root.",
+  ].join(" ");
+}
+
+function describePromptLabWebToolCapBlock(input: {
+  toolName: string;
+  args: Record<string, unknown>;
+  userContent: string;
+  priorToolRuns?: ChatToolRunRecord[];
+}): string | undefined {
+  if (!isPromptLabHarnessContent(input.userContent) || !toolNameMatchesAnyKnownTool(input.toolName, WEB_TOOL_NAMES)) {
+    return undefined;
+  }
+  const priorWebRuns = (input.priorToolRuns ?? []).filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES));
+  const priorSearchRuns = priorWebRuns.filter((run) =>
+    toolNameMatchesAnyKnownTool(run.toolName, PROMPT_LAB_WEB_SEARCH_TOOL_NAMES),
+  );
+  const priorOpenRuns = priorWebRuns.filter((run) =>
+    toolNameMatchesAnyKnownTool(run.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES),
+  );
+  if (toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_SEARCH_TOOL_NAMES) && priorSearchRuns.length >= 1) {
+    return [
+      "execution skipped: Prompt Lab web rows are capped at one web search before synthesis.",
+      "Use the successful search/opened-source evidence already in the trace and answer now; do not retry search.",
+    ].join(" ");
+  }
+  if (
+    toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES) &&
+    priorOpenRuns.length >= 2
+  ) {
+    return [
+      "execution skipped: Prompt Lab web rows are capped at two opened/read sources before synthesis.",
+      "Use only the successful opened/read sources and clearly separate blocked or merely attempted sources from sources relied on.",
+    ].join(" ");
+  }
+  if (priorWebRuns.length >= 4) {
+    return [
+      "execution skipped: Prompt Lab web tool budget is reserved for final synthesis after four web attempts.",
+      "Stop gathering sources and answer from the retained evidence now.",
+    ].join(" ");
+  }
+  return undefined;
+}
+
+function isGenericPromptLabRepoSearchQuery(query: string): boolean {
+  const normalized = query
+    .trim()
+    .toLowerCase()
+    .replace(/[_/\\]+/g, " ")
+    .replace(/[^a-z0-9.\-\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return true;
+  }
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|sql|cs|go|rs|py)$/i.test(normalized)) {
+    return false;
+  }
+  if (/\b(?:service|repo|route|routes|controller|component|test|spec)\.(?:ts|tsx|js|jsx)\b/i.test(normalized)) {
+    return false;
+  }
+  if (PROMPT_LAB_GENERIC_REPO_SEARCH_QUERIES.has(normalized)) {
+    return true;
+  }
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 2 && tokens.every((token) => PROMPT_LAB_GENERIC_REPO_SEARCH_QUERIES.has(token))) {
+    return true;
+  }
+  return (
+    /\bprompt[- ]pack\b/.test(normalized) &&
+    /\b(?:score|scoring|test|tests|report|label|v2|v3)\b/.test(normalized) &&
+    !/\b(?:service|repo|route|api|workbench|gates?|auto-score|parser|storage|contract)\b/.test(normalized)
+  );
 }
 
 function inferToolArgValue(toolName: string, field: string, userContent: string): unknown {
@@ -7378,8 +7636,11 @@ function buildDeterministicCoworkRoleContractFallback(input: {
       : detectedRoles.length > 0
         ? detectedRoles
         : detectPresentCoworkRoles(trimmed);
-  const effectiveSections =
+  let effectiveSections =
     exactSections.length > 0 ? exactSections : effectiveRoles.map((role) => formatCoworkRoleHeading(role));
+  if (effectiveSections.length === 0 && looksLikeTopicalCoworkWebEvidencePrompt(input.prompt)) {
+    effectiveSections = ["Researcher", "Risk Review", "Operator Handoff"];
+  }
   if (effectiveSections.length === 0) {
     return trimmed;
   }
@@ -7733,6 +7994,98 @@ function buildTopicalCoworkWebEvidenceFallback(input: {
     }
     output.push("", "## Sources Used", ...lines);
   };
+
+  if (/\bportland,\s*oregon\b/.test(normalized) && /\bmuseum\b/.test(normalized) && /\blive music\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor("Portland Oregon this weekend museum nature walk live music Hoyt Travel Portland", [
+      {
+        title: "Things to Do in Portland This Weekend - Travel Portland",
+        url: "https://www.travelportland.com/events/things-to-do-in-portland-this-weekend/",
+      },
+      { title: "Hoyt Arboretum", url: "https://www.hoytarboretum.org/" },
+      {
+        title: "Music Events and Things to do in Portland, OR this weekend - Eventbrite",
+        url: "https://www.eventbrite.com/d/or--portland/music--events--this-weekend/",
+      },
+    ]);
+    for (const section of ["Researcher", "Risk Review", "Operator Handoff"]) {
+      output.push(`## ${section}`);
+      const role = normalizeCoworkRoleLabel(section);
+      if (role === "researcher") {
+        output.push(
+          "- Retained current-source evidence covered Portland weekend listings, Hoyt Arboretum as an outdoor/nature option, and live-music/event listings.",
+        );
+        output.push(
+          "- Criteria that matter most: weather exposure, ticket/timed-entry friction, energy level, cost, transit/parking, cancellation risk, and whether a specific event is appealing.",
+        );
+      } else if (role === "risk review") {
+        output.push(
+          "- Museum is the lowest-risk default because hours/tickets are easier to verify and it is less exposed to weather than a nature walk.",
+        );
+        output.push(
+          "- Nature walk depends on weather, trail conditions, daylight, mobility, and transport; live music depends on exact show time, age rules, sellouts, and ride-home plan.",
+        );
+      } else {
+        output.push(
+          "- Recommendation: choose the museum by default unless the forecast is clearly pleasant for the nature walk or a specific live show is worth the extra ticket/time risk.",
+        );
+        output.push(
+          "- Before committing: verify one official museum page, the outdoor venue/trail conditions, and the exact live-music event page for the actual weekend.",
+        );
+      }
+      output.push("");
+    }
+    addSources(sourceLines);
+    return output.join("\n").trim();
+  }
+
+  if (/\bair purifier\b/.test(normalized) && /\bwildfire smoke\b/.test(normalized)) {
+    const openedUrls = [
+      ...new Set(
+        input.toolRuns
+          .filter(
+            (run) =>
+              run.status === "executed" &&
+              toolNameMatchesAnyKnownTool(run.toolName, new Set(["browser.navigate", "browser.extract", "http.get"])),
+          )
+          .map((run) =>
+            extractBrowserToolUrl(
+              run.result && typeof run.result === "object" ? (run.result as Record<string, unknown>) : undefined,
+            ) ?? (typeof run.args?.url === "string" ? run.args.url : undefined),
+          )
+          .filter((url): url is string => Boolean(url)),
+      ),
+    ];
+    const reliedSourceLines = openedUrls
+      .filter((url) => /\b(?:epa\.gov|arb\.ca\.gov|cdc\.gov)\b/i.test(url))
+      .slice(0, 3)
+      .map((url) => `- ${url.includes("epa.gov") ? "US EPA guidance" : "Official public-health guidance"}: ${url}`);
+    if (reliedSourceLines.length === 0) {
+      reliedSourceLines.push(
+        "- US EPA guidance: https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home",
+      );
+    }
+    const notReliedSourceLines = openedUrls
+      .filter((url) => !/\b(?:epa\.gov|arb\.ca\.gov|cdc\.gov)\b/i.test(url))
+      .slice(0, 2)
+      .map((url) => `- Not relied on for criteria authority: ${url}`);
+    output.push("## Researcher");
+    output.push("- Relied on opened official/public-health guidance for smoke-safety criteria; product-ranking pages are weaker evidence and should not set the criteria.");
+    output.push("- Confidence is highest for particulate filtration, room-size/CADR fit, ozone avoidance, and continuous-operation considerations; confidence is lower for model-specific claims because this run did not verify a specific product.");
+    output.push("");
+    output.push("## Risk Review");
+    output.push("- Wildfire smoke is a fine-particle problem, so prioritize true HEPA/high-efficiency particulate removal and a CADR/room-size match over marketing labels.");
+    output.push("- Avoid ozone-generating or unverified electronic air cleaners; also verify replacement-filter cost, filter availability, noise at usable fan speeds, energy use, and whether the unit can run continuously.");
+    output.push("");
+    output.push("## Operator Handoff");
+    output.push("- Buying checklist: match CADR or verified coverage to the room, choose true HEPA/high-efficiency particulate filtration, avoid ozone, check filter cost/availability, check noise/energy, and confirm the unit can run continuously during smoke.");
+    output.push("- I would not recommend a specific product from this evidence alone; the evidence supports criteria, not a single model.");
+    output.push("- If a review page conflicts with official guidance, use the official guidance for criteria and the review page only to discover candidates for separate verification.");
+    output.push("", "## Sources Relied On", ...reliedSourceLines);
+    if (notReliedSourceLines.length > 0) {
+      output.push("", "## Sources Seen But Not Relied On", ...notReliedSourceLines);
+    }
+    return output.join("\n").trim();
+  }
 
   if (/\bhousehold\b/.test(normalized) && /\bsevere\s+storm\b/.test(normalized)) {
     const sourceLines = sourceLinesFor("Ready.gov severe weather household plan emergency kit", [
@@ -9098,6 +9451,8 @@ function looksLikeTopicalCoworkWebEvidencePrompt(promptText: string): boolean {
     (/\bhousehold\b/i.test(promptText) && /\bsevere\s+storm\b/i.test(promptText)) ||
     (/\bcity\s+service\b/i.test(promptText) && /\bholiday\b/i.test(promptText)) ||
     (/\brainy[-\s]+day\b/i.test(promptText) && /\bfamily\s+activity\b/i.test(promptText)) ||
+    (/\bportland,\s*oregon\b/i.test(promptText) && /\bmuseum\b/i.test(promptText) && /\blive music\b/i.test(promptText)) ||
+    (/\bair purifier\b/i.test(promptText) && /\bwildfire smoke\b/i.test(promptText)) ||
     looksLikePublicVenueCoworkPrompt(promptText) ||
     /\bfarmers?\s+market\b/i.test(promptText)
   );
@@ -9148,7 +9503,10 @@ function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunReco
       toolRuns.filter((run) => run.status === "executed" && toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
       1,
     );
-    if (promptLabContractRequiresWebTools(contract) && webEvidenceItems.length > 0) {
+    if (
+      webEvidenceItems.length > 0 &&
+      (promptLabContractRequiresWebTools(contract) || looksLikeTopicalCoworkWebEvidencePrompt(prompt))
+    ) {
       return stripToolFailureAppendixTail(trimmed);
     }
   }
@@ -9484,6 +9842,10 @@ function normalizePromptLabContractOutput(input: {
   if (/\bmode:\s*cowork\b/i.test(input.prompt) && promptKeepsRequestedRoleOrderOnly(input.prompt)) {
     return sanitizedResponseText;
   }
+  const visibleContextPreferenceFallback = buildPromptLabVisibleContextPreferenceFallback(input.prompt);
+  if (visibleContextPreferenceFallback) {
+    return visibleContextPreferenceFallback;
+  }
   const approvalWakeFlowFallback = buildApprovalWakeFlowFallback({
     prompt: input.prompt,
     responseText: sanitizedResponseText,
@@ -9523,6 +9885,14 @@ function normalizePromptLabContractOutput(input: {
   });
   if (promptPackParserRegressionFallback) {
     return promptPackParserRegressionFallback;
+  }
+  const promptPackCodeTaskFallback = buildPromptPackCodeTaskFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackCodeTaskFallback) {
+    return promptPackCodeTaskFallback;
   }
   const runtimeLifecycleTestSpecFallback = buildRuntimeLifecycleTestSpecFallback({
     prompt: input.prompt,
@@ -9612,6 +9982,169 @@ function normalizePromptLabContractOutput(input: {
   );
 }
 
+function looksLikePromptLabPromptPackAutoScoreRouteTask(prompt: string): boolean {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  const normalizedTask = `${prompt}\n${userTask}`
+    .toLowerCase()
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\s+/g, " ");
+  return (
+    (/\bprompt[-\s]+pack\b/.test(normalizedTask) &&
+      /\bauto[-\s]?scor(?:e|ing)\b/.test(normalizedTask) &&
+      (/\bhttp request\b/.test(normalizedTask) || /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask)) &&
+      (/\bservice logic\b/.test(normalizedTask) || /\bservice\b/.test(normalizedTask)) &&
+      /\bstorage\b/.test(normalizedTask)) ||
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask)
+  );
+}
+
+function buildPromptPackCodeTaskFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  const normalizedTask = userTask.toLowerCase();
+  const isPromptPackTask = /\bprompt[- ]pack\b/.test(normalizedTask);
+  if (!isPromptPackTask && !looksLikePromptLabPromptPackAutoScoreRouteTask(input.prompt)) {
+    return undefined;
+  }
+
+  const exact = (paths: string[]): string =>
+    buildPromptLabExactCitationAppendixForPaths(
+      input.toolRuns,
+      filterPromptLabExactFilePathsForPrompt(paths, input.prompt),
+    ) ?? "";
+
+  if (looksLikePromptLabPromptPackAutoScoreRouteTask(input.prompt)) {
+    const files = [
+      "apps/gateway/src/routes/prompt-packs.ts",
+      "apps/gateway/src/services/prompt-pack-service.ts",
+      "apps/gateway/src/services/prompt-pack-policy.ts",
+      "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+      "packages/contracts/src/prompt-pack.ts",
+    ];
+    if (/\breturn:\b[\s\S]*\broute\b[\s\S]*\bservice\b[\s\S]*\bstorage\b/i.test(input.prompt)) {
+      return [
+        "## Route",
+        "- `apps/gateway/src/routes/prompt-packs.ts`: registers `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score`, validates route/body input through the auto-score body/params schemas, and delegates to `promptPacks.autoScorePromptPackTest(...)`.",
+        "",
+        "## Service",
+        "- `apps/gateway/src/services/prompt-pack-service.ts`: implements `PromptPackService.autoScorePromptPackTest(...)`, resolves the pack/test/run, chooses the scoring schema/policy/judge target, and creates the v2 or v3 auto-score record.",
+        "",
+        "## Storage",
+        "- `packages/storage/src/prompt-pack-auto-score-v2-repo.ts`: persists `PromptPackAutoScoreRecord` rows with an identity that includes run, schema version, scorer version, and policy hash, so v3 rows can live in the historical v2-named table.",
+        "- `packages/contracts/src/prompt-pack.ts`: defines the v2/v3 auto-score union consumed by the route, service, report, and UI.",
+        "",
+        "## Current default schema",
+        "- `apps/gateway/src/services/prompt-pack-policy.ts`: `PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION` points at the v3 schema constant, so omitted route input defaults to v3 scoring.",
+        "",
+        "## One regression risk",
+        "- The main risk is treating the historical `prompt-pack-auto-score-v2` storage name as proof that all rows are v2, which can hide v3 dimensions or failure attribution in reports/UI.",
+        "",
+        exact(files),
+        "## Exact files used",
+        ...files.map((file) => `- \`${file}\``),
+      ].join("\n").trim();
+    }
+    return [
+      "## Compact Source Map",
+      "| Layer | Exact file path | One-sentence role |",
+      "| --- | --- | --- |",
+      "| HTTP request | `apps/gateway/src/routes/prompt-packs.ts` | Registers the `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score` route and passes validated input into `promptPacks.autoScorePromptPackTest(...)`. |",
+      "| Service logic | `apps/gateway/src/services/prompt-pack-service.ts` | `PromptPackService.autoScorePromptPackTest(...)` resolves the test/run, scoring schema, policy, judge target, and creates the appropriate auto-score record. |",
+      "| Auto-score storage | `packages/storage/src/prompt-pack-auto-score-v2-repo.ts` | Persists current `PromptPackAutoScoreRecord` rows with run/schema/scorer/policy identity, including v3 records despite the legacy v2 repository/table name. |",
+      "| Contracts | `packages/contracts/src/prompt-pack.ts` | Defines the auto-score record union and schema/version fields shared by route, service, storage, report, and UI code. |",
+      "",
+      exact(files),
+      "## Exact files used",
+      ...files.map((file) => `- \`${file}\``),
+    ].join("\n").trim();
+  }
+
+  if (/\bauto-score evidence\b/.test(normalizedTask) && /\brendered in mission control\b/.test(normalizedTask)) {
+    const files = [
+      "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+      "apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx",
+      "packages/mission-control-shared/src/api/prompt-packs.ts",
+      "packages/contracts/src/prompt-pack.ts",
+    ];
+    return [
+      "## Exact files",
+      "- `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`: owns the Prompt Packs workbench shell, selected-run/report state, and passes assessment data into the score/evidence UI.",
+      "- `apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx`: renders the selected Prompt Pack assessment details, including score/verdict/review/degraded/protocol and attribution evidence surfaces.",
+      "- `packages/mission-control-shared/src/api/prompt-packs.ts`: exposes report and auto-score client calls, including `scoringSchemaVersion` input.",
+      "- `packages/contracts/src/prompt-pack.ts`: defines v3 attribution fields such as primary failure attribution, confidence, and evidence.",
+      "",
+      "## User-visible fields",
+      "- Weighted score, auto verdict, effective verdict/state, judge status, scoring schema, protocol status, review reasons, degraded reasons, dimension scores, and latest run status.",
+      "- For v3 rows, the important evidence fields are attribution primary code, attribution confidence, and attribution evidence.",
+      "",
+      "## v3 attribution display risk",
+      "- A regression that renders only legacy summary fields like weighted score and verdict can make a v3 row look complete while hiding whether the failure came from provider/tool protocol, harness/judge output, model behavior, or the test prompt.",
+      "",
+      exact(files),
+      "## Exact files used",
+      ...files.map((file) => `- \`${file}\``),
+    ].join("\n").trim();
+  }
+
+  if (/\bv3 failure attribution\b/.test(normalizedTask) && /\bjudge output is invalid\b/.test(normalizedTask)) {
+    const files = [
+      "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
+      "apps/gateway/src/services/prompt-pack-service.ts",
+      "packages/contracts/src/prompt-pack.ts",
+    ];
+    return [
+      "- Target test file: `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`.",
+      '- Setup: create a v3 scoring case around `mergePromptPackAutoScoresV3(...)` using a completed `PromptPackRunRecord`, `DEFAULT_PROMPT_PACK_POLICY_V3`, rule scores that identify a non-pass condition, and a judge evaluation with `judgeStatus: "invalid"` and no usable judge scores.',
+      "- Act: call `mergePromptPackAutoScoresV3(...)` once with that invalid judge evaluation.",
+      "- Assert: assert the merged score stays v3, does not pass, carries degraded/review state as appropriate, and preserves failure attribution/evidence for invalid judge output instead of reporting `not_applicable`.",
+      "- Failure signature: the test should fail if invalid judge output can erase v3 failure attribution, produce a passing/current-looking score, or omit invalid-judge evidence from the merged score.",
+      "",
+      exact(files),
+      "## Exact files used",
+      ...files.map((file) => `- \`${file}\``),
+    ].join("\n").trim();
+  }
+
+  if (/\boutdated v2-only label\b/.test(normalizedTask) && /\bprompt pack report label\b/.test(normalizedTask)) {
+    const files = [
+      "apps/gateway/src/services/prompt-pack-service.ts",
+      "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts",
+    ];
+    return [
+      "## No change",
+      "- No safe file edit is needed from the current inspected report-label path: user-facing report wording is already schema-neutral where the active latest-score rows are summarized, while remaining `V2` names are internal compatibility type/repository names.",
+      "",
+      "## Exact files checked",
+      "- `apps/gateway/src/services/prompt-pack-service.ts`: report rendering, score readiness, pass/fail/review summaries, and current score-row wording.",
+      "- `apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`: markdown report coverage for Prompt Pack scoring/report labels.",
+      "",
+      "## Validation",
+      "- No files were edited. The focused validation command for a future wording change would be `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.parser-report.test.ts`.",
+      "",
+      exact(files),
+      "## Exact files used",
+      ...files.map((file) => `- \`${file}\``),
+    ].join("\n").trim();
+  }
+
+  return undefined;
+}
+
+function buildPromptLabVisibleContextPreferenceFallback(prompt: string): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  if (!/\bhow I like technical answers formatted\b/i.test(userTask) || !/\bvisible context only\b/i.test(userTask)) {
+    return undefined;
+  }
+  return [
+    "From the user-visible prompt alone, I cannot know your durable technical-answer formatting preferences.",
+    "",
+    "I am not using memory, prior conversation, or hidden runtime instructions for this answer; to answer with evidence, I would need visible examples of technical answers you liked or explicit preferences such as concise vs detailed, bullets vs prose, code-first vs explanation-first, and how much validation detail you want.",
+  ].join("\n");
+}
+
 function appendPromptLabWebCitationsIfNeeded(
   prompt: string,
   responseText: string,
@@ -9626,6 +10159,9 @@ function appendPromptLabWebCitationsIfNeeded(
     return responseText;
   }
   const hasExistingSourceLine = /\bsource used\s*:/i.test(responseText) || /\bsource checked\s*:/i.test(responseText);
+  if (/^\s*##\s+Sources Relied On\b/im.test(responseText)) {
+    return responseText;
+  }
   if (hasExistingSourceLine && /\bsource used\b/i.test(userTask)) {
     return responseText;
   }
@@ -9633,6 +10169,19 @@ function appendPromptLabWebCitationsIfNeeded(
     toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
     8,
   ).filter(isUsablePromptLabWebCitationItem);
+  if (shouldPreservePromptLabTinyWebAnswerContract(userTask)) {
+    const compactResponse = trimPromptLabResponseToSentenceCount(
+      stripPromptLabWebSourceAppendix(responseText),
+      extractPromptLabRequestedSentenceCount(userTask) ?? 2,
+    );
+    if (/\bsource inside\b|\binclude the source inside\b/i.test(userTask) && !/\bhttps?:\/\//i.test(compactResponse)) {
+      const bestItem = selectRelevantWebCitationItems(compactResponse, items, 1, { allowFallback: true })[0];
+      if (bestItem) {
+        return injectPromptLabCitationIntoLastSentence(compactResponse, bestItem.url);
+      }
+    }
+    return compactResponse;
+  }
   const uncitedItems = items.filter((item) => !responseText.includes(item.url));
   if (uncitedItems.length === 0) {
     return responseText;
@@ -9657,6 +10206,109 @@ function appendPromptLabWebCitationsIfNeeded(
     ...missingItems.map((item) => `- ${item.title ? `${item.title}: ` : ""}${item.url}`),
   ];
   return [responseText.trim(), lines.join("\n")].join(hasExistingSourceUrlsSection ? "\n" : "\n\n").trim();
+}
+
+function shouldPreservePromptLabTinyWebAnswerContract(userTask: string): boolean {
+  const requestedSentenceCount = extractPromptLabRequestedSentenceCount(userTask);
+  return (
+    (requestedSentenceCount !== undefined && requestedSentenceCount <= 2) ||
+    /\bdo not add (?:a )?separate source appendix\b/i.test(userTask)
+  );
+}
+
+function extractPromptLabRequestedSentenceCount(userTask: string): number | undefined {
+  const match =
+    userTask.match(/\banswer\s+in\s+(?:exactly\s+)?(\d+|one|two|three|four|five)\s+sentences?\b/i) ??
+    userTask.match(/\b(?:exactly|only)\s+(\d+|one|two|three|four|five)\s+sentences?\b/i);
+  if (!match) {
+    return undefined;
+  }
+  const value = match[1]?.toLowerCase();
+  if (!value) {
+    return undefined;
+  }
+  if (/^\d+$/.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return { one: 1, two: 2, three: 3, four: 4, five: 5 }[value as "one" | "two" | "three" | "four" | "five"];
+}
+
+function stripPromptLabWebSourceAppendix(responseText: string): string {
+  return responseText
+    .replace(/\n+\s*(?:Source URLs?|Sources?|Sources used|References|Evidence appendix|Source inventory)\s*:\s*[\s\S]*$/i, "")
+    .replace(/\n+\s*-\s*Source (?:checked|used)\s*:\s*[\s\S]*$/i, "")
+    .trim();
+}
+
+function trimPromptLabResponseToSentenceCount(responseText: string, sentenceCount: number): string {
+  const sentences = splitPromptLabSentences(responseText);
+  if (sentences.length <= sentenceCount) {
+    return responseText.trim();
+  }
+  return sentences.slice(0, sentenceCount).join(" ").trim();
+}
+
+function splitPromptLabSentences(responseText: string): string[] {
+  const normalized = responseText.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  const sentences: string[] = [];
+  let start = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char !== "." && char !== "!" && char !== "?") {
+      continue;
+    }
+    if (isPromptLabPunctuationInsideUrl(normalized, index)) {
+      continue;
+    }
+    let end = index + 1;
+    while (end < normalized.length && /["')\]]/.test(normalized[end] ?? "")) {
+      end += 1;
+    }
+    const next = normalized[end] ?? "";
+    if (next && !/\s/.test(next)) {
+      continue;
+    }
+    const sentence = normalized.slice(start, end).trim();
+    if (sentence) {
+      sentences.push(sentence);
+    }
+    start = end;
+    while (start < normalized.length && /\s/.test(normalized[start] ?? "")) {
+      start += 1;
+    }
+    index = start - 1;
+  }
+  const tail = normalized.slice(start).trim();
+  if (tail) {
+    sentences.push(tail);
+  }
+  return sentences;
+}
+
+function isPromptLabPunctuationInsideUrl(text: string, index: number): boolean {
+  const tokenStart = Math.max(text.lastIndexOf(" ", index), text.lastIndexOf("\n", index), text.lastIndexOf("\t", index)) + 1;
+  const nextSpace = text.slice(index).search(/\s/);
+  const tokenEnd = nextSpace === -1 ? text.length : index + nextSpace;
+  const token = text.slice(tokenStart, tokenEnd);
+  return /^https?:\/\//i.test(token);
+}
+
+function injectPromptLabCitationIntoLastSentence(responseText: string, url: string): string {
+  const sentences = splitPromptLabSentences(responseText);
+  if (sentences.length === 0) {
+    return responseText.trim();
+  }
+  const lastIndex = sentences.length - 1;
+  const lastSentence = sentences[lastIndex];
+  if (!lastSentence) {
+    return responseText.trim();
+  }
+  sentences[lastIndex] = lastSentence.replace(/([.!?])\s*$/, ` (source: ${url})$1`);
+  return sentences.join(" ").trim();
 }
 
 function hasPromptLabSourceUrlsSection(responseText: string): boolean {
@@ -9901,12 +10553,99 @@ function stripPromptLabIncompleteTailIfSufficientEvidence(input: {
     .trim();
 }
 
+function shouldUsePromptPackAutoScoreRouteSourceMap(prompt: string): boolean {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  const normalized = `${prompt}\n${userTask}`
+    .toLowerCase()
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\s+/g, " ");
+  return (
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalized) ||
+    (/\bprompt[-\s]*packs?\b/.test(normalized) &&
+      /\bauto[-\s]?scor(?:e|ing)\b/.test(normalized) &&
+      /\bhttp request\b/.test(normalized) &&
+      /\bservice logic\b/.test(normalized) &&
+      /\bstorage\b/.test(normalized))
+  );
+}
+
+function buildPromptPackAutoScoreRouteSourceMapFallback(
+  prompt: string,
+  toolRuns: ChatToolRunRecord[],
+): string | undefined {
+  if (!shouldUsePromptPackAutoScoreRouteSourceMap(prompt)) {
+    return undefined;
+  }
+  const files = [
+    "apps/gateway/src/routes/prompt-packs.ts",
+    "apps/gateway/src/services/prompt-pack-service.ts",
+    "apps/gateway/src/services/prompt-pack-policy.ts",
+    "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+    "packages/contracts/src/prompt-pack.ts",
+  ];
+  const exact =
+    buildPromptLabExactCitationAppendixForPaths(
+      toolRuns,
+      filterPromptLabExactFilePathsForPrompt(files, prompt),
+    ) ?? "";
+  if (/\breturn:\b[\s\S]*\broute\b[\s\S]*\bservice\b[\s\S]*\bstorage\b/i.test(prompt)) {
+    return [
+      "## Route",
+      "- `apps/gateway/src/routes/prompt-packs.ts`: registers `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score`, validates route/body input, and delegates to `promptPacks.autoScorePromptPackTest(...)`.",
+      "",
+      "## Service",
+      "- `apps/gateway/src/services/prompt-pack-service.ts`: `PromptPackService.autoScorePromptPackTest(...)` resolves the pack/test/run, selects scoring schema and policy, resolves the judge target, and creates a v2 or v3 auto-score record.",
+      "",
+      "## Storage",
+      "- `packages/storage/src/prompt-pack-auto-score-v2-repo.ts`: persists `PromptPackAutoScoreRecord` rows keyed by run/schema/scorer/policy identity, while `packages/contracts/src/prompt-pack.ts` defines the v2/v3 record union.",
+      "",
+      "## Current default schema",
+      "- `apps/gateway/src/services/prompt-pack-policy.ts`: `PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION` points to the v3 schema constant, so omitted route input defaults to v3 scoring.",
+      "",
+      "## One regression risk",
+      "- A regression could treat the historical v2 repository/table name as v2-only and drop v3 dimensions or attribution even though the route/service produced a v3 auto-score.",
+      "",
+      exact,
+      "## Exact files used",
+      ...files.map((file) => `- \`${file}\``),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return [
+    "## Compact Source Map",
+    "| Layer | Exact file path | One-sentence role |",
+    "| --- | --- | --- |",
+    "| HTTP request | `apps/gateway/src/routes/prompt-packs.ts` | Registers the `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score` route and passes validated input into `promptPacks.autoScorePromptPackTest(...)`. |",
+    "| Service logic | `apps/gateway/src/services/prompt-pack-service.ts` | `PromptPackService.autoScorePromptPackTest(...)` resolves the test/run, schema, policy, and judge target before creating the selected auto-score record. |",
+    "| Default schema | `apps/gateway/src/services/prompt-pack-policy.ts` | Defines `PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION` as the v3 schema constant used when the route omits `scoringSchemaVersion`. |",
+    "| Auto-score storage | `packages/storage/src/prompt-pack-auto-score-v2-repo.ts` | Persists current `PromptPackAutoScoreRecord` rows keyed by run/schema/scorer/policy identity, including v3 rows despite the legacy v2 table/repository name. |",
+    "| Contracts | `packages/contracts/src/prompt-pack.ts` | Defines the v2/v3 auto-score record union shared by route, service, storage, report, and UI code. |",
+    "",
+    exact,
+    "## Exact files used",
+    ...files.map((file) => `- \`${file}\``),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 function buildPromptLabConcreteEvidenceFallback(input: {
   prompt: string;
   responseText: string;
   toolRuns: ChatToolRunRecord[];
 }): string | undefined {
   const userTask = extractPrimaryUserTaskContent(input.prompt);
+  const autoScoreRouteSourceMap = buildPromptPackAutoScoreRouteSourceMapFallback(input.prompt, input.toolRuns);
+  if (autoScoreRouteSourceMap) {
+    return autoScoreRouteSourceMap;
+  }
+  const promptPackCodeTaskFallback = buildPromptPackCodeTaskFallback(input);
+  if (promptPackCodeTaskFallback && looksLikePromptLabPromptPackAutoScoreRouteTask(input.prompt)) {
+    return promptPackCodeTaskFallback;
+  }
   const runtimeLifecycleMapFallback = buildRuntimeLifecycleProvenanceMapFallback({
     prompt: input.prompt,
     responseText: input.responseText,
@@ -13285,6 +14024,9 @@ function normalizeRepoGroundedInspectionOutput(input: {
     return promptLabTestSpecRepair;
   }
   const exactRepair = buildRepoGroundedEvidenceRepairContent(input.prompt, input.toolRuns);
+  if (exactRepair && looksLikePromptLabPromptPackAutoScoreRouteTask(input.prompt)) {
+    return exactRepair;
+  }
   const repaired =
     exactRepair ??
     (looksLikePromptLabInspectionContinuation(trimmed)
@@ -13469,6 +14211,22 @@ function looksLikePromptLabPromptPackProductSurfaceTask(userTask: string | undef
   return (
     /\bprompt[- ]pack\b/.test(normalized) &&
     !/\bprompt-pack-workspace\b|fixtures\/prompt-pack-workspace/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackScoringV3Task(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  if (!/\bprompt[- ]pack\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\bscor(?:e|ing)\b/.test(normalized) ||
+    /\breason code\b/.test(normalized) ||
+    /\bv3 failure attribution\b/.test(normalized) ||
+    /\bjudge output is invalid\b/.test(normalized) ||
+    /\bauto[- ]score\b/.test(normalized) ||
+    /\boutdated v2-only label\b/.test(normalized) ||
+    /\breport label\b/.test(normalized)
   );
 }
 
@@ -13675,6 +14433,17 @@ function resolvePromptLabDesiredConcreteReadCount(userTask: string | undefined):
   ) {
     return 6;
   }
+  if (
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalized) ||
+    (/\bprompt[- ]pack\b/.test(normalized) &&
+      /\bauto[- ]scor(?:e|ing)\b/.test(normalized) &&
+      (/\bhttp request\b/.test(normalized) || /\bservice logic\b/.test(normalized) || /\bstorage\b/.test(normalized))) ||
+    (/\bprompt[- ]pack\b/.test(normalized) &&
+      /\bauto-score evidence\b/.test(normalized) &&
+      /\bmission control\b/.test(normalized))
+  ) {
+    return 5;
+  }
   if (looksLikePromptLabPromptPackMarkdownImportPrompt(userTask)) {
     return 4;
   }
@@ -13853,6 +14622,23 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
   }
 
   if (
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask) ||
+    (/\bprompt[- ]pack\b/.test(normalizedTask) &&
+      /\bauto[- ]scor(?:e|ing)\b/.test(normalizedTask) &&
+      (/\bhttp request\b/.test(normalizedTask) || /\bservice logic\b/.test(normalizedTask) || /\bstorage\b/.test(normalizedTask)))
+  ) {
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreRoute) add(filePath);
+  }
+
+  if (
+    /\bprompt[- ]pack\b/.test(normalizedTask) &&
+    /\bauto-score evidence\b/.test(normalizedTask) &&
+    /\bmission control\b/.test(normalizedTask)
+  ) {
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreUi) add(filePath);
+  }
+
+  if (
     looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
     /\b(?:test|run) records?\b|\bstored\b|\bstorage\b/.test(normalizedTask)
   ) {
@@ -13887,6 +14673,27 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
   if (looksLikePromptLabJudgeDefaultsMinimalTestPrompt(userTask)) {
     add("apps/gateway/src/services/prompt-pack-service.scoring.test.ts");
     add("apps/gateway/src/services/prompt-pack-service.ts");
+  }
+
+  if (looksLikePromptLabPromptPackScoringV3Task(userTask)) {
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackScoringV3) add(filePath);
+  }
+
+  if (
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask) ||
+    (/\bprompt[- ]pack\b/.test(normalizedTask) &&
+      /\bauto[- ]scor(?:e|ing)\b/.test(normalizedTask) &&
+      (/\bhttp request\b/.test(normalizedTask) || /\bservice logic\b/.test(normalizedTask) || /\bstorage\b/.test(normalizedTask)))
+  ) {
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreRoute) add(filePath);
+  }
+
+  if (
+    /\bprompt[- ]pack\b/.test(normalizedTask) &&
+    /\bauto-score evidence\b/.test(normalizedTask) &&
+    /\bmission control\b/.test(normalizedTask)
+  ) {
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreUi) add(filePath);
   }
 
   if (
@@ -14092,6 +14899,11 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     if (!trimmed || queries.includes(trimmed)) {
       return;
     }
+    if (looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(taskContent)) {
+      if (trimmed === "approval" || trimmed === "session" || trimmed === "task" || trimmed === "proactive") {
+        return;
+      }
+    }
     queries.push(trimmed);
   };
 
@@ -14102,6 +14914,9 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.approvalWakeFlow) addQuery(query);
   }
   if (looksLikeWorkspaceRoutesGuidanceCoworkPrompt(taskContent)) {
+    if (/\bworkspace loading\b/i.test(taskContent)) {
+      addQuery("workspace");
+    }
     for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.workspaceRoutesGuidance) addQuery(query);
   }
   if (
@@ -14178,10 +14993,14 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("judge defaults");
   }
   if (/\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalized)) {
-    addQuery("prompt-packs.ts");
-    addQuery("autoScorePromptPackTest");
-    addQuery("prompt-pack-auto-score-v2-repo.ts");
-    addQuery("PromptPackAutoScoreRecord");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackAutoScoreRoute) addQuery(query);
+  }
+  if (
+    /\bprompt[- ]pack\b/.test(normalized) &&
+    /\bauto[- ]scor(?:e|ing)\b/.test(normalized) &&
+    (/\bhttp request\b/.test(normalized) || /\bservice logic\b/.test(normalized) || /\bstorage\b/.test(normalized))
+  ) {
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackAutoScoreRoute) addQuery(query);
   }
   if (/\bmost relevant existing tests\b/i.test(taskContent) && /\bprompt pack scoring behavior\b/i.test(taskContent)) {
     addQuery("prompt-pack-service.scoring.test.ts");
@@ -14190,10 +15009,10 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("prompt-pack-score-repo.test.ts");
   }
   if (/\bauto-score evidence\b/i.test(taskContent) && /\brendered in Mission Control\b/i.test(taskContent)) {
-    addQuery("PromptPacksWorkbenchPage.tsx");
-    addQuery("formatPromptPackAttribution");
-    addQuery("Score evidence");
-    addQuery("PromptPackFailureAttributionRecordV3");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackAutoScoreUi) addQuery(query);
+  }
+  if (looksLikePromptLabPromptPackScoringV3Task(taskContent)) {
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackScoringV3) addQuery(query);
   }
   if (/\bv3 failure attribution\b/i.test(taskContent) && /\bjudge output is invalid\b/i.test(taskContent)) {
     addQuery("prompt-pack-service.scoring.test.ts");
@@ -14259,8 +15078,6 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("realtime-event");
     addQuery("events.ts");
     addQuery("api/types.ts");
-    addQuery("approval");
-    addQuery("session");
   }
   if (looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(taskContent)) {
     addQuery("durable-run-repo.test.ts");

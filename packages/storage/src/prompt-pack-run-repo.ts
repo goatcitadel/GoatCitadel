@@ -25,6 +25,8 @@ interface PromptPackRunRow {
   execution_style: PromptPackRunRecord["executionStyle"] | null;
   diagnostic_metadata_json: string | null;
   response_text: string | null;
+  final_response_text: string | null;
+  final_response_signals_json: string | null;
   derived_response_text: string | null;
   derived_response_signals_json: string | null;
   trace_json: string | null;
@@ -49,12 +51,12 @@ export class PromptPackRunRepository {
       INSERT INTO prompt_pack_runs (
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
-        execution_style, diagnostic_metadata_json, response_text, derived_response_text, derived_response_signals_json,
+        execution_style, diagnostic_metadata_json, response_text, final_response_text, final_response_signals_json, derived_response_text, derived_response_signals_json,
         trace_json, citations_json, integrity_json, error, started_at, finished_at
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
-        @executionStyle, @diagnosticMetadataJson, @responseText, @derivedResponseText, @derivedResponseSignalsJson,
+        @executionStyle, @diagnosticMetadataJson, @responseText, @finalResponseText, @finalResponseSignalsJson, @derivedResponseText, @derivedResponseSignalsJson,
         @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
       )
     `);
@@ -71,6 +73,8 @@ export class PromptPackRunRepository {
         execution_style = CASE WHEN @hasExecutionStyle = 1 THEN @executionStyle ELSE execution_style END,
         diagnostic_metadata_json = CASE WHEN @hasDiagnosticMetadata = 1 THEN @diagnosticMetadataJson ELSE diagnostic_metadata_json END,
         response_text = CASE WHEN @hasResponseText = 1 THEN @responseText ELSE response_text END,
+        final_response_text = CASE WHEN @hasFinalResponseText = 1 THEN @finalResponseText ELSE final_response_text END,
+        final_response_signals_json = CASE WHEN @hasFinalResponseSignals = 1 THEN @finalResponseSignalsJson ELSE final_response_signals_json END,
         derived_response_text = CASE WHEN @hasDerivedResponseText = 1 THEN @derivedResponseText ELSE derived_response_text END,
         derived_response_signals_json = CASE WHEN @hasDerivedResponseSignals = 1 THEN @derivedResponseSignalsJson ELSE derived_response_signals_json END,
         trace_json = CASE WHEN @hasTrace = 1 THEN @traceJson ELSE trace_json END,
@@ -120,6 +124,8 @@ export class PromptPackRunRepository {
     executionStyle?: PromptPackRunRecord["executionStyle"];
     diagnosticMetadata?: PromptPackDiagnosticMetadata;
     responseText?: string;
+    finalResponseText?: string;
+    finalResponseSignals?: string[];
     derivedResponseText?: string;
     derivedResponseSignals?: string[];
     trace?: ChatTurnTraceRecord;
@@ -146,6 +152,8 @@ export class PromptPackRunRepository {
       executionStyle: input.executionStyle ?? null,
       diagnosticMetadataJson: input.diagnosticMetadata ? JSON.stringify(input.diagnosticMetadata) : null,
       responseText: input.responseText ?? null,
+      finalResponseText: input.finalResponseText ?? null,
+      finalResponseSignalsJson: input.finalResponseSignals ? JSON.stringify(input.finalResponseSignals) : null,
       derivedResponseText: input.derivedResponseText ?? null,
       derivedResponseSignalsJson: input.derivedResponseSignals ? JSON.stringify(input.derivedResponseSignals) : null,
       traceJson: input.trace ? JSON.stringify(input.trace) : null,
@@ -171,6 +179,8 @@ export class PromptPackRunRepository {
       executionStyle?: PromptPackRunRecord["executionStyle"];
       diagnosticMetadata?: PromptPackDiagnosticMetadata;
       responseText?: string;
+      finalResponseText?: string;
+      finalResponseSignals?: string[];
       derivedResponseText?: string;
       derivedResponseSignals?: string[];
       trace?: ChatTurnTraceRecord;
@@ -201,6 +211,11 @@ export class PromptPackRunRepository {
       diagnosticMetadataJson: input.diagnosticMetadata !== undefined ? JSON.stringify(input.diagnosticMetadata) : null,
       hasResponseText: input.responseText !== undefined ? 1 : 0,
       responseText: input.responseText ?? null,
+      hasFinalResponseText: input.finalResponseText !== undefined ? 1 : 0,
+      finalResponseText: input.finalResponseText ?? null,
+      hasFinalResponseSignals: input.finalResponseSignals !== undefined ? 1 : 0,
+      finalResponseSignalsJson:
+        input.finalResponseSignals !== undefined ? JSON.stringify(input.finalResponseSignals) : null,
       hasDerivedResponseText: input.derivedResponseText !== undefined ? 1 : 0,
       derivedResponseText: input.derivedResponseText ?? null,
       hasDerivedResponseSignals: input.derivedResponseSignals !== undefined ? 1 : 0,
@@ -269,6 +284,10 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
       ? safeJsonParse<PromptPackDiagnosticMetadata | undefined>(row.diagnostic_metadata_json, undefined)
       : undefined,
     responseText: row.response_text ?? undefined,
+    finalResponseText: row.final_response_text ?? undefined,
+    finalResponseSignals: row.final_response_signals_json
+      ? safeJsonParse<string[] | undefined>(row.final_response_signals_json, undefined)
+      : undefined,
     derivedResponseText: row.derived_response_text ?? undefined,
     derivedResponseSignals: row.derived_response_signals_json
       ? safeJsonParse<string[] | undefined>(row.derived_response_signals_json, undefined)
@@ -321,6 +340,8 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
     (typeof value.execution_style === "string" || value.execution_style === null) &&
     (typeof value.diagnostic_metadata_json === "string" || value.diagnostic_metadata_json === null) &&
     (typeof value.response_text === "string" || value.response_text === null) &&
+    (typeof value.final_response_text === "string" || value.final_response_text === null) &&
+    (typeof value.final_response_signals_json === "string" || value.final_response_signals_json === null) &&
     (typeof value.derived_response_text === "string" || value.derived_response_text === null) &&
     (typeof value.derived_response_signals_json === "string" || value.derived_response_signals_json === null) &&
     (typeof value.trace_json === "string" || value.trace_json === null) &&

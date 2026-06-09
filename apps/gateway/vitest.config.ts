@@ -20,6 +20,30 @@ export default defineConfig({
         find: "@goatcitadel/extensions-sdk",
         replacement: path.resolve(configDir, "../../packages/extensions-sdk/src/index.ts"),
       },
+      {
+        find: "@goatcitadel/gateway-core",
+        replacement: path.resolve(configDir, "../../packages/gateway-core/src/index.ts"),
+      },
+      {
+        find: "@goatcitadel/storage",
+        replacement: path.resolve(configDir, "../../packages/storage/src/index.ts"),
+      },
+      {
+        find: "@goatcitadel/mesh-core",
+        replacement: path.resolve(configDir, "../../packages/mesh-core/src/index.ts"),
+      },
+      {
+        find: "@goatcitadel/memory-core",
+        replacement: path.resolve(configDir, "../../packages/memory-core/src/index.ts"),
+      },
+      {
+        find: "@goatcitadel/orchestration",
+        replacement: path.resolve(configDir, "../../packages/orchestration/src/index.ts"),
+      },
+      {
+        find: "@goatcitadel/policy-engine",
+        replacement: path.resolve(configDir, "../../packages/policy-engine/src/index.ts"),
+      },
     ],
   },
   test: {

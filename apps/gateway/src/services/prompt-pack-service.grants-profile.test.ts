@@ -215,9 +215,25 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(codeProfile.mode).toBe("code");
     expect(codeProfile.toolTier).toBe("explicit-tools");
     expect(codeProfile.toolAutonomy).toBe("safe_auto");
-    expect(codeProfile.webMode).toBe("auto");
-    expect(codeProfile.memoryMode).toBe("auto");
+    expect(codeProfile.webMode).toBe("off");
+    expect(codeProfile.memoryMode).toBe("off");
     expect(codeProfile.thinkingLevel).toBe("extended");
+
+    const codeWebMemoryProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-web-memory",
+        packId: "pack-1",
+        code: "TEST-02B",
+        title: "Code Web Memory",
+        prompt: "Use web lookup and available memory/context before explaining the repo fix.",
+        orderIndex: 2,
+        mode: "code",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(codeWebMemoryProfile.webMode).toBe("auto");
+    expect(codeWebMemoryProfile.memoryMode).toBe("auto");
   });
 
   it("builds deterministic session overrides for prompt-pack runs", () => {
@@ -332,6 +348,13 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(buildPromptPackSessionPrefsOverride(codeProfile)).toMatchObject({
       mode: "code",
       planningMode: "off",
+      orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "sequential",
+      toolAutonomy: "safe_auto",
+    });
+    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Inspect files and fix the issue.", "agentic_surface")).toMatchObject({
+      mode: "code",
       orchestrationEnabled: false,
       orchestrationVisibility: "explicit",
       orchestrationParallelism: "sequential",
@@ -520,6 +543,25 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
         "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.",
       ),
     ).toEqual(expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract"]));
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        resolvePromptPackExecutionProfile({
+          test: {
+            testId: "test-v5-home-energy-chat",
+            packId: "pack-1",
+            code: "TEST-C511",
+            title: "Chat Home Energy Extraction",
+            prompt:
+              "Find one accessible reputable web page about reducing home energy use. Use it to extract three practical tips. Return a table with Tip, Why it matters, Source.",
+            orderIndex: 8,
+            mode: "chat",
+            toolTier: "explicit-tools",
+            createdAt: "2026-05-05T00:00:00.000Z",
+          },
+        }),
+        "Find one accessible reputable web page about reducing home energy use. Use it to extract three practical tips. Return a table with Tip, Why it matters, Source.",
+      ),
+    ).toEqual(expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract", "time.now"]));
   });
 
   it("resumes stale benchmark runs when status is requested", () => {
@@ -605,6 +647,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       "tests.run",
       "lint.run",
     ]);
+    expect(buildPromptPackSessionToolAllowlist(codeProfile, "Write a report document with repo evidence.")).not.toContain(
+      "documents.create",
+    );
 
     expect(
       buildPromptPackSessionToolAllowlist(
@@ -654,6 +699,7 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       "browser.search",
       "browser.navigate",
       "browser.extract",
+      "time.now",
     ]);
 
     expect(
@@ -661,28 +707,28 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
         coworkProfile,
         'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
       ),
-    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract", "time.now"]);
 
     expect(
       buildPromptPackSessionToolAllowlist(
         coworkProfile,
         'The user asks: "Find one reliable source on whether the local museum is open late this Friday, then answer with the source." Use Chat style. If a lookup is available, cite exactly the source you used.',
       ),
-    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract", "time.now"]);
 
     expect(
       buildPromptPackSessionToolAllowlist(
         coworkProfile,
         'Cowork request: "Research whether a weekend farmers market is likely to be busy and help me plan when to arrive." Use available tools if they are appropriate.',
       ),
-    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract", "time.now"]);
 
     expect(
       buildPromptPackSessionToolAllowlist(
         coworkProfile,
         'Cowork request: "Find a plausible public venue for a small meetup and draft the decision path, but do not contact anyone." Use available lookup if appropriate.',
       ),
-    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract", "time.now"]);
 
     expect(
       buildPromptPackSessionToolAllowlist(
@@ -1000,6 +1046,27 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(plainWebLookupInput.prompt).not.toContain("If a file/code read is truncated");
     expect(plainWebLookupInput.prompt).not.toContain("exact patch points/assertions");
 
+    const visibleContextProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-visible-context-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-03A",
+        title: "Visible Context Contract",
+        prompt:
+          "What do you know about how I like technical answers formatted?\n\nAnswer from visible context only. If you are relying on memory or prior context, say that plainly.",
+        orderIndex: 3,
+        mode: "chat",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const visibleContextInput = buildPromptPackPromptInput(
+      "What do you know about how I like technical answers formatted?\n\nAnswer from visible context only. If you are relying on memory or prior context, say that plainly.",
+      visibleContextProfile,
+    );
+    expect(visibleContextInput.prompt).toContain("Visible-context memory boundary");
+    expect(visibleContextInput.prompt).toContain("Do not infer user preferences from system, developer, runtime");
+
     const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
       test: {
         testId: "test-chat-repo-contract",
@@ -1046,9 +1113,50 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(explicitCodeInput.prompt).toContain(
       "Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
     );
+    expect(explicitCodeInput.prompt).toContain("Use bounded repo inspection");
+    expect(explicitCodeInput.prompt).toContain("Do not create document, presentation, or artifact files");
     expect(explicitCodeInput.prompt).toContain(
       "Keep file/code reads inside the prompt-listed scope unless another path is explicitly required",
     );
+
+    const implicitCodeProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-implicit-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-04B",
+        title: "Implicit Code Contract",
+        prompt: "Find the most relevant existing tests for Prompt Pack scoring behavior.",
+        orderIndex: 4,
+        mode: "code",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const implicitCodeInput = buildPromptPackPromptInput(
+      "Find the most relevant existing tests for Prompt Pack scoring behavior.",
+      implicitCodeProfile,
+    );
+    expect(implicitCodeInput.prompt).toContain("This is a repo-grounded code evaluation.");
+    expect(implicitCodeInput.prompt).toContain("Repo inspection assist: enabled.");
+
+    const autoScoreRouteInput = buildPromptPackPromptInput(
+      [
+        "Inspect the repo and identify where Prompt Pack auto-scoring is routed from HTTP request to service logic to storage.",
+        "",
+        "Return a compact source map with exact file paths and one sentence per layer.",
+      ].join("\n"),
+      implicitCodeProfile,
+    );
+    expect(autoScoreRouteInput.prompt).toContain("Prompt Pack auto-score route hint");
+    expect(autoScoreRouteInput.prompt).toContain("apps/gateway/src/routes/prompt-packs.ts");
+    expect(autoScoreRouteInput.prompt).toContain("packages/storage/src/prompt-pack-auto-score-v2-repo.ts");
+
+    const autoScoreUiInput = buildPromptPackPromptInput(
+      "Use repo inspection to find where Prompt Pack auto-score evidence is rendered in Mission Control.",
+      implicitCodeProfile,
+    );
+    expect(autoScoreUiInput.prompt).toContain("Prompt Pack auto-score UI hint");
+    expect(autoScoreUiInput.prompt).toContain("Distinguish UI-rendering files from supporting API/contract files");
 
     const exactSectionCoworkProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -1270,6 +1378,68 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(promptInput.prompt).toContain(
       "Do not stop after only `code.search_files` or `file.find` hits when the prompt asks for exact grounding.",
     );
+  });
+
+  it("still grants non-denied tools when one requested tool has an active deny", () => {
+    const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
+    const createGrant = vi.fn();
+    service.ctx = {
+      config: {
+        rootDir: "F:/code/personal-ai",
+        assistant: { workspaceDir: "workspace" },
+      },
+      storage: {
+        toolGrants: {
+          listActive: vi.fn((scope: string) =>
+            scope === "session"
+              ? [
+                  {
+                    grantId: "grant-deny-browser-search",
+                    toolPattern: "browser.search",
+                    decision: "deny",
+                    scope: "session",
+                    scopeRef: "session-mixed-grants",
+                    grantType: "ttl",
+                    createdAt: "2026-06-09T00:00:00.000Z",
+                  },
+                ]
+              : [],
+          ),
+          create: createGrant,
+        },
+        chatSessionMeta: { get: vi.fn(() => undefined) },
+      },
+    };
+
+    const prompt =
+      "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.";
+    const coworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-mixed-grants",
+        packId: "pack-1",
+        code: "TEST-TOOLS-06",
+        title: "Mixed Grants",
+        prompt,
+        orderIndex: 9,
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        createdAt: "2026-06-09T00:00:00.000Z",
+      },
+    });
+
+    (
+      service as unknown as {
+        ensurePromptPackSessionToolGrants(sessionId: string, profile: unknown, prompt: string): void;
+      }
+    ).ensurePromptPackSessionToolGrants("session-mixed-grants", coworkProfile, prompt);
+
+    const grantedPatterns = createGrant.mock.calls.map(
+      ([grant]) => (grant as { toolPattern: string }).toolPattern,
+    );
+    expect(grantedPatterns).toEqual(
+      expect.arrayContaining(["fs.read", "file.read_range", "browser.navigate", "browser.extract"]),
+    );
+    expect(grantedPatterns).not.toContain("browser.search");
   });
 
   it("only requires citation evidence when the prompt actually asks for file-grounded citations", () => {

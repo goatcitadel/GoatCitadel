@@ -109,14 +109,14 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
         <>
           <button
             type="button"
-            className="mc-next-secondary-button"
+            className="mc-next-button-secondary"
             onClick={() => void copyTraceExport()}
             disabled={!runId || exporting}
           >
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy trace export"}
           </button>
-          <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
+          <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
             <RefreshCw className="h-4 w-4" />
             Refresh
           </button>

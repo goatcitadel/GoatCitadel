@@ -22,6 +22,7 @@ import {
   statusChipClass,
   summarizePromptPackTestOutcomes,
 } from "./PromptPacksWorkbenchPage";
+import { computePassReadiness } from "./PromptPacksWorkbenchPage.helpers";
 
 describe("PromptPacksWorkbenchPage helpers", () => {
   afterEach(() => {
@@ -58,6 +59,57 @@ describe("PromptPacksWorkbenchPage helpers", () => {
     expect(resultCategoryClass("needs_score")).toBe("result-needs-score");
     expect(resultCategoryClass("passing")).toBe("result-passing");
     expect(resultCategoryClass("not_run")).toBe("result-not-run");
+  });
+
+  it("computes pass readiness with the same blockers as the prompt-pack gate", () => {
+    const readySummary = {
+      totalTests: 4,
+      completedRuns: 4,
+      failedRuns: 0,
+      runFailureCount: 0,
+      invalidLatestRuns: 0,
+      scoreFailureCount: 0,
+      needsScoreCount: 0,
+      staleLatestAutoScoreCount: 0,
+      durableRuns: 0,
+      approvalPausedRuns: 0,
+      backgroundedRuns: 0,
+      judgeFallbackCount: 0,
+      judgeErrorCount: 0,
+      autoScoredRuns: 4,
+      humanReviewedRuns: 0,
+      degradedScoreCount: 0,
+      passCount: 4,
+      failCount: 0,
+      reviewCount: 0,
+      effectivePassRate: 1,
+      reviewRate: 0,
+      activeScoringSchemaVersion: "v3",
+      passThreshold: 75,
+      averageTotalScore: 0,
+      averageWeightedScore: 92,
+      passRate: 1,
+      failingCodes: [],
+    } as any;
+
+    expect(computePassReadiness(readySummary)).toEqual({ blockers: [], complete: true });
+
+    const blocked = computePassReadiness({
+      ...readySummary,
+      completedRuns: 4,
+      autoScoredRuns: 2,
+      runFailureCount: 1,
+      invalidLatestRuns: 1,
+      judgeErrorCount: 1,
+      degradedScoreCount: 1,
+    });
+
+    expect(blocked.complete).toBe(false);
+    expect(blocked.blockers).toContain("1 runtime failure(s)");
+    expect(blocked.blockers).toContain("1 invalid latest run(s)");
+    expect(blocked.blockers).toContain("1 completed run(s) without current auto-score");
+    expect(blocked.blockers).toContain("1 judge error(s)");
+    expect(blocked.blockers).toContain("1 degraded score(s)");
   });
 
   it("computes draft verdicts, run routes, and v2 feature flag defaults", () => {

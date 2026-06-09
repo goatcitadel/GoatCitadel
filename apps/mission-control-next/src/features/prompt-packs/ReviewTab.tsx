@@ -32,7 +32,7 @@ export function ReviewTab({
   onAutoScoreSelected,
 }: ReviewTabProps) {
   return (
-    <div className="mc-pp-tab-grid">
+    <div className="mc-pp-tab-grid mc-pp-tab-grid-single">
       <section className="mc-pp-surface">
         <div className="mc-pp-section-heading">
           <div>

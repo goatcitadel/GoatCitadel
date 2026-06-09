@@ -12,12 +12,22 @@ const MAX_TOOL_RUNS_PER_TURN = 12;
 const COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS = 6;
 const COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN = 16;
 const COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS = 8;
-const PROMPT_LAB_MAX_TOOL_LOOPS = 8;
-const PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN = 20;
+const PROMPT_LAB_EXPLICIT_MAX_TOOL_LOOPS = 8;
+const PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN = 12;
+const PROMPT_LAB_IMPLICIT_MAX_TOOL_LOOPS = {
+  chat: 4,
+  cowork: 6,
+  code: 6,
+} as const satisfies Record<ChatMode, number>;
 const PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN = {
-  chat: 12,
-  cowork: 16,
-  code: 16,
+  chat: 8,
+  cowork: 8,
+  code: 8,
+} as const satisfies Record<ChatMode, number>;
+const PROMPT_LAB_SEARCH_MAX_RESULTS = {
+  chat: 4,
+  cowork: 6,
+  code: 6,
 } as const satisfies Record<ChatMode, number>;
 const PROMPT_LAB_MIN_MAX_TOKENS = {
   chat: 1800,
@@ -214,19 +224,23 @@ export function applyPromptLabHarnessBudget(
   if (!input.promptLabHarness) {
     return budget;
   }
+  const maxToolLoops = input.promptLabExplicitTools
+    ? PROMPT_LAB_EXPLICIT_MAX_TOOL_LOOPS
+    : PROMPT_LAB_IMPLICIT_MAX_TOOL_LOOPS[input.mode];
   const maxToolRunsPerTurn = input.promptLabExplicitTools
     ? PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN
     : PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN[input.mode];
+  const synthesisReserveMs = input.mode === "chat" ? 20_000 : 30_000;
   return {
     ...budget,
-    maxToolLoops: Math.max(budget.maxToolLoops, PROMPT_LAB_MAX_TOOL_LOOPS),
+    maxToolLoops: Math.max(budget.maxToolLoops, maxToolLoops),
     maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, maxToolRunsPerTurn),
-    searchMaxResults: Math.max(budget.searchMaxResults, 8),
+    searchMaxResults: Math.max(budget.searchMaxResults, PROMPT_LAB_SEARCH_MAX_RESULTS[input.mode]),
     maxTokens: Math.max(budget.maxTokens ?? 900, PROMPT_LAB_MIN_MAX_TOKENS[input.mode]),
-    minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 15000),
+    minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, synthesisReserveMs),
+    expensiveToolMinimumRemainingMs: Math.max(budget.expensiveToolMinimumRemainingMs, synthesisReserveMs),
   };
 }
-
 export function applyPromptLabExplicitToolBudget(
   budget: ChatExecutionBudget,
   promptLabExplicitTools?: boolean,

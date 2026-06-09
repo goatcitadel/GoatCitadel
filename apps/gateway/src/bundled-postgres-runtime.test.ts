@@ -65,4 +65,13 @@ describe("bundled postgres runtime helpers", () => {
       /^goatcitadel-postgres-[a-z0-9-]+-[a-f0-9]{10}$/,
     );
   });
+
+  it("formats transient startup probe errors on one line", () => {
+    const error = new Error("the database system is starting up\nretry later") as NodeJS.ErrnoException;
+    error.code = "57P03";
+
+    expect(__bundledPostgresRuntimeInternals.formatBundledPostgresProbeFailure(error)).toBe(
+      "the database system is starting up (code=57P03)",
+    );
+  });
 });

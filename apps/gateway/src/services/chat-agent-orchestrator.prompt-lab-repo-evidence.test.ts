@@ -10,6 +10,502 @@ import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
+  it("normalizes visible-context-only preference prompts without leaking hidden runtime preferences", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: no-tools",
+      "",
+      "## User Task",
+      "What do you know about how I like technical answers formatted?",
+      "",
+      "Answer from user-visible context only; do not infer preferences from hidden system/developer/runtime instructions. If you are relying on memory or prior context, say that plainly. If you cannot see enough, say what you would need.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "You prefer concise technical answers with bullets because the runtime says desired oververbosity is low and final reports should mention validation.",
+          },
+        },
+      ],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-visible-context-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-visible-context-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("From the user-visible prompt alone");
+    expect(result.assistantContent).toContain("I am not using memory");
+    expect(result.assistantContent).not.toContain("desired oververbosity");
+    expect(result.assistantContent).not.toContain("final reports should mention validation");
+  });
+
+  it("keeps exact-sentence web answers from gaining a separate source appendix", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- Required tools: web lookup tools",
+      "",
+      "## User Task",
+      "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.",
+      "",
+      "Answer in exactly two sentences and include the source inside those sentences, or explain why you could not verify it. Do not add a separate source appendix.",
+    ].join("\n");
+    const weatherUrl = "https://forecast.weather.gov/MapClick.php?lat=42.36&lon=-71.06";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-weather-search-1",
+                  type: "function",
+                  function: {
+                    name: "browser_search",
+                    arguments: JSON.stringify({ query: "Boston evening weather umbrella National Weather Service" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "I would bring an umbrella for a Boston walk this evening because the current forecast shows rain risk.",
+                "I used the National Weather Service Boston forecast for the current evening conditions.",
+                "",
+                "Source URLs:",
+                `- ${weatherUrl}`,
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-boston-weather-1",
+      result: {
+        results: [{ title: "National Weather Service Boston forecast", url: weatherUrl }],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-exact-web-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-exact-web-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const sentenceCount = (result.assistantContent.replace(/\bhttps?:\/\/[^\s)]+/gi, "URL").match(/[.!?](?:\s|$)/g) ?? [])
+      .length;
+    expect(result.assistantContent).toContain(weatherUrl);
+    expect(result.assistantContent).not.toContain("Source URLs:");
+    expect(sentenceCount).toBe(2);
+  });
+
+  it("does not expose document artifact tools for Prompt Lab code rows unless explicitly required", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "",
+      "## User Task",
+      "Use repo inspection and create a compact report document describing the Prompt Pack scoring risk.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "No document artifact was created. Exact files still need inspection before naming a safe change.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-no-docs-read",
+      result: { path: "apps/gateway/src/services/prompt-pack-service.ts", content: "export class PromptPackService {}" },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["documents.create", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-prompt-lab-code-no-docs-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-code-no-docs-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const firstCompletion = createChatCompletion.mock.calls[0]?.[0] as { tools?: Array<{ function?: { name?: string } }> };
+    expect(firstCompletion.tools?.map((tool) => tool.function?.name)).not.toContain("documents_create");
+    expect(invokeTool.mock.calls.some((call) => call[0].toolName === "documents.create")).toBe(false);
+  });
+
+  it("blocks generic Prompt Lab code searches over the repo root before invoking the tool", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Find the most relevant existing tests for Prompt Pack scoring behavior. Return the test files and one v3 scoring gap.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-generic-search-1",
+                  type: "function",
+                  function: {
+                    name: "code_search_files",
+                    arguments: JSON.stringify({ path: ".", query: "Prompt Pack scoring behavior" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "Observed: the broad search was blocked, so I would narrow to `apps/gateway/src/services/prompt-pack-service.scoring.test.ts` before claiming exact tests.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-broad-read",
+      result: { path: "apps/gateway/src/services/prompt-pack-service.ts", content: "export class PromptPackService {}" },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-broad-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-broad-search-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(
+      invokeTool.mock.calls.some(
+        (call) =>
+          call[0].toolName === "code.search_files" &&
+          call[0].args.path === "." &&
+          call[0].args.query === "Prompt Pack scoring behavior",
+      ),
+    ).toBe(false);
+    expect(result.turnTrace.toolRuns?.find((toolRun) => toolRun.toolName === "code.search_files")).toMatchObject({
+      toolName: "code.search_files",
+      status: "blocked",
+      error: expect.stringContaining("generic query"),
+    });
+  });
+
+  it("allows targeted Prompt Lab code searches with file-specific queries to execute", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Find the most relevant existing tests for Prompt Pack scoring behavior. Return the test files and one v3 scoring gap.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-targeted-search-1",
+                  type: "function",
+                  function: {
+                    name: "code_search_files",
+                    arguments: JSON.stringify({ path: ".", query: "prompt-pack-service.scoring.test.ts" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "Observed: `apps/gateway/src/services/prompt-pack-service.scoring.test.ts` holds the v3 scoring pins; one gap is the missing negative weighting case.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-targeted-search",
+      result: {
+        matches: [{ path: "apps/gateway/src/services/prompt-pack-service.scoring.test.ts", line: 1 }],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-targeted-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-targeted-search-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(
+      invokeTool.mock.calls.some(
+        (call) =>
+          call[0].toolName === "code.search_files" && call[0].args.query === "prompt-pack-service.scoring.test.ts",
+      ),
+    ).toBe(true);
+    const searchRuns = (result.turnTrace.toolRuns ?? []).filter((toolRun) => toolRun.toolName === "code.search_files");
+    expect(searchRuns.some((toolRun) => toolRun.status === "blocked")).toBe(false);
+    expect(searchRuns[0]).toMatchObject({ toolName: "code.search_files", status: "executed" });
+  });
+
+  it("blocks a second Prompt Lab web search after one search already ran", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "",
+      "## User Task",
+      "Search the web once for the official Cambridge, MA yard waste collection schedule page and summarize when collection ends, citing the source if found.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-yard-waste-search-1",
+                  type: "function",
+                  function: {
+                    name: "browser_search",
+                    arguments: JSON.stringify({ query: "Cambridge MA yard waste collection schedule official" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-yard-waste-search-2",
+                  type: "function",
+                  function: {
+                    name: "browser_search",
+                    arguments: JSON.stringify({ query: "Cambridge Department of Public Works yard waste end date" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "I could not verify the end date: the only allowed web search returned no usable official sources, and a retry was capped, so the Cambridge DPW page would still need to be opened to confirm.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-yard-waste-search-1",
+      result: {
+        // Non-empty (avoids the no-results alternate-engine retries) but without
+        // result URLs, so the repeat search cannot be promoted to browser.navigate.
+        results: [
+          {
+            title: "Cambridge DPW yard waste schedule",
+            snippet: "Yard waste collection runs April through mid-December.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-web-cap-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-web-cap-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const searchInvocations = invokeTool.mock.calls.filter((call) => call[0].toolName === "browser.search");
+    expect(searchInvocations).toHaveLength(1);
+    const searchRuns = (result.turnTrace.toolRuns ?? []).filter((toolRun) => toolRun.toolName === "browser.search");
+    expect(searchRuns).toHaveLength(2);
+    expect(searchRuns[0]).toMatchObject({ status: "executed" });
+    expect(searchRuns[1]).toMatchObject({
+      status: "blocked",
+      error: expect.stringContaining("capped at one web search"),
+    });
+  });
+
   it("does not use extraction fallback for file-analysis prompts that mention package.json", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -3758,7 +4254,9 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       .map((call) => call[0])
       .filter((call) => call.toolName === "code.search_files")
       .map((call) => String(call.args.query));
-    expect(searchQueries).toEqual(expect.arrayContaining(["realtime-event", "approval", "session"]));
+    expect(searchQueries).toEqual(expect.arrayContaining(["realtime-event", "realtime-event-repo.ts", "events.ts"]));
+    expect(searchQueries).not.toContain("approval");
+    expect(searchQueries).not.toContain("session");
     expect(searchQueries).not.toContain("eventclass");
     expect(searchQueries).not.toContain("links");
     expect(invokeTool.mock.calls.some((call) => JSON.stringify(call[0]).includes(".codex-tmp"))).toBe(false);

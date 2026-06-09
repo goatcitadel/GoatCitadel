@@ -16,7 +16,7 @@ export function AssessmentTab({ selectedAssessment }: AssessmentTabProps) {
   const selectedLegacyScore = selectedAssessment?.legacyScore;
   const selectedHumanReview = selectedAssessment?.humanReview;
   return (
-    <div className="mc-pp-tab-grid">
+    <div className="mc-pp-tab-grid mc-pp-tab-grid-single">
       <section className="mc-pp-surface">
         <div className="mc-pp-section-heading">
           <div>

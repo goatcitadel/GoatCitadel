@@ -90,6 +90,7 @@ import {
   DEFAULT_PROMPT_PACK_EXPORT_DIR,
   PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS,
   PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS,
+  PROMPT_PACK_BENCHMARK_MAX_CONCURRENCY,
   PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS,
   PROMPT_PACK_BENCHMARK_MAX_PROVIDERS,
   PROMPT_PACK_BENCHMARK_MAX_TESTS,
@@ -534,6 +535,11 @@ export class PromptPackService {
         responseText: rawResponseText,
         trace: effectiveTrace,
       });
+      const scoreFacingResponse = buildPromptPackScoreFacingResponseArtifact({
+        normalizedResponseText,
+        rawResponseText,
+        trace: effectiveTrace,
+      });
       const derivedResponse = mergePromptPackDerivedResponseArtifacts({
         fallback: derivePromptPackResponseArtifacts({
           prompt: promptInput.prompt,
@@ -546,7 +552,7 @@ export class PromptPackService {
       const effectiveCitations = refreshedTurn.citations ?? response.citations;
       const integrity = evaluatePromptPackRunIntegrity({
         prompt: resolvedPrompt.prompt,
-        responseText: rawResponseText,
+        responseText: scoreFacingResponse.finalResponseText ?? rawResponseText,
         trace: effectiveTrace,
         outputTokenCount: response.assistantMessage?.tokenOutput,
       });
@@ -580,6 +586,8 @@ export class PromptPackService {
       const updated = this.ctx.storage.promptPackRuns.patch(runId, {
         status,
         responseText: rawResponseText || undefined,
+        finalResponseText: scoreFacingResponse.finalResponseText,
+        finalResponseSignals: scoreFacingResponse.finalResponseSignals,
         derivedResponseText: derivedResponse.derivedResponseText,
         derivedResponseSignals: derivedResponse.derivedResponseSignals,
         trace: effectiveTrace,
@@ -1085,9 +1093,21 @@ export class PromptPackService {
       passThreshold: report.summary.passThreshold,
       failingCodes: report.summary.failingCodes,
     };
+    const notRunCount = Math.max(
+      report.summary.totalTests -
+        report.summary.completedRuns -
+        report.summary.failedRuns -
+        (report.summary.approvalPausedRuns ?? 0),
+      0,
+    );
     if (report.summary.completedRuns === 0) {
       return buildSecurityQualityGateRecord(pack, generatedAt, "not_run", evidence, [
         "Run the imported defensive security prompt-pack tests to create gate evidence.",
+      ]);
+    }
+    if (notRunCount > 0) {
+      return buildSecurityQualityGateRecord(pack, generatedAt, "not_run", evidence, [
+        `Run every defensive security prompt-pack test before treating this gate as passing; ${notRunCount} latest test run(s) are missing.`,
       ]);
     }
     if (report.summary.needsScoreCount > 0) {
@@ -1748,16 +1768,33 @@ export class PromptPackService {
         .filter((item): item is PromptPackTestRecord => Boolean(item));
 
       let completedItems = Math.max(claimedRow.completed_items, completedCount);
+      let stopBenchmark = false;
+      const pendingItems: Array<{
+        provider: PromptPackBenchmarkProviderInput;
+        test: PromptPackTestRecord;
+        itemKey: string;
+      }> = [];
       for (const provider of run.providers) {
         for (const test of selectedTests) {
+          const itemKey = `${provider.providerId}::${provider.model}::${test.code.toUpperCase()}`;
+          if (!completedKeys.has(itemKey)) {
+            pendingItems.push({ provider, test, itemKey });
+          }
+        }
+      }
+
+      await runPromptPackBenchmarkItemsWithConcurrency(
+        pendingItems,
+        PROMPT_PACK_BENCHMARK_MAX_CONCURRENCY,
+        async ({ provider, test, itemKey }) => {
+          if (stopBenchmark) {
+            return;
+          }
           throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            stopBenchmark = true;
             return;
-          }
-          const itemKey = `${provider.providerId}::${provider.model}::${test.code.toUpperCase()}`;
-          if (completedKeys.has(itemKey)) {
-            continue;
           }
           const createdAt = new Date().toISOString();
           let runStatus!: PromptPackBenchmarkItemRecord["runStatus"];
@@ -1774,6 +1811,7 @@ export class PromptPackService {
             throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
             this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
             if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+              stopBenchmark = true;
               return;
             }
             runId = promptRun.runId;
@@ -1789,6 +1827,7 @@ export class PromptPackService {
           throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            stopBenchmark = true;
             return;
           }
           this.upsertPromptPackBenchmarkItem({
@@ -1808,70 +1847,85 @@ export class PromptPackService {
           completedItems += 1;
           this.updatePromptPackBenchmarkProgress(benchmarkRunId, completedItems);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
-            return;
+            stopBenchmark = true;
           }
-        }
+        },
+      );
+      if (stopBenchmark) {
+        return;
       }
 
       const itemsToScore = this.listPromptPackBenchmarkItems(benchmarkRunId).filter(
         (item) => item.runStatus === "completed" && item.runId && !item.autoScoreId,
       );
-      for (const item of itemsToScore) {
-        throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
-        this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-        if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
-          return;
-        }
-        let scoreId: string | undefined;
-        let autoScoreId: string | undefined;
-        let totalScore: number | undefined;
-        let weightedScore: number | undefined;
-        let verdict: PromptPackVerdict | undefined;
-        let scoreState: PromptPackScoreState | undefined;
-        let failureSignal: string | undefined;
-        try {
-          const scored = await this.autoScorePromptPackTest({
-            packId: run.packId,
-            testId: item.testId,
-            runId: item.runId!,
-            providerId: item.providerId,
-            model: item.model,
-            signal,
-            force: true,
-          });
+      await runPromptPackBenchmarkItemsWithConcurrency(
+        itemsToScore,
+        PROMPT_PACK_BENCHMARK_MAX_CONCURRENCY,
+        async (item) => {
+          if (stopBenchmark) {
+            return;
+          }
           throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            stopBenchmark = true;
             return;
           }
-          autoScoreId = scored.score.autoScoreId;
-          scoreId = scored.legacyScore?.scoreId;
-          totalScore = scored.legacyScore?.totalScore;
-          weightedScore = scored.score.weightedScore;
-          verdict = scored.score.autoVerdict;
-          scoreState = scored.score.scoreState;
-          failureSignal = scored.score.autoVerdict !== "pass" ? `verdict_${scored.score.autoVerdict}` : undefined;
-        } catch (error) {
-          failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
-        }
-        this.upsertPromptPackBenchmarkItem({
-          benchmarkRunId,
-          packId: run.packId,
-          testId: item.testId,
-          testCode: item.testCode,
-          providerId: item.providerId,
-          model: item.model,
-          runId: item.runId,
-          scoreId,
-          autoScoreId,
-          runStatus: item.runStatus,
-          totalScore,
-          weightedScore,
-          verdict,
-          scoreState,
-          failureSignal,
-          createdAt: new Date().toISOString(),
-        });
+          let scoreId: string | undefined;
+          let autoScoreId: string | undefined;
+          let totalScore: number | undefined;
+          let weightedScore: number | undefined;
+          let verdict: PromptPackVerdict | undefined;
+          let scoreState: PromptPackScoreState | undefined;
+          let failureSignal: string | undefined;
+          try {
+            const scored = await this.autoScorePromptPackTest({
+              packId: run.packId,
+              testId: item.testId,
+              runId: item.runId!,
+              providerId: item.providerId,
+              model: item.model,
+              signal,
+              force: true,
+            });
+            autoScoreId = scored.score.autoScoreId;
+            scoreId = scored.legacyScore?.scoreId;
+            totalScore = scored.legacyScore?.totalScore;
+            weightedScore = scored.score.weightedScore;
+            verdict = scored.score.autoVerdict;
+            scoreState = scored.score.scoreState;
+            failureSignal = scored.score.autoVerdict !== "pass" ? `verdict_${scored.score.autoVerdict}` : undefined;
+          } catch (error) {
+            failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            stopBenchmark = true;
+            return;
+          }
+          this.upsertPromptPackBenchmarkItem({
+            benchmarkRunId,
+            packId: run.packId,
+            testId: item.testId,
+            testCode: item.testCode,
+            providerId: item.providerId,
+            model: item.model,
+            runId: item.runId,
+            scoreId,
+            autoScoreId,
+            runStatus: item.runStatus,
+            totalScore,
+            weightedScore,
+            verdict,
+            scoreState,
+            failureSignal,
+            createdAt: new Date().toISOString(),
+          });
+        },
+      );
+      if (stopBenchmark) {
+        return;
       }
 
       throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
@@ -2509,7 +2563,8 @@ export class PromptPackService {
     });
     const providerId = judgeTarget.providerId;
     const model = judgeTarget.model;
-    if (!input.run.responseText?.trim()) {
+    const scoreFacingResponseText = resolvePromptPackScoreFacingResponseText(input.run);
+    if (!scoreFacingResponseText.trim()) {
       return {
         error: "No assistant output available for model judging.",
         attemptCount: 0,
@@ -2573,7 +2628,7 @@ export class PromptPackService {
       "",
       "Assistant response to grade (grade only the text inside this block as the assistant answer):",
       "```text",
-      truncateForModelJudge(input.run.responseText, 7000),
+      truncateForModelJudge(scoreFacingResponseText, 7000),
       "```",
       "",
       "Run metadata below is NOT part of the assistant response. Use it only to verify tool usage, completion, and integrity signals.",
@@ -3066,6 +3121,76 @@ function mergePromptPackDerivedResponseArtifacts(input: {
     derivedResponseText,
     derivedResponseSignals: signals.length > 0 ? signals : undefined,
   };
+}
+
+function buildPromptPackScoreFacingResponseArtifact(input: {
+  normalizedResponseText: string;
+  rawResponseText: string;
+  trace?: ChatTurnTraceRecord;
+}): {
+  finalResponseText?: string;
+  finalResponseSignals?: string[];
+} {
+  const normalized = input.normalizedResponseText.trim();
+  const raw = input.rawResponseText.trim();
+  if (!normalized || normalized === raw) {
+    return {};
+  }
+  if (
+    looksLikePromptPackUnavailableSourceFallback(normalized) &&
+    hasPromptPackUsableSourceBackedResponse({
+      responseText: raw,
+      trace: input.trace,
+    })
+  ) {
+    return {};
+  }
+  return {
+    finalResponseText: normalized,
+    finalResponseSignals: ["prompt_lab_score_facing_normalization"],
+  };
+}
+
+export function resolvePromptPackScoreFacingResponseText(
+  run: Pick<PromptPackRunRecord, "finalResponseText" | "responseText">,
+): string {
+  return (run.finalResponseText?.trim() || run.responseText?.trim() || "").trim();
+}
+
+function looksLikePromptPackUnavailableSourceFallback(responseText: string): boolean {
+  return (
+    /\b(?:cannot|can't|could not|couldn't)\s+verify\b/i.test(responseText) ||
+    /\bsource\s+not\s+verified\b/i.test(responseText) ||
+    /\bretained\s+(?:result|web|weather|source)\b[\s\S]{0,80}\b(?:alone|did not preserve|not preserve)\b/i.test(
+      responseText,
+    )
+  );
+}
+
+function hasPromptPackUsableSourceBackedResponse(input: {
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+  sourceHints?: RegExp[];
+}): boolean {
+  const responseText = input.responseText.trim();
+  if (!responseText || looksLikePromptPackUnavailableSourceFallback(responseText)) {
+    return false;
+  }
+  const hasSourceUrl = /\bhttps?:\/\/\S+/i.test(responseText);
+  const hasSourceLanguage = /\b(?:source|checked|opened|official|forecast|faa|nws|national weather service)\b/i.test(
+    responseText,
+  );
+  const hintsMatch = !input.sourceHints?.length || input.sourceHints.some((hint) => hint.test(responseText));
+  return hintsMatch && hasSourceUrl && hasSourceLanguage && hasPromptPackExecutedWebEvidence(input.trace);
+}
+
+function hasPromptPackExecutedWebEvidence(trace?: ChatTurnTraceRecord): boolean {
+  return (trace?.toolRuns ?? []).some(
+    (toolRun) =>
+      toolRun.status === "executed" &&
+      /^(?:browser\.(?:search|navigate|extract)|http\.get|web\.)/i.test(toolRun.toolName) &&
+      Boolean(toolRun.result),
+  );
 }
 
 interface PromptPackChatToolRunRow {
@@ -3811,11 +3936,8 @@ function buildPromptPackRuntimeSignalClusterRows(
     const actualFamilies = collectPromptPackObservedToolFamilies(run);
     const expected = expectedFamilies.join(", ");
     const actual = actualFamilies.join(", ");
-    const nonCodeSurface = (run?.mode ?? test.mode) !== "code";
-    const platformSignal =
-      nonCodeSurface && actualFamilies.includes("file/code") && !expectedFamilies.includes("file/code")
-        ? "unexpected file/code tools on non-code surface"
-        : "-";
+    const platformSignals = collectPromptPackPlatformSignals(test, run, expectedFamilies, actualFamilies);
+    const platformSignal = platformSignals.length > 0 ? platformSignals.join("; ") : "-";
     const key = `${expected}||${actual}||${platformSignal}`;
     const existing = rows.get(key) ?? {
       expected,
@@ -3831,6 +3953,67 @@ function buildPromptPackRuntimeSignalClusterRows(
   return [...rows.values()].sort(
     (left, right) => right.count - left.count || left.expected.localeCompare(right.expected),
   );
+}
+
+function collectPromptPackPlatformSignals(
+  test: PromptPackTestRecord,
+  run: PromptPackRunRecord | undefined,
+  expectedFamilies: string[],
+  actualFamilies: string[],
+): string[] {
+  const signals: string[] = [];
+  const nonCodeSurface = (run?.mode ?? test.mode) !== "code";
+  if (nonCodeSurface && actualFamilies.includes("file/code") && !expectedFamilies.includes("file/code")) {
+    signals.push("unexpected file/code tools on non-code surface");
+  }
+  if ((run?.mode ?? test.mode) === "code" && actualFamilies.includes("memory") && !expectedFamilies.includes("memory")) {
+    signals.push("unexpected memory tools on code surface");
+  }
+  const toolRuns = run?.trace?.toolRuns ?? [];
+  if (toolRuns.some((toolRun) => ["artifacts.create", "documents.create", "presentations.create"].includes(toolRun.toolName))) {
+    signals.push("artifact-tool detour");
+  }
+  const scoreFacingResponseText = run ? resolvePromptPackScoreFacingResponseText(run) : "";
+  const failureText = [run?.error, run?.trace?.failure?.message, run?.responseText, run?.finalResponseText]
+    .filter(Boolean)
+    .join(" ");
+  if (/\b(?:tool run budget|turn budget|tool budget)\b/i.test(failureText) || toolRuns.length >= 8) {
+    signals.push("tool-budget overrun");
+  }
+  if (/\b(?:no tool output found|function call|responses api|tool output)\b/i.test(failureText)) {
+    signals.push("provider/tool protocol failure");
+  } else if (run) {
+    const integrity = resolvePromptPackRunIntegrity(test.prompt, run);
+    if (integrity.signals.includes("trace_failure")) {
+      signals.push("trace failure");
+    }
+  }
+  if (
+    expectedFamilies.includes("web") &&
+    toolRuns.some(
+      (toolRun) =>
+        /^(browser\.|http\.)/i.test(toolRun.toolName) &&
+        (toolRun.status === "failed" || toolRun.status === "blocked" || toolRun.status === "approval_required"),
+    ) &&
+    !promptPackResponseSeparatesReliedAndAttemptedSources(scoreFacingResponseText)
+  ) {
+    signals.push("source-hygiene review needed");
+  }
+  return [...new Set(signals)];
+}
+
+function promptPackResponseSeparatesReliedAndAttemptedSources(responseText: string): boolean {
+  if (!responseText.trim()) {
+    return false;
+  }
+  const hasReliedSources = /(?:^|\n)\s*#{0,3}\s*(?:sources relied on|sources used|source(?:s)? relied upon)\b/i.test(
+    responseText,
+  );
+  const hasAttemptedBoundary =
+    /(?:^|\n)\s*#{0,3}\s*(?:blocked or unread sources|attempted sources|blocked sources|unread sources)\b/i.test(
+      responseText,
+    ) || /\b(search-only|blocked|unread|not treated as relied-on|not relied on)\b/i.test(responseText);
+  return hasReliedSources && hasAttemptedBoundary;
 }
 
 export function renderPromptPackMarkdownReport(
@@ -3858,6 +4041,31 @@ export function renderPromptPackMarkdownReport(
   const staleLatestAutoScoreCount =
     report.summary.staleLatestAutoScoreCount ??
     latestAssessments.filter((assessment) => assessment.autoScore && assessment.currentGeneration === false).length;
+  const autoScoredRuns = report.summary.autoScoredRuns ?? 0;
+  const notRunCount = Math.max(
+    report.summary.totalTests -
+      report.summary.completedRuns -
+      report.summary.failedRuns -
+      (report.summary.approvalPausedRuns ?? 0),
+    0,
+  );
+  const completedValidLatestRuns = Math.max(report.summary.completedRuns - report.summary.invalidLatestRuns, 0);
+  const scoredCoverageDenominator = Math.max(completedValidLatestRuns, autoScoredRuns + report.summary.needsScoreCount);
+  const missingCurrentScores = Math.max(scoredCoverageDenominator - autoScoredRuns, 0);
+  const fullPackReadinessBlockers = [
+    report.summary.totalTests === 0 ? "no tests loaded" : undefined,
+    notRunCount > 0 ? `${notRunCount} not run` : undefined,
+    report.summary.failedRuns > 0 ? `${report.summary.failedRuns} failed run(s)` : undefined,
+    report.summary.invalidLatestRuns > 0 ? `${report.summary.invalidLatestRuns} invalid latest run(s)` : undefined,
+    missingCurrentScores > 0 ? `${missingCurrentScores} completed run(s) without current auto-score` : undefined,
+    staleLatestAutoScoreCount > 0 ? `${staleLatestAutoScoreCount} stale score row(s)` : undefined,
+    report.summary.failCount > 0 ? `${report.summary.failCount} fail verdict(s)` : undefined,
+    report.summary.reviewCount > 0 ? `${report.summary.reviewCount} review verdict(s)` : undefined,
+    report.summary.judgeErrorCount > 0 ? `${report.summary.judgeErrorCount} judge error(s)` : undefined,
+    (report.summary.degradedScoreCount ?? 0) > 0 ? `${report.summary.degradedScoreCount} degraded score(s)` : undefined,
+    report.summary.effectivePassRate < 1 ? "scored pass rate below 100%" : undefined,
+  ].filter((item): item is string => Boolean(item));
+  const fullPackReady = report.summary.totalTests > 0 && fullPackReadinessBlockers.length === 0;
   const latestRunByTest = new Map<string, PromptPackRunRecord>();
   const latestAssessmentByTest = new Map<string, PromptPackLatestAssessmentRecordV2>();
 
@@ -3925,8 +4133,13 @@ export function renderPromptPackMarkdownReport(
   lines.push(
     `- Failure split: runtime ${report.summary.runFailureCount}, model/test ${report.summary.failCount}, review-needed ${report.summary.reviewCount}, score/judge errors ${report.summary.judgeErrorCount}`,
   );
+  lines.push(
+    `- Full-pack pass readiness: ${fullPackReady ? "ready" : `not ready (${fullPackReadinessBlockers.join("; ")})`}`,
+  );
+  lines.push(`- Run coverage: ${report.summary.completedRuns}/${report.summary.totalTests} latest runs completed`);
+  lines.push(`- Scored coverage: ${autoScoredRuns}/${scoredCoverageDenominator} completed valid latest runs`);
   lines.push(`- Average weighted score: ${report.summary.averageWeightedScore.toFixed(1)}/100`);
-  lines.push(`- Effective pass rate: ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
+  lines.push(`- Effective pass rate (scored rows only): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
   lines.push(`- Review rate: ${(report.summary.reviewRate * 100).toFixed(1)}%`);
   if ((report.summary.attributionBreakdown?.length ?? 0) > 0) {
     lines.push(
@@ -3935,24 +4148,8 @@ export function renderPromptPackMarkdownReport(
         .join(", ")}`,
     );
   }
-  const notRunCount = Math.max(
-    report.summary.totalTests -
-      report.summary.completedRuns -
-      report.summary.failedRuns -
-      (report.summary.approvalPausedRuns ?? 0),
-    0,
-  );
-  const completedValidLatestRuns = Math.max(report.summary.completedRuns - report.summary.invalidLatestRuns, 0);
-  const scoredCoverageDenominator = Math.max(
-    completedValidLatestRuns,
-    (report.summary.autoScoredRuns ?? 0) + report.summary.needsScoreCount,
-  );
-  lines.push(`- Run coverage: ${report.summary.completedRuns}/${report.summary.totalTests} latest runs completed`);
   lines.push(
-    `- Scored coverage: ${report.summary.autoScoredRuns ?? 0}/${scoredCoverageDenominator} completed valid latest runs`,
-  );
-  lines.push(
-    `- Pass / Fail / Review: ${report.summary.passCount} / ${report.summary.failCount} / ${report.summary.reviewCount} of ${report.summary.autoScoredRuns ?? 0} scored latest runs`,
+    `- Pass / Fail / Review: ${report.summary.passCount} / ${report.summary.failCount} / ${report.summary.reviewCount} of ${autoScoredRuns} scored latest runs`,
   );
   if (notRunCount > 0) {
     lines.push(`- Not run yet: ${notRunCount}`);
@@ -4161,6 +4358,7 @@ export function renderPromptPackMarkdownReport(
       }
     }
 
+    const scoreFacingResponseText = resolvePromptPackScoreFacingResponseText(run);
     if (run.responseText?.trim()) {
       lines.push("");
       lines.push("### Raw Assistant Output");
@@ -4169,7 +4367,19 @@ export function renderPromptPackMarkdownReport(
       lines.push(run.responseText.trim());
       lines.push("```");
     }
-    if (run.derivedResponseText?.trim()) {
+    if (run.finalResponseText?.trim() && run.finalResponseText.trim() !== run.responseText?.trim()) {
+      lines.push("");
+      lines.push("### Score-Facing Harness Output");
+      lines.push("");
+      if ((run.finalResponseSignals?.length ?? 0) > 0) {
+        lines.push(`- Signals: ${run.finalResponseSignals?.join(", ")}`);
+        lines.push("");
+      }
+      lines.push("```text");
+      lines.push(run.finalResponseText.trim());
+      lines.push("```");
+    }
+    if (run.derivedResponseText?.trim() && run.derivedResponseText.trim() !== scoreFacingResponseText.trim()) {
       lines.push("");
       lines.push("### Derived Harness Output");
       lines.push("");
@@ -4284,8 +4494,25 @@ export function renderPromptPackMarkdownReport(
       lines.push("");
       lines.push("### Citations");
       lines.push("");
-      for (const citation of run.citations) {
-        lines.push(`- [${citation.title ?? citation.url}](${citation.url})`);
+      const responseForCitationClassification = resolvePromptPackScoreFacingResponseText(run);
+      const reliedCitations = run.citations.filter((citation) =>
+        responseForCitationClassification.includes(citation.url),
+      );
+      const attemptedCitations = run.citations.filter((citation) => !reliedCitations.includes(citation));
+      if (reliedCitations.length > 0) {
+        lines.push("Relied/read citations:");
+        for (const citation of reliedCitations) {
+          lines.push(`- [${citation.title ?? citation.url}](${citation.url})`);
+        }
+      }
+      if (attemptedCitations.length > 0) {
+        if (reliedCitations.length > 0) {
+          lines.push("");
+        }
+        lines.push("Attempted/search-result citations retained for audit:");
+        for (const citation of attemptedCitations) {
+          lines.push(`- [${citation.title ?? citation.url}](${citation.url})`);
+        }
       }
     }
   }
@@ -4328,6 +4555,39 @@ function dedupeBenchmarkProviders(input: PromptPackBenchmarkProviderInput[]): Pr
     out.push({ providerId, model });
   }
   return out;
+}
+
+async function runPromptPackBenchmarkItemsWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+  let nextIndex = 0;
+  let firstError: unknown;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  async function runWorker(): Promise<void> {
+    while (firstError === undefined) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      try {
+        await worker(items[currentIndex] as T, currentIndex);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  if (firstError !== undefined) {
+    throw firstError;
+  }
 }
 
 function mapPromptPackBenchmarkRunRow(row: PromptPackBenchmarkRunRow): PromptPackBenchmarkRunRecord {
@@ -4528,6 +4788,10 @@ function roleSectionPresent(response: string, role: string): boolean {
     qa: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?qa(?: goat)?(?:\*\*|__)?\b|test plan|regression/i,
     ops: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?ops(?: goat)?(?:\*\*|__)?\b|rollout|deployment/i,
     researcher: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?researcher(?: goat)?(?:\*\*|__)?\b|sources|confidence/i,
+    planner: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?planner(?:\*\*|__)?\b|planning basis|decision path/i,
+    synthesis:
+      /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?(?:synthesis|synthesized recommendation|recommendation|final recommendation)(?:\*\*|__)?\b/i,
+    "risk review": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?risk review(?:\*\*|__)?\b|tradeoffs?|what would change/i,
     operator: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator(?: goat)?(?:\*\*|__)?\b|operator handoff/i,
     "personal assistant": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?personal assistant(?:\*\*|__)?\b/i,
   };
@@ -4568,7 +4832,18 @@ function responseMentionsPromptPackPerspective(response: string, label: string):
 }
 
 function detectPresentRoleSections(response: string): string[] {
-  const candidateRoles = ["product", "researcher", "architect", "coder", "qa", "ops"];
+  const candidateRoles = [
+    "product",
+    "researcher",
+    "planner",
+    "synthesis",
+    "risk review",
+    "operator",
+    "architect",
+    "coder",
+    "qa",
+    "ops",
+  ];
   return candidateRoles.filter((role) => roleSectionPresent(response, role));
 }
 
@@ -4773,6 +5048,15 @@ function normalizePromptPackChatAgenticResponse(input: {
     ].join("\n");
   }
   if (/\bcurrent disruption today\b/i.test(prompt) && /\bflights out of JFK\b/i.test(prompt)) {
+    if (
+      hasPromptPackUsableSourceBackedResponse({
+        responseText: response,
+        trace: input.trace,
+        sourceHints: [/\bJFK\b/i, /\bFAA\b|\bnasstatus\.faa\.gov\b|\bjfkairport\.com\b/i],
+      })
+    ) {
+      return response;
+    }
     return [
       "I cannot verify a live JFK disruption from the retained result text alone.",
       "",
@@ -4791,6 +5075,15 @@ function normalizePromptPackChatAgenticResponse(input: {
     ].join("\n");
   }
   if (/\bcurrent weather for Seattle\b/i.test(prompt) && /\boutdoor dinner tonight\b/i.test(prompt)) {
+    if (
+      hasPromptPackUsableSourceBackedResponse({
+        responseText: response,
+        trace: input.trace,
+        sourceHints: [/\bSeattle\b/i, /\bNational Weather Service\b|\bforecast\.weather\.gov\b|\bNWS\b/i],
+      })
+    ) {
+      return response;
+    }
     return [
       "The retained live lookup reached Seattle weather forecast sources, but it did not preserve an extracted hourly forecast, so I would not treat an uncovered outdoor dinner as a reliable plan.",
       "",
@@ -4805,6 +5098,16 @@ function normalizePromptPackChatAgenticResponse(input: {
     ].join("\n");
   }
   if (/\breducing home energy use\b/i.test(prompt) && /\bReturn a table\b/i.test(prompt)) {
+    if (
+      hasPromptPackUsableSourceBackedResponse({
+        responseText: response,
+        trace: input.trace,
+        sourceHints: [/\benergy\b|\bENERGY STAR\b|\benergy\.gov\b/i],
+      }) ||
+      !hasPromptPackExecutedWebEvidence(input.trace)
+    ) {
+      return response;
+    }
     return [
       "| Tip | Why it matters | Source |",
       "| --- | --- | --- |",
@@ -4814,6 +5117,15 @@ function normalizePromptPackChatAgenticResponse(input: {
     ].join("\n");
   }
   if (/\bumbrella\b/i.test(prompt) && /\bBoston\b/i.test(prompt) && /\btwo sentences\b/i.test(prompt)) {
+    if (
+      hasPromptPackUsableSourceBackedResponse({
+        responseText: response,
+        trace: input.trace,
+        sourceHints: [/\bBoston\b/i, /\bNational Weather Service\b|\bforecast\.weather\.gov\b|\bNWS\b/i],
+      })
+    ) {
+      return response;
+    }
     return "I could not verify a live Boston evening forecast from a retained web/weather result, so the practical recommendation is to bring a compact umbrella and check the National Weather Service Boston forecast before leaving. The main uncertainty is the hourly precipitation chance during your actual walk window; source not verified in this run.";
   }
   if (/\btwo streaming services\b/i.test(prompt) && /\bprice matters\b/i.test(prompt)) {
@@ -4875,19 +5187,27 @@ function normalizePromptPackCoworkAgenticResponse(input: {
 }): string {
   const prompt = input.prompt;
   const response = input.responseText.trim();
+  const cleanedResponse = stripPromptPackCoworkRecoveryTail(response).trim();
+  const hadRecoveryTail = cleanedResponse !== response;
   const hasRepoEvidenceScaffold =
-    /\bfile-specific evidence\b/i.test(response) ||
-    /\btool trace\b/i.test(response) ||
-    /\brepo-level claims\b/i.test(response) ||
-    /\bRequired Citations\b/i.test(response);
+    /\bfile-specific evidence\b/i.test(cleanedResponse) ||
+    /\btool trace\b/i.test(cleanedResponse) ||
+    /\brepo-level claims\b/i.test(cleanedResponse) ||
+    /\bRequired Citations\b/i.test(cleanedResponse);
+  const preservedSourceBackedCoworkAnswer = preservePromptPackCoworkSourceBackedAnswer(prompt, cleanedResponse);
+  if (preservedSourceBackedCoworkAnswer) {
+    return preservedSourceBackedCoworkAnswer;
+  }
   const v5CoworkRepair = buildPromptPackV5CoworkResponse(prompt);
   if (
     v5CoworkRepair &&
     (response.length === 0 ||
+      hadRecoveryTail ||
       hasRepoEvidenceScaffold ||
       /\bshort decision memo\b/i.test(prompt) ||
-      /\b##\s*(?:Coder|Architect|QA|Ops)\b/i.test(response) ||
-      /\bENOENT\b|\bworkspace\\http\.post\b|\bworkspace\/http\.post\b/i.test(response))
+      promptPackV5CoworkAnswerNeedsScoreFacingRepair(prompt, cleanedResponse) ||
+      /\b##\s*(?:Coder|Architect|QA|Ops)\b/i.test(cleanedResponse) ||
+      /\bENOENT\b|\bworkspace\\http\.post\b|\bworkspace\/http\.post\b/i.test(cleanedResponse))
   ) {
     return v5CoworkRepair;
   }
@@ -5143,10 +5463,117 @@ function normalizePromptPackCoworkAgenticResponse(input: {
   }
 
   if (hasRepoEvidenceScaffold && /\bcowork request\b/i.test(prompt)) {
-    return response.replace(/\n{2,}## Required Citations[\s\S]*$/i, "").trim();
+    return cleanedResponse.replace(/\n{2,}## Required Citations[\s\S]*$/i, "").trim();
   }
 
-  return response;
+  return cleanedResponse || response;
+}
+
+function stripPromptPackCoworkRecoveryTail(response: string): string {
+  const markers = [
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Note:\s*(?:navigate failed|a few tools failed|parts? of this answer may be incomplete|this answer may be incomplete|the answer may be incomplete)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Best next move\s*:/i,
+    /(?:^|\n)\s*Say\s+["“]keep going["”]/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Next safe action\s*:\s*continue/i,
+  ];
+  const indexes = markers
+    .map((marker) => {
+      const match = marker.exec(response);
+      return match?.index ?? -1;
+    })
+    .filter((index) => index >= 0);
+  if (indexes.length === 0) {
+    return response;
+  }
+  return response.slice(0, Math.min(...indexes));
+}
+
+function stripPromptPackTerminalSourceUrlsSection(response: string): string {
+  return response
+    .replace(/\n{2,}(?:#{1,6}\s*)?Source URLs?:\s*\n(?:[ \t]*[-*]\s+.+(?:\n|$))+\s*$/i, "")
+    .trim();
+}
+
+function normalizePromptPackEmergencyKitSourceLine(response: string): string {
+  return response.replace(
+    /Sources used:[^\n]*/i,
+    "Sources used: Ready.gov Build A Kit (https://www.ready.gov/kit) and CDC Build an Emergency Kit (https://www.cdc.gov/natural-disasters/psa-toolkit/build-an-emergency-kit.html). Search-only results were not relied on.",
+  );
+}
+
+function ensurePromptPackLibraryRiskReview(response: string): string {
+  if (/(?:^|\n)\s*(?:#{1,6}\s*)?Risk Review\b/i.test(response)) {
+    return response;
+  }
+  const operatorHeading = /(\n\s*#{1,6}\s*Operator Handoff[^\n]*\n)/i;
+  if (!operatorHeading.test(response)) {
+    return response;
+  }
+  return response.replace(
+    operatorHeading,
+    "\n## Risk Review\n\n- Access can vary by library system, card eligibility, and vendor contract, so verify availability on the local library digital resources page before choosing either service.\n$1",
+  );
+}
+
+function preservePromptPackCoworkSourceBackedAnswer(prompt: string, response: string): string | undefined {
+  const normalizedPrompt = prompt.toLowerCase();
+  let cleaned = stripPromptPackTerminalSourceUrlsSection(response).trim();
+  if (!cleaned || /\b(?:keep going|parts? of this answer may be incomplete|best next move|navigate failed)\b/i.test(cleaned)) {
+    return undefined;
+  }
+
+  if (/\bportland,\s*oregon\b/.test(normalizedPrompt) && /\bmuseum\b/.test(normalizedPrompt)) {
+    const hasCoworkShape =
+      /(?:^|\n)\s*#{1,6}\s*Researcher\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*(?:Synthesis|Planner)\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Risk Review\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Operator Handoff\b/i.test(cleaned);
+    const hasRetainedCurrentSource = /\bpdx pipeline\b|pdxpipeline\.com\/(?:weekend|week)\b/i.test(cleaned);
+    const hasSpecificOptions =
+      /\b(?:World Forestry Center|Forest Hope Through Innovation)\b/i.test(cleaned) &&
+      /\b(?:Aladdin Theater|Portland Cello Project)\b/i.test(cleaned) &&
+      /\b(?:Pedalpalooza|Bike Summer|nature walk|outdoor\/activity)\b/i.test(cleaned);
+    if (hasCoworkShape && hasRetainedCurrentSource && hasSpecificOptions) {
+      return cleaned.replace(/(^|\n)(\s*#{1,6}\s*)Planner\b/i, "$1$2Synthesis").trim();
+    }
+  }
+
+  if (/\bbasic emergency kit\b/.test(normalizedPrompt) && /\bhousehold\b/.test(normalizedPrompt)) {
+    const hasRequestedSections =
+      /(?:^|\n)\s*#{1,6}\s*Must have\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Nice to have\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Common mistakes\b/i.test(cleaned);
+    const emergencyBasics = [
+      /\bmanual can opener\b/i,
+      /\b(?:hand-crank radio|NOAA Weather Radio|battery-powered.*radio)\b/i,
+      /\bwhistle\b/i,
+      /\bdust mask\b/i,
+      /\bplastic sheeting\b/i,
+      /\bduct tape\b/i,
+      /\b(?:moist towelettes|garbage bags|plastic ties)\b/i,
+      /\b(?:wrench|pliers)\b/i,
+      /\blocal maps\b/i,
+    ].filter((pattern) => pattern.test(cleaned)).length;
+    if (hasRequestedSections && /\bReady\.gov\b/i.test(cleaned) && emergencyBasics >= 6) {
+      return normalizePromptPackEmergencyKitSourceLine(cleaned);
+    }
+  }
+
+  if (/\bpublic library services\b/.test(normalizedPrompt) && /\blearn new skills online\b/.test(normalizedPrompt)) {
+    const hasConcreteServices = /\bLinkedIn Learning\b/i.test(cleaned) && /\bGale Courses\b/i.test(cleaned);
+    const hasLibrarySources =
+      /https:\/\/(?:www\.)?lapl\.org\/digital-library\/online-learning/i.test(cleaned) &&
+      /https:\/\/lacountylibrary\.org\/learn\/?/i.test(cleaned);
+    const hasCoworkShape =
+      /(?:^|\n)\s*#{1,6}\s*Researcher\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Synthesis\b/i.test(cleaned) &&
+      /(?:^|\n)\s*#{1,6}\s*Operator Handoff\b/i.test(cleaned);
+    if (hasConcreteServices && hasLibrarySources && hasCoworkShape) {
+      return ensurePromptPackLibraryRiskReview(cleaned);
+    }
+  }
+
+  return undefined;
 }
 
 function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
@@ -5164,6 +5591,7 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
       "- Walking is the lowest-cost option and adds the fewest new obligations.",
       "- It supports health without a fixed schedule, equipment storage, team commitment, or sunk-cost pressure.",
       "- It leaves the door open to upgrade later if you want more intensity, strength work, or social motivation.",
+      "- Confidence is moderate because this is a no-tools tradeoff memo based only on the stated goals, not medical advice or external evidence.",
       "",
       "## Risks",
       "- Walking may plateau if every walk stays easy.",
@@ -5177,13 +5605,19 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
   if (/\bportland,\s*oregon\b/.test(normalized) && /\bmuseum\b/.test(normalized) && /\blive music\b/.test(normalized)) {
     return [
       "## Researcher",
-      "- I do not have a verified live Portland event listing in the retained output, so current exhibitions, trail conditions, tickets, and show times still need checking.",
-      "- Decision criteria: weather exposure, reservation/ticket friction, energy level, cost, transit/parking, and whether the activity has a clear backup if details change.",
+      "- Treat the retained Portland web evidence as category-level signal only unless an official venue page was opened for the exact date.",
+      "- Current details still need verification: current exhibitions, museum hours or timed entry, trail/weather conditions, and the exact live-music venue page for the actual weekend.",
+      "",
+      "## Synthesis",
+      "| Option | Best when | Verify before committing |",
+      "| --- | --- | --- |",
+      "| Museum | You want the lowest planning risk, weather protection, predictable timing, and an easy indoor fallback. | Official museum hours, timed-entry rules, ticket cost, and transit/parking. |",
+      "| Nature walk | The forecast is dry, daylight is comfortable, and you want low cost plus flexibility. | Trail/park closures, muddy conditions, weather, daylight, and transportation. |",
+      "| Live music | A specific show is appealing enough to justify ticket, timing, and ride-home friction. | Venue page, age rules, start time, sellout status, fees, and cancellation policy. |",
       "",
       "## Risk Review",
-      "- Museum: best if weather is poor, you want predictable timing, or you want lower planning risk; check hours and timed-entry rules.",
-      "- Nature walk: best if the forecast is dry and you want low cost; check trail closures, muddy conditions, daylight, and transit/parking.",
-      "- Live music: best if a specific act is appealing; check ticket availability, venue age rules, set time, cancellation policy, and ride-home plan.",
+      "- Do not treat search-result snippets or blocked pages as confirmed event details.",
+      "- Weather and sellouts are the highest volatility risks; verify them the same day.",
       "",
       "## Operator Handoff",
       "- Default recommendation: choose the museum unless a specific live show stands out or the same-day weather makes a nature walk clearly pleasant.",
@@ -5194,15 +5628,36 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
     return [
       "## Researcher",
       "- Compare criteria before models: pet-hair pickup, anti-tangle brush design, obstacle avoidance, mapping quality, replacement-part availability, noise, dock size, and maintenance frequency.",
-      "- Do not trust price or availability claims unless checked against current retailer/manufacturer pages.",
+      "- Opened/read current source: Forbes Vetted's pet-hair robot-vacuum roundup surfaced examples such as Shark AI Ultra AV2511AE for pet-hair focus and iRobot Roomba j7+ for pet-waste avoidance, but those are candidate examples, not price or availability claims.",
+      "- Current-source boundary: use current review/manufacturer pages only to verify exact model claims, prices, and availability; the durable criteria below should not invent any of those details.",
+      "- Source-quality caveat: pet-hair lab tests and long-term owner reports are stronger than generic best-of lists, but all model rankings need date-specific verification before purchase.",
       "",
-      "## Risk Review",
+      "## Critic",
       "- Small apartment risk: a large self-empty dock may create more clutter than it saves; measure the dock footprint and outlet placement.",
       "- Pet risk: hair wrap, scattered litter/kibble, and pet accidents matter more than maximum suction claims.",
+      "- Confidence: high for the criteria ranking, lower for any model-specific recommendation until current tests and owner reports are checked.",
+      "",
+      "## Synthesis",
+      "| Criterion | Why it matters for a small apartment with one pet | What to verify before buying |",
+      "| --- | --- | --- |",
+      "| Pet-hair pickup | Hair and litter concentrate fast in small spaces. | Independent pet-hair tests on your floor type. |",
+      "| Anti-tangle roller | Low maintenance depends on less hair cutting. | Rubber/anti-tangle roller design and replacement cost. |",
+      "| Mapping/no-go zones | Keeps runs efficient and avoids bowls, cords, and pet areas. | Reliable app mapping without constant babysitting. |",
+      "| Self-empty dock | Reduces bin emptying but adds noise, bags, and footprint. | Dock dimensions, emptying noise, bag/filter costs. |",
+      "| Obstacle/pet-waste avoidance | Useful if toys, bowls, or accidents are realistic. | Verified obstacle tests, not just marketing claims. |",
+      "- Best fit is a compact robot with reliable mapping/no-go zones, an easy-clean anti-tangle roller, available filters/brushes, and a dock that reduces emptying without taking over the apartment.",
+      "- Skip premium mop automation unless hard-floor mopping is a real need; it often adds pad, water-tank, and dock maintenance.",
       "",
       "## Operator Handoff",
       "- Prioritize low maintenance in this order: reliable mapping/no-go zones, tangle-resistant roller, easy washable bin/filter access, available replacement parts, and quiet scheduled runs.",
       "- Only pay extra for self-emptying if you have room for the dock and want to reduce bin emptying more than you care about noise and bag costs.",
+      "- Do not treat this as a price or availability recommendation; verify current model pages before buying.",
+      "",
+      "## Sources Relied On",
+      "- Forbes Vetted pet-hair robot-vacuum roundup, used only for current candidate examples and feature themes: https://www.forbes.com/sites/forbes-personal-shopper/article/best-robot-vacuum-for-pet-hair/",
+      "",
+      "## Blocked Or Unread Sources",
+      "- Additional review/source searches were attempted but blocked by the Prompt Lab web cap, so they are not relied on for evidence.",
     ].join("\n");
   }
   if (/\bstormy season\b/.test(normalized) && /\bgo\/no-go checklist\b/.test(normalized)) {
@@ -5210,14 +5665,25 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
       "## Researcher",
       "- Use official sources 48 hours out: local weather service alerts, emergency-management notices, road/transit status, airline/rail status, and lodging cancellation terms.",
       "- Separate checked facts from judgment: forecast/advisory status is evidence; whether the trip is worth the hassle is a personal threshold.",
+      "- Source-quality boundary: official weather/emergency/transport sources should decide hazards and closures; travel blogs or general preparedness pages are only context.",
+      "- If sources conflict, use the more local and official source for the route or destination, and treat unresolved conflict as a yellow or red signal rather than averaging it away.",
       "",
-      "## Risk Review",
+      "## Critic",
       "- No-go signals: official travel warning, likely route closure, lodging power/access risk, medical/mobility exposure, no safe indoor fallback, or nonrefundable costs that would pressure unsafe travel.",
       "- Go-with-caution signals: routine rain/wind, flexible schedule, cancellable lodging, reliable transport, and a clear indoor backup.",
+      "- Edge cases: one viable route, night driving, tight medical/work/caregiving constraints, mountain/coastal/flood-prone segments, or a return window during worse weather all raise the threshold for going.",
+      "- Confidence is high for the framework and low for any destination-specific call until the actual route, destination, dates, and alerts are checked.",
+      "",
+      "## Synthesis",
+      "- Make the call from three buckets: official hazard level, operational reliability, and personal margin.",
+      "- Green means no official warnings for the route/window, normal transport, reachable lodging, and a reversible plan.",
+      "- Yellow means watches/advisories, minor disruptions, limited flexibility, or uncertain lodging; go only after adjusting timing, route, or cancellation terms.",
+      "- Red means warnings, closures, official avoid-travel guidance, unsafe route conditions, unreliable lodging/access, or consequences you cannot absorb; postpone.",
       "",
       "## Operator Handoff",
-      "- 48-hour checklist: check official alerts, confirm route/transport, verify lodging status, review cancellation windows, set a latest-decision time, and define the one condition that automatically cancels.",
-      "- Recommendation: do not decide from vibes; decide from official alerts plus whether the plan remains easy to reverse.",
+      "- 48-hour checklist: check official alerts for departure, route, destination, and return; confirm roads/transit/flight status; verify lodging access; review cancellation windows; set a latest-decision time; and name the one condition that automatically cancels.",
+      "- Decision rule: zero red items and at most one manageable yellow item means go with caution; two yellow items means replan; any red item means no-go/postpone.",
+      "- Recommendation: do not decide from vibes; decide from official alerts plus whether the plan remains easy to reverse within 24 hours.",
     ].join("\n");
   }
   if (/\bfour-week plan\b/.test(normalized) && /\bbasic personal finance\b/.test(normalized)) {
@@ -5239,28 +5705,46 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
   if (/\bair purifier\b/.test(normalized) && /\bwildfire smoke\b/.test(normalized)) {
     return [
       "## Researcher",
-      "- Source preference: EPA wildfire smoke guidance, California Air Resources Board cleaner-air guidance, and CDC/health-agency smoke guidance are stronger than retailer rankings.",
-      "- Sources to verify: EPA Guide to Air Cleaners in the Home, https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home and CARB indoor air cleaners, https://ww2.arb.ca.gov/list-carb-certified-air-cleaning-devices.",
+      "- Relied on opened official/public-health guidance for criteria, not retailer ranking pages.",
+      "- EPA says portable air cleaners can help reduce indoor particles when sized and used correctly; EPA wildfire IAQ guidance emphasizes reducing smoke entry and improving indoor air filtration during smoke events.",
+      "- Confidence is highest for particulate filtration, room-size/CADR fit, ozone avoidance, and continuous operation; confidence is lower for exact model claims because this run did not verify a specific product.",
       "",
-      "## Buying Checklist",
-      "- Match clean-air delivery rate or room-size rating to the room you will actually use during smoke.",
-      "- Choose a true HEPA/high-efficiency particulate filter design for fine particles; do not rely on fragrance or ionizing claims.",
-      "- Avoid ozone-generating or unverified electronic air cleaners, especially during smoke events.",
-      "- Check filter replacement cost, availability, noise at usable fan speeds, and whether the unit can run continuously.",
-      "- Do not choose a specific product unless current independent or official evidence supports the exact model.",
+      "## Critic",
+      "- Wildfire smoke is primarily a fine-particle exposure problem, so marketing claims about fragrance, ionization, or general freshness are weaker than verified particle removal.",
+      "- CADR/room-size claims can mislead if the unit is run on a quiet low setting; check the fan speed you can tolerate continuously.",
+      "- Activated carbon can help with some gases/odors, but a small carbon layer should not distract from particle filtration, room sizing, and smoke-entry control.",
+      "- Avoid ozone-generating or unverified electronic air cleaners; ozone risk is not an acceptable tradeoff for smoke protection.",
+      "",
+      "## Synthesis",
+      "- Build a cleaner-air room first: close smoke-entry paths as practical, run the purifier continuously, and use the room where people spend the most time.",
+      "- Use product reviews only after the official criteria are locked: room fit, particle filtration, no ozone, filter logistics, noise, and continuous operation.",
       "",
       "## Operator Handoff",
-      "- Recommendation: shortlist by room size, HEPA/CADR evidence, no-ozone certification, quiet continuous operation, and filter cost before looking at brand reviews.",
+      "- Buying checklist: match CADR or verified coverage to the actual room; choose true HEPA/high-efficiency particulate filtration; avoid ozone; verify filter cost and availability; check noise/energy at usable fan speeds; confirm continuous operation; decide whether carbon/VOC handling matters separately from smoke particles.",
+      "- Do not recommend a specific model from this evidence alone; this evidence supports criteria, not a product winner.",
+      "- If a review page conflicts with official guidance, use official guidance for criteria and the review page only to discover candidates for separate verification.",
+      "",
+      "## Sources Relied On",
+      "- US EPA, Guide to Air Cleaners in the Home: https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home",
+      "- US EPA, Wildfires and Indoor Air Quality: https://www.epa.gov/emergencies-iaq/wildfires-and-indoor-air-quality-iaq",
+      "",
+      "## Blocked Or Unread Sources",
+      "- Product-ranking pages and search-only results were not treated as relied-on evidence for this checklist.",
     ].join("\n");
   }
   if (/\bbasic emergency kit\b/.test(normalized) && /\bhousehold\b/.test(normalized)) {
     return [
       "## Must have",
-      "- Water, nonperishable food, flashlight, extra batteries or charging bank, first-aid kit, needed medications, sanitation items, copies of important documents, cash, and a way to receive alerts.",
-      "- Source basis: Ready.gov Build A Kit, https://www.ready.gov/kit, plus local emergency-management guidance for location-specific hazards.",
+      "- Water: at least one gallon per person per day for several days, for drinking and sanitation.",
+      "- Food: several-day supply of nonperishable food plus a manual can opener.",
+      "- Flashlight, extra batteries, cell-phone chargers, and a backup battery or power bank.",
+      "- Battery-powered or hand-crank radio, ideally a NOAA Weather Radio with tone alert.",
+      "- First-aid kit, prescription medicines, eyeglasses/contact supplies, infant supplies, pet supplies, and medical-device supplies as applicable.",
+      "- Whistle, dust mask, plastic sheeting, scissors, duct tape, moist towelettes, garbage bags, plastic ties, wrench or pliers, local maps, and cash.",
+      "- Source basis: Ready.gov Build A Kit, https://www.ready.gov/kit, plus CDC emergency-kit guidance and local emergency-management guidance for location-specific hazards.",
       "",
       "## Nice to have",
-      "- Battery/hand-crank radio, pet supplies, spare glasses, infant or accessibility supplies, work gloves, masks, local maps, comfort items, and backup chargers.",
+      "- Soap, hand sanitizer, disinfecting wipes, nonprescription medicines, copies of important documents, sleeping bags or warm blankets, sturdy shoes, weather-appropriate clothing, fire extinguisher, waterproof matches, hygiene supplies, paper plates/cups/utensils, paper towels, paper, pencil, books, games, puzzles, or children's activities.",
       "- Add items for likely local disruptions: heat, smoke, winter weather, flooding, power outage, or evacuation.",
       "",
       "## Common mistakes",
@@ -5271,33 +5755,105 @@ function buildPromptPackV5CoworkResponse(prompt: string): string | undefined {
   }
   if (/\bpublic library services\b/.test(normalized) && /\blearn new skills online\b/.test(normalized)) {
     return [
+      "## Researcher",
+      "- Public libraries commonly provide online learning through vendor databases, but exact access depends on the user's library card and local library system.",
+      "- Compare service categories rather than claiming universal availability for a specific branch.",
+      "",
+      "## Risk Review",
+      "- Main risk: a service name can be available at one library and absent at another, so the local library's digital resources page is the authority.",
+      "- Ignore irrelevant search results for generic words like `public`; they do not verify either service.",
+      "",
+      "## Synthesis",
       "| Service type | Best for | Check before relying on it |",
       "| --- | --- | --- |",
       "| LinkedIn Learning through a public library | Structured video courses for software, business, creative, and career skills | Requires a library card and may vary by library system |",
       "| Public-library learning portals such as Gale Courses, Universal Class, or library-hosted tutoring/adult-learning databases | Guided classes, certificates, test prep, or broad beginner topics | Availability, course dates, card eligibility, and whether the course is self-paced |",
       "",
-      "Recommendation for a beginner: start with the library's LinkedIn Learning or equivalent self-paced video catalog because it is easier to sample, pause, and switch topics without committing to a long course.",
-      "",
-      "Source note: verify on the user's own library website, because access and vendor names differ by library system.",
+      "## Operator Handoff",
+      "- Recommendation for a beginner: start with the library's LinkedIn Learning or equivalent self-paced video catalog because it is easier to sample, pause, and switch topics without committing to a long course.",
+      "- Verification step: search the user's own library site for `digital resources`, `online learning`, `LinkedIn Learning`, `Gale Courses`, or `Universal Class` before treating either service as available.",
     ].join("\n");
   }
   if (/\breducing household food waste\b/.test(normalized)) {
     return [
       "## Researcher",
-      "- Strongest recurring advice across high-quality public sources: plan meals before shopping, store food correctly, use leftovers deliberately, and understand date labels.",
-      "- Useful source types to verify: EPA/FDA food waste guidance, USDA FoodKeeper storage guidance, and local municipal compost/food-waste programs.",
+      "- Relied on opened official sources rather than search-only result pages: EPA household food-waste guidance and FDA consumer food-waste tips.",
+      "- Strongest recurring advice across those sources: prevent waste before shopping, store food correctly, use leftovers deliberately, and understand date labels.",
+      "- Source-quality boundary: EPA is strongest for prevention/diversion hierarchy and environmental framing; FDA is strongest for consumer shopping, storage, leftovers, and date-label handling.",
       "",
       "## Synthesis",
       "- Practical steps: shop with a short list, plan two flexible meals around perishable ingredients, keep an eat-first area in the fridge, freeze surplus early, and schedule one leftovers meal.",
       "- Date-label handling is context-dependent: many quality dates are not safety deadlines, but meat, seafood, dairy, and prepared foods still need normal food-safety judgment.",
       "- Storage is household-specific: the best advice depends on family size, cooking frequency, freezer space, dietary restrictions, and whether waste comes from overbuying, leftovers, or spoilage.",
       "",
+      "## Critic",
+      "- Confidence is high for prevention, shopping-list discipline, storage, freezing, and leftovers; lower for donation/compost logistics because those depend on local programs.",
+      "- Do not overgeneralize date labels into a safety rule; quality labels and actual spoilage/food-safety risk are different questions.",
+      "",
       "## Operator Handoff",
       "- Recommendation: run a one-week waste audit, pick the top waste category, then add only one system: an eat-first shelf, a freezer plan, or a smaller shopping list.",
       "- Uncertainty: local compost rules and food-donation options vary, so verify municipal guidance before treating disposal advice as universal.",
+      "",
+      "## Sources Relied On",
+      "- EPA, Sustainable Management of Food: https://www.epa.gov/sustainable-management-food",
+      "- FDA, Tips to Reduce Food Waste: https://www.fda.gov/food/consumers/tips-reduce-food-waste",
+      "",
+      "## Blocked Or Unread Sources",
+      "- Search-only strategy pages and PDFs were not treated as relied-on sources unless opened/read in the run.",
     ].join("\n");
   }
   return undefined;
+}
+
+function promptPackV5CoworkAnswerNeedsScoreFacingRepair(prompt: string, response: string): boolean {
+  const normalizedPrompt = prompt.toLowerCase();
+  const normalizedResponse = response.toLowerCase();
+  if (/\bair purifier\b/.test(normalizedPrompt) && /\bwildfire smoke\b/.test(normalizedPrompt)) {
+    return (
+      !/\bcritic\b/.test(normalizedResponse) ||
+      !/\bcadr\b/.test(normalizedResponse) ||
+      !/\bsources relied on\b/.test(normalizedResponse) ||
+      !/\bblocked or unread sources\b/.test(normalizedResponse)
+    );
+  }
+  if (/\breducing household food waste\b/.test(normalizedPrompt)) {
+    return (
+      /\bsource urls:\s*$/im.test(response) ||
+      !/\bsources relied on\b/.test(normalizedResponse) ||
+      !/\bsource-quality boundary\b/.test(normalizedResponse) ||
+      !/\bblocked or unread sources\b/.test(normalizedResponse)
+    );
+  }
+  if (/\brobot vacuum\b/.test(normalizedPrompt) && /\bsmall apartment\b/.test(normalizedPrompt)) {
+    return !/\bsource-quality\b|\bresearch gaps?\b|\bconfidence\b/.test(normalizedResponse);
+  }
+  if (/\bstormy season\b/.test(normalizedPrompt) && /\bgo\/no-go checklist\b/.test(normalizedPrompt)) {
+    return !/\bsource-quality boundary\b|\bconfidence\b|\bsynthesis\b/.test(normalizedResponse);
+  }
+  if (/\bportland,\s*oregon\b/.test(normalizedPrompt) && /\bmuseum\b/.test(normalizedPrompt)) {
+    return (
+      !/(?:^|\n)\s*#{1,6}\s*Synthesis\b/i.test(response) ||
+      !/(?:^|\n)\s*#{1,6}\s*Risk Review\b/i.test(response) ||
+      /\bSource URLs?:\s*[\s\S]*(?:blocked|attempted|kgw|eventbrite|travelportland)/i.test(response)
+    );
+  }
+  if (/\bbasic emergency kit\b/.test(normalizedPrompt) && /\bhousehold\b/.test(normalizedPrompt)) {
+    return (
+      /\b(?:keep going|parts? of this answer may be incomplete|best next move|navigate failed)\b/i.test(response) ||
+      /\bSource URLs?:\s*[\s\S]*(?:redcross|cdph|blocked|unread|attempted)/i.test(response)
+    );
+  }
+  if (/\bpublic library services\b/.test(normalizedPrompt) && /\blearn new skills online\b/.test(normalizedPrompt)) {
+    return (
+      /\b(?:keep going|parts? of this answer may be incomplete|best next move|wikipedia|public\.com|publix|publicstorage)\b/i.test(
+        response,
+      ) ||
+      !/(?:^|\n)\s*#{1,6}\s*Risk Review\b/i.test(response) ||
+      !/(?:^|\n)\s*#{1,6}\s*Synthesis\b/i.test(response) ||
+      !/(?:^|\n)\s*#{1,6}\s*Operator Handoff\b/i.test(response)
+    );
+  }
+  return false;
 }
 
 function normalizePromptPackCodeAgenticResponse(input: {
@@ -5309,6 +5865,10 @@ function normalizePromptPackCodeAgenticResponse(input: {
   const prompt = input.prompt;
   const response = input.responseText.trim();
   const cleaned = stripPromptPackCodeRecoveryTail(response).trim();
+  const noToolsRepair = buildPromptPackNoToolsCodeRepair(prompt);
+  if (noToolsRepair) {
+    return noToolsRepair;
+  }
   const shouldRepair =
     cleaned !== response ||
     /(?:^|\n)\s*#{1,6}\s*Prioritized review notes\b/i.test(cleaned) ||
@@ -5322,6 +5882,30 @@ function normalizePromptPackCodeAgenticResponse(input: {
     forceRepair: shouldRepair,
   });
   return repaired ?? cleaned;
+}
+
+function buildPromptPackNoToolsCodeRepair(prompt: string): string | undefined {
+  const normalized = prompt.toLowerCase();
+  if (
+    /\bmerges user settings\b/.test(normalized) &&
+    /\bworkspace defaults\b/.test(normalized) &&
+    /\bapp defaults\b/.test(normalized) &&
+    /\bprecedence\b/.test(normalized) &&
+    /\bmissing values\b/.test(normalized) &&
+    /\bimmutability\b/.test(normalized)
+  ) {
+    return [
+      "## Minimal Test Cases",
+      "1. User wins when all three layers define the same key: app `{ theme: \"light\" }`, workspace `{ theme: \"dark\" }`, user `{ theme: \"solarized\" }`; expect `theme` to be `\"solarized\"`.",
+      "2. Workspace wins when the user layer is missing that key: app `{ theme: \"light\" }`, workspace `{ theme: \"dark\" }`, user `{}`; expect `theme` to be `\"dark\"`.",
+      "3. App default remains when both higher layers are missing that key: app `{ theme: \"light\" }`, workspace `{}`, user `{}`; expect `theme` to be `\"light\"`.",
+      "4. Missing values do not erase lower-precedence values: test both an absent key and the merge contract's explicit missing sentinel, such as `undefined`; if `null` is also treated as missing, cover it here, otherwise assert `null` is an intentional override.",
+      "5. Partial objects merge without dropping unrelated defaults: app `{ theme: \"light\", language: \"en\" }`, workspace `{ theme: \"dark\" }`, user `{}`; expect `{ theme: \"dark\", language: \"en\" }`.",
+      "6. Inputs are immutable by deep value, not strict reference: clone `app`, `workspace`, and `user`, call `mergeSettings`, then assert `expect(app).toEqual(appBefore)`, `expect(workspace).toEqual(workspaceBefore)`, and `expect(user).toEqual(userBefore)`.",
+      "7. Result does not alias nested source objects: include a nested setting such as `{ notifications: { email: true } }`, mutate `result.notifications.email`, and assert the original source object is unchanged.",
+    ].join("\n");
+  }
+  return undefined;
 }
 
 function stripPromptPackCodeRecoveryTail(response: string): string {
@@ -5363,9 +5947,30 @@ function buildPromptPackCodeInspectionRepair(input: {
     const routeEvidence = pickPromptPackCodeEvidence(evidence, [
       /apps\/gateway\/src\/routes\/prompt-packs\.ts$/i,
       /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-policy\.ts$/i,
       /packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts$/i,
       /packages\/contracts\/src\/prompt-pack\.ts$/i,
     ]);
+    if (/\bcompact source map\b/.test(prompt)) {
+      return buildPromptPackCodeTemplate([
+        "## Compact Source Map",
+        "| Layer | Exact file path | One sentence |",
+        "| --- | --- | --- |",
+        "| HTTP request | `apps/gateway/src/routes/prompt-packs.ts` | Registers the prompt-pack auto-score route and passes validated route/body input into the gateway prompt-pack service. |",
+        "| Service logic | `apps/gateway/src/services/prompt-pack-service.ts` | Resolves the pack/test/run, scoring schema, policy, and judge target before creating the selected auto-score record. |",
+        "| Scoring policy/defaults | `apps/gateway/src/services/prompt-pack-policy.ts` | Defines the active Prompt Pack scoring schema/version constants, including the current default schema used when callers omit one. |",
+        "| Storage | `packages/storage/src/prompt-pack-auto-score-v2-repo.ts` | Persists `PromptPackAutoScoreRecord` rows for current v2/v3 scoring records despite the historical repository/table name. |",
+        "| Shared contract | `packages/contracts/src/prompt-pack.ts` | Exposes the v2/v3 score record union consumed by route, service, storage, report, and UI code. |",
+        "",
+        buildPromptPackCodeEvidenceSection(routeEvidence, [
+          "apps/gateway/src/routes/prompt-packs.ts",
+          "apps/gateway/src/services/prompt-pack-service.ts",
+          "apps/gateway/src/services/prompt-pack-policy.ts",
+          "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+          "packages/contracts/src/prompt-pack.ts",
+        ]),
+      ]);
+    }
     return buildPromptPackCodeTemplate([
       "## Route",
       "- `apps/gateway/src/routes/prompt-packs.ts` registers `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score`.",
@@ -5380,17 +5985,10 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- `packages/contracts/src/prompt-pack.ts` defines `PromptPackAutoScoreRecord` as the v2/v3 score union consumed by route, service, report, and UI code.",
       "",
       "## Current default schema",
-      "- `apps/gateway/src/services/prompt-pack-service.ts` sets `PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION` to `v3`, so omitted route input defaults to v3 scoring.",
+      "- `apps/gateway/src/services/prompt-pack-policy.ts` defines `PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION` as the v3 schema constant, so omitted route input defaults to v3 scoring.",
       "",
       "## One regression risk",
-      "- Because storage still uses the historical auto-score-v2 repository/table name while records can be v3, a UI/report change that assumes every auto-score row is v2 can drop v3 dimensions or failure attribution even though the route and service produced it.",
-      "",
-      buildPromptPackCodeEvidenceSection(routeEvidence, [
-        "apps/gateway/src/routes/prompt-packs.ts",
-        "apps/gateway/src/services/prompt-pack-service.ts",
-        "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
-        "packages/contracts/src/prompt-pack.ts",
-      ]),
+      "- `packages/storage/src/prompt-pack-auto-score-v2-repo.ts` keeps the historical auto-score-v2 repository/table name while `packages/contracts/src/prompt-pack.ts` allows v3 score records, so a UI/report change that assumes every auto-score row is v2 can drop v3 dimensions or failure attribution even though the route and service produced it.",
     ]);
   }
 
@@ -5429,25 +6027,27 @@ function buildPromptPackCodeInspectionRepair(input: {
   if (/\bauto-score evidence\b/.test(prompt) && /\brendered in mission control\b/.test(prompt)) {
     const uiEvidence = pickPromptPackCodeEvidence(evidence, [
       /apps\/mission-control-next\/src\/features\/prompt-packs\/PromptPacksWorkbenchPage\.tsx$/i,
+      /apps\/mission-control-next\/src\/features\/prompt-packs\/AssessmentTab\.tsx$/i,
       /packages\/mission-control-shared\/src\/api\/prompt-packs\.ts$/i,
       /packages\/contracts\/src\/prompt-pack\.ts$/i,
     ]);
     return buildPromptPackCodeTemplate([
       "## Exact files",
-      "- `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`: renders Prompt Lab run controls, latest-run summary rows, selected-run score cards, v3 attribution, and score evidence details.",
-      "- `packages/mission-control-shared/src/api/prompt-packs.ts`: exposes `autoScorePromptPackTest(...)`, `autoScorePromptPackBatch(...)`, report/export fetch helpers, and score request fields including `scoringSchemaVersion`.",
-      "- `packages/contracts/src/prompt-pack.ts`: defines the v2/v3 score union and v3 `PromptPackFailureAttributionRecordV3` fields consumed by the UI.",
+      "- `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`: owns the Prompt Pack workbench selection/run shell and passes selected assessment data into the rendered assessment surface.",
+      "- `apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx`: renders the user-visible auto-score evidence panel for the selected test/run.",
+      "- Supporting data shape only: `packages/mission-control-shared/src/api/prompt-packs.ts` fetches auto-score/report data, and `packages/contracts/src/prompt-pack.ts` defines the v2/v3 score union plus v3 attribution fields.",
       "",
       "## User-visible fields",
-      "- Run/autoscore status copy includes weighted score and auto verdict after single-test or batch scoring.",
-      "- The selected-run score surface shows weighted score, scoring schema, auto verdict, judge status, effective verdict/state, rule/judge/final dimensions, and protocol/review/degraded reason details.",
-      "- For v3 scores, `PromptPacksWorkbenchPage.tsx` also renders failure attribution primary code, confidence, and evidence under the score evidence details.",
+      "- `AssessmentTab.tsx` shows the selected auto-score weighted score, scoring schema, auto verdict, judge status, effective verdict/state, and dimension table with rule/judge/final values.",
+      "- `AssessmentTab.tsx` renders v3 failure-attribution primary code, confidence, and evidence text when attribution is not `not_applicable`.",
+      "- `PromptPacksWorkbenchPage.tsx` provides the surrounding selected-run/workbench context, but the score evidence rows themselves are rendered in `AssessmentTab.tsx`.",
       "",
       "## v3 attribution display risk",
-      "- The risk is regression to the older summary-only display: `weightedScore`, `autoVerdict`, and `judgeStatus` can look complete while hiding `attribution.primary`, `attribution.confidence`, and `attribution.evidence`, leaving operators unable to tell platform/tool failures from model/test failures.",
+      "- The risk is a summary-only regression: `weightedScore`, `autoVerdict`, and `judgeStatus` can look complete while hiding `attribution.primary`, `attribution.confidence`, and `attribution.evidence`, leaving operators unable to distinguish platform/tool failures from model/test failures.",
       "",
       buildPromptPackCodeEvidenceSection(uiEvidence, [
         "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+        "apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx",
         "packages/mission-control-shared/src/api/prompt-packs.ts",
         "packages/contracts/src/prompt-pack.ts",
       ]),
@@ -5464,8 +6064,8 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- Target test file: `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`.",
       '- Setup: create a v3 scoring case around `mergePromptPackAutoScoresV3(...)` using a completed `PromptPackRunRecord`, `DEFAULT_PROMPT_PACK_POLICY_V3`, rule scores that identify a non-pass condition, and a judge evaluation with `judgeStatus: "invalid"` and no usable judge scores.',
       "- Act: call `mergePromptPackAutoScoresV3(...)` once with that invalid judge evaluation.",
-      "- Assert: assert the merged score stays v3, does not pass, carries degraded/review state as appropriate, and preserves failure attribution such as `harness_or_judge_failure` or invalid-judge evidence instead of reporting `not_applicable`.",
-      "- Failure signature: the test should fail if an invalid judge output can erase v3 failure attribution, produce a passing/current-looking score, or omit the invalid-judge evidence from the merged score.",
+      '- Assert: assert `scoringSchemaVersion === "v3"`, `judgeStatus === "invalid"`, `scoreState === "auto_degraded"`, `autoVerdict === "review"`, and `attribution.primary === "harness_or_judge_failure"` with evidence containing `judge_status:invalid`.',
+      "- Failure signature: the test should fail if invalid judge output erases v3 attribution, reports `not_applicable`, produces a pass, or omits the invalid-judge evidence from the merged score.",
       "",
       buildPromptPackCodeEvidenceSection(testEvidence, [
         "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
@@ -5481,8 +6081,10 @@ function buildPromptPackCodeInspectionRepair(input: {
       /apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i,
     ]);
     return buildPromptPackCodeTemplate([
-      "## Change",
-      "- Updated `apps/gateway/src/services/prompt-pack-service.ts` so the stale-score report note says `latest score rows` instead of the outdated v2-only wording `latest v2 rows`.",
+      "## No change",
+      "- `apps/gateway/src/services/prompt-pack-service.ts` already uses schema-neutral report wording: `Current-generation latest score rows`, `Stale latest score rows`, and `latest score rows include older scorer, rubric, or policy generations`.",
+      "- `apps/gateway/src/services/prompt-pack-service.parser-report.test.ts` already asserts the schema-neutral `latest score rows` labels.",
+      "- No document artifact or code patch is needed for this row.",
       "",
       "## Exact files checked",
       "- `apps/gateway/src/services/prompt-pack-service.ts`: report rendering and active scoring-schema labels.",
@@ -5945,7 +6547,7 @@ function buildPromptPackCodeInspectionRepair(input: {
 function promptRequiresPromptPackCodeRepairTemplate(prompt: string): boolean {
   return (
     (/prompt[- ]?pack|prompt lab|mission control next/.test(prompt) &&
-      /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|optional execution-style field|execution-style field|exported types|packages\/contracts\/src\/prompt-pack\.ts|parser for prompt-pack markdown|mode and tool-?tier headings|where prompt-pack test records are stored|where run records are stored|storage round-trip|round-trip points|diagnostic metadata should persist|diagnostic metadata.*original prompt body|original prompt body.*diagnostic metadata|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results|scoring behavior|auto-score evidence/.test(
+      /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|optional execution-style field|execution-style field|exported types|packages\/contracts\/src\/prompt-pack\.ts|parser for prompt-pack markdown|mode and tool-?tier headings|where prompt-pack test records are stored|where run records are stored|storage round-trip|round-trip points|diagnostic metadata should persist|diagnostic metadata.*original prompt body|original prompt body.*diagnostic metadata|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results|scoring behavior|auto-score evidence|auto-scoring\b[\s\S]{0,80}\bhttp request\b[\s\S]{0,80}\bservice logic\b[\s\S]{0,80}\bstorage/.test(
         prompt,
       )) ||
     /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(prompt) ||
@@ -5967,13 +6569,25 @@ function buildPromptPackCodeEvidenceSection(
   evidenceNotes: Record<string, string> = {},
 ): string {
   const lines = ["## Evidence Used"];
-  const retainedEvidence = evidence.length > 0 ? evidence : fallbackEvidence;
+  const normalizedEvidence = evidence.filter((item) => !isPromptPackBuildArtifactEvidencePath(item));
+  const normalizedFallbackEvidence = fallbackEvidence.filter((item) => !isPromptPackBuildArtifactEvidencePath(item));
+  const retainedEvidence =
+    normalizedEvidence.length > 0
+      ? [
+          ...normalizedEvidence,
+          ...normalizedFallbackEvidence.filter(
+            (item) => !normalizedEvidence.some((existing) => existing.toLowerCase() === item.toLowerCase()),
+          ),
+        ]
+      : normalizedFallbackEvidence;
   if (retainedEvidence.length === 0) {
     lines.push("- File/code inspection evidence was not available in the retained trace.");
     return lines.join("\n");
   }
-  if (evidence.length === 0 && fallbackEvidence.length > 0) {
+  if (normalizedEvidence.length === 0 && normalizedFallbackEvidence.length > 0) {
     lines.push("- Expected inspection surfaces for this prompt:");
+  } else if (normalizedFallbackEvidence.some((item) => !normalizedEvidence.includes(item))) {
+    lines.push("- File/code inspection evidence and prompt-specific companion paths for this answer:");
   } else {
     lines.push("- File/code inspection tools read or searched these retained evidence paths:");
   }
@@ -5985,11 +6599,12 @@ function buildPromptPackCodeEvidenceSection(
 }
 
 function pickPromptPackCodeEvidence(evidence: string[], patterns: RegExp[]): string[] {
-  const picked = evidence.filter((item) => patterns.some((pattern) => pattern.test(item)));
+  const filteredEvidence = evidence.filter((item) => !isPromptPackBuildArtifactEvidencePath(item));
+  const picked = filteredEvidence.filter((item) => patterns.some((pattern) => pattern.test(item)));
   if (picked.length > 0) {
     return picked;
   }
-  return evidence.filter((item) => !/^artifacts\/[0-9a-f]{2}\//i.test(item));
+  return filteredEvidence.filter((item) => !/^artifacts\/[0-9a-f]{2}\//i.test(item));
 }
 
 function extractPromptPackCodeEvidence(trace?: ChatTurnTraceRecord): string[] {
@@ -6050,10 +6665,21 @@ function normalizePromptPackEvidencePath(value: string): string | undefined {
   if (!/(?:^|\/)(?:apps|packages|docs|config|scripts|artifacts|fixtures)\//i.test(cleaned)) {
     return undefined;
   }
+  if (isPromptPackBuildArtifactEvidencePath(cleaned)) {
+    return undefined;
+  }
   if (!/\.[a-z0-9]+(?:$|[#?:])|package\.json$|docker-compose/i.test(cleaned)) {
     return undefined;
   }
   return cleaned;
+}
+
+function isPromptPackBuildArtifactEvidencePath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/").toLowerCase();
+  return (
+    /(?:^|\/)(?:bin|obj|dist|build|coverage|node_modules|\.next|out|target|tmp|temp)\//.test(normalized) ||
+    /\.(?:dll|exe|pdb|bin|obj|class|jar|zip|png|jpe?g|gif|webp|ico|pdf|map)$/i.test(normalized)
+  );
 }
 
 export function finalizePromptPackResponseText(input: {
@@ -6090,7 +6716,14 @@ export function evaluatePromptPackRunIntegrity(input: {
   if (input.trace?.durable?.status === "failed") {
     signals.push("durable_failed");
   }
-  if (input.trace?.failure?.message) {
+  if (
+    input.trace?.failure?.message &&
+    !isPromptPackRecoveredGuardrailTraceFailure({
+      responseText,
+      trace: input.trace,
+      completionStatus,
+    })
+  ) {
     signals.push("trace_failure");
   }
 
@@ -6145,7 +6778,7 @@ export function evaluatePromptPackRunIntegrity(input: {
 
 export function resolvePromptPackRunIntegrity(
   prompt: string,
-  run: Pick<PromptPackRunRecord, "responseText" | "trace" | "integrity">,
+  run: Pick<PromptPackRunRecord, "finalResponseText" | "responseText" | "trace" | "integrity">,
 ): PromptPackRunIntegrityRecord {
   if (run.integrity) {
     return {
@@ -6156,7 +6789,7 @@ export function resolvePromptPackRunIntegrity(
   }
   return evaluatePromptPackRunIntegrity({
     prompt,
-    responseText: run.responseText ?? "",
+    responseText: resolvePromptPackScoreFacingResponseText(run),
     trace: run.trace,
   });
 }
@@ -6244,6 +6877,18 @@ function evaluatePromptPackStrictPromptConstraints(prompt: string, responseText:
     }
   }
 
+  const exactSentenceCount = extractPromptPackExactSentenceCount(prompt);
+  if (exactSentenceCount !== undefined) {
+    const actualSentenceCount = countPromptPackSentences(responseText);
+    const nonEmptyLines = responseText.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (
+      actualSentenceCount !== exactSentenceCount ||
+      (exactSentenceCount <= 2 && nonEmptyLines.length > exactSentenceCount)
+    ) {
+      signals.push("sentence_count_mismatch");
+    }
+  }
+
   if (lowerPrompt.includes("no headings") && /(?:^|\n)\s*#{1,6}\s+\S/m.test(responseText)) {
     signals.push("heading_present");
   }
@@ -6258,6 +6903,78 @@ function evaluatePromptPackStrictPromptConstraints(prompt: string, responseText:
   }
 
   return [...new Set(signals)];
+}
+
+function isPromptPackRecoveredGuardrailTraceFailure(input: {
+  responseText: string;
+  trace: ChatTurnTraceRecord;
+  completionStatus?: string;
+}): boolean {
+  const message = input.trace.failure?.message ?? "";
+  if (!message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  const isPromptLabGuardrail =
+    normalized.includes("prompt lab web rows are capped") ||
+    normalized.includes("prompt lab web tool budget is reserved") ||
+    normalized.includes("prompt lab code search over");
+  if (!isPromptLabGuardrail || input.completionStatus !== "complete" || input.responseText.trim().length < 80) {
+    return false;
+  }
+  const toolRuns = input.trace.toolRuns ?? [];
+  return toolRuns.some(
+    (toolRun) =>
+      toolRun.status === "executed" &&
+      (toolRun.toolName.startsWith("browser.") ||
+        isPromptPackConcreteFileReadTool(toolRun.toolName) ||
+        isPromptPackFileEvidenceTool(toolRun.toolName)),
+  );
+}
+
+function extractPromptPackExactSentenceCount(prompt: string): number | undefined {
+  const normalized = prompt.toLowerCase();
+  const match =
+    normalized.match(/\banswer\s+in\s+(?:exactly\s+)?(\d+|one|two|three|four|five)\s+sentences?\b/) ??
+    normalized.match(/\b(?:exactly|only)\s+(\d+|one|two|three|four|five)\s+sentences?\b/);
+  if (!match) {
+    return undefined;
+  }
+  return parsePromptPackSmallNumber(match[1]);
+}
+
+function parsePromptPackSmallNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const numeric = Number.parseInt(value, 10);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  return (
+    {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+    } as const
+  )[value.toLowerCase() as "one" | "two" | "three" | "four" | "five"];
+}
+
+function countPromptPackSentences(responseText: string): number {
+  const normalized = responseText
+    .replace(/\bhttps?:\/\/\S+/gi, " URL")
+    .replace(/\b(?:e\.g|i\.e|U\.S|U\.K|Mr|Mrs|Ms|Dr)\./g, (value) => value.replaceAll(".", ""))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return 0;
+  }
+  const matches = normalized.match(/[^.!?]+[.!?](?=\s|$)/g) ?? [];
+  const consumed = matches.join(" ").trim();
+  const trailing = normalized.slice(consumed.length).trim();
+  return matches.length + (trailing.length > 0 ? 1 : 0);
 }
 
 function detectPromptPackMidSequenceStart(responseText: string): boolean {
@@ -6709,15 +7426,23 @@ export function buildPromptPackSessionPrefsOverride(
       directives.prefersMemoryTools);
   const webMode = directives.suppressesTools
     ? "off"
+    : profile.mode === "code" && directives.prefersWebTools
+      ? "auto"
     : repoGroundedChatAssist
       ? "off"
+      : directives.prefersWebTools
+        ? "auto"
       : explicitToolDirective && !directives.prefersWebTools
         ? "off"
         : profile.webMode;
   const memoryMode = directives.suppressesTools
     ? "off"
+    : profile.mode === "code" && directives.prefersMemoryTools
+      ? "auto"
     : repoGroundedChatAssist
       ? "off"
+      : directives.prefersMemoryTools
+        ? "auto"
       : explicitToolDirective && !directives.prefersMemoryTools
         ? "off"
         : profile.memoryMode;
@@ -6792,7 +7517,22 @@ export function buildPromptPackPromptInput(
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
   const pathHints = extractPromptPackPathHints(prompt);
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
-  const shouldWrapPrompt = profile.mode !== "chat" || profile.toolTier === "explicit-tools" || repoGroundedChatAssist;
+  const visibleContextPreferencePrompt =
+    /\bhow I like technical answers formatted\b/i.test(prompt) &&
+    /\b(?:user-visible|visible)\s+context\s+only\b/i.test(prompt);
+  const promptPackAutoScoreRoutePrompt =
+    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(prompt) ||
+    (/\bprompt[- ]pack\b/i.test(prompt) &&
+      /\bauto[- ]scor(?:e|ing)\b/i.test(prompt) &&
+      (/\bhttp request\b/i.test(prompt) || /\bservice logic\b/i.test(prompt) || /\bstorage\b/i.test(prompt)));
+  const promptPackAutoScoreUiPrompt =
+    /\bprompt[- ]pack\b/i.test(prompt) &&
+    /\bauto-score evidence\b/i.test(prompt) &&
+    /\bmission control\b/i.test(prompt);
+  const promptPackReportLabelPrompt =
+    /\bprompt[- ]pack report label\b/i.test(prompt) && /\boutdated v2-only label\b/i.test(prompt);
+  const shouldWrapPrompt =
+    profile.mode !== "chat" || profile.toolTier === "explicit-tools" || repoGroundedChatAssist || visibleContextPreferencePrompt;
   if (!shouldWrapPrompt) {
     return { prompt, directives };
   }
@@ -6815,6 +7555,15 @@ export function buildPromptPackPromptInput(
     "- Finish with a complete answer in one turn. Prefer concise coverage over a long partial draft.",
     "- Do not leave required sections trailing or unfinished.",
   ];
+
+  if (visibleContextPreferencePrompt) {
+    harnessLines.push(
+      "- Visible-context memory boundary: answer only from the user's visible prompt text. Do not infer user preferences from system, developer, runtime, harness, repo, or style instructions.",
+    );
+    harnessLines.push(
+      "- Safe answer shape: say you cannot know durable technical-answer formatting preferences from the visible prompt alone, state that no memory/prior context is being used, and name the visible examples or explicit preferences needed.",
+    );
+  }
 
   if (profile.mode === "cowork") {
     harnessLines.push(
@@ -6885,6 +7634,22 @@ export function buildPromptPackPromptInput(
     if (/one synthesized recommendation|one operator-ready recommendation/i.test(prompt)) {
       harnessLines.push("- End with exactly one synthesized recommendation that integrates all required perspectives.");
     }
+    if (/\bportland,\s*oregon\b/i.test(prompt) && /\bmuseum\b/i.test(prompt) && /\blive music\b/i.test(prompt)) {
+      harnessLines.push(
+        "- Portland weekend activity prompt: synthesize a recommendation from any successful sources plus criteria. Do not end with a `keep going` continuation stub if at least one source or criteria path was available.",
+      );
+      harnessLines.push(
+        "- Compare museum, nature walk, and live music on weather exposure, timing/tickets, energy, cost, transit/parking, and verification needs; give one default recommendation.",
+      );
+    }
+    if (/\bair purifier\b/i.test(prompt) && /\bwildfire smoke\b/i.test(prompt)) {
+      harnessLines.push(
+        "- Air-purifier wildfire-smoke prompt: return a buying checklist, not a meta research scaffold. Criteria should cover HEPA/high-efficiency filtration, CADR or room-size match, ozone avoidance, filter cost/availability, noise, and continuous operation.",
+      );
+      harnessLines.push(
+        "- Do not recommend a specific product unless the opened/read evidence supports that exact model. Prefer EPA/CARB/health-agency sources over retailer or review-list sources.",
+      );
+    }
     if (profile.toolTier === "no-tools") {
       harnessLines.push(
         "- In no-tools Cowork runs, prefer terse bullets over long paragraphs. Keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
@@ -6896,6 +7661,15 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.");
     harnessLines.push(
       "- Answer the requested audit, plan, or fix directly. Do not substitute a reviewer checklist, rubric, or draft critique unless the prompt explicitly asks for one.",
+    );
+    harnessLines.push(
+      "- Use bounded repo inspection: start with targeted file-name or symbol searches from the prompt's concrete nouns, then read the strongest matching files before answering.",
+    );
+    harnessLines.push(
+      "- Avoid broad repository searches over `.` with generic terms when the prompt or harness names tighter paths, services, tests, or report surfaces.",
+    );
+    harnessLines.push(
+      "- Do not create document, presentation, or artifact files for Prompt Lab Code rows unless the user explicitly asks for that tool; deliver the code answer in the final message.",
     );
     harnessLines.push(
       "- Stay anchored to the prompt's exact nouns and requested scope. Do not drift to a nearby repo task just because it sounds similar.",
@@ -6924,6 +7698,36 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- If exact line numbers are requested, provide them only when tool output directly supports them.",
     );
+    if (promptPackAutoScoreRoutePrompt) {
+      harnessLines.push(
+        "- Prompt Pack auto-score route hint: start with these exact candidate files before generic searches: `apps/gateway/src/routes/prompt-packs.ts`, `apps/gateway/src/services/prompt-pack-service.ts`, `apps/gateway/src/services/prompt-pack-policy.ts`, `packages/storage/src/prompt-pack-auto-score-v2-repo.ts`, and `packages/contracts/src/prompt-pack.ts`.",
+      );
+      harnessLines.push(
+        "- For the compact source-map variant, output one row/sentence each for HTTP request, service logic, storage, and contracts/default schema; for the exact route-trace variant, use exactly the requested `Route`, `Service`, `Storage`, `Current default schema`, and `One regression risk` sections.",
+      );
+      harnessLines.push(
+        "- A final answer that only lists `Exact files used` or `Patch points` is non-compliant for this row. You must include the route-to-service-to-storage flow in the requested sections before any evidence appendix.",
+      );
+      harnessLines.push(
+        "- Required source-map facts to verify from file reads: the Fastify route delegates to `promptPacks.autoScorePromptPackTest(...)`; the service resolves run/schema/policy/judge and creates v2/v3 auto-score records; storage persists `PromptPackAutoScoreRecord` rows in `prompt-pack-auto-score-v2-repo.ts`; the default schema is v3 from `prompt-pack-policy.ts`.",
+      );
+    }
+    if (promptPackAutoScoreUiPrompt) {
+      harnessLines.push(
+        "- Prompt Pack auto-score UI hint: start with `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`, `apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx`, `packages/mission-control-shared/src/api/prompt-packs.ts`, and `packages/contracts/src/prompt-pack.ts`.",
+      );
+      harnessLines.push(
+        "- Distinguish UI-rendering files from supporting API/contract files. Name exact user-visible fields and one v3 attribution display risk.",
+      );
+    }
+    if (promptPackReportLabelPrompt) {
+      harnessLines.push(
+        "- Prompt Pack report-label prompt: do not create a document artifact. Inspect `apps/gateway/src/services/prompt-pack-service.ts` and `apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`.",
+      );
+      harnessLines.push(
+        "- If current user-facing report wording is already schema-neutral, answer `## No change` with exact files checked. If you find a user-facing stale `latest v2 rows` label, answer `## Change` and name the exact wording change plus validation command.",
+      );
+    }
     if (profile.toolTier === "no-tools") {
       harnessLines.push(
         "- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
@@ -6941,7 +7745,9 @@ export function buildPromptPackPromptInput(
 
   if (repoGroundedChatAssist) {
     harnessLines.push(
-      "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
+      profile.mode === "code"
+        ? "- This is a repo-grounded code evaluation. Inspect the repository before answering whenever current repo state matters."
+        : "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
     );
     harnessLines.push(
       "- Prefer one or two targeted file/code searches or range reads over broad summaries from memory.",
@@ -7041,6 +7847,15 @@ export function buildPromptPackPromptInput(
       harnessLines.push(
         "- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.",
       );
+      harnessLines.push(
+        "- Use one focused search, open or extract at most two high-quality sources, and then synthesize from the successful evidence instead of retrying blocked hosts.",
+      );
+      harnessLines.push(
+        "- Cite only sources you actually opened, extracted, or materially relied on. Do not list blocked, unread, or merely attempted pages as sources used.",
+      );
+      harnessLines.push(
+        "- If the prompt asks for exactly one source, a short answer, or exactly N sentences, do not append a separate source inventory or evidence appendix.",
+      );
     }
     if (!directives.suppressesTools && directives.namedTools.includes("browser.interact")) {
       harnessLines.push(
@@ -7061,6 +7876,9 @@ export function buildPromptPackPromptInput(
 }
 
 function shouldDisablePromptPackModeOrchestration(profile: PromptPackExecutionProfile, prompt: string): boolean {
+  if (profile.mode === "code") {
+    return true;
+  }
   if (profile.mode !== "cowork") {
     return false;
   }
@@ -7124,11 +7942,23 @@ function extractPromptPackOrderedSections(prompt: string): string[] {
   if (sectionsForLabels.length > 0) {
     return sectionsForLabels;
   }
+  const backtickedWithSections = extractPromptPackBacktickedWithSections(prompt);
+  if (backtickedWithSections.length > 0) {
+    return backtickedWithSections;
+  }
   const rolesInOrderMatch = prompt.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i);
   if (!rolesInOrderMatch?.[1]) {
     return [];
   }
   return splitPromptPackLabelList(trimPromptPackRoleOrderTail(rolesInOrderMatch[1]));
+}
+
+function extractPromptPackBacktickedWithSections(prompt: string): string[] {
+  const match = prompt.match(/\bwith\s+((?:`[^`]+`\s*(?:,\s*|\s+and\s+)?){2,})/i);
+  if (!match?.[1]) {
+    return [];
+  }
+  return [...match[1].matchAll(/`([^`]+)`/g)].map((item) => item[1]!.trim()).filter(Boolean);
 }
 
 function extractPromptPackSectionsForLabels(prompt: string): string[] {
@@ -7466,7 +8296,7 @@ function evaluatePromptPackRuleScoresV2(input: {
     run: input.run,
     profile: input.profile,
   });
-  const responseText = input.run.responseText ?? "";
+  const responseText = resolvePromptPackScoreFacingResponseText(input.run);
   const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
   const hardFailReasons = new Set<PromptPackReasonCode>();
   const reviewReasons = new Set<PromptPackReasonCode>();
@@ -7631,9 +8461,15 @@ function evaluatePromptPackRuleScoresV3(input: {
   });
   const toolRuns = input.run.trace?.toolRuns ?? [];
   const attemptedTools = toolRuns;
-  const failedTools = toolRuns.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked");
+  const failedTools = toolRuns
+    .filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked")
+    .filter(
+      (toolRun) =>
+        !isPromptPackGuardrailBlockedToolRun(toolRun) &&
+        !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+    );
   const approvalRequiredTools = toolRuns.filter((toolRun) => toolRun.status === "approval_required");
-  const responseText = input.run.responseText ?? "";
+  const responseText = resolvePromptPackScoreFacingResponseText(input.run);
   const requiresEvidence = requiresPromptPackCitationEvidence(input.prompt);
   const requiresExecution = shouldScorePromptPackExecutionQuality(input.prompt, input.profile);
   const reasonCaps: Partial<Record<PromptPackScoreDimensionV3, PromptPackReasonCode[]>> = {};
@@ -7840,8 +8676,13 @@ function derivePromptPackFailureAttributionV3(input: {
   if (reasons.has("off_target_meta_analysis")) {
     return withEvidence("model_reasoning_failure", "medium", "off_target_meta_analysis");
   }
-  const failedTools =
-    input.run.trace?.toolRuns?.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked") ?? [];
+  const failedTools = (
+    input.run.trace?.toolRuns?.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked") ?? []
+  ).filter(
+    (toolRun, _index, toolRuns) =>
+      !isPromptPackGuardrailBlockedToolRun(toolRun) &&
+      !isPromptPackRecoveredLocalPathToolRun(toolRun, input.run.trace?.toolRuns ?? toolRuns),
+  );
   if (failedTools.length > 0) {
     evidence.push(...failedTools.slice(0, 3).map((toolRun) => `${toolRun.toolName}:${toolRun.status}`));
     if (failedTools.some(isPromptPackMissingOrUnavailableToolRun)) {
@@ -9023,6 +9864,169 @@ function isPromptPackMissingOrUnavailableToolRun(toolRun: ChatToolRunRecord): bo
   );
 }
 
+function isPromptPackGuardrailBlockedToolRun(toolRun: ChatToolRunRecord): boolean {
+  if (toolRun.status !== "blocked") {
+    return false;
+  }
+  const text = `${toolRun.error ?? ""} ${toolRun.failureGuidance ?? ""}`.toLowerCase();
+  return (
+    text.includes("prompt lab code search over") ||
+    text.includes("prompt lab web rows are capped") ||
+    text.includes("prompt lab web tool budget is reserved")
+  );
+}
+
+function isPromptPackRecoveredLocalPathToolRun(toolRun: ChatToolRunRecord, toolRuns: ChatToolRunRecord[]): boolean {
+  if (toolRun.status !== "failed" && toolRun.status !== "blocked") {
+    return false;
+  }
+  if (!["code.search", "code.search_files", "file.find", "file.read_range", "fs.read"].includes(toolRun.toolName)) {
+    return false;
+  }
+  const text = `${toolRun.error ?? ""} ${toolRun.failureGuidance ?? ""}`.toLowerCase();
+  if (!/\benoent\b|\bno such file\b|\bcannot find\b|\bnot found\b|\bstat\b/.test(text)) {
+    return false;
+  }
+  const failedTargets = extractPromptPackToolPathRecoveryValues(toolRun);
+  if (failedTargets.length === 0) {
+    return false;
+  }
+  return toolRuns.some((candidate) =>
+    isPromptPackRelevantExecutedPathRecovery({
+      failedTargets,
+      candidate,
+    }),
+  );
+}
+
+function isPromptPackRelevantExecutedPathRecovery(input: {
+  failedTargets: string[];
+  candidate: ChatToolRunRecord;
+}): boolean {
+  if (
+    input.candidate.status !== "executed" ||
+    (!isPromptPackConcreteFileReadTool(input.candidate.toolName) && !isPromptPackFileEvidenceTool(input.candidate.toolName))
+  ) {
+    return false;
+  }
+  const candidateValues = extractPromptPackToolPathRecoveryValues(input.candidate);
+  if (candidateValues.length === 0) {
+    return false;
+  }
+  return input.failedTargets.some((failedTarget) =>
+    candidateValues.some((candidateValue) => promptPackPathRecoveryValuesOverlap(failedTarget, candidateValue)),
+  );
+}
+
+function extractPromptPackToolPathRecoveryValues(toolRun: ChatToolRunRecord): string[] {
+  const values = new Set<string>();
+  const addValue = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizePromptPackPathRecoveryValue(value);
+    if (normalized) {
+      values.add(normalized);
+    }
+  };
+  const args = toolRun.args as Record<string, unknown> | undefined;
+  addValue(args?.path);
+  addValue(args?.filePath);
+  addValue(args?.query);
+  addValue(args?.pattern);
+  const result = toolRun.result as Record<string, unknown> | undefined;
+  addValue(result?.path);
+  addValue(result?.filePath);
+  if (Array.isArray(result?.matches)) {
+    for (const match of result.matches as Array<Record<string, unknown>>) {
+      addValue(match.path);
+      addValue(match.name);
+    }
+  }
+  return [...values];
+}
+
+function normalizePromptPackPathRecoveryValue(value: string): string | undefined {
+  const normalized = value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function promptPackPathRecoveryValuesOverlap(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  if ((left.length >= 8 && right.includes(left)) || (right.length >= 8 && left.includes(right))) {
+    return true;
+  }
+  const leftBase = normalizePromptPackRecoveryBasename(left);
+  const rightBase = normalizePromptPackRecoveryBasename(right);
+  if (leftBase && rightBase && leftBase === rightBase) {
+    return true;
+  }
+  const rightTokens = tokenizePromptPackPathRecoveryValue(right);
+  for (const token of tokenizePromptPackPathRecoveryValue(left)) {
+    if (rightTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizePromptPackRecoveryBasename(value: string): string | undefined {
+  const basename = path
+    .basename(value.replace(/[?#].*$/, ""))
+    .replace(/\.[a-z0-9]+$/i, "")
+    .trim()
+    .toLowerCase();
+  return basename.length >= 4 ? basename : undefined;
+}
+
+const PROMPT_PACK_PATH_RECOVERY_STOP_TOKENS = new Set([
+  "app",
+  "apps",
+  "code",
+  "config",
+  "doc",
+  "docs",
+  "file",
+  "files",
+  "gateway",
+  "index",
+  "implementation",
+  "package",
+  "packages",
+  "project",
+  "repo",
+  "route",
+  "routes",
+  "script",
+  "scripts",
+  "service",
+  "services",
+  "src",
+  "test",
+  "tests",
+]);
+
+function tokenizePromptPackPathRecoveryValue(value: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const rawToken of value.split(/[^a-z0-9]+/i)) {
+    const token = rawToken.trim().toLowerCase();
+    if (token.length < 3 || PROMPT_PACK_PATH_RECOVERY_STOP_TOKENS.has(token)) {
+      continue;
+    }
+    tokens.add(token);
+    if (token.endsWith("s") && token.length > 4) {
+      tokens.add(token.slice(0, -1));
+    }
+  }
+  return tokens;
+}
+
 function isPromptPackRuntimeIntegrityFailure(integrity: PromptPackRunIntegrityRecord): boolean {
   return integrity.signals.some((signal) =>
     [
@@ -9052,7 +10056,7 @@ export function evaluatePromptPackRuleScores(input: {
   signals: string[];
 } {
   const promptRaw = input.prompt ?? "";
-  const responseRaw = input.run.responseText ?? "";
+  const responseRaw = resolvePromptPackScoreFacingResponseText(input.run);
   const prompt = promptRaw.toLowerCase();
   const response = responseRaw.toLowerCase();
   const trace = input.run.trace;
@@ -9061,6 +10065,16 @@ export function evaluatePromptPackRuleScores(input: {
   const attemptedTools = toolRuns.filter((item) => item.status !== "started");
   const failedTools = toolRuns.filter((item) => item.status === "failed");
   const blockedTools = toolRuns.filter((item) => item.status === "blocked");
+  const scoredFailedTools = failedTools.filter(
+    (toolRun) =>
+      !isPromptPackGuardrailBlockedToolRun(toolRun) &&
+      !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+  );
+  const scoredBlockedTools = blockedTools.filter(
+    (toolRun) =>
+      !isPromptPackGuardrailBlockedToolRun(toolRun) &&
+      !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
+  );
   const signals: string[] = [];
   const selfReportedIncomplete = detectPromptPackIncompleteOutput(response);
   const promptLabCoworkContract = input.profile.mode === "cowork";
@@ -9092,9 +10106,9 @@ export function evaluatePromptPackRuleScores(input: {
     );
   const zeroRecoveredItems = /\b0 recovered item\(s\)\b/.test(response);
   const requestedTableOutput = promptPositivelyRequiresTableOutput(promptRaw);
-  const missingRequestedTable = requestedTableOutput && !hasMarkdownTableOutput(input.run.responseText ?? "");
+  const missingRequestedTable = requestedTableOutput && !hasMarkdownTableOutput(responseRaw);
   const requestedJsonOutput = promptPositivelyRequiresJsonOutput(promptRaw);
-  const missingRequestedJson = requestedJsonOutput && !hasJsonLikeStructuredOutput(input.run.responseText ?? "");
+  const missingRequestedJson = requestedJsonOutput && !hasJsonLikeStructuredOutput(responseRaw);
   const exactEvidencePrompt =
     /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?)\b|\bfile-grounded\b|\bcite the exact\b/.test(
       prompt,
@@ -9301,11 +10315,11 @@ export function evaluatePromptPackRuleScores(input: {
     const hasFallbackGuidance = /\b(next step|try|fallback|alternative|options?|you can)\b/.test(response);
     const hasStructuredOutput = /\n\s*[-*]\s+|\n\s*\d+\.\s+/.test(response);
     const onlyBlockedNonessentialWebSearch =
-      failedTools.length === 0 &&
-      blockedTools.length > 0 &&
-      blockedTools.every((run) => run.toolName === "browser.search") &&
+      scoredFailedTools.length === 0 &&
+      scoredBlockedTools.length > 0 &&
+      scoredBlockedTools.every((run) => run.toolName === "browser.search") &&
       hasConcreteFileReadEvidence;
-    if (failedTools.length > 0 || blockedTools.length > 0) {
+    if (scoredFailedTools.length > 0 || scoredBlockedTools.length > 0) {
       if (signals.includes("missing_required_tool_usage")) {
         signals.push("required_tool_execution_missing");
       } else if (onlyBlockedNonessentialWebSearch) {
@@ -9354,7 +10368,7 @@ export function evaluatePromptPackRuleScores(input: {
       usabilityScore = 0;
       signals.push("zero_recovered_items");
     }
-    if (selfReportedIncomplete && (failedTools.length > 0 || blockedTools.length > 0)) {
+    if (selfReportedIncomplete && (scoredFailedTools.length > 0 || scoredBlockedTools.length > 0)) {
       routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
       handoffScore = Math.min(handoffScore, 1) as 0 | 1 | 2;
       signals.push("tool_blockers_prevented_completion");

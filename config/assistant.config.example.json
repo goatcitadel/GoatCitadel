@@ -155,7 +155,7 @@
       "dataDir": "./data/postgres",
       "port": 45432,
       "autoStart": true,
-      "startTimeoutMs": 20000
+      "startTimeoutMs": 90000
     },
     "sqlite": {
       "cacheSizeKb": 65536,

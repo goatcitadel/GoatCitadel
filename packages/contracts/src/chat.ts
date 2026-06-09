@@ -888,6 +888,15 @@ export interface ChatTurnCompletionRecord {
   usage?: ChatStreamUsageRecord;
   latencyMs?: number;
   providerCallCount?: number;
+  /**
+   * Audit marker set when a recoverable failure was cleared at turn
+   * finalization because the assistant content was judged substantive.
+   * Preserves what would otherwise be an invisible failure-suppression.
+   */
+  failureCleared?: {
+    failureClass: ChatTurnFailureClass;
+    message: string;
+  };
 }
 
 export type ChatUsageCostSource = "provider_reported" | "estimated" | "mixed" | "unknown";

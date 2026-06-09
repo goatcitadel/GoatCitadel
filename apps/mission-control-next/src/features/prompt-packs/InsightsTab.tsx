@@ -3,7 +3,11 @@ import type {
   fetchPromptPackReplayRegressionStatus,
   fetchPromptPackTrends,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { formatPromptPackExecutionStyle, type PromptPackTestOutcomeSummary } from "./PromptPacksWorkbenchPage.helpers";
+import {
+  computePassReadiness,
+  formatPromptPackExecutionStyle,
+  type PromptPackTestOutcomeSummary,
+} from "./PromptPacksWorkbenchPage.helpers";
 
 type TrendSeries = Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"];
 type RegressionStatus = Awaited<ReturnType<typeof fetchPromptPackReplayRegressionStatus>> | null;
@@ -29,8 +33,10 @@ export function InsightsTab({
   benchmarkStatus,
   regressionStatus,
 }: InsightsTabProps) {
+  const { blockers: readinessBlockers, complete: readyForFullPass } = computePassReadiness(report?.summary);
+
   return (
-    <div className="mc-pp-tab-grid">
+    <div className="mc-pp-tab-grid mc-pp-tab-grid-single">
       <section className="mc-pp-surface">
         <div className="mc-pp-section-heading">
           <div>
@@ -55,11 +61,21 @@ export function InsightsTab({
             <p>Threshold {passThreshold}/100</p>
           </article>
           <article className="mc-pp-metric-card">
-            <span>Effective pass rate</span>
-            <strong>{report ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%` : "n/a"}</strong>
+            <span>Full-pack readiness</span>
+            <strong>
+              {report
+                ? readyForFullPass
+                  ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%`
+                  : "Incomplete"
+                : "n/a"}
+            </strong>
             <p>
-              {report?.summary.reviewRate
-                ? `${(report.summary.reviewRate * 100).toFixed(1)}% review rate`
+              {report
+                ? readyForFullPass
+                  ? report.summary.reviewRate != null
+                    ? `${(report.summary.reviewRate * 100).toFixed(1)}% review rate`
+                    : "No review rate yet"
+                  : `${readinessBlockers.slice(0, 2).join(", ")}; ${(report.summary.effectivePassRate * 100).toFixed(1)}% scored pass rate`
                 : "No review rate yet"}
             </p>
           </article>

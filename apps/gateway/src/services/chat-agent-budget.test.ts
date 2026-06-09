@@ -73,11 +73,11 @@ describe("chat-agent-budget", () => {
       }),
     ).toEqual(
       expect.objectContaining({
-        maxToolLoops: 8,
-        maxToolRunsPerTurn: 16,
-        searchMaxResults: 8,
+        maxToolLoops: 6,
+        maxToolRunsPerTurn: 8,
+        searchMaxResults: 6,
         maxTokens: 2200,
-        minSynthesisReserveMs: 15000,
+        minSynthesisReserveMs: 30000,
       }),
     );
 
@@ -175,8 +175,8 @@ describe("chat-agent-budget", () => {
       maxToolRunsPerTurn: 30,
       searchMaxResults: 12,
       maxTokens: 5000,
-      minSynthesisReserveMs: 20000,
-      expensiveToolMinimumRemainingMs: 25000,
+      minSynthesisReserveMs: 30000,
+      expensiveToolMinimumRemainingMs: 30000,
     };
 
     expect(applyPromptLabHarnessBudget(base, { mode: "chat" })).toBe(base);
@@ -184,6 +184,26 @@ describe("chat-agent-budget", () => {
     expect(applyPromptLabHarnessBudget(base, { mode: "code", promptLabHarness: true })).toEqual(base);
     expect(applyPromptLabExplicitToolBudget({ ...base, maxToolLoops: 1, maxToolRunsPerTurn: 2 }, true)).toEqual(
       expect.objectContaining({ maxToolLoops: 6, maxToolRunsPerTurn: 12 }),
+    );
+  });
+
+  it("raises the harness synthesis reserve to the per-mode floor when the base reserve is smaller", () => {
+    const base = {
+      turnBudgetMs: 1000,
+      completionTimeoutMs: 500,
+      maxToolLoops: 10,
+      maxToolRunsPerTurn: 30,
+      searchMaxResults: 12,
+      maxTokens: 5000,
+      minSynthesisReserveMs: 10_000,
+      expensiveToolMinimumRemainingMs: 10_000,
+    };
+
+    expect(applyPromptLabHarnessBudget(base, { mode: "chat", promptLabHarness: true })).toEqual(
+      expect.objectContaining({ minSynthesisReserveMs: 20_000, expensiveToolMinimumRemainingMs: 20_000 }),
+    );
+    expect(applyPromptLabHarnessBudget(base, { mode: "cowork", promptLabHarness: true })).toEqual(
+      expect.objectContaining({ minSynthesisReserveMs: 30_000, expensiveToolMinimumRemainingMs: 30_000 }),
     );
   });
 

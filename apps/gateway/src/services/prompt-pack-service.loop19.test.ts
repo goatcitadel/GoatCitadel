@@ -32,6 +32,8 @@ describe("prompt-pack report operator diagnostics", () => {
       toolTier: "no-tools",
       executionStyle: "agentic_surface",
       responseText: "Raw answer with enough detail to score.",
+      finalResponseText: "Score-facing answer with deterministic Prompt Lab repair.",
+      finalResponseSignals: ["prompt_lab_score_facing_normalization"],
       derivedResponseText: "Derived harness hint for the operator.",
       derivedResponseSignals: ["prompt_lab_contract_fallback"],
       citations: [{ title: "Source One", url: "https://example.test/source" }],
@@ -283,6 +285,12 @@ describe("prompt-pack report operator diagnostics", () => {
     expect(markdown).toContain("- Fallback reason: primary_rate_limited");
     expect(markdown).toContain("- Durable run: durable-loop19");
     expect(markdown).toContain("- Reflection: accepted after 2 attempt(s)");
+    expect(markdown).toContain("### Raw Assistant Output");
+    expect(markdown).toContain("Raw answer with enough detail to score.");
+    expect(markdown).toContain("### Score-Facing Harness Output");
+    expect(markdown).toContain("- Signals: prompt_lab_score_facing_normalization");
+    expect(markdown).toContain("Score-facing answer with deterministic Prompt Lab repair.");
+    expect(markdown).toContain("### Derived Harness Output");
     expect(markdown).toContain("- `file.read_range` - executed - 125ms");
     expect(markdown).toContain("- reuse: yes from `tool-previous` (same file already read)");
     expect(markdown).toContain("- approval: `approval-loop19`");

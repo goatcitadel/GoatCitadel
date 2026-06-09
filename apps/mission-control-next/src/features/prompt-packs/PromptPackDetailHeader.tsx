@@ -15,11 +15,9 @@ import {
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
 import {
-  DETAIL_TABS,
   formatPromptPackExecutionStyle,
   resultCategoryClass,
   statusChipClass,
-  type DetailTab,
 } from "./PromptPacksWorkbenchPage.helpers";
 
 type ResolvedPromptPackRunModelUsage = ReturnType<typeof resolvePromptPackRunModelUsage>;
@@ -35,11 +33,9 @@ export interface PromptPackDetailHeaderProps {
   activeRun: ActiveRunState | null;
   running: boolean;
   executionStyle: PromptPackExecutionStyle;
-  detailTab: DetailTab;
   onRunSelected: () => void;
   onOpenSelectedRun: () => void;
   onCopySelectedRunLink: () => void;
-  onSetDetailTab: (tab: DetailTab) => void;
 }
 
 export function PromptPackDetailHeader({
@@ -53,11 +49,9 @@ export function PromptPackDetailHeader({
   activeRun,
   running,
   executionStyle,
-  detailTab,
   onRunSelected,
   onOpenSelectedRun,
   onCopySelectedRunLink,
-  onSetDetailTab,
 }: PromptPackDetailHeaderProps) {
   const selectedAutoScore = selectedAssessment?.autoScore;
   const selectedHumanReview = selectedAssessment?.humanReview;
@@ -77,10 +71,6 @@ export function PromptPackDetailHeader({
             ) : null}
           </div>
           <h4>{selectedTest.title}</h4>
-          <p>
-            Keep the selected test in focus, and open deeper evidence only when you need to inspect scoring, output, or
-            regression context.
-          </p>
         </div>
         <button
           type="button"
@@ -152,21 +142,6 @@ export function PromptPackDetailHeader({
               : "No integrity data yet"}
           </p>
         </div>
-      </div>
-
-      <div className="mc-pp-tab-list" role="tablist" aria-label="Prompt pack detail tabs">
-        {DETAIL_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={detailTab === tab.id}
-            className={`mc-pp-tab${detailTab === tab.id ? " active" : ""}`}
-            onClick={() => onSetDetailTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
       </div>
     </>
   );

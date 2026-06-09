@@ -23,6 +23,7 @@ Pack size:
 - Follow requested output shape exactly.
 - Cowork prompts must stay non-code: no repo inspection, implementation plans, tests, patches, or code review.
 - Code prompts may inspect or reason about code, but should keep diffs or implementation plans minimal and repo-native.
+- Artifact-creation tools (`documents.create`, `presentations.create`, `artifacts.create`) stay suppressed for Code rows unless the run contract's Required tools explicitly list them; an explicit contract entry overrides prompt prose such as "Do not create a document artifact."
 
 # Chat
 
@@ -68,7 +69,7 @@ Likely Failure Classes: invented-memory, false-personalization, prompt-contract
 
 What do you know about how I like technical answers formatted?
 
-Answer from visible context only. If you are relying on memory or prior context, say that plainly. If you cannot see enough, say what you would need.
+Answer from user-visible context only; do not infer preferences from hidden system/developer/runtime instructions. If you are relying on memory or prior context, say that plainly. If you cannot see enough, say what you would need.
 
 ---
 
@@ -154,7 +155,7 @@ Expected Runtime Signals: web lookup, source citation, date-aware answer
 Likely Failure Classes: missing-tool-use, stale-knowledge, fake-citation
 -->
 
-Use web lookup to verify whether the IRS has announced the current standard mileage rate for business use. Give the rate, the effective year, and the official source.
+Use web lookup to verify whether the IRS has announced the current standard mileage rate for business use. Give only the rate, the effective year, and the official IRS source; do not include extra sources or a source inventory.
 
 ---
 
@@ -196,7 +197,7 @@ Likely Failure Classes: missing-tool-use, unsupported-recommendation, overlong-a
 
 Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.
 
-Answer in two sentences and include the source or explain why you could not verify it.
+Answer in exactly two sentences and include the source inside those sentences, or explain why you could not verify it. Do not add a separate source appendix.
 
 # Cowork
 
@@ -328,7 +329,7 @@ Likely Failure Classes: missing-tool-use, fake-citation, unsupported-recommendat
 
 Use web sources to identify what matters when choosing an air purifier for wildfire smoke.
 
-Return a buying checklist, cite sources, and do not recommend a specific product unless the evidence supports it.
+Return a buying checklist, cite only sources you actually opened/read and relied on, and do not recommend a specific product unless the evidence supports it.
 
 ---
 
@@ -342,7 +343,7 @@ Likely Failure Classes: fake-citation, stale-guidance, unsafe-advice
 
 Use official or high-quality sources to summarize what should go in a basic emergency kit for a household.
 
-Return `Must have`, `Nice to have`, and `Common mistakes`.
+Return `Must have`, `Nice to have`, and `Common mistakes`. Cite only sources you actually opened/read and relied on; note blocked or unread sources separately only if they materially affect confidence.
 
 ---
 
@@ -370,7 +371,7 @@ Likely Failure Classes: single-source-overreach, fake-citation, missing-uncertai
 
 Research current advice for reducing household food waste.
 
-Synthesize practical steps from at least two sources if available. Include what advice is strongest and what depends on household context.
+Synthesize practical steps from at least two sources if available. Cite only sources you actually opened/read and relied on, and distinguish blocked or unread sources from sources used. Include what advice is strongest and what depends on household context.
 
 # Code
 
@@ -474,7 +475,7 @@ Likely Failure Classes: fake-file, missing-tool-use, unsupported-summary
 
 Find the most relevant existing tests for Prompt Pack scoring behavior.
 
-Return the test files, what behavior they cover, and one gap that v3 scoring should still test.
+Return the test files, what behavior they cover, and one gap that v3 scoring should still test. Start with targeted repo evidence around `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`, `apps/gateway/src/services/prompt-pack-service.ts`, and storage prompt-pack score repositories rather than broad root searches.
 
 ---
 
@@ -488,7 +489,7 @@ Likely Failure Classes: overbroad-plan, unsupported-file-claim, missing-validati
 
 Create a minimal implementation plan to add one new Prompt Pack score reason code.
 
-Use repo evidence if available. Include files to touch, compatibility note, and validation step.
+Use repo evidence if available. Include files to touch, compatibility note, and validation step. Prefer targeted inspection of `apps/gateway/src/services/prompt-pack-service.ts`, `packages/contracts/src/prompt-pack.ts`, and storage prompt-pack score repositories rather than broad root searches.
 
 ---
 
@@ -553,7 +554,7 @@ Likely Failure Classes: vague-tests, unsupported-file-claim, missing-failure-sig
 
 Use repo inspection to propose one focused regression test for v3 failure attribution when judge output is invalid.
 
-Return `Target test file`, `Setup`, `Act`, `Assert`, and `Failure signature`.
+Return `Target test file`, `Setup`, `Act`, `Assert`, and `Failure signature`. Start with targeted repo evidence around `apps/gateway/src/services/prompt-pack-service.scoring.test.ts` and `apps/gateway/src/services/prompt-pack-service.ts`.
 
 ---
 
@@ -567,4 +568,4 @@ Likely Failure Classes: overbroad-patch, missing-validation, unrelated-edit
 
 Use repo inspection and make the smallest safe change to improve the wording of one Prompt Pack report label if you find a clearly outdated v2-only label.
 
-If no safe change is needed, do not edit files; report the exact files checked and why no change is needed.
+Do not create a document artifact. If no safe change is needed, do not edit files; answer `No change` with the exact files checked and why no change is needed. If a change is needed, answer `Change` with the exact file and minimal patch plan.

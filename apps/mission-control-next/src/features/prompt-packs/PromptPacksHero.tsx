@@ -49,6 +49,19 @@ export function PromptPacksHero({
   onAutoScoreUnscored,
   onRefresh,
 }: PromptPacksHeroProps) {
+  const commandTitle = benchmarkActive
+    ? "Run all active"
+    : activeRun
+      ? `Running ${activeRun.testCode}`
+      : "Ready for next pass";
+  const commandDetail = benchmarkActive
+    ? "Benchmark worker is processing the selected pack."
+    : activeRun
+      ? "Focused run is in progress."
+      : testsLength > 0
+        ? `${testsLength} test${testsLength === 1 ? "" : "s"} available`
+        : "No tests loaded";
+
   return (
     <>
       <header className="mc-pp-hero">
@@ -56,6 +69,24 @@ export function PromptPacksHero({
           <p className="mc-pp-kicker">{isOpsVariant ? "Quality" : "Prompt Packs"}</p>
           <h3>{title}</h3>
           <p>{subtitle}</p>
+        </div>
+      </header>
+
+      <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
+        {summaryCards.map((card) => (
+          <article key={card.label} className="mc-pp-summary-card">
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+            <p>{card.detail}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="mc-pp-command-strip" aria-label="Prompt pack run controls">
+        <div className="mc-pp-command-copy">
+          <span>Run controls</span>
+          <strong>{commandTitle}</strong>
+          <p>{commandDetail}</p>
         </div>
         <div className="mc-pp-hero-actions">
           <button
@@ -95,16 +126,6 @@ export function PromptPacksHero({
             Refresh
           </button>
         </div>
-      </header>
-
-      <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
-        {summaryCards.map((card) => (
-          <article key={card.label} className="mc-pp-summary-card">
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-            <p>{card.detail}</p>
-          </article>
-        ))}
       </section>
 
       {hasReport && passRate !== undefined && passThreshold !== undefined ? (

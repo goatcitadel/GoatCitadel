@@ -74,8 +74,8 @@ Use browser.search and memory.search, then cite the exact evidence.
 
     expect(buildPromptPackSessionPrefsOverride(profile, "Use filesystem.read_file only.")).toMatchObject({
       mode: "code",
-      webMode: "auto",
-      memoryMode: "auto",
+      webMode: "off",
+      memoryMode: "off",
       toolAutonomy: "safe_auto",
       orchestrationEnabled: false,
       orchestrationVisibility: "explicit",

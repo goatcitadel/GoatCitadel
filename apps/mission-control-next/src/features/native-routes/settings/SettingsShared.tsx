@@ -98,7 +98,7 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
         }))}
       />
       <div className="mc-next-settings-actions">
-        <button type="button" className="mc-next-secondary-button" onClick={() => void onRetry()}>
+        <button type="button" className="mc-next-button-secondary" onClick={() => void onRetry()}>
           <RefreshCw className="h-4 w-4" />
           Retry
         </button>

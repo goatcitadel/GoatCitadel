@@ -375,6 +375,15 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_benchmark_runs/);
   });
 
+  it("repairs prompt-pack score-facing response columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 61);
+
+    assert.equal(repairMigration?.name, "prompt_pack_run_score_facing_response_fields");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_runs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS final_response_text TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS final_response_signals_json TEXT/);
+  });
+
   it("repairs benchmark item uniqueness for older Postgres prompt-pack runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 22);
 

@@ -37,6 +37,8 @@ describe("PromptPackRunRepository", () => {
       testId: "test-1",
       status: "running",
       responseText: "initial response",
+      finalResponseText: "initial final response",
+      finalResponseSignals: ["prompt_lab_score_facing_normalization"],
       derivedResponseText: "initial derived response",
       derivedResponseSignals: ["prompt_lab_contract_fallback"],
       error: "initial error",
@@ -49,6 +51,8 @@ describe("PromptPackRunRepository", () => {
     });
     assert.equal(firstPatch.status, "completed");
     assert.equal(firstPatch.responseText, "final response");
+    assert.equal(firstPatch.finalResponseText, "initial final response");
+    assert.deepEqual(firstPatch.finalResponseSignals, ["prompt_lab_score_facing_normalization"]);
     assert.equal(firstPatch.derivedResponseText, "initial derived response");
     assert.deepEqual(firstPatch.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
     assert.equal(firstPatch.error, "initial error");
@@ -58,6 +62,8 @@ describe("PromptPackRunRepository", () => {
     });
     assert.equal(secondPatch.status, "completed");
     assert.equal(secondPatch.responseText, "final response");
+    assert.equal(secondPatch.finalResponseText, "initial final response");
+    assert.deepEqual(secondPatch.finalResponseSignals, ["prompt_lab_score_facing_normalization"]);
     assert.equal(secondPatch.derivedResponseText, "initial derived response");
     assert.deepEqual(secondPatch.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
     assert.equal(secondPatch.error, "updated error");
@@ -85,6 +91,36 @@ describe("PromptPackRunRepository", () => {
 
     assert.equal(patched.derivedResponseText, "Updated derived text.");
     assert.deepEqual(patched.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
+  });
+
+  it("round-trips score-facing response metadata through create and patch", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      runId: "run-final-1",
+      packId: "pack-1",
+      testId: "test-1",
+      status: "completed",
+      responseText: "Raw weak transcript.",
+      finalResponseText: "Final score-facing answer.",
+      finalResponseSignals: ["prompt_lab_score_facing_normalization"],
+      startedAt: "2026-03-02T00:00:00.000Z",
+    });
+
+    assert.equal(created.responseText, "Raw weak transcript.");
+    assert.equal(created.finalResponseText, "Final score-facing answer.");
+    assert.deepEqual(created.finalResponseSignals, ["prompt_lab_score_facing_normalization"]);
+
+    const patched = repo.patch("run-final-1", {
+      finalResponseText: "Updated score-facing answer.",
+      finalResponseSignals: ["prompt_lab_score_facing_normalization", "trace_backed_repair"],
+    });
+
+    assert.equal(patched.responseText, "Raw weak transcript.");
+    assert.equal(patched.finalResponseText, "Updated score-facing answer.");
+    assert.deepEqual(patched.finalResponseSignals, [
+      "prompt_lab_score_facing_normalization",
+      "trace_backed_repair",
+    ]);
   });
 
   it("round-trips execution style and diagnostic metadata through create and patch", () => {

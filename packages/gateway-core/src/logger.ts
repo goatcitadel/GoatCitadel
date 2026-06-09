@@ -40,7 +40,7 @@ const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, // Authorization bearer tokens
 ];
 
-function redactSecretsInString(value: string): string {
+export function redactSecretsInString(value: string): string {
   let result = value;
   for (const pattern of SECRET_VALUE_PATTERNS) {
     pattern.lastIndex = 0;
@@ -119,7 +119,7 @@ function hasCredentialTokenSegment(segments: readonly string[]): boolean {
  * `secretValue`, `clientSecret`, and `x-api-key` redact, while usage counters
  * such as `prompt_tokens`, `maxTokens`, `tokenCount`, and `tokenizer` do not.
  */
-function isSensitiveLogKey(key: string): boolean {
+export function isSensitiveLogKey(key: string): boolean {
   const segments = splitKeySegments(key);
   if (segments.some((segment) => SECRET_KEY_SEGMENTS.has(segment))) {
     return true;
@@ -155,7 +155,7 @@ function createLogger(component: string): Logger {
       level,
       ts: new Date().toISOString(),
       component,
-      msg,
+      msg: redactSecretsInString(msg),
       ...sanitizeLogContext(context),
     };
     const line = JSON.stringify(entry);

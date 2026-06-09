@@ -117,6 +117,28 @@ export const PROMPT_LAB_SUGGESTED_FILE_PATHS = {
     "apps/gateway/src/routes/prompt-packs.ts",
     "packages/mission-control-shared/src/api/prompt-packs.ts",
   ],
+  promptPackScoringV3: [
+    "apps/gateway/src/services/prompt-pack-service.ts",
+    "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
+    "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts",
+    "packages/storage/src/prompt-pack-score-repo.ts",
+    "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+    "packages/contracts/src/prompt-pack.ts",
+  ],
+  promptPackAutoScoreRoute: [
+    "apps/gateway/src/routes/prompt-packs.ts",
+    "apps/gateway/src/services/prompt-pack-service.ts",
+    "apps/gateway/src/services/prompt-pack-policy.ts",
+    "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+    "packages/contracts/src/prompt-pack.ts",
+    "packages/mission-control-shared/src/api/prompt-packs.ts",
+  ],
+  promptPackAutoScoreUi: [
+    "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+    "apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx",
+    "packages/mission-control-shared/src/api/prompt-packs.ts",
+    "packages/contracts/src/prompt-pack.ts",
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type PromptLabSuggestedFilePathSeed = keyof typeof PROMPT_LAB_SUGGESTED_FILE_PATHS;
@@ -228,6 +250,29 @@ export const PROMPT_LAB_LOCAL_SEARCH_QUERIES = {
     "prompt-pack-service.ts",
     "expansion-pack",
     "baseline",
+  ],
+  promptPackScoringV3: [
+    "prompt-pack-service.scoring.test.ts",
+    "prompt-pack-service.parser-report.test.ts",
+    "evaluatePromptPackRuleScores",
+    "mergePromptPackAutoScoresV3",
+    "derivePromptPackFailureAttributionV3",
+    "PromptPackReasonCode",
+    "latest score rows",
+  ],
+  promptPackAutoScoreRoute: [
+    "prompt-packs.ts",
+    "autoScorePromptPackTest",
+    "PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION",
+    "prompt-pack-auto-score-v2-repo.ts",
+    "PromptPackAutoScoreRecord",
+  ],
+  promptPackAutoScoreUi: [
+    "PromptPacksWorkbenchPage.tsx",
+    "AssessmentTab.tsx",
+    "formatPromptPackAttribution",
+    "autoScorePromptPackTest",
+    "PromptPackFailureAttributionRecordV3",
   ],
 } as const satisfies Record<string, readonly string[]>;
 

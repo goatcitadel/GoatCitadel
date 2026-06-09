@@ -58,11 +58,11 @@ import {
   chooseNextPromptPackTest,
   computeDraftVerdict,
   computeDraftWeightedScore,
+  computePassReadiness,
   filterPromptPackTestsByResult,
   formatPromptPackExecutionStyle,
   isPromptPackV2UiEnabled,
   summarizePromptPackTestOutcomes,
-  type DetailTab,
 } from "./PromptPacksWorkbenchPage.helpers";
 
 export interface UsePromptPacksWorkbenchStateOptions {
@@ -80,6 +80,7 @@ export function usePromptPacksWorkbenchState({
   const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
   const selectedPackIdRef = useRef<string | null>(null);
+  const loadPackEpochRef = useRef(0);
   const exportedBenchmarkRunIdsRef = useRef<Set<string>>(new Set());
   const exportedRegressionRunIdsRef = useRef<Set<string>>(new Set());
   const [initialLoading, setInitialLoading] = useState(true);
@@ -126,7 +127,6 @@ export function usePromptPacksWorkbenchState({
   > | null>(null);
   const [trendSeries, setTrendSeries] = useState<Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"]>([]);
   const [exportInfo, setExportInfo] = useState<PromptPackExportRecord | null>(null);
-  const [detailTab, setDetailTab] = useState<DetailTab>("prompt");
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
 
   const running = activeRun !== null;
@@ -162,6 +162,10 @@ export function usePromptPacksWorkbenchState({
   }, [selectedPackId]);
 
   const loadPack = useCallback(async (packId: string) => {
+    // Request epoch: if another loadPack starts while this one is in flight
+    // (user re-selects a pack during a background refresh), drop the stale
+    // responses instead of clobbering the newer pack's state.
+    const epoch = ++loadPackEpochRef.current;
     const [testsResponse, reportResponse, exportResponse] = await Promise.all([
       fetchPromptPackTests(packId),
       fetchPromptPackReport(packId),
@@ -172,6 +176,9 @@ export function usePromptPacksWorkbenchState({
         sizeBytes: 0,
       })),
     ]);
+    if (epoch !== loadPackEpochRef.current) {
+      return;
+    }
     setTests(testsResponse.items);
     setReport({
       runs: reportResponse.runs,
@@ -185,6 +192,14 @@ export function usePromptPacksWorkbenchState({
         : (testsResponse.items[0]?.testId ?? null),
     );
   }, []);
+
+  const selectPack = useCallback(
+    (packId: string) => {
+      setSelectedPackId(packId);
+      void loadPack(packId).catch((err: Error) => setError(err.message));
+    },
+    [loadPack],
+  );
 
   const load = useCallback(
     async (options?: { background?: boolean }) => {
@@ -260,13 +275,6 @@ export function usePromptPacksWorkbenchState({
       onFallbackStateChange: setIsFallbackRefreshing,
     },
   );
-
-  useEffect(() => {
-    if (!selectedPackId) {
-      return;
-    }
-    void loadPack(selectedPackId).catch((err: Error) => setError(err.message));
-  }, [loadPack, selectedPackId]);
 
   const latestRunByTest = useMemo(() => buildLatestPromptPackRunByTest(report?.runs), [report?.runs]);
 
@@ -457,7 +465,6 @@ export function usePromptPacksWorkbenchState({
       const { input, missingPlaceholders } = buildRunInput(test);
       if (missingPlaceholders.length > 0) {
         setError(`Missing placeholder values for ${test.code}: ${missingPlaceholders.join(", ")}.`);
-        setDetailTab("prompt");
         return;
       }
       setActiveRun({ mode, testId: test.testId, testCode: test.code });
@@ -487,7 +494,6 @@ export function usePromptPacksWorkbenchState({
         }
         await loadPack(selectedPackId);
         setSelectedTestId(test.testId);
-        setDetailTab(run.status === "completed" ? "output" : "assessment");
         if (run.status === "failed") {
           setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
         } else if (autoScoreError) {
@@ -549,7 +555,6 @@ export function usePromptPacksWorkbenchState({
     const skipped = tests.length - runnableTests.length;
     if (runnableTests.length === 0) {
       setError("Run all has no runnable tests because required placeholder values are missing.");
-      setDetailTab("prompt");
       return;
     }
     setBenchmarkPending(true);
@@ -568,7 +573,6 @@ export function usePromptPacksWorkbenchState({
       setSuccess(
         `Run all started in background: ${started.benchmarkRunId}.${skipped > 0 ? ` Skipped ${skipped} placeholder-bound test(s).` : ""}`,
       );
-      setDetailTab("insights");
     } catch (err) {
       setBenchmarkPending(false);
       setError((err as Error).message);
@@ -701,7 +705,6 @@ export function usePromptPacksWorkbenchState({
       setSuccess(
         `Auto-scored ${selectedTest.code}: ${formatWeightedScore(result.score.weightedScore)} (${result.score.autoVerdict}).`,
       );
-      setDetailTab("assessment");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -749,7 +752,6 @@ export function usePromptPacksWorkbenchState({
       setBenchmarkRunId(started.benchmarkRunId);
       await loadBenchmarkStatus(started.benchmarkRunId);
       setSuccess(`Benchmark started: ${started.benchmarkRunId}`);
-      setDetailTab("insights");
     } catch (err) {
       setBenchmarkPending(false);
       setError((err as Error).message);
@@ -804,7 +806,6 @@ export function usePromptPacksWorkbenchState({
       setRegressionRunId(started.regressionRunId);
       await loadRegressionStatus(started.regressionRunId);
       setSuccess(`Replay regression started: ${started.regressionRunId}`);
-      setDetailTab("insights");
     } catch (err) {
       setRegressionPending(false);
       setError((err as Error).message);
@@ -870,14 +871,14 @@ export function usePromptPacksWorkbenchState({
       });
       setImportText("");
       await load();
-      setSelectedPackId(imported.pack.packId);
+      selectPack(imported.pack.packId);
       setSuccess(`Imported ${imported.tests.length} tests.`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setImporting(false);
     }
-  }, [importText, isOpsVariant, load]);
+  }, [importText, isOpsVariant, load, selectPack]);
 
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? null;
   const selectedCategory = classifyTestResultCategory(selectedRun, selectedAssessment);
@@ -889,6 +890,12 @@ export function usePromptPacksWorkbenchState({
       ? "Agentic uses the real surface orchestration preset for the selected Chat, Cowork, or Code mode."
       : "Harness uses the deterministic single-turn Prompt Lab wrapper.";
   const selectedDiagnosticMetadata = selectedRun?.diagnosticMetadata ?? selectedTest?.diagnosticMetadata;
+  const { blockers: passReadinessBlockers, complete: passReadinessComplete } = computePassReadiness(report?.summary);
+  const passReadinessDetail = report
+    ? passReadinessComplete
+      ? `${report.summary.averageWeightedScore.toFixed(1)}/100 average, threshold ${passThreshold}/100`
+      : `${passReadinessBlockers.slice(0, 2).join(", ")}; ${(report.summary.effectivePassRate * 100).toFixed(1)}% scored pass rate`
+    : "Run and score a pack to generate the scorecard.";
 
   const summaryCards = [
     {
@@ -901,16 +908,14 @@ export function usePromptPacksWorkbenchState({
           : "Import or select a pack to begin.",
     },
     {
-      label: "Coverage",
+      label: "Latest attempts",
       value: `${tests.length - testOutcomeSummary.notRunCount}/${tests.length || 0}`,
       detail: tests.length > 0 ? `${testOutcomeSummary.notRunCount} not run` : "No tests loaded",
     },
     {
-      label: "Pass rate",
-      value: report ? `${(report.summary.passRate * 100).toFixed(1)}%` : "No report yet",
-      detail: report
-        ? `${report.summary.averageWeightedScore.toFixed(1)}/100 average`
-        : "Run and score a pack to generate the scorecard.",
+      label: "Pass readiness",
+      value: report ? (passReadinessComplete ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%` : "Incomplete") : "No report yet",
+      detail: passReadinessDetail,
     },
     {
       label: "Model lane",
@@ -979,7 +984,6 @@ export function usePromptPacksWorkbenchState({
     regressionStatus,
     trendSeries,
     exportInfo,
-    detailTab,
     scoreDraft,
     running,
     benchmarkActive,
@@ -1011,7 +1015,7 @@ export function usePromptPacksWorkbenchState({
     title,
     subtitle,
     setSelectedPackId,
-    setDetailTab,
+    selectPack,
     setSelectedProviderId,
     setSelectedModel,
     setReuseLastModel,

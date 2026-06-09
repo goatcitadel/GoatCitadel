@@ -34,12 +34,180 @@ import {
   resolvePromptPackJudgeServiceTier,
   resolvePromptPackExecutionProfile,
   renderPromptPackMarkdownReport,
+  resolvePromptPackScoreFacingResponseText,
 } from "./prompt-pack-service.js";
 import { DEFAULT_PROMPT_PACK_POLICY_V2, DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, hashPromptPackPolicyV3 } from "@goatcitadel/storage";
 import { createPack, createRun, createScore, createTest, createTrace } from "./prompt-pack-service-test-fixtures.js";
 
 describe("prompt-pack scoring, judging, and integrity", () => {
+  it("scores deterministic final response text while preserving raw transcript separately", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-final-response",
+      packId: "pack-1",
+      code: "TEST-D509",
+      title: "Final Response",
+      prompt:
+        "Use repo inspection to trace the `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score` path. Each section must cite exact file paths.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const run: PromptPackRunRecord = {
+      runId: "run-final-response",
+      packId: "pack-1",
+      testId: test.testId,
+      status: "completed",
+      mode: "code",
+      toolTier: "explicit-tools",
+      responseText: "## Exact files used\n- apps/gateway/src/routes/prompt-packs.ts\n\n## Patch points\n- incomplete",
+      finalResponseText: [
+        "## Route",
+        "- `apps/gateway/src/routes/prompt-packs.ts`: registers the auto-score route.",
+        "",
+        "## Service",
+        "- `apps/gateway/src/services/prompt-pack-service.ts`: resolves the run and creates the score.",
+        "",
+        "## Storage",
+        "- `packages/storage/src/prompt-pack-auto-score-v2-repo.ts`: persists the auto-score record.",
+        "",
+        "## Current default schema",
+        "- `apps/gateway/src/services/prompt-pack-policy.ts`: defines the current default schema.",
+        "",
+        "## One regression risk",
+        "- A v2-only assumption could hide v3 attribution.",
+      ].join("\n"),
+      finalResponseSignals: ["prompt_lab_score_facing_normalization"],
+      trace: {
+        turnId: "turn-final-response",
+        sessionId: "sess-final-response",
+        userMessageId: "user-final-response",
+        branchKind: "append",
+        status: "completed",
+        mode: "code",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        citations: [],
+        routing: {},
+        toolRuns: [
+          {
+            toolRunId: "tool-final-response",
+            turnId: "turn-final-response",
+            sessionId: "sess-final-response",
+            toolName: "file.read_range",
+            status: "executed",
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+            args: { path: "apps/gateway/src/services/prompt-pack-service.ts" },
+            result: { path: "apps/gateway/src/services/prompt-pack-service.ts", content: "autoScorePromptPackTest" },
+          },
+          {
+            toolRunId: "tool-final-response-bad-path",
+            turnId: "turn-final-response",
+            sessionId: "sess-final-response",
+            toolName: "code.search_files",
+            status: "blocked",
+            startedAt: "2026-03-14T00:00:00.500Z",
+            finishedAt: "2026-03-14T00:00:00.750Z",
+            args: { path: "api/v1/prompt-packs/", query: "prompt-packs.ts" },
+            error: "execution error: ENOENT: no such file or directory",
+            failureGuidance: "Retry search files with a narrower, more explicit input.",
+          },
+        ],
+      },
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: "2026-03-14T00:00:01.000Z",
+    };
+
+    expect(resolvePromptPackScoreFacingResponseText(run)).toContain("## Route");
+    expect(resolvePromptPackRunIntegrity(test.prompt, run).validationStatus).toBe("valid");
+
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile: resolvePromptPackExecutionProfile({ test }),
+      run,
+    });
+
+    expect(evaluation.signals).toContain("file_specific_evidence_present");
+    expect(evaluation.signals).not.toContain("missing_file_specific_evidence");
+    expect(evaluation.signals).not.toContain("tool_failures_not_acknowledged");
+    expect(evaluation.scores.robustnessScore).not.toBe(0);
+    expect(run.responseText).toContain("Patch points");
+  });
+
+  it("keeps unrelated failed local-path attempts visible in scoring", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-unrelated-path-recovery",
+      packId: "pack-1",
+      code: "TEST-D510",
+      title: "Unrelated path recovery",
+      prompt:
+        "Use file/code tools to inspect `apps/gateway/src/services/skill-import-service.ts` and cite the exact files used.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        ...createRun("run-unrelated-path-recovery", "completed", "2026-03-14T00:00:00.000Z"),
+        testId: test.testId,
+        mode: "code",
+        toolTier: "explicit-tools",
+        responseText: [
+          "## Evidence",
+          "- `apps/gateway/src/services/prompt-pack-service.ts` handles prompt-pack scoring.",
+          "",
+          "## Result",
+          "- The answer uses the implementation file that was actually read.",
+        ].join("\n"),
+        trace: createTrace("sess-unrelated-path-recovery", {
+          mode: "code",
+          toolRuns: [
+            {
+              toolRunId: "tool-missing-target",
+              turnId: "turn-sess-unrelated-path-recovery",
+              sessionId: "sess-unrelated-path-recovery",
+              toolName: "code.search_files",
+              status: "failed",
+              args: {
+                path: "apps/gateway/src/services/skill-import-service.ts",
+                query: "importSkillTrust",
+              },
+              error: "execution error: ENOENT: no such file or directory",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:00.250Z",
+            },
+            {
+              toolRunId: "tool-unrelated-read",
+              turnId: "turn-sess-unrelated-path-recovery",
+              sessionId: "sess-unrelated-path-recovery",
+              toolName: "file.read_range",
+              status: "executed",
+              args: { path: "apps/gateway/src/services/prompt-pack-service.ts" },
+              result: {
+                path: "apps/gateway/src/services/prompt-pack-service.ts",
+                content: "export function evaluatePromptPackRuleScores() {}",
+              },
+              startedAt: "2026-03-14T00:00:00.300Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(evaluation.signals).toContain("required_tool_usage_present");
+    expect(evaluation.signals).toContain("tool_failures_not_acknowledged");
+  });
+
   it("penalizes missing required tool usage for explicit-tools runs", () => {
     const test: PromptPackTestRecord = {
       testId: "test-explicit",
@@ -1681,6 +1849,65 @@ describe("prompt-pack scoring, judging, and integrity", () => {
     expect(integrity.signals).toContain("heading_present");
     expect(integrity.signals).toContain("non_step_content_present");
     expect(integrity.signals).toContain("repeated_step_verb");
+  });
+
+  it("marks exact sentence-count violations invalid", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt:
+        "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening. Answer in exactly two sentences and include the source inside those sentences.",
+      responseText: [
+        "Bring an umbrella because evening showers are possible.",
+        "The forecast source I checked was the National Weather Service.",
+        "Source: https://weather.gov/",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-two-sentences"),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("sentence_count_mismatch");
+  });
+
+  it("keeps recovered Prompt Lab web-cap guardrail traces scorable", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Use current information if available and synthesize from successful sources.",
+      responseText:
+        "## Researcher\n- Successful source evidence was opened before the Prompt Lab web cap stopped further retries.\n\n## Synthesis\n- The answer uses the successful source and clearly avoids relying on blocked attempts.",
+      trace: createTrace("sess-web-cap-recovered", {
+        completion: { status: "complete", finishReason: "stop" },
+        failure: {
+          message:
+            "Repeated tool failure for browser.search (2 attempts): execution skipped: Prompt Lab web rows are capped at one web search before synthesis.",
+        },
+        toolRuns: [
+          {
+            toolRunId: "tool-web-cap-opened",
+            turnId: "turn-sess-web-cap-recovered",
+            sessionId: "sess-web-cap-recovered",
+            toolName: "browser.navigate",
+            status: "executed",
+            args: { url: "https://example.test/source" },
+            result: { url: "https://example.test/source", textSnippet: "opened source" },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+          {
+            toolRunId: "tool-web-cap-blocked",
+            turnId: "turn-sess-web-cap-recovered",
+            sessionId: "sess-web-cap-recovered",
+            toolName: "browser.search",
+            status: "blocked",
+            args: { query: "retry" },
+            error:
+              "execution skipped: Prompt Lab web rows are capped at one web search before synthesis. Use the successful search/opened-source evidence already in the trace and answer now.",
+            startedAt: "2026-03-14T00:00:01.000Z",
+            finishedAt: "2026-03-14T00:00:01.010Z",
+          },
+        ],
+      }),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("trace_failure");
   });
 
   it("derives integrity from trace metadata when historical runs lack integrity_json", () => {

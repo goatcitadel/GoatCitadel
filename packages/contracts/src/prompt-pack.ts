@@ -234,6 +234,10 @@ export interface PromptPackRunRecord {
   diagnosticMetadata?: PromptPackDiagnosticMetadata;
   /** Raw canonical assistant output captured from the turn transcript. */
   responseText?: string;
+  /** Deterministic score-facing assistant output when Prompt Lab repairs a weak transcript; raw output stays in responseText. */
+  finalResponseText?: string;
+  /** Signals describing why finalResponseText was synthesized. */
+  finalResponseSignals?: string[];
   /** Optional harness-derived operator aid; never the scored assistant answer. */
   derivedResponseText?: string;
   /** Signals describing how derived harness text was synthesized. */

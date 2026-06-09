@@ -11,6 +11,7 @@ import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
+const STARTUP_PROBE_HEARTBEAT_MS = 5_000;
 // SECURITY (codex finding #2): Path (relative to gateway rootDir) where the
 // generated bundled-Postgres superuser password is persisted. File is
 // written with mode 0o600. Existing data directories that were initialised
@@ -58,6 +59,17 @@ export async function ensureBundledPostgresPassword(config: GatewayRuntimeConfig
 export interface BundledPostgresRuntimeHandle {
   readonly strategy: "native" | "docker";
   stop(): Promise<void>;
+}
+
+interface BundledPostgresProbeResult {
+  reachable: boolean;
+  matchesExpectedRoot: boolean;
+  dataDirectory?: string;
+  failure?: string;
+}
+
+interface BundledPostgresProbeOptions {
+  logFailure?: boolean;
 }
 
 export async function ensureBundledPostgresRuntime(
@@ -424,19 +436,44 @@ async function tryStartDockerBundledPostgres(
 async function waitForBundledPostgres(config: GatewayRuntimeConfig): Promise<void> {
   const timeoutMs = config.assistant.database.bundledPostgres.startTimeoutMs;
   const startedAt = Date.now();
+  let nextHeartbeatAt = startedAt + STARTUP_PROBE_HEARTBEAT_MS;
+  let lastProbeDetail: string | undefined;
   const options = resolveGatewayPostgresConnectionOptions(config, {
     applicationName: "goatcitadel-bundled-wait",
     databaseOverride: "postgres",
   });
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (await canReachExpectedBundledPostgres(config, options)) {
+    const probe = await probeBundledPostgresRuntime(config, options, { logFailure: false });
+    if (probe.matchesExpectedRoot) {
       return;
+    }
+    lastProbeDetail =
+      probe.failure ??
+      (probe.reachable
+        ? `configured port is reachable but data directory did not match expected runtime root${
+            probe.dataDirectory ? ` (${probe.dataDirectory})` : ""
+          }`
+        : lastProbeDetail);
+    const now = Date.now();
+    if (now >= nextHeartbeatAt) {
+      const elapsedSec = Math.round((now - startedAt) / 1000);
+      const remainingSec = Math.max(0, Math.round((startedAt + timeoutMs - now) / 1000));
+      process.stderr.write(
+        `[bundled-pg] waiting for bundled Postgres readiness (${elapsedSec}s elapsed, ${remainingSec}s before timeout${
+          lastProbeDetail ? `; last probe: ${lastProbeDetail}` : ""
+        })\n`,
+      );
+      nextHeartbeatAt = now + STARTUP_PROBE_HEARTBEAT_MS;
     }
     await wait(READY_POLL_MS);
   }
 
-  throw new Error(`Bundled Postgres did not become reachable within ${timeoutMs}ms.`);
+  throw new Error(
+    `Bundled Postgres did not become reachable within ${timeoutMs}ms.${
+      lastProbeDetail ? ` Last probe: ${lastProbeDetail}.` : ""
+    }`,
+  );
 }
 
 async function ensureDatabaseExists(config: GatewayRuntimeConfig): Promise<void> {
@@ -483,8 +520,9 @@ function resolveNativePostgresCommands(config: GatewayRuntimeConfig): { initdb: 
 async function canReachExpectedBundledPostgres(
   config: GatewayRuntimeConfig,
   options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>,
+  probeOptions?: BundledPostgresProbeOptions,
 ): Promise<boolean> {
-  return (await probeBundledPostgresRuntime(config, options)).matchesExpectedRoot;
+  return (await probeBundledPostgresRuntime(config, options, probeOptions)).matchesExpectedRoot;
 }
 
 /**
@@ -504,7 +542,8 @@ async function canReachExpectedBundledPostgres(
 async function probeBundledPostgresRuntime(
   config: GatewayRuntimeConfig,
   options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>,
-): Promise<{ reachable: boolean; matchesExpectedRoot: boolean; dataDirectory?: string }> {
+  probeOptions: BundledPostgresProbeOptions = {},
+): Promise<BundledPostgresProbeResult> {
   const client = new PostgresDatabaseClient(options);
   try {
     const row = await client.queryOne<{ data_directory: string }>("SHOW data_directory");
@@ -515,17 +554,23 @@ async function probeBundledPostgresRuntime(
       dataDirectory,
     };
   } catch (error) {
-    process.stderr.write(
-      `[bundled-pg] probe failed: ${
-        error instanceof Error
-          ? `${error.message.split("\n")[0]} (code=${(error as NodeJS.ErrnoException).code ?? "unknown"})`
-          : String(error)
-      }\n`,
-    );
-    return { reachable: false, matchesExpectedRoot: false };
+    const failure = formatBundledPostgresProbeFailure(error);
+    if (probeOptions.logFailure !== false) {
+      process.stderr.write(`[bundled-pg] probe failed: ${failure}\n`);
+    }
+    return { reachable: false, matchesExpectedRoot: false, failure };
   } finally {
     await client.close();
   }
+}
+
+function formatBundledPostgresProbeFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const message = error.message.split("\n")[0] || error.name || "unknown error";
+  const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+  return `${message} (code=${code})`;
 }
 
 function isExpectedBundledDataDirectory(config: GatewayRuntimeConfig, actualDataDirectory: string): boolean {
@@ -720,4 +765,5 @@ export const __bundledPostgresRuntimeInternals = {
   resolveNativePostgresCommands,
   sameFilesystemPath,
   dockerContainerMountsDataDir,
+  formatBundledPostgresProbeFailure,
 };

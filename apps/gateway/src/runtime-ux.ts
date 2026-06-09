@@ -1,6 +1,7 @@
 import process from "node:process";
 import chalk from "chalk";
 import type { FastifyBaseLogger } from "fastify";
+import { isSensitiveLogKey, redactSecretsInString } from "@goatcitadel/gateway-core";
 
 type TerminalLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 type TerminalReporterOptions = {
@@ -52,8 +53,6 @@ const compactMetaKeys = new Set([
 ]);
 
 const REDACTED_LOG_VALUE = "[redacted]";
-const SENSITIVE_LOG_KEY_PATTERN =
-  /(?:api[_-]?key|authorization|bearer|client[_-]?secret|companion[_-]?session[_-]?token|connector[_-]?secret[_-]?value|cookie|idempotency[_-]?key|password|provider[_-]?api[_-]?key|refresh[_-]?token|request[_-]?secret|secret|session[_-]?token|token)$/i;
 
 export function isVerboseLoggingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.GOATCITADEL_VERBOSE?.trim().toLowerCase();
@@ -222,7 +221,7 @@ function emitTerminalLine(
   const scopeLabel = chalk.cyan(scope);
   const levelLabel = formatLevelLabel(level, variant);
   const bindingLabel = formatBindingLabel(bindings);
-  const baseMessage = message.trim() || fallbackMessageForLevel(level);
+  const baseMessage = redactSecretsInString(message.trim() || fallbackMessageForLevel(level));
   const allowDetail = verbose || level === "warn" || level === "error" || level === "fatal";
   const detail = allowDetail ? formatMetaDetail(meta, verbose, bindings, level, variant) : "";
   const line = [timestamp, levelLabel, scopeLabel, bindingLabel, baseMessage].filter(Boolean).join(" ");
@@ -515,10 +514,13 @@ function fallbackMessageForLevel(level: TerminalLevel): string {
 function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<object>()): unknown {
   if (value instanceof Error) {
     return {
-      error: value.message,
+      error: redactSecretsInString(value.message),
       code: "code" in value ? (value as Error & { code?: string }).code : undefined,
-      stack: verbose ? value.stack : undefined,
+      stack: verbose && value.stack ? redactSecretsInString(value.stack) : undefined,
     };
+  }
+  if (typeof value === "string") {
+    return redactSecretsInString(value);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
@@ -541,7 +543,7 @@ function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<ob
     if (typeof entry === "function") {
       continue;
     }
-    if (SENSITIVE_LOG_KEY_PATTERN.test(key)) {
+    if (isSensitiveLogKey(key)) {
       result[key] = REDACTED_LOG_VALUE;
       continue;
     }

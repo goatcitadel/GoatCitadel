@@ -1149,7 +1149,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         port: clampInt(bundledPostgresInput.port, 45_432, 1, 65_535),
         binDir: bundledPostgresInput.binDir,
         autoStart: bundledPostgresInput.autoStart ?? true,
-        startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 20_000, 1_000, 120_000),
+        startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 90_000, 1_000, 120_000),
       },
       sqlite,
     },

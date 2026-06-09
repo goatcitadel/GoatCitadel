@@ -9,7 +9,7 @@ vi.mock("node:sqlite", () => ({
   StatementSync: class StatementSync {},
 }));
 
-import type { PromptPackScoreRecordV2, PromptPackRunRecord } from "@goatcitadel/contracts";
+import type { PromptPackAutoScoreRecord, PromptPackScoreRecordV2, PromptPackRunRecord } from "@goatcitadel/contracts";
 import {
   PromptPackService,
   buildPromptPackReportSummary,
@@ -17,8 +17,9 @@ import {
   parsePromptPackTests,
   renderPromptPackMarkdownReport,
 } from "./prompt-pack-service.js";
-import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
-import { hashPromptPackPolicyV2 } from "@goatcitadel/storage";
+import { DEFAULT_PROMPT_PACK_POLICY_V2, DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
+import { hashPromptPackPolicyV2, hashPromptPackPolicyV3 } from "@goatcitadel/storage";
+import { PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION, PROMPT_PACK_V3_SCORER_VERSION } from "./prompt-pack-policy.js";
 import {
   buildCanonicalMergedPromptPackMarkdown,
   buildFocusedV2PromptPackMarkdown,
@@ -477,6 +478,148 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(markdown).not.toContain(longContent);
   });
 
+  it("marks full-pack readiness incomplete when a scored subset has a perfect pass rate", () => {
+    const pack = createPack("pack-incomplete-readiness");
+    const completedTest = {
+      ...createTest("test-incomplete-readiness-1", "TEST-INCOMPLETE-READY-1"),
+      packId: pack.packId,
+    };
+    const missingTest = {
+      ...createTest("test-incomplete-readiness-2", "TEST-INCOMPLETE-READY-2"),
+      packId: pack.packId,
+    };
+    const run: PromptPackRunRecord = {
+      ...createRun("run-incomplete-readiness-1", "completed", "2026-05-05T21:14:08.000Z"),
+      packId: pack.packId,
+      testId: completedTest.testId,
+      providerId: "openai",
+      model: "gpt-5.4",
+      responseText: "Passing subset answer.",
+      trace: createTrace("sess-incomplete-readiness"),
+    };
+    const autoScore: PromptPackAutoScoreRecord = {
+      autoScoreId: "auto-incomplete-readiness-1",
+      packId: pack.packId,
+      testId: completedTest.testId,
+      runId: run.runId,
+      scoringSchemaVersion: "v3",
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash: hashPromptPackPolicyV3(DEFAULT_PROMPT_PACK_POLICY_V3),
+      policySource: "repo_default",
+      scoreState: "auto_valid",
+      protocol: { protocolPass: true, reasonCodes: [] },
+      hardFailReasons: [],
+      applicability: {},
+      outcomeScores: {},
+      executionScores: {},
+      ruleScores: { taskSuccess: 4, truthfulness: 4, evidenceGrounding: 4 },
+      judgeScores: { taskSuccess: 4, truthfulness: 4, evidenceGrounding: 4 },
+      finalScores: {
+        taskSuccess: 4,
+        truthfulness: 4,
+        evidenceGrounding: 4,
+        formatAdherence: 4,
+        operatorUsefulness: 4,
+        toolUseQuality: 4,
+        orchestrationQuality: 4,
+        efficiency: 4,
+        recoveryQuality: 4,
+      },
+      disagreement: {},
+      weightedScore: 100,
+      autoVerdict: "pass",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+      judgeStatus: "valid",
+      createdAt: "2026-05-05T21:15:08.000Z",
+    };
+    const tests = [completedTest, missingTest];
+    const markdown = renderPromptPackMarkdownReport({
+      pack,
+      tests,
+      runs: [run],
+      scores: [],
+      autoScoresV2: [autoScore],
+      humanReviewsV2: [],
+      latestAssessments: [],
+      summary: buildPromptPackReportSummary(tests, [run], [], [autoScore]),
+    });
+
+    expect(markdown).toContain("- Full-pack pass readiness: not ready (1 not run)");
+    expect(markdown).toContain("- Run coverage: 1/2 latest runs completed");
+    expect(markdown).toContain("- Effective pass rate (scored rows only): 100.0%");
+  });
+
+  it("clusters Prompt Lab platform failure patterns in markdown reports", () => {
+    const pack = createPack("pack-platform-clusters");
+    const test = {
+      ...createTest("test-platform-clusters", "TEST-D-PLATFORM"),
+      packId: pack.packId,
+      mode: "code" as const,
+      toolTier: "explicit-tools" as const,
+      prompt: "Use repo inspection to find Prompt Pack scoring behavior and report the exact files.",
+    };
+    const run: PromptPackRunRecord = {
+      ...createRun("run-platform-clusters", "completed", "2026-05-05T21:14:08.000Z"),
+      packId: pack.packId,
+      testId: test.testId,
+      mode: "code",
+      toolTier: "explicit-tools",
+      responseText: "Prompt Lab synthesis note: this turn has already used the tool budget.",
+      trace: createTrace("sess-platform-clusters", {
+        mode: "code",
+        failure: {
+          failureClass: "tool_failed",
+          message: "No tool output found for function call call-123.",
+          retryable: false,
+          recommendedAction: "retry",
+        },
+        toolRuns: [
+          {
+            toolRunId: "tool-platform-1",
+            turnId: "turn-sess-platform-clusters",
+            sessionId: "sess-platform-clusters",
+            toolName: "documents.create",
+            status: "approval_required",
+            approvalId: "approval-docs-1",
+            args: { title: "Prompt Pack report" },
+            startedAt: "2026-05-05T21:14:08.000Z",
+            finishedAt: "2026-05-05T21:14:08.250Z",
+          },
+          ...Array.from({ length: 8 }, (_, index) => ({
+            toolRunId: `tool-platform-search-${index + 1}`,
+            turnId: "turn-sess-platform-clusters",
+            sessionId: "sess-platform-clusters",
+            toolName: "code.search_files",
+            status: "executed" as const,
+            args: { path: ".", query: "Prompt Pack scoring behavior" },
+            result: { matches: [] },
+            startedAt: "2026-05-05T21:14:08.000Z",
+            finishedAt: "2026-05-05T21:14:08.250Z",
+          })),
+        ],
+      }),
+    };
+
+    const markdown = renderPromptPackMarkdownReport({
+      pack,
+      tests: [test],
+      runs: [run],
+      scores: [],
+      autoScoresV2: [],
+      humanReviewsV2: [],
+      latestAssessments: [],
+      summary: buildPromptPackReportSummary([test], [run], [], []),
+    });
+
+    expect(markdown).toContain("artifact-tool detour");
+    expect(markdown).toContain("tool-budget overrun");
+    expect(markdown).toContain("provider/tool protocol failure");
+  });
+
   it("parses the repo expansion prompt pack markdown with stable mode and tool tiers", () => {
     const markdown = buildRepoExpansionPromptPackMarkdown();
     const tests = parsePromptPackTests(markdown);
@@ -703,8 +846,9 @@ describe("prompt-pack parser, import, export, and reports", () => {
         path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
         "utf8",
       ),
-    ).map((test) => ({
+    ).map((test, index) => ({
       ...test,
+      testId: `test-security-partial-${index + 1}`,
       packId: importedPack.packId,
     }));
     const service = new PromptPackService(
@@ -783,6 +927,122 @@ describe("prompt-pack parser, import, export, and reports", () => {
       },
     });
     expect(gates.items[0]?.blockers.join(" ")).toContain("Run the imported defensive security prompt-pack tests");
+  });
+
+  it("keeps security quality gates not_run when only a scored subset has evidence", () => {
+    const importedPack = {
+      packId: "pack-security-partial",
+      name: "Security Red Team",
+      sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+      testCount: 18,
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    };
+    const securityTests = parsePromptPackTests(
+      fs.readFileSync(
+        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
+        "utf8",
+      ),
+    ).map((test, index) => ({
+      ...test,
+      testId: `test-security-partial-${index + 1}`,
+      packId: importedPack.packId,
+    }));
+    const completedTest = securityTests[0]!;
+    const run: PromptPackRunRecord = {
+      ...createRun("run-security-partial", "completed", "2026-05-30T00:10:00.000Z"),
+      packId: importedPack.packId,
+      testId: completedTest.testId,
+      providerId: "openai",
+      model: "gpt-5.4",
+      responseText: "Passing security subset answer.",
+      trace: createTrace("sess-security-partial"),
+    };
+    const autoScore: PromptPackAutoScoreRecord = {
+      autoScoreId: "auto-security-partial",
+      packId: importedPack.packId,
+      testId: completedTest.testId,
+      runId: run.runId,
+      scoringSchemaVersion: "v3",
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash: hashPromptPackPolicyV3(DEFAULT_PROMPT_PACK_POLICY_V3),
+      policySource: "repo_default",
+      scoreState: "auto_valid",
+      protocol: { protocolPass: true, reasonCodes: [] },
+      hardFailReasons: [],
+      applicability: {},
+      outcomeScores: {},
+      executionScores: {},
+      ruleScores: { taskSuccess: 4, truthfulness: 4, evidenceGrounding: 4 },
+      judgeScores: { taskSuccess: 4, truthfulness: 4, evidenceGrounding: 4 },
+      finalScores: {
+        taskSuccess: 4,
+        truthfulness: 4,
+        evidenceGrounding: 4,
+        formatAdherence: 4,
+        operatorUsefulness: 4,
+        toolUseQuality: 4,
+        orchestrationQuality: 4,
+        efficiency: 4,
+        recoveryQuality: 4,
+      },
+      disagreement: {},
+      weightedScore: 100,
+      autoVerdict: "pass",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+      judgeStatus: "valid",
+      createdAt: "2026-05-30T00:11:00.000Z",
+    };
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [importedPack],
+            getPack: () => importedPack,
+            listTests: () => securityTests,
+          },
+          promptPackRuns: { listByPack: () => [run] },
+          promptPackScores: { listByPack: () => [] },
+          promptPackAutoScoresV2: { listByPack: () => [autoScore] },
+          promptPackHumanReviewsV2: { listByPack: () => [] },
+        },
+        config: {
+          rootDir: process.cwd(),
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    const gates = service.listSecurityQualityGates();
+
+    expect(gates.items[0]).toMatchObject({
+      status: "not_run",
+      evidence: {
+        completedRuns: 1,
+        passCount: 1,
+        effectivePassRate: 1,
+      },
+    });
+    expect(gates.items[0]?.blockers.join(" ")).toContain("17 latest test run(s) are missing");
   });
 
   it("recognizes the imported built-in security pack by canonical pack id and hyphenated source label", () => {

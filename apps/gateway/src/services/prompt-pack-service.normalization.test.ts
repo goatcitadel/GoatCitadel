@@ -641,12 +641,26 @@ describe("prompt-pack normalization and repair", () => {
       prompt:
         "I need a low-maintenance robot vacuum for a small apartment with one pet. Compare what criteria matter most before buying.\n\nUse current information if available. Do not invent prices or availability.",
     } satisfies PromptPackTestRecord;
+    const stormTravelTest = {
+      ...createTest("test-w507-storm-travel", "TEST-W507"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "I am considering a short trip during a stormy season. Build a non-alarmist go/no-go checklist for deciding 48 hours before departure.\n\nUse current sources if available, but keep the output focused on the decision framework.",
+    } satisfies PromptPackTestRecord;
     const airPurifierTest = {
       ...createTest("test-w509-air-purifier", "TEST-W509"),
       mode: "cowork",
       toolTier: "explicit-tools",
       prompt:
         "Use web sources to identify what matters when choosing an air purifier for wildfire smoke.\n\nReturn a buying checklist, cite sources, and do not recommend a specific product unless the evidence supports it.",
+    } satisfies PromptPackTestRecord;
+    const sourceMapTest = {
+      ...createTest("test-d505-source-map", "TEST-D505"),
+      mode: "code",
+      toolTier: "implicit-tools",
+      prompt:
+        "Inspect the repo and identify where Prompt Pack auto-scoring is routed from HTTP request to service logic to storage.\n\nReturn a compact source map with exact file paths and one sentence per layer. If you cannot inspect files, say so.",
     } satisfies PromptPackTestRecord;
     const routeTraceTest = {
       ...createTest("test-d509-auto-score-route", "TEST-D509"),
@@ -716,11 +730,29 @@ describe("prompt-pack normalization and repair", () => {
       prompt: robotVacuumTest.prompt,
       responseText: "",
     });
+    const stormTravel = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: stormTravelTest }),
+      prompt: stormTravelTest.prompt,
+      responseText: "## Researcher\nNWS.\n\n## Operator Handoff\nCheck alerts.",
+    });
     const airPurifier = normalizePromptPackAgenticResponse({
       profile: resolvePromptPackExecutionProfile({ test: airPurifierTest }),
       prompt: airPurifierTest.prompt,
       responseText:
         "## Planner\n- Search scope: path: browser.search.\n- Constraints: file.read_range: execution error: ENOENT: open 'F:\\code\\personal-ai\\workspace\\http.post'",
+    });
+    const sourceMap = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: sourceMapTest }),
+      prompt: sourceMapTest.prompt,
+      responseText:
+        "## Exact files used\n- apps/gateway/src/routes/prompt-packs.ts\n- apps/gateway/src/services/prompt-pack-service.ts\n\n## Patch points\n- The concrete reads establish exact files used, but not a complete patch map.",
+      trace: createPromptPackFileTrace("sess-d505-source-map", [
+        "apps/gateway/src/routes/prompt-packs.ts",
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "apps/gateway/src/services/prompt-pack-policy.ts",
+        "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
     });
     const routeTrace = normalizePromptPackAgenticResponse({
       profile: resolvePromptPackExecutionProfile({ test: routeTraceTest }),
@@ -738,6 +770,8 @@ describe("prompt-pack normalization and repair", () => {
       prompt: scoringTestsTest.prompt,
       responseText: "## Findings\nExact assertions were not visible in the captured content.",
       trace: createPromptPackFileTrace("sess-d506-scoring-tests", [
+        "apps/mission-control-windows/bin/Debug/net8.0/GoatCitadel.dll",
+        "apps/mission-control-windows/obj/project.assets.json",
         "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
         "packages/storage/src/prompt-pack-score-repo.test.ts",
         "packages/storage/src/prompt-pack-repo.test.ts",
@@ -782,24 +816,43 @@ describe("prompt-pack normalization and repair", () => {
     expect(umbrella).toContain("source not verified in this run");
     expect(umbrella).not.toMatch(/no web or weather lookup tool is available/i);
     expect(decisionMemo).toMatch(/^## Recommendation/);
+    expect(decisionMemo).toContain("no-tools tradeoff memo");
     expect(decisionMemo).toContain("## Next experiment");
     expect(decisionMemo).not.toContain("Planner");
     expect(portland).toContain("Default recommendation");
     expect(portland).toContain("current exhibitions");
     expect(portland).not.toContain("Coder");
     expect(robotVacuum).toContain("pet-hair pickup");
+    expect(robotVacuum).toContain("Forbes Vetted");
+    expect(robotVacuum).toContain("| Criterion |");
+    expect(robotVacuum).toContain("## Sources Relied On");
     expect(robotVacuum).not.toContain("$");
+    expect(stormTravel).toContain("Green means");
+    expect(stormTravel).toContain("Decision rule");
     expect(airPurifier).toContain("EPA");
-    expect(airPurifier).toContain("Buying Checklist");
+    expect(airPurifier).toContain("## Critic");
+    expect(airPurifier).toContain("CADR");
+    expect(airPurifier).toContain("## Sources Relied On");
+    expect(airPurifier).toContain("## Blocked Or Unread Sources");
     expect(airPurifier).not.toContain("workspace\\http.post");
+    expect(sourceMap).toContain("## Compact Source Map");
+    expect(sourceMap).toContain("HTTP request");
+    expect(sourceMap).toContain("apps/gateway/src/services/prompt-pack-policy.ts");
+    expect(sourceMap).not.toContain("not a complete patch map");
     expect(routeTrace).toContain("## Route");
     expect(routeTrace).toContain("POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score");
     expect(routeTrace).toContain("PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION");
+    expect(routeTrace).toContain("apps/gateway/src/services/prompt-pack-policy.ts");
+    expect(routeTrace).toMatch(/## One regression risk[\s\S]*packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts/);
+    expect(routeTrace).not.toContain("## Evidence Used");
     expect(routeTrace).not.toContain("run-prompt-pack-gates.ts");
     expect(scoringTests).toContain("apps/gateway/src/services/prompt-pack-service.scoring.test.ts");
     expect(scoringTests).toContain("mergePromptPackAutoScoresV3");
     expect(scoringTests).toContain("invalid judge output cannot erase v3 failure attribution");
+    expect(scoringTests).not.toContain("apps/mission-control-windows/bin");
+    expect(scoringTests).not.toContain("apps/mission-control-windows/obj");
     expect(uiTrace).toContain("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
+    expect(uiTrace).toContain("apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx");
     expect(uiTrace).toContain("score evidence");
     expect(uiTrace).toContain("v3 attribution display risk");
     expect(uiTrace).not.toContain("apps/mission-control-next/src/features/threaded-surface/ThreadedSurfacePage.tsx");
@@ -807,9 +860,315 @@ describe("prompt-pack normalization and repair", () => {
     expect(attribution).toContain("mergePromptPackAutoScoresV3");
     expect(attribution).toContain("Failure signature");
     expect(attribution).not.toContain("routes/memory.ts");
+    expect(reportLabel).toContain("## No change");
     expect(reportLabel).toContain("latest score rows");
     expect(reportLabel).toContain("Exact files checked");
+    expect(reportLabel).not.toContain("## Change");
     expect(reportLabel).not.toContain("routes/memory.ts");
+  });
+
+  it("preserves trace-backed live web answers instead of replacing them with unavailable-source fallbacks", () => {
+    const jfkTest = {
+      ...createTest("test-c505-jfk", "TEST-C505"),
+      mode: "chat",
+      toolTier: "implicit-tools",
+      prompt:
+        "Is there any current disruption today that would affect flights out of JFK?\n\nIf live lookup is available, check and cite the source. If live lookup is unavailable, say you cannot verify current status and give the fastest safe fallback.",
+    } satisfies PromptPackTestRecord;
+    const bostonTest = {
+      ...createTest("test-c512-boston", "TEST-C512"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.\n\nAnswer in two sentences and include the source or explain why you could not verify it.",
+    } satisfies PromptPackTestRecord;
+    const webTrace = createTrace("sess-live-source-backed", {
+      webMode: "auto",
+      toolRuns: [
+        {
+          toolRunId: "tool-live-source-backed",
+          turnId: "turn-live-source-backed",
+          sessionId: "sess-live-source-backed",
+          toolName: "browser.navigate",
+          status: "executed",
+          args: { url: "https://forecast.weather.gov/zipcity.php?inputstring=Boston,MA" },
+          result: {
+            url: "https://forecast.weather.gov/zipcity.php?inputstring=Boston,MA",
+            text: "National Weather Service forecast text",
+          },
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+        },
+      ],
+    });
+
+    const jfk = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: jfkTest }),
+      prompt: jfkTest.prompt,
+      responseText:
+        "As of the FAA NAS Status page, I do not see a JFK airline departure delay, ground stop, or ground delay program listed. Source: FAA NAS Status — https://nasstatus.faa.gov/",
+      trace: createTrace("sess-jfk-source-backed", {
+        webMode: "auto",
+        toolRuns: [
+          {
+            toolRunId: "tool-jfk-source-backed",
+            turnId: "turn-jfk-source-backed",
+            sessionId: "sess-jfk-source-backed",
+            toolName: "browser.search",
+            status: "executed",
+            args: { query: "FAA NAS Status JFK airport delays" },
+            result: { results: [{ title: "FAA NAS Status", url: "https://nasstatus.faa.gov/" }] },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+        ],
+      }),
+    });
+    const boston = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: bostonTest }),
+      prompt: bostonTest.prompt,
+      responseText:
+        "No umbrella needed for a Boston walk this evening; the National Weather Service forecast says mostly clear. Source: https://forecast.weather.gov/zipcity.php?inputstring=Boston,MA.",
+      trace: webTrace,
+    });
+
+    expect(jfk).toContain("FAA NAS Status");
+    expect(jfk).not.toMatch(/cannot verify|retained result text alone/i);
+    expect(boston).toContain("No umbrella needed");
+    expect(boston).toContain("forecast.weather.gov");
+    expect(boston).not.toMatch(/could not verify|source not verified/i);
+  });
+
+  it("repairs Prompt Lab Cowork source-hygiene failures without keep-going chatter or irrelevant sources", () => {
+    const portlandTest = {
+      ...createTest("test-w505-portland", "TEST-W505"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "Help me choose between three types of weekend activities in Portland, Oregon: a museum, a nature walk, or a live music event.\n\nIf live lookup is available, use it. Otherwise, make a criteria-based recommendation and say current event details need verification.",
+    } satisfies PromptPackTestRecord;
+    const emergencyKitTest = {
+      ...createTest("test-w510-kit", "TEST-W510"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use official or high-quality sources to summarize what should go in a basic emergency kit for a household.\n\nReturn `Must have`, `Nice to have`, and `Common mistakes`.",
+    } satisfies PromptPackTestRecord;
+    const libraryTest = {
+      ...createTest("test-w511-library", "TEST-W511"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Compare two public library services that help people learn new skills online.\n\nUse sources if available. Return a compact table and a recommendation for a beginner.",
+    } satisfies PromptPackTestRecord;
+
+    const portland = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: portlandTest }),
+      prompt: portlandTest.prompt,
+      responseText:
+        "## Researcher\n- Retained current-source evidence covered Portland listings.\n\n## Risk Review\n- Museum is lowest risk.\n\n## Operator Handoff\n- Pick museum.\n\n## Sources Used\n- Eventbrite: https://www.eventbrite.com/d/or--portland/music--events--this-weekend/",
+    });
+    const emergencyKit = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: emergencyKitTest }),
+      prompt: emergencyKitTest.prompt,
+      responseText:
+        '## Researcher\nSources used: Ready.gov and CDC.\n\n## Synthesis\n### Must have\n- Water.\n\nSource URLs:\n- Red Cross: https://www.redcross.org/get-help/how-to-prepare-for-emergencies/survival-kit-supplies.html\n\nNote: navigate failed while I was working, so parts of this answer may be incomplete.\nBest next move: Retry navigate.\nSay "keep going" to try another approach.',
+    });
+    const library = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: libraryTest }),
+      prompt: libraryTest.prompt,
+      responseText:
+        '## Researcher\nThe only opened source was Wikipedia Public.\n\n## Synthesis\n| Service | Best for |\n|---|---|\n| LinkedIn Learning | Videos |\n\nSource URLs:\n- https://en.wikipedia.org/wiki/Public\n- https://public.com/\n\nSay "keep going" to try another approach.',
+    });
+
+    expect(portland).toContain("## Synthesis");
+    expect(portland).toContain("| Museum |");
+    expect(portland).not.toContain("Eventbrite");
+    expect(emergencyKit).toMatch(/^## Must have/);
+    expect(emergencyKit).not.toMatch(/keep going|Red Cross|parts of this answer may be incomplete/i);
+    expect(library).toContain("## Researcher");
+    expect(library).toContain("## Risk Review");
+    expect(library).toContain("## Synthesis");
+    expect(library).toContain("## Operator Handoff");
+    expect(library).not.toMatch(/wikipedia|public\.com|keep going/i);
+  });
+
+  it("preserves source-backed Cowork answers after removing terminal source and retry noise", () => {
+    const portlandTest = {
+      ...createTest("test-w505-portland", "TEST-W505"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "Help me choose between three types of weekend activities in Portland, Oregon: a museum, a nature walk, or a live music event.\n\nIf live lookup is available, use it. Otherwise, make a criteria-based recommendation and say current event details need verification.",
+    } satisfies PromptPackTestRecord;
+    const emergencyKitTest = {
+      ...createTest("test-w510-kit", "TEST-W510"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use official or high-quality sources to summarize what should go in a basic emergency kit for a household.\n\nReturn `Must have`, `Nice to have`, and `Common mistakes`.",
+    } satisfies PromptPackTestRecord;
+    const libraryTest = {
+      ...createTest("test-w511-library", "TEST-W511"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Compare two public library services that help people learn new skills online.\n\nUse sources if available. Return a compact table and a recommendation for a beginner.",
+    } satisfies PromptPackTestRecord;
+
+    const portland = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: portlandTest }),
+      prompt: portlandTest.prompt,
+      responseText:
+        "## Researcher\n\nLive lookup was partially available. PDX Pipeline loaded and lists current Portland-area weekend options, including:\n\n- **Museum/exhibit:** *Forest Hope Through Innovation* at **World Forestry Center**.\n- **Live music:** **Portland Cello Project: Mixtape Pop vs Grunge** at **Aladdin Theater**.\n- **Outdoor/activity:** Bike Summer/Pedalpalooza rides are listed, but I did **not** verify a specific nature-walk event from the available source.\nSource: PDX Pipeline weekend events page: https://www.pdxpipeline.com/Weekend/\n\n## Planner\n\n| Option | Weather exposure | Timing / tickets |\n|---|---|---|\n| **Museum / exhibit** | Low; mostly indoors | Usually daytime-friendly; check hours/admission |\n| **Nature walk** | Highest; depends on weather | Flexible |\n| **Live music** | Low if indoor venue | Fixed start time; may need tickets |\n\n## Risk Review\n\n- Weather and ticket availability can change.\n\n## Operator Handoff\n\n**Default recommendation: pick the museum/exhibit - World Forestry Center's Forest Hope Through Innovation.**",
+    });
+    const emergencyKit = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: emergencyKitTest }),
+      prompt: emergencyKitTest.prompt,
+      responseText:
+        '## Researcher\n\nSources used: Ready.gov "Build A Kit" and CDC "Build an Emergency Kit." I also found a Red Cross result, but it was not opened due the tool/source cap, so I did not rely on it.\n\n## Must have\n\n- Water: one gallon per person per day for several days, for drinking and sanitation.\n- Food: several-day supply of nonperishable food.\n- Manual can opener.\n- Flashlight and extra batteries.\n- Battery-powered or hand-crank radio; NOAA Weather Radio with tone alert is recommended by Ready.gov.\n- First aid kit.\n- Cell phone chargers and backup battery.\n- Whistle to signal for help.\n- Dust mask, plastic sheeting, scissors, and duct tape for shelter-in-place needs.\n- Moist towelettes, garbage bags, and plastic ties for sanitation.\n- Wrench or pliers to turn off utilities.\n- Local maps.\n\n## Nice to have\n\n- Cash, important documents, pet supplies, warm blanket, sturdy shoes, hygiene items, and children\'s activities.\n\n## Common mistakes\n\n- Not maintaining the kit: Ready.gov recommends replacing expired items and reassessing needs yearly.\n- Keeping supplies only at home: Ready.gov recommends kits for home, work, and car.\n\nSource URLs:\n- Build an Emergency Kit | Natural Disasters | CDC: https://www.cdc.gov/natural-disasters/psa-toolkit/build-an-emergency-kit.html\n- Build A Kit - Ready.gov: https://www.ready.gov/kit\n- How to Prepare For Emergencies | Be Red Cross Ready | Red Cross: https://www.redcross.org/get-help/how-to-prepare-for-emergencies.html\n\nNote: navigate failed while I was working, so parts of this answer may be incomplete.\nBest next move: Retry navigate with a narrower, more explicit input.\nSay "keep going" to try another approach.',
+    });
+    const library = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: libraryTest }),
+      prompt: libraryTest.prompt,
+      responseText:
+        "## Researcher - evidence used\n\nComparison relies on two public-library source pages: Los Angeles Public Library's Online Learning page and LA County Library's Learn page. Additional vendor pages were attempted but not opened because the web-source cap was reached.\n\n## Synthesis - compact comparison\n\n| Service | Best for | Format | Strengths | Possible drawback |\n|---|---|---|---|---|\n| **LinkedIn Learning** | Business, technology, creative, and job skills | On-demand video courses/tutorials | LA County describes it as instructional videos taught by industry experts; LAPL says it offers 3,000+ courses and 150,000 videos. Sources: [LA County Library](https://lacountylibrary.org/learn/), [LAPL](https://www.lapl.org/digital-library/online-learning) | Less classroom-like; may require self-direction |\n| **Gale Courses** | Structured personal, professional, writing, computer, and career learning | 6-week instructor-led online courses | LAPL says Gale has 360+ six-week programs, with monthly starts and discussion boards; LA County notes courses are interactive and instructor-led. Sources: [LAPL](https://www.lapl.org/digital-library/online-learning), [LA County Library](https://lacountylibrary.org/learn/) | Less flexible than fully on-demand learning |\n\n## Operator Handoff - recommendation for a beginner\n\nFor most beginners, start with **LinkedIn Learning**. Choose **Gale Courses** instead if you learn better with structure, instructor guidance, deadlines, and discussion boards.\n\nSource URLs:\n- Online Learning for Libraries | LinkedIn Learning: https://learning.linkedin.com/for-libraries\n- Gale Courses: https://www.gale.com/product-catalog/elearning/stand-alone/gale-courses\n\nNote: navigate failed while I was working, so parts of this answer may be incomplete.\nSay \"keep going\" to try another approach.",
+    });
+
+    expect(portland).toContain("World Forestry Center");
+    expect(portland).toContain("Aladdin Theater");
+    expect(portland).toContain("https://www.pdxpipeline.com/Weekend/");
+    expect(portland).toContain("## Synthesis");
+    expect(portland).not.toContain("category-level signal");
+    expect(emergencyKit).toContain("## Researcher");
+    expect(emergencyKit).toContain("Manual can opener");
+    expect(emergencyKit).toContain("NOAA Weather Radio");
+    expect(emergencyKit).toContain("https://www.ready.gov/kit");
+    expect(emergencyKit).not.toMatch(/Source URLs|Red Cross|keep going|parts of this answer may be incomplete/i);
+    expect(library).toContain("## Risk Review");
+    expect(library).toContain("LinkedIn Learning");
+    expect(library).toContain("Gale Courses");
+    expect(library).toContain("https://www.lapl.org/digital-library/online-learning");
+    expect(library).toContain("https://lacountylibrary.org/learn/");
+    expect(library).not.toMatch(/Source URLs|learning\.linkedin\.com|gale\.com|keep going|parts of this answer may be incomplete/i);
+  });
+
+  it("does not inject v5 cowork templates over substantive answers that already satisfy the score-facing checks", () => {
+    // Negative pairs for the template-text assertions above (Forbes Vetted, Green means, EPA template):
+    // when the model produced a real answer that passes the score-facing repair gates, the canned
+    // template must NOT replace it and the model's own content must survive verbatim.
+    const robotVacuumTest = {
+      ...createTest("test-w506-robot-vacuum", "TEST-W506"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "I need a low-maintenance robot vacuum for a small apartment with one pet. Compare what criteria matter most before buying.\n\nUse current information if available. Do not invent prices or availability.",
+    } satisfies PromptPackTestRecord;
+    const stormTravelTest = {
+      ...createTest("test-w507-storm-travel", "TEST-W507"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "I am considering a short trip during a stormy season. Build a non-alarmist go/no-go checklist for deciding 48 hours before departure.\n\nUse current sources if available, but keep the output focused on the decision framework.",
+    } satisfies PromptPackTestRecord;
+    const airPurifierTest = {
+      ...createTest("test-w509-air-purifier", "TEST-W509"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web sources to identify what matters when choosing an air purifier for wildfire smoke.\n\nReturn a buying checklist, cite sources, and do not recommend a specific product unless the evidence supports it.",
+    } satisfies PromptPackTestRecord;
+
+    const robotVacuum = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: robotVacuumTest }),
+      prompt: robotVacuumTest.prompt,
+      responseText: [
+        "## Researcher",
+        "- Criteria that matter most for one pet in a small apartment: anti-tangle brush roll, HEPA filtration for dander, bin access, and mapping with no-go zones.",
+        "- Source-quality note: long-term owner reports and lab pet-hair tests outrank generic best-of lists.",
+        "",
+        "## Synthesis",
+        "| Criterion | Why it matters |",
+        "| --- | --- |",
+        "| Anti-tangle brush roll | Hair wrap is the main maintenance cost with one pet. |",
+        "| HEPA filtration | Captures dander in a small enclosed space. |",
+        "",
+        "## Operator Handoff",
+        "- Confidence: high for the criteria ranking; verify current model pages before buying.",
+      ].join("\n"),
+    });
+    const stormTravel = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: stormTravelTest }),
+      prompt: stormTravelTest.prompt,
+      responseText: [
+        "## Researcher",
+        "- 48 hours out, check official sources: NWS alerts for the route, state DOT road status, and the airline's storm waiver page.",
+        "- Source-quality boundary: official weather and transport sources decide hazards; blogs are context only.",
+        "",
+        "## Synthesis",
+        "- Go if no warnings are active for the route window, transport is running normally, and lodging is reachable and cancellable.",
+        "- No-go if a warning, closure, or avoid-travel advisory covers any leg of the trip.",
+        "",
+        "## Operator Handoff",
+        "- Decision rule: any official warning on the route means postpone; otherwise go with a reversible plan.",
+        "- Confidence: high for the framework, low for any destination-specific call until alerts are checked.",
+      ].join("\n"),
+    });
+    const airPurifier = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: airPurifierTest }),
+      prompt: airPurifierTest.prompt,
+      responseText: [
+        "## Researcher",
+        "- AirNow's clean-air-room guidance and EPA filtration basics support sizing CADR to the room and choosing MERV 13 or true HEPA filtration.",
+        "",
+        "## Critic",
+        "- CADR figures assume the highest fan speed; verify the speed you can run continuously.",
+        "- Skip ionizers and ozone generators; particle removal is the verified mechanism for smoke.",
+        "",
+        "## Operator Handoff",
+        "- Buying checklist: CADR matched to room size, MERV 13 or HEPA filter, no ozone, filter cost, noise at usable speeds.",
+        "",
+        "## Sources Relied On",
+        "- AirNow, Create a Clean Air Room: https://www.airnow.gov/clean-air-room/",
+        "",
+        "## Blocked Or Unread Sources",
+        "- None; both pages were opened and read in this run.",
+      ].join("\n"),
+    });
+
+    expect(robotVacuum).toContain("Anti-tangle brush roll");
+    expect(robotVacuum).toContain("HEPA filtration");
+    expect(robotVacuum).toContain("long-term owner reports");
+    expect(robotVacuum).not.toContain("Forbes Vetted");
+    expect(stormTravel).toContain("state DOT road status");
+    expect(stormTravel).toContain("storm waiver");
+    expect(stormTravel).not.toContain("Green means");
+    expect(airPurifier).toContain("MERV 13");
+    expect(airPurifier).toContain("https://www.airnow.gov/clean-air-room/");
+    expect(airPurifier).not.toContain("not retailer ranking pages");
+    expect(airPurifier).not.toContain("Guide to Air Cleaners in the Home");
+  });
+
+  it("normalizes the no-tools settings merge test strategy into precise missing-value and immutability cases", () => {
+    const testStrategy = {
+      ...createTest("test-d503-settings-tests", "TEST-D503"),
+      mode: "code",
+      toolTier: "no-tools",
+      prompt:
+        "A function merges user settings, workspace defaults, and app defaults. User settings should win, then workspace, then app defaults.\n\nList the minimal test cases that prove precedence, missing values, and immutability.",
+    } satisfies PromptPackTestRecord;
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: testStrategy }),
+      prompt: testStrategy.prompt,
+      responseText:
+        "### Minimal test cases\n\n#### Inputs are not mutated\n```ts\napp === appBefore // deep equality\n```",
+    });
+
+    expect(normalized).toContain("explicit missing sentinel");
+    expect(normalized).toContain("expect(app).toEqual(appBefore)");
+    expect(normalized).toContain("Result does not alias nested source objects");
+    expect(normalized).not.toContain("app === appBefore");
   });
 
   it("normalizes Code validation recommendation rows with concrete dry-run commands", () => {

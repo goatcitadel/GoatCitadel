@@ -157,7 +157,8 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     expect(listActive).toHaveBeenCalledWith("global", "global");
     expect(listActive).toHaveBeenCalledWith("agent", "assistant");
     expect(listActive).toHaveBeenCalledWith("workspace", "workspace-a");
-    expect(createGrant).not.toHaveBeenCalled();
+    const grantedPatterns = createGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
+    expect(grantedPatterns.some((pattern) => pattern.startsWith("browser."))).toBe(false);
   });
 
   it("inherits default-workspace denies when prompt-pack session metadata is missing", () => {
@@ -245,7 +246,8 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
 
     expect(listActive).toHaveBeenCalledWith("workspace", "default");
-    expect(createGrant).not.toHaveBeenCalled();
+    const grantedPatterns = createGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
+    expect(grantedPatterns.some((pattern) => pattern.startsWith("browser."))).toBe(false);
   });
 
   it("blocks prompt-pack test execution before creating run rows when durable preflight fails", async () => {
@@ -2310,6 +2312,183 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     ).toBe(true);
     expect(benchmarkUpdates.some((params) => params.completedItems === 1)).toBe(true);
     expect(benchmarkUpdates.some((params) => params.completedItems === 2)).toBe(true);
+  });
+
+  it("starts pending benchmark prompt-pack items concurrently", async () => {
+    const benchmarkTests = Array.from({ length: 5 }, (_, index) =>
+      createTest(`test-benchmark-parallel-${index + 1}`, `TEST-BENCH-PAR-${index + 1}`),
+    );
+    const benchmarkRun: Record<string, unknown> = {
+      benchmark_run_id: "ppb-parallel-1",
+      pack_id: "pack-1",
+      status: "queued",
+      test_codes_json: JSON.stringify(benchmarkTests.map((test) => test.code)),
+      providers_json: JSON.stringify([{ providerId: "openai", model: "gpt-5.4" }]),
+      total_items: benchmarkTests.length,
+      completed_items: 0,
+      claimed_by_worker_id: null,
+      claim_heartbeat_at: null,
+      claim_expires_at: null,
+      execution_style: "agentic_surface",
+      error: null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null,
+    };
+    const benchmarkItems: Array<Record<string, unknown>> = [];
+    const publishRealtime = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listTests: () => benchmarkTests,
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (arg: string) =>
+              sql.includes("FROM prompt_pack_benchmark_runs") && arg === benchmarkRun.benchmark_run_id
+                ? benchmarkRun
+                : undefined,
+            all: (arg?: unknown) => {
+              if (sql.includes("FROM prompt_pack_benchmark_items") && arg === benchmarkRun.benchmark_run_id) {
+                return benchmarkItems;
+              }
+              return [];
+            },
+            run: (params: Record<string, unknown>) => {
+              if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
+                const existingIndex = benchmarkItems.findIndex(
+                  (item) =>
+                    item.benchmark_run_id === params.benchmarkRunId &&
+                    item.provider_id === params.providerId &&
+                    item.model === params.model &&
+                    item.test_id === params.testId,
+                );
+                const item = {
+                  item_id: String(params.itemId),
+                  benchmark_run_id: String(params.benchmarkRunId),
+                  pack_id: String(params.packId),
+                  test_id: String(params.testId),
+                  test_code: String(params.testCode),
+                  provider_id: String(params.providerId),
+                  model: String(params.model),
+                  run_id: typeof params.runId === "string" ? params.runId : null,
+                  score_id: typeof params.scoreId === "string" ? params.scoreId : null,
+                  auto_score_id: typeof params.autoScoreId === "string" ? params.autoScoreId : null,
+                  run_status: String(params.runStatus),
+                  total_score: typeof params.totalScore === "number" ? params.totalScore : null,
+                  weighted_score: typeof params.weightedScore === "number" ? params.weightedScore : null,
+                  verdict: typeof params.verdict === "string" ? params.verdict : null,
+                  score_state: typeof params.scoreState === "string" ? params.scoreState : null,
+                  failure_signal: typeof params.failureSignal === "string" ? params.failureSignal : null,
+                  created_at: String(params.createdAt),
+                };
+                if (existingIndex >= 0) {
+                  benchmarkItems[existingIndex] = { ...benchmarkItems[existingIndex], ...item };
+                } else {
+                  benchmarkItems.push(item);
+                }
+              } else if (sql.includes("SET claim_heartbeat_at = @now")) {
+                if (benchmarkRun.claimed_by_worker_id === String(params.workerId)) {
+                  benchmarkRun.claim_heartbeat_at = String(params.now);
+                  benchmarkRun.claim_expires_at = String(params.claimExpiresAt);
+                  return { changes: 1 };
+                }
+                return { changes: 0 };
+              } else if (sql.includes("status = 'completed'")) {
+                benchmarkRun.status = "completed";
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+                return { changes: 1 };
+              } else if (sql.includes("status = 'running'")) {
+                benchmarkRun.status = "running";
+                benchmarkRun.error = null;
+                benchmarkRun.completed_items = Number(params.completedItems ?? benchmarkRun.completed_items);
+                benchmarkRun.claimed_by_worker_id = String(params.workerId ?? "worker-test");
+                benchmarkRun.claim_heartbeat_at = String(params.now ?? "2026-03-16T00:00:00.000Z");
+                benchmarkRun.claim_expires_at = String(params.claimExpiresAt ?? "2026-03-16T00:02:00.000Z");
+                return { changes: 1 };
+              } else if (sql.includes("SET completed_items = @completedItems")) {
+                benchmarkRun.completed_items = Number(params.completedItems);
+                return { changes: 1 };
+              }
+              return { changes: 0 };
+            },
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    const runResolvers: Array<() => void> = [];
+    const runPromptPackTest = vi.spyOn(service, "runPromptPackTest").mockImplementation(async (_packId, testId) => {
+      await new Promise<void>((resolve) => runResolvers.push(resolve));
+      return {
+        ...createRun(`run-${testId}`, "completed", "2026-03-16T00:02:00.000Z"),
+        testId,
+        responseText: `Benchmark answer for ${testId}.`,
+        trace: createTrace(`sess-${testId}`),
+      };
+    });
+    const autoScorePromptPackTest = vi.spyOn(service, "autoScorePromptPackTest").mockImplementation(async (input) => ({
+      score: {
+        autoScoreId: `auto-${input.testId}`,
+        weightedScore: 96,
+        autoVerdict: "pass",
+        scoreState: "auto_valid",
+      },
+      legacyScore: undefined,
+      run: createRun(String(input.runId ?? "run-scored"), "completed", "2026-03-16T00:03:00.000Z"),
+    }) as never);
+
+    const task = (
+      service as unknown as { runPromptPackBenchmarkTask: (benchmarkRunId: string) => Promise<void> }
+    ).runPromptPackBenchmarkTask("ppb-parallel-1");
+    await vi.waitFor(() => expect(runResolvers.length).toBeGreaterThanOrEqual(4));
+
+    expect(runPromptPackTest).toHaveBeenCalledTimes(4);
+    expect(runResolvers).toHaveLength(4);
+    const firstBatch = runResolvers.splice(0);
+    firstBatch.forEach((resolve) => resolve());
+    await vi.waitFor(() => expect(runResolvers.length).toBeGreaterThanOrEqual(1));
+
+    expect(runPromptPackTest).toHaveBeenCalledTimes(5);
+    runResolvers.splice(0).forEach((resolve) => resolve());
+    await task;
+
+    expect(autoScorePromptPackTest).toHaveBeenCalledTimes(5);
+    expect(benchmarkItems).toHaveLength(5);
+    expect(benchmarkRun.status).toBe("completed");
+    expect(benchmarkRun.completed_items).toBe(5);
+    expect(
+      publishRealtime.mock.calls.some(
+        ([eventType, source, payload]) =>
+          eventType === "prompt_pack_benchmark_completed" &&
+          source === "promptLab" &&
+          (payload as { benchmarkRunId?: string }).benchmarkRunId === benchmarkRun.benchmark_run_id,
+      ),
+    ).toBe(true);
   });
 
   it("cancels an in-flight benchmark without flipping it to failed", async () => {

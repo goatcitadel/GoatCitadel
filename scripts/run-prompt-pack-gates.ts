@@ -19,6 +19,30 @@ interface InjectErrorPayload {
   error?: unknown;
 }
 
+interface GateSummaryMetrics {
+  notRunCount: number;
+  completedValidLatestRuns: number;
+  autoScoredRuns: number;
+  scoredCoverageDenominator: number;
+  missingCurrentScores: number;
+}
+
+/**
+ * Derived coverage metrics shared by the console summary in main() and the
+ * markdown report in renderReport() — keep both in lockstep.
+ */
+function deriveGateSummaryMetrics(summary: PromptPackReportRecord["summary"]): GateSummaryMetrics {
+  const notRunCount = Math.max(
+    summary.totalTests - summary.completedRuns - summary.failedRuns - (summary.approvalPausedRuns ?? 0),
+    0,
+  );
+  const completedValidLatestRuns = Math.max(summary.completedRuns - summary.invalidLatestRuns, 0);
+  const autoScoredRuns = summary.autoScoredRuns ?? 0;
+  const scoredCoverageDenominator = Math.max(completedValidLatestRuns, autoScoredRuns + summary.needsScoreCount);
+  const missingCurrentScores = Math.max(scoredCoverageDenominator - autoScoredRuns, 0);
+  return { notRunCount, completedValidLatestRuns, autoScoredRuns, scoredCoverageDenominator, missingCurrentScores };
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const args = new Set(argv);
@@ -135,6 +159,23 @@ async function main(): Promise<void> {
     }
 
     const report = await getReport(app, pack.packId, authHeaders);
+    const { notRunCount, autoScoredRuns, scoredCoverageDenominator, missingCurrentScores } = deriveGateSummaryMetrics(
+      report.summary,
+    );
+    const fullPackPassReady =
+      fullRun &&
+      report.summary.totalTests > 0 &&
+      notRunCount === 0 &&
+      report.summary.failedRuns === 0 &&
+      report.summary.runFailureCount === 0 &&
+      report.summary.invalidLatestRuns === 0 &&
+      missingCurrentScores === 0 &&
+      report.summary.staleLatestAutoScoreCount === 0 &&
+      report.summary.failCount === 0 &&
+      report.summary.reviewCount === 0 &&
+      report.summary.judgeErrorCount === 0 &&
+      (report.summary.degradedScoreCount ?? 0) === 0 &&
+      report.summary.effectivePassRate === 1;
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
     const timestamp = formatStamp(finishedAt);
@@ -160,7 +201,10 @@ async function main(): Promise<void> {
       `[gate] summary: runFailures=${report.summary.runFailureCount} fail=${report.summary.failCount} review=${report.summary.reviewCount}` +
         ` needsScore=${report.summary.needsScoreCount} stale=${report.summary.staleLatestAutoScoreCount}` +
         ` degraded=${report.summary.degradedScoreCount}` +
-        ` avg=${report.summary.averageWeightedScore.toFixed(1)} passRate=${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
+        ` coverage=${report.summary.completedRuns}/${report.summary.totalTests} notRun=${notRunCount}` +
+        ` scored=${autoScoredRuns}/${scoredCoverageDenominator}` +
+        ` avg=${report.summary.averageWeightedScore.toFixed(1)} scoredPassRate=${(report.summary.effectivePassRate * 100).toFixed(1)}%` +
+        ` fullPackReady=${fullPackPassReady ? "yes" : "no"}`,
     );
     if (!isEnvEnabled(PROMPT_PACK_V2_GATING_ENABLED_ENV)) {
       console.log(
@@ -170,7 +214,16 @@ async function main(): Promise<void> {
       report.summary.failCount > 0 ||
       report.summary.reviewCount > 0 ||
       report.summary.needsScoreCount > 0 ||
-      report.summary.staleLatestAutoScoreCount > 0
+      report.summary.staleLatestAutoScoreCount > 0 ||
+      (fullRun &&
+        (notRunCount > 0 ||
+          report.summary.failedRuns > 0 ||
+          report.summary.runFailureCount > 0 ||
+          report.summary.invalidLatestRuns > 0 ||
+          missingCurrentScores > 0 ||
+          report.summary.judgeErrorCount > 0 ||
+          (report.summary.degradedScoreCount ?? 0) > 0 ||
+          report.summary.effectivePassRate < 1))
     ) {
       process.exitCode = 1;
     }
@@ -353,6 +406,25 @@ function renderReport(input: {
       latestAssessmentByTestId.set(assessment.testId, assessment);
     }
   }
+  const { notRunCount, autoScoredRuns, scoredCoverageDenominator, missingCurrentScores } = deriveGateSummaryMetrics(
+    report.summary,
+  );
+  const fullPackReadinessBlockers = [
+    report.summary.totalTests === 0 ? "no tests loaded" : undefined,
+    !fullRun ? "target-only run" : undefined,
+    notRunCount > 0 ? `${notRunCount} not run` : undefined,
+    report.summary.failedRuns > 0 ? `${report.summary.failedRuns} failed run(s)` : undefined,
+    report.summary.runFailureCount > 0 ? `${report.summary.runFailureCount} runtime failure(s)` : undefined,
+    report.summary.invalidLatestRuns > 0 ? `${report.summary.invalidLatestRuns} invalid latest run(s)` : undefined,
+    missingCurrentScores > 0 ? `${missingCurrentScores} completed run(s) without current auto-score` : undefined,
+    report.summary.staleLatestAutoScoreCount > 0 ? `${report.summary.staleLatestAutoScoreCount} stale score row(s)` : undefined,
+    report.summary.failCount > 0 ? `${report.summary.failCount} fail verdict(s)` : undefined,
+    report.summary.reviewCount > 0 ? `${report.summary.reviewCount} review verdict(s)` : undefined,
+    report.summary.judgeErrorCount > 0 ? `${report.summary.judgeErrorCount} judge error(s)` : undefined,
+    (report.summary.degradedScoreCount ?? 0) > 0 ? `${report.summary.degradedScoreCount} degraded score(s)` : undefined,
+    report.summary.effectivePassRate < 1 ? "scored pass rate below 100%" : undefined,
+  ].filter((item): item is string => Boolean(item));
+  const fullPackReady = report.summary.totalTests > 0 && fullPackReadinessBlockers.length === 0;
   const testByCode = new Map(report.tests.map((test) => [normalizeCode(test.code), test]));
   const targetedRows = targetCodes
     .map((code) => {
@@ -387,8 +459,11 @@ function renderReport(input: {
     `- Needs score: ${report.summary.needsScoreCount}`,
     `- Stale latest auto scores: ${report.summary.staleLatestAutoScoreCount}`,
     `- Degraded auto scores: ${report.summary.degradedScoreCount}`,
+    `- Full-pack pass readiness: ${fullPackReady ? "ready" : `not ready (${fullPackReadinessBlockers.join("; ")})`}`,
+    `- Run coverage: ${report.summary.completedRuns}/${report.summary.totalTests} latest runs completed`,
+    `- Scored coverage: ${autoScoredRuns}/${scoredCoverageDenominator} completed valid latest runs`,
     `- Average weighted score: ${report.summary.averageWeightedScore.toFixed(1)}/100`,
-    `- Effective pass rate @ ${report.summary.passThreshold}/100: ${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
+    `- Effective pass rate @ ${report.summary.passThreshold}/100 (scored rows only): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
     `- Review rate: ${(report.summary.reviewRate * 100).toFixed(1)}%`,
     "",
     "## Execution Log (This Run)",

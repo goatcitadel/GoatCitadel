@@ -291,14 +291,14 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         <>
           <button
             type="button"
-            className="mc-next-secondary-button"
+            className="mc-next-button-secondary"
             onClick={() => void copyEvalProofExport()}
             disabled={exporting}
           >
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy eval proof export"}
           </button>
-          <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
+          <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
             <BarChart3 className="h-4 w-4" />
             Refresh
           </button>
@@ -334,7 +334,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   <button
                     key={pack.packId}
                     type="button"
-                    className={pack.packId === selectedPack?.packId ? "mc-next-button" : "mc-next-secondary-button"}
+                    className={pack.packId === selectedPack?.packId ? "mc-next-button" : "mc-next-button-secondary"}
                     onClick={() => setSelectedPackId(pack.packId)}
                   >
                     {pack.name}
@@ -414,7 +414,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
               <div className="mc-next-approvals-inline-actions">
                 <button
                   type="button"
-                  className="mc-next-secondary-button"
+                  className="mc-next-button-secondary"
                   onClick={() => void copyPromptPackExportPath()}
                   disabled={!selectedExport}
                 >
@@ -423,7 +423,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 </button>
                 <button
                   type="button"
-                  className="mc-next-secondary-button"
+                  className="mc-next-button-secondary"
                   onClick={() => openPromptPackWorkbench(selectedPack?.packId)}
                 >
                   Open selected pack
@@ -475,7 +475,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   <button
                     key={pack.packKey}
                     type="button"
-                    className="mc-next-secondary-button"
+                    className="mc-next-button-secondary"
                     onClick={() =>
                       pack.importedPackId
                         ? openPromptPackWorkbench(pack.importedPackId)
@@ -548,7 +548,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   <button
                     key={gate.gateId}
                     type="button"
-                    className="mc-next-secondary-button"
+                    className="mc-next-button-secondary"
                     onClick={() => openPromptPackWorkbench(gate.packId)}
                   >
                     Review security pack scoring
@@ -602,14 +602,14 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           <div className="mc-next-approvals-inline-actions">
             <button
               type="button"
-              className="mc-next-secondary-button"
+              className="mc-next-button-secondary"
               onClick={() => navigate({ area: "library", section: "skills", theme: route.theme })}
             >
               Open skills
             </button>
             <button
               type="button"
-              className="mc-next-secondary-button"
+              className="mc-next-button-secondary"
               onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
             >
               Open runtime evidence
@@ -755,7 +755,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           <div className="mc-next-approvals-inline-actions">
             <button
               type="button"
-              className="mc-next-secondary-button"
+              className="mc-next-button-secondary"
               onClick={() => void copyOtelQualityExport()}
               disabled={otelExporting}
             >

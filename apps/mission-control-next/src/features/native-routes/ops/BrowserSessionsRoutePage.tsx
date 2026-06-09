@@ -186,7 +186,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
         { label: "Events", value: String(detail.events.length) },
       ]}
       actions={
-        <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
+        <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>

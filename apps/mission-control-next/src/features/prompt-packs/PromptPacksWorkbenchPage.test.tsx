@@ -533,14 +533,6 @@ function findSelectContaining(renderer: ReactTestRenderer, text: string) {
   return select;
 }
 
-function findTab(renderer: ReactTestRenderer, text: string) {
-  const tab = renderer.root.findAll((node) => node.props.role === "tab").find((node) => readNodeText(node) === text);
-  if (!tab) {
-    throw new Error(`Missing tab ${text}`);
-  }
-  return tab;
-}
-
 async function click(button: ReactTestInstance) {
   await act(async () => {
     button.props.onClick();
@@ -578,11 +570,29 @@ describe("PromptPacksWorkbenchPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps pack-wide run controls in a stable command strip", async () => {
+    const renderer = await renderWorkbench();
+
+    const commandStrip = renderer.root.findByProps({ className: "mc-pp-command-strip" });
+    const commandText = readNodeText(commandStrip);
+    expect(commandText).toContain("Run controls");
+    expect(commandText).toContain("Run all");
+    expect(commandText).toContain("3 tests available");
+    expect(renderer.root.findAllByProps({ className: "mc-pp-command-deck" })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ className: "mc-pp-pack-list" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ "aria-label": "Prompt pack detail tabs" })).toHaveLength(0);
+    expect(findSelectContaining(renderer, "Operator trust pack").props.value).toBe("pack-1");
+    expect(readNodeText(renderer.root)).toContain("Assistant output");
+    expect(readNodeText(renderer.root)).toContain("Assessment summary");
+    expect(readNodeText(renderer.root)).toContain("Manual review");
+  });
+
   it("drives the prompt-pack workbench through run, review, ops, reset, import, and refresh flows", async () => {
     const navigate = vi.fn();
     const renderer = await renderWorkbench({ navigate });
 
     expect(readNodeText(renderer.root)).toContain("Operator trust pack");
+    expect(readNodeText(renderer.root)).toContain("Latest attempts");
     expect(readNodeText(renderer.root)).toContain("Trace a local failure");
     expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("openai");
 
@@ -605,11 +615,8 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(promptPackMocks.autoScorePromptPackTest).toHaveBeenCalledWith("pack-1", "test-1", { runId: "run-new" });
     expect(promptPackMocks.exportPromptPackReport).toHaveBeenCalledWith("pack-1");
 
-    await click(findTab(renderer, "Output"));
     expect(readNodeText(renderer.root)).toContain("Assistant output");
-    await click(findTab(renderer, "Assessment"));
     expect(readNodeText(renderer.root)).toContain("Failure attribution");
-    await click(findTab(renderer, "Review"));
     expect(readNodeText(renderer.root)).toContain("Manual review");
 
     await click(findButton(renderer, "Open run thread"));
@@ -643,8 +650,9 @@ describe("PromptPacksWorkbenchPage", () => {
       runId: "run-1",
     });
 
-    await click(findTab(renderer, "Insights"));
     expect(readNodeText(renderer.root)).toContain("Pack insights");
+    expect(readNodeText(renderer.root)).toContain("Full-pack readiness");
+    expect(readNodeText(renderer.root)).toContain("Incomplete");
     await click(findButton(renderer, "Start benchmark"));
     expect(promptPackMocks.runPromptPackBenchmark).toHaveBeenCalledWith(
       "pack-1",
@@ -715,12 +723,16 @@ describe("PromptPacksWorkbenchPage", () => {
 
     expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledWith("pack-2");
     expect(promptPackMocks.fetchPromptPackReport).toHaveBeenCalledWith("pack-2");
+    // Exactly one fetch per selection — the duplicate selectedPackId effect
+    // used to double-load every pack change.
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledTimes(1);
     expect(readNodeText(renderer.root)).toContain("Secondary pack");
 
-    await click(findButton(renderer, "Operator trust pack"));
+    await change(findSelectContaining(renderer, "Operator trust pack"), "pack-1");
 
     expect(promptPackMocks.fetchPromptPackTests).toHaveBeenLastCalledWith("pack-1");
     expect(promptPackMocks.fetchPromptPackReport).toHaveBeenLastCalledWith("pack-1");
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces load, copy, validation, and ops import failures", async () => {
@@ -734,7 +746,6 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).not.toContain("Import a new pack");
 
     await change(findInput(renderer, "Value for <LOCAL PATH>"), "F:/code/personal-ai/runtime.log");
-    await click(findButton(renderer, "Review"));
     await act(async () => {
       vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error("denied"));
     });
@@ -764,6 +775,9 @@ describe("PromptPacksWorkbenchPage", () => {
     promptPackMocks.fetchPromptPacks.mockResolvedValueOnce({ items: [] });
     const emptyRenderer = await renderWorkbench();
     expect(readNodeText(emptyRenderer.root)).toContain("No tests match this filter.");
+    const emptyPackSelect = findSelectContaining(emptyRenderer, "No packs available");
+    expect(emptyPackSelect.props.disabled).toBe(true);
+    expect(emptyPackSelect.props.value).toBe("");
     expect(promptPackMocks.fetchPromptPackTests).not.toHaveBeenCalled();
 
     setupApiSuccess();
@@ -778,7 +792,7 @@ describe("PromptPacksWorkbenchPage", () => {
   it("covers failed run, auto-score, export, terminal benchmark, and keyboard selection branches", async () => {
     const renderer = await renderWorkbench();
 
-    await click(findButton(renderer, "Secondary pack"));
+    await change(findSelectContaining(renderer, "Secondary pack"), "pack-2");
     expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledWith("pack-2");
 
     const testRow = renderer.root
@@ -854,7 +868,6 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).toContain("batch score failed");
 
     promptPackMocks.scorePromptPackTest.mockRejectedValueOnce(new Error("review save failed"));
-    await click(findTab(renderer, "Review"));
     await click(findButton(renderer, "Save review"));
     expect(readNodeText(renderer.root)).toContain("review save failed");
 
@@ -883,7 +896,6 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Run all"));
     expect(readNodeText(renderer.root)).toContain("Run all needs a selected provider/model lane.");
 
-    await click(findTab(renderer, "Insights"));
     await change(findTextarea(renderer, "openai/gpt-5.4-mini\nmoonshot/kimi-k2.6"), "");
     await click(findButton(renderer, "Start benchmark"));
     expect(readNodeText(renderer.root)).toContain("Benchmark needs at least one provider/model entry");
@@ -923,8 +935,6 @@ describe("PromptPacksWorkbenchPage", () => {
     await change(findSelectContaining(legacyRenderer, "claude-opus-5"), "claude-opus-5");
     await click(findButton(legacyRenderer, "Harness"));
     await click(findButton(legacyRenderer, "Agentic"));
-    await click(findTab(legacyRenderer, "Review"));
-
     expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("anthropic");
     expect(readNodeText(legacyRenderer.root)).toContain("New runs request anthropic/claude-opus-5.");
     expect(readNodeText(legacyRenderer.root)).toContain("Prompt Pack Scoring V2 UI is disabled in this build.");

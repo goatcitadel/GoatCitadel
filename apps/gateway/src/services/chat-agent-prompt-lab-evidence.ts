@@ -176,6 +176,10 @@ export function extractPromptLabCitationExcerpt(
   }
   if (/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(normalizedPath)) {
     preferredPathSpecificPatterns.push(
+      /\basync autoScorePromptPackTest\b/,
+      /\bcreatePromptPackAutoScoreV3\b/,
+      /\bcreatePromptPackAutoScoreV2\b/,
+      /\bPROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION\b/,
       /\breplacePackTests\([\s\S]*sourceLabel\b/,
       /\bsourceLabel: input\.sourceLabel\b/,
       /\bsourceLabel: sourcePath\b/,
@@ -186,6 +190,36 @@ export function extractPromptLabCitationExcerpt(
       /\bparsePromptPackTests\b/,
       /\bensurePromptPackLoaded\b/,
       /\bresolvePromptPackJudgeTarget\b/,
+    );
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(
+      /\bpromptPackAutoScoreBodySchema\b/,
+      /\/:packId\/tests\/:testId\/auto-score/,
+      /\bautoScorePromptPackTest\b/,
+    );
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-policy\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(
+      /\bPROMPT_PACK_V3_SCHEMA_VERSION\b/,
+      /\bPROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION\b/,
+      /\bDEFAULT_PROMPT_PACK_POLICY_V3\b/,
+    );
+  }
+  if (/(?:^|\/)packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(
+      /\bPromptPackAutoScoreV2Repository\b/,
+      /\bfindByIdentity\b/,
+      /\bINSERT INTO prompt_pack_auto_scores_v2\b/,
+      /\bON CONFLICT\b/,
+      /\bscoring_schema_version\b/,
+    );
+  }
+  if (/(?:^|\/)packages\/contracts\/src\/prompt-pack\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(
+      /\bPromptPackScoringSchemaVersion\b/,
+      /\bPromptPackAutoScoreRecord\b/,
+      /\bPromptPackScoreRecordV3\b/,
     );
   }
   if (/(?:^|\/)packages\/storage\/src\/prompt-pack-repo\.ts$/i.test(normalizedPath)) {

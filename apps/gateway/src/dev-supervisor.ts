@@ -51,7 +51,7 @@ const gatewayPort = Number(process.env.GATEWAY_PORT ?? 8787);
 // under active file indexing or antivirus scanning. Keep the dev supervisor
 // patient enough to wait for recovery instead of restarting a gateway that is
 // still making forward progress toward readiness.
-const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 120_000);
+const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 180_000);
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const pollMs = Number(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS ?? 1200);
 const watchDebounceMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_WATCH_DEBOUNCE_MS, 750);

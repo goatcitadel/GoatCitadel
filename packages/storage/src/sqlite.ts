@@ -1067,6 +1067,14 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "a2a_task_push_configs",
     up: createA2ATaskPushConfigSchema,
   },
+  {
+    version: 108,
+    name: "prompt_pack_run_score_facing_response_fields",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "final_response_text", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "final_response_signals_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2936,6 +2944,8 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       provider_id TEXT,
       model TEXT,
       response_text TEXT,
+      final_response_text TEXT,
+      final_response_signals_json TEXT,
       derived_response_text TEXT,
       derived_response_signals_json TEXT,
       trace_json TEXT,

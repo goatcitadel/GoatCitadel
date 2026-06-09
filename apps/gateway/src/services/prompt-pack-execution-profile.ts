@@ -141,6 +141,12 @@ export function resolvePromptPackExecutionProfile(input: {
       break;
   }
 
+  if (mode === "code" && toolTier !== "no-tools") {
+    const directives = detectPromptPackToolDirectives(input.test.prompt ?? "");
+    profile.webMode = directives.prefersWebTools ? "auto" : "off";
+    profile.memoryMode = directives.prefersMemoryTools ? "auto" : "off";
+  }
+
   if (input.override?.toolAutonomy) {
     profile.toolAutonomy = input.override.toolAutonomy;
   }
@@ -265,6 +271,7 @@ export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecution
     for (const toolName of PROMPT_PACK_WEB_TOOL_NAMES) {
       tools.add(toolName);
     }
+    tools.add("time.now");
   }
   if (directives.prefersMemoryTools) {
     for (const toolName of PROMPT_PACK_MEMORY_TOOL_NAMES) {
@@ -544,6 +551,10 @@ export function detectPromptPackToolDirectives(prompt: string): PromptPackToolDi
     (namedTools.some((toolName) => PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES.has(toolName)) ||
       /\bweb\s+lookup\b/.test(lower) ||
       /\buse\s+(?:a\s+)?(?:web|browser)\s+(?:search|lookup)\b/.test(lower) ||
+      /\b(?:accessible\s+)?reputable\s+web\s+page\b/.test(lower) ||
+      /\bfind\s+(?:one\s+)?(?:accessible\s+)?(?:reputable|reliable|official|credible)\s+(?:web\s+page|source)\b/.test(
+        lower,
+      ) ||
       /\blive\s+(?:lookup|information|source|sources|weather)\b/.test(lower) ||
       /\bcurrent\s+(?:weather|disruption|disruptions|sources?|advice|guidance|status|information)\b/.test(lower) ||
       /\blatest\s+official\s+guidance\b/.test(lower) ||
@@ -643,11 +654,15 @@ export function shouldApplyPromptPackRepoGroundedChatAssist(
   const normalized = prompt.toLowerCase();
   return (
     /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
+    /\brepo(?:sitory)? inspection\b/.test(normalized) ||
     /\buse (?:file|code|file\/code) tools\b/.test(normalized) ||
-    /\bcite the exact files?\b/.test(normalized) ||
-    /\bexact evidence\b/.test(normalized) ||
+    /\bcite (?:the )?exact files?\b/.test(normalized) ||
+    /\bexact (?:file )?evidence\b/.test(normalized) ||
     /\bguidance-loading chain\b/.test(normalized) ||
     /\bcurrent implementation\b/.test(normalized) ||
+    /\b(?:find|locate)\b[\s\S]{0,80}\bexisting\b[\s\S]{0,60}\b(?:tests?|test files?|implementations?|files?|routes?|services?|components?)\b/.test(
+      normalized,
+    ) ||
     (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
   );
 }

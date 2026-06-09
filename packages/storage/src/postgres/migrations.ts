@@ -1685,4 +1685,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON a2a_task_push_configs(last_delivery_status, next_retry_at);
     `,
   },
+  {
+    version: 61,
+    name: "prompt_pack_run_score_facing_response_fields",
+    sql: `
+      ALTER TABLE prompt_pack_runs
+        ADD COLUMN IF NOT EXISTS final_response_text TEXT,
+        ADD COLUMN IF NOT EXISTS final_response_signals_json TEXT;
+    `,
+  },
 ];
