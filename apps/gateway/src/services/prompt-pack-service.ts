@@ -6670,7 +6670,7 @@ function evaluatePromptPackRuleScoresV2(input: {
   };
 }
 
-function evaluatePromptPackRuleScoresV3(input: {
+export function evaluatePromptPackRuleScoresV3(input: {
   prompt: string;
   run: PromptPackRunRecord;
   profile: PromptPackExecutionProfile;
@@ -6697,6 +6697,12 @@ function evaluatePromptPackRuleScoresV3(input: {
         !isPromptPackGuardrailBlockedToolRun(toolRun) && !isPromptPackRecoveredLocalPathToolRun(toolRun, toolRuns),
     );
   const approvalRequiredTools = toolRuns.filter((toolRun) => toolRun.status === "approval_required");
+  const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
+  const hasRecoveryContext =
+    input.run.status === "failed" ||
+    failedTools.length > 0 ||
+    approvalRequiredTools.length > 0 ||
+    integrity.signals.includes("trace_failure");
   const responseText = resolvePromptPackScoreFacingResponseText(input.run);
   const requiresEvidence = requiresPromptPackCitationEvidence(input.prompt);
   const requiresExecution = shouldScorePromptPackExecutionQuality(input.prompt, input.profile);
@@ -6719,12 +6725,17 @@ function evaluatePromptPackRuleScoresV3(input: {
     evidenceGrounding: requiresEvidence
       ? clampPromptPackV3DimensionScore(v2.ruleScores.honesty ?? 0)
       : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.honesty ?? 3, 3)),
-    formatAdherence: clampPromptPackV3DimensionScore(v2.ruleScores.usability ?? 0),
+    formatAdherence:
+      hasReason("missing_required_json") || hasReason("missing_required_table") || hasReason("off_target_meta_analysis")
+        ? clampPromptPackV3DimensionScore(v2.ruleScores.usability ?? 0)
+        : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.usability ?? 3, 3)),
     operatorUsefulness: clampPromptPackV3DimensionScore(
       Math.round(((v2.ruleScores.taskSuccess ?? 0) + (v2.ruleScores.usability ?? 0)) / 2),
     ),
-    recoveryQuality: clampPromptPackV3DimensionScore(v2.ruleScores.robustness ?? 0),
   };
+  if (hasRecoveryContext) {
+    ruleScores.recoveryQuality = clampPromptPackV3DimensionScore(v2.ruleScores.robustness ?? 0);
+  }
   if (requiresExecution) {
     ruleScores.toolUseQuality = clampPromptPackV3DimensionScore(v2.ruleScores.executionQuality ?? 0);
     ruleScores.orchestrationQuality = clampPromptPackV3DimensionScore(v2.ruleScores.executionQuality ?? 0);
@@ -6787,7 +6798,7 @@ function evaluatePromptPackRuleScoresV3(input: {
     toolUseQuality: requiresExecution,
     orchestrationQuality: requiresExecution && input.profile.mode !== "chat",
     efficiency: requiresExecution,
-    recoveryQuality: true,
+    recoveryQuality: hasRecoveryContext,
   };
   const attribution = derivePromptPackFailureAttributionV3({
     prompt: input.prompt,

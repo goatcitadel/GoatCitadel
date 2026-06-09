@@ -22,6 +22,7 @@ import {
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRunIntegrity,
   evaluatePromptPackRuleScores,
+  evaluatePromptPackRuleScoresV3,
   extractPromptPackCompletionText,
   mergePromptPackAutoScoresV2,
   mergePromptPackAutoScoresV3,
@@ -3643,5 +3644,91 @@ describe("score-facing response integrity", () => {
       finishedAt: "2026-03-14T00:00:01.000Z",
     };
     expect(resolvePromptPackScoreFacingResponseText(run)).toBe("plain answer");
+  });
+});
+
+describe("v3 rule-score calibration", () => {
+  it("marks recoveryQuality inapplicable when nothing needed recovery", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-v3-cal-clean", "TEST-V3-CAL-CLEAN"),
+      mode: "chat",
+      toolTier: "no-tools",
+    };
+    const evaluation = evaluatePromptPackRuleScoresV3({
+      prompt: test.prompt,
+      run: {
+        ...createRun("run-v3-cal-clean", "completed", "2026-05-05T00:00:00.000Z"),
+        testId: test.testId,
+        toolTier: "no-tools",
+        responseText:
+          "A complete, grounded, and useful answer with enough structure and detail to satisfy the operator request end to end.",
+        trace: createTrace("sess-v3-cal-clean"),
+      },
+      profile: resolvePromptPackExecutionProfile({ test }),
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+    });
+
+    expect(evaluation.applicability.recoveryQuality).toBe(false);
+    expect(evaluation.ruleScores.recoveryQuality).toBeUndefined();
+  });
+
+  it("keeps recoveryQuality applicable when tools failed", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-v3-cal-failed-tool", "TEST-V3-CAL-FAILED-TOOL"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+    };
+    const evaluation = evaluatePromptPackRuleScoresV3({
+      prompt: test.prompt,
+      run: {
+        ...createRun("run-v3-cal-failed-tool", "completed", "2026-05-05T00:00:00.000Z"),
+        testId: test.testId,
+        toolTier: "explicit-tools",
+        responseText:
+          "The remote site blocked automation, so I summarized the available context and flagged the blocked navigation attempt.",
+        trace: createTrace("sess-v3-cal-failed-tool", {
+          toolRuns: [
+            {
+              toolRunId: "tool-v3-cal-failed",
+              turnId: "turn-sess-v3-cal-failed-tool",
+              sessionId: "sess-v3-cal-failed-tool",
+              toolName: "browser.navigate",
+              status: "failed",
+              args: { url: "https://example.com/pricing" },
+              error: "remote site blocked automation (automation block 403)",
+              startedAt: "2026-05-05T00:00:00.000Z",
+              finishedAt: "2026-05-05T00:00:00.500Z",
+            },
+          ],
+        }),
+      },
+      profile: resolvePromptPackExecutionProfile({ test }),
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+    });
+
+    expect(evaluation.applicability.recoveryQuality).toBe(true);
+  });
+
+  it("does not floor formatAdherence below 3 without a format violation signal", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-v3-cal-format", "TEST-V3-CAL-FORMAT"),
+      mode: "chat",
+      toolTier: "no-tools",
+    };
+    const evaluation = evaluatePromptPackRuleScoresV3({
+      prompt: test.prompt,
+      run: {
+        ...createRun("run-v3-cal-format", "completed", "2026-05-05T00:00:00.000Z"),
+        testId: test.testId,
+        toolTier: "no-tools",
+        responseText:
+          "A well-formed, complete answer with clear structure and enough operator-facing detail to satisfy the request.",
+        trace: createTrace("sess-v3-cal-format"),
+      },
+      profile: resolvePromptPackExecutionProfile({ test }),
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+    });
+
+    expect(evaluation.ruleScores.formatAdherence).toBeGreaterThanOrEqual(3);
   });
 });
