@@ -3084,7 +3084,7 @@ function safeJsonParseDefined<T>(raw: string | null | undefined, fallback: T): T
 }
 
 export function resolvePromptPackScoreFacingResponseText(
-  run: Pick<PromptPackRunRecord, "finalResponseText" | "responseText">,
+  run: Pick<PromptPackRunRecord, "responseText">,
 ): string {
   // Scoring must always see the model's real output. finalResponseText is a
   // historical fabrication artifact (prompt_lab_score_facing_normalization)
@@ -4265,7 +4265,7 @@ export function renderPromptPackMarkdownReport(
       }
     }
 
-    const scoreFacingResponseText = resolvePromptPackScoreFacingResponseText(run);
+    const rawResponseText = resolvePromptPackScoreFacingResponseText(run);
     if (run.responseText?.trim()) {
       lines.push("");
       lines.push("### Raw Assistant Output");
@@ -4286,7 +4286,7 @@ export function renderPromptPackMarkdownReport(
       lines.push(run.finalResponseText.trim());
       lines.push("```");
     }
-    if (run.derivedResponseText?.trim() && run.derivedResponseText.trim() !== scoreFacingResponseText.trim()) {
+    if (run.derivedResponseText?.trim() && run.derivedResponseText.trim() !== rawResponseText.trim()) {
       lines.push("");
       lines.push("### Derived Harness Output");
       lines.push("");
@@ -4997,7 +4997,7 @@ export function evaluatePromptPackRunIntegrity(input: {
 
 export function resolvePromptPackRunIntegrity(
   prompt: string,
-  run: Pick<PromptPackRunRecord, "finalResponseText" | "responseText" | "trace" | "integrity">,
+  run: Pick<PromptPackRunRecord, "responseText" | "trace" | "integrity">,
 ): PromptPackRunIntegrityRecord {
   if (run.integrity) {
     return {
