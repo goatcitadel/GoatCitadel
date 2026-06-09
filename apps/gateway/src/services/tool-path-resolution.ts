@@ -160,7 +160,7 @@ function resolveAbsoluteToolPath(
       return defaultToolCwd(context);
     }
     throw new ValidationError({
-      message: `Path "${rawPath}" resolves to the filesystem root and is not allowed for ${kind} operations.`,
+      message: `Path "${rawPath}" resolves to the filesystem root and is not allowed for ${kind} operations. Use a relative path such as "." to target the project root.`,
     });
   }
 

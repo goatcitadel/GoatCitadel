@@ -118,20 +118,28 @@ describe("resolveToolRequestPaths", () => {
 
   it("rejects filesystem root placeholders for read operations", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const fsRoot = path.parse(workspaceRoot).root;
     const request: ToolInvokeRequest = {
       toolName: "code.search_files",
-      args: { path: path.parse(workspaceRoot).root, query: "package.json" },
+      args: { path: fsRoot, query: "package.json" },
       agentId: "agent",
       sessionId: "session",
     };
 
-    expect(() =>
+    let caught: unknown;
+    try {
       resolveToolRequestPaths(request, {
         workspaceRoot,
         projectRoot,
         projectWorkspacePath: "fixtures/prompt-pack-workspace",
-      }),
-    ).toThrow(ValidationError);
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ValidationError);
+    expect((caught as ValidationError).message).toContain(
+      'Use a relative path such as "." to target the project root.',
+    );
   });
 
   it("preserves filesystem root convenience for cwd resolution", async () => {
