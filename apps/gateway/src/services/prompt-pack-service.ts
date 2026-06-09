@@ -4024,6 +4024,9 @@ export function renderPromptPackMarkdownReport(
   lines.push(`- Completed runs: ${report.summary.completedRuns}`);
   lines.push(`- Failed runs: ${report.summary.failedRuns}`);
   lines.push(`- Run failures: ${report.summary.runFailureCount}`);
+  lines.push(
+    "- Note: run failures count failed-status runs plus completed runs invalidated by runtime integrity failures.",
+  );
   lines.push(`- Invalid latest runs: ${report.summary.invalidLatestRuns}`);
   lines.push(`- Score failures: ${report.summary.scoreFailureCount}`);
   lines.push(`- Needs score: ${report.summary.needsScoreCount}`);

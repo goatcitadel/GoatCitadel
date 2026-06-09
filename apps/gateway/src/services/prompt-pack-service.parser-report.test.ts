@@ -551,6 +551,9 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(markdown).toContain("- Full-pack pass readiness: not ready (1 not run)");
     expect(markdown).toContain("- Run coverage: 1/2 latest runs completed");
     expect(markdown).toContain("- Effective pass rate (scored rows only): 100.0%");
+    expect(markdown).toContain(
+      "- Note: run failures count failed-status runs plus completed runs invalidated by runtime integrity failures.",
+    );
   });
 
   it("clusters Prompt Lab platform failure patterns in markdown reports", () => {
