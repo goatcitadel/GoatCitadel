@@ -3854,7 +3854,7 @@ function buildPromptPackRuntimeSignalClusterRows(
   );
 }
 
-function collectPromptPackPlatformSignals(
+export function collectPromptPackPlatformSignals(
   test: PromptPackTestRecord,
   run: PromptPackRunRecord | undefined,
   expectedFamilies: string[],
@@ -3881,13 +3881,17 @@ function collectPromptPackPlatformSignals(
     signals.push("artifact-tool detour");
   }
   const scoreFacingResponseText = run ? resolvePromptPackScoreFacingResponseText(run) : "";
-  const failureText = [run?.error, run?.trace?.failure?.message, run?.responseText, run?.finalResponseText]
+  const modelAndFailureText = [run?.error, run?.trace?.failure?.message, run?.responseText, run?.finalResponseText]
     .filter(Boolean)
     .join(" ");
-  if (/\b(?:tool run budget|turn budget|tool budget)\b/i.test(failureText) || toolRuns.length >= 8) {
+  // Budget detection reads harness failure state only — never the model's own text —
+  // and code-mode repo tasks legitimately use 8-12 tool calls.
+  const runFailureText = [run?.error, run?.trace?.failure?.message].filter(Boolean).join(" ");
+  const toolBudgetThreshold = (run?.mode ?? test.mode) === "code" ? 16 : 8;
+  if (/\b(?:tool run budget|turn budget|tool budget)\b/i.test(runFailureText) || toolRuns.length >= toolBudgetThreshold) {
     signals.push("tool-budget overrun");
   }
-  if (/\b(?:no tool output found|function call|responses api|tool output)\b/i.test(failureText)) {
+  if (/\b(?:no tool output found|function call|responses api|tool output)\b/i.test(modelAndFailureText)) {
     signals.push("provider/tool protocol failure");
   } else if (run) {
     const integrity = resolvePromptPackRunIntegrity(test.prompt, run);
@@ -3900,7 +3904,8 @@ function collectPromptPackPlatformSignals(
     toolRuns.some(
       (toolRun) =>
         /^(browser\.|http\.)/i.test(toolRun.toolName) &&
-        (toolRun.status === "failed" || toolRun.status === "blocked" || toolRun.status === "approval_required"),
+        (toolRun.status === "failed" || toolRun.status === "blocked" || toolRun.status === "approval_required") &&
+        !isPromptPackGuardrailBlockedToolRun(toolRun),
     ) &&
     !promptPackResponseSeparatesReliedAndAttemptedSources(scoreFacingResponseText)
   ) {

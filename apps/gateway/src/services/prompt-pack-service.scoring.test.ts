@@ -20,6 +20,7 @@ import {
   buildPromptPackReportSummary,
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
+  collectPromptPackPlatformSignals,
   evaluatePromptPackRunIntegrity,
   evaluatePromptPackRuleScores,
   evaluatePromptPackRuleScoresV2,
@@ -3885,5 +3886,94 @@ describe("tool-unavailability claim detection", () => {
       const flagged = evaluation.protocol.reasonCodes.includes("unsupported_access_claim");
       expect(flagged, `case: ${JSON.stringify(text)}`).toBe(expectClaim);
     }
+  });
+});
+
+describe("platform signal calibration", () => {
+  it("does not flag tool-budget overrun for a code-mode run with 12 successful tool calls", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-signal-code-budget", "TEST-SIGNAL-CODE-BUDGET"),
+      mode: "code",
+      toolTier: "explicit-tools",
+    };
+    const run: PromptPackRunRecord = {
+      ...createRun("run-signal-code-budget", "completed", "2026-05-05T00:00:00.000Z"),
+      testId: test.testId,
+      mode: "code",
+      toolTier: "explicit-tools",
+      trace: createTrace("sess-signal-code-budget", {
+        mode: "code",
+        toolRuns: Array.from({ length: 12 }, (_, index) => ({
+          toolRunId: `tool-signal-code-budget-${index + 1}`,
+          turnId: "turn-sess-signal-code-budget",
+          sessionId: "sess-signal-code-budget",
+          toolName: "file.read_range",
+          status: "executed" as const,
+          args: { path: `apps/gateway/src/file-${index + 1}.ts` },
+          startedAt: "2026-05-05T00:00:00.000Z",
+          finishedAt: "2026-05-05T00:00:00.500Z",
+        })),
+      }),
+    };
+
+    const signals = collectPromptPackPlatformSignals(test, run, ["file/code"], ["file/code"]);
+
+    expect(signals).not.toContain("tool-budget overrun");
+  });
+
+  it("flags tool-budget overrun when the trace failure message reports a budget stop", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-signal-budget-stop", "TEST-SIGNAL-BUDGET-STOP"),
+      mode: "chat",
+      toolTier: "implicit-tools",
+    };
+    const run: PromptPackRunRecord = {
+      ...createRun("run-signal-budget-stop", "completed", "2026-05-05T00:00:00.000Z"),
+      testId: test.testId,
+      trace: createTrace("sess-signal-budget-stop", {
+        failure: {
+          failureClass: "tool_run_budget_exceeded",
+          message: "Stopped: tool run budget exhausted for this turn.",
+        },
+      }),
+    };
+
+    const signals = collectPromptPackPlatformSignals(test, run, [], []);
+
+    expect(signals).toContain("tool-budget overrun");
+  });
+
+  it("does not demand source-hygiene review when the only blocked web runs are Prompt Lab cap guardrails", () => {
+    const test: PromptPackTestRecord = {
+      ...createTest("test-signal-web-cap", "TEST-SIGNAL-WEB-CAP"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+    };
+    const run: PromptPackRunRecord = {
+      ...createRun("run-signal-web-cap", "completed", "2026-05-05T00:00:00.000Z"),
+      testId: test.testId,
+      mode: "cowork",
+      trace: createTrace("sess-signal-web-cap", {
+        mode: "cowork",
+        toolRuns: [
+          {
+            toolRunId: "tool-signal-web-cap-1",
+            turnId: "turn-sess-signal-web-cap",
+            sessionId: "sess-signal-web-cap",
+            toolName: "browser.navigate",
+            status: "blocked" as const,
+            args: { url: "https://example.com/third-source" },
+            error:
+              "execution skipped: Prompt Lab web rows are capped at two opened/read sources before synthesis. Use only the successful opened/read sources and clearly separate blocked or merely attempted sources from sources relied on.",
+            startedAt: "2026-05-05T00:00:00.000Z",
+            finishedAt: "2026-05-05T00:00:00.500Z",
+          },
+        ],
+      }),
+    };
+
+    const signals = collectPromptPackPlatformSignals(test, run, ["web"], ["web"]);
+
+    expect(signals).not.toContain("source-hygiene review needed");
   });
 });

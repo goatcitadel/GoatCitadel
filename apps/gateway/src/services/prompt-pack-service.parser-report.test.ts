@@ -568,7 +568,8 @@ describe("prompt-pack parser, import, export, and reports", () => {
       testId: test.testId,
       mode: "code",
       toolTier: "explicit-tools",
-      responseText: "Prompt Lab synthesis note: this turn has already used the tool budget.",
+      responseText: "Prompt Lab synthesis note: repo inspection results summarized below.",
+      error: "Stopped: tool run budget exhausted for this turn.",
       trace: createTrace("sess-platform-clusters", {
         mode: "code",
         failure: {
