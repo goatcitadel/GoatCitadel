@@ -18,7 +18,8 @@ export const PROMPT_PACK_V2_SCHEMA_VERSION = "v2";
 export const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-16.2";
 export const PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION = "2026-04-09.1";
 export const PROMPT_PACK_V3_SCHEMA_VERSION = "v3";
-export const PROMPT_PACK_V3_SCORER_VERSION = "2026-05-v3.1";
+// 2026-06-v3.2: fabrication layer removed; raw-output scoring + recovery/format calibration + unavailability-claim detection
+export const PROMPT_PACK_V3_SCORER_VERSION = "2026-06-v3.2";
 export const PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION = "outcome-execution-attribution-2026-05";
 export const PROMPT_PACK_V2_PASS_THRESHOLD = DEFAULT_PROMPT_PACK_POLICY_V2.threshold;
 export const PROMPT_PACK_V2_SCORING_ENABLED_ENV = "PROMPT_PACK_V2_SCORING_ENABLED";
