@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -41,7 +41,7 @@ import { hashPromptPackPolicyV2, hashPromptPackPolicyV3 } from "@goatcitadel/sto
 import { createPack, createRun, createScore, createTest, createTrace } from "./prompt-pack-service-test-fixtures.js";
 
 describe("prompt-pack scoring, judging, and integrity", () => {
-  it("scores deterministic final response text while preserving raw transcript separately", () => {
+  it("scores the raw model output even when a fabricated finalResponseText is present", () => {
     const test: PromptPackTestRecord = {
       testId: "test-final-response",
       packId: "pack-1",
@@ -123,7 +123,7 @@ describe("prompt-pack scoring, judging, and integrity", () => {
       finishedAt: "2026-03-14T00:00:01.000Z",
     };
 
-    expect(resolvePromptPackScoreFacingResponseText(run)).toContain("## Route");
+    expect(resolvePromptPackScoreFacingResponseText(run)).toContain("## Exact files used");
     expect(resolvePromptPackRunIntegrity(test.prompt, run).validationStatus).toBe("valid");
 
     const evaluation = evaluatePromptPackRuleScores({
@@ -132,9 +132,9 @@ describe("prompt-pack scoring, judging, and integrity", () => {
       run,
     });
 
-    expect(evaluation.signals).toContain("file_specific_evidence_present");
-    expect(evaluation.signals).not.toContain("missing_file_specific_evidence");
-    expect(evaluation.signals).not.toContain("tool_failures_not_acknowledged");
+    expect(evaluation.signals).toContain("missing_file_specific_evidence");
+    expect(evaluation.signals).not.toContain("file_specific_evidence_present");
+    expect(evaluation.signals).toContain("required_tool_usage_present");
     expect(evaluation.scores.robustnessScore).not.toBe(0);
     expect(run.responseText).toContain("Patch points");
   });
@@ -3594,5 +3594,53 @@ describe("prompt-pack scoring, judging, and integrity", () => {
       { timestamp: "2026-03-12T00:00:02.000Z", value: 0.5 },
       { timestamp: "2026-03-14T00:00:03.000Z", value: 0.3333 },
     ]);
+  });
+});
+
+
+describe("score-facing response integrity", () => {
+  it("ignores fabricated finalResponseText and scores the raw model output", () => {
+    const run: PromptPackRunRecord = {
+      runId: "run-integrity-fabricated",
+      packId: "pack-1",
+      testId: "test-1",
+      sessionId: "sess-integrity-fabricated",
+      status: "completed",
+      mode: "chat",
+      toolTier: "implicit-tools",
+      toolAutonomy: "safe_auto",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      responseText: "I exhausted the current tool approaches after several attempts.",
+      finalResponseText: "## Route\n- A polished answer the model never produced.",
+      finalResponseSignals: ["prompt_lab_score_facing_normalization"],
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: "2026-03-14T00:00:01.000Z",
+    };
+    expect(resolvePromptPackScoreFacingResponseText(run)).toBe(
+      "I exhausted the current tool approaches after several attempts.",
+    );
+  });
+
+  it("returns the raw response text when no finalResponseText exists", () => {
+    const run: PromptPackRunRecord = {
+      runId: "run-integrity-no-final",
+      packId: "pack-1",
+      testId: "test-1",
+      sessionId: "sess-integrity-no-final",
+      status: "completed",
+      mode: "chat",
+      toolTier: "implicit-tools",
+      toolAutonomy: "safe_auto",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      responseText: "plain answer",
+      finalResponseText: undefined,
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: "2026-03-14T00:00:01.000Z",
+    };
+    expect(resolvePromptPackScoreFacingResponseText(run)).toBe("plain answer");
   });
 });

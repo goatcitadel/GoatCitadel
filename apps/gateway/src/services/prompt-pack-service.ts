@@ -3154,7 +3154,10 @@ function buildPromptPackScoreFacingResponseArtifact(input: {
 export function resolvePromptPackScoreFacingResponseText(
   run: Pick<PromptPackRunRecord, "finalResponseText" | "responseText">,
 ): string {
-  return (run.finalResponseText?.trim() || run.responseText?.trim() || "").trim();
+  // Scoring must always see the model's real output. finalResponseText is a
+  // historical fabrication artifact (prompt_lab_score_facing_normalization)
+  // retained on old run records for audit only.
+  return (run.responseText ?? "").trim();
 }
 
 function looksLikePromptPackUnavailableSourceFallback(responseText: string): boolean {
