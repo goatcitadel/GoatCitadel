@@ -497,13 +497,14 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
         createdAt: "2026-05-05T00:00:00.000Z",
       },
     });
+    // The v5 cowork canned-answer special case is gone: this eval prompt now gets
+    // the normal cowork orchestration defaults instead of a forced-sequential override.
     expect(
       buildPromptPackSessionPrefsOverride(robotVacuumCoworkProfile, robotVacuumCoworkPrompt, "agentic_surface"),
     ).toMatchObject({
       mode: "cowork",
-      orchestrationEnabled: false,
-      orchestrationVisibility: "explicit",
-      orchestrationParallelism: "sequential",
+      orchestrationEnabled: true,
+      orchestrationParallelism: "parallel",
       toolAutonomy: "safe_auto",
     });
 

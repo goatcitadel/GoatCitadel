@@ -343,28 +343,3 @@ export function createTrace(
     ...overrides,
   };
 }
-
-export function createPromptPackFileTrace(
-  sessionId: string,
-  paths: string[],
-): NonNullable<PromptPackRunRecord["trace"]> {
-  return createTrace(sessionId, {
-    mode: "code",
-    toolRuns: paths.map((filePath, index) => ({
-      toolRunId: `tool-${sessionId}-${index}`,
-      turnId: `turn-${sessionId}`,
-      sessionId,
-      toolName: "file.read_range",
-      status: "executed",
-      args: {
-        path: filePath,
-      },
-      result: {
-        path: filePath,
-        content: `Observed content for ${filePath}`,
-      },
-      startedAt: "2026-03-14T00:00:00.000Z",
-      finishedAt: "2026-03-14T00:00:00.500Z",
-    })),
-  });
-}

@@ -461,7 +461,6 @@ const CHECK_GROUPS = Object.freeze({
       fileContains("apps/gateway/src/services/prompt-pack-service.ts", [
         "agentic_surface",
         "single_turn_harness",
-        "normalizePromptPackAgenticResponse",
       ]),
       commandCheck(
         "Harness availability and scripted runner behavior",
