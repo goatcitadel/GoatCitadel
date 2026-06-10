@@ -136,5 +136,9 @@ function trimCandidate(input: string, maxChars: number): string {
   if (input.length <= maxChars) {
     return input;
   }
-  return `${input.slice(0, Math.max(0, maxChars - 16))}\n...[truncated]`;
+  const suffix = "\n...[truncated]";
+  if (maxChars <= suffix.length) {
+    return input.slice(0, maxChars);
+  }
+  return `${input.slice(0, Math.max(0, maxChars - 16))}${suffix}`;
 }

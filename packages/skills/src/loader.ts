@@ -17,13 +17,9 @@ export class SkillsService {
   public constructor(private readonly sources: SkillSource[]) {}
 
   public async reload(): Promise<LoadedSkill[]> {
-    const all: LoadedSkill[] = [];
-    for (const source of this.sources) {
-      const sourceSkills = await loadSourceSkills(source);
-      all.push(...sourceSkills);
-    }
+    const sourceSkills = await Promise.all(this.sources.map((source) => loadSourceSkills(source)));
 
-    this.loaded = resolveSkillPrecedence(all);
+    this.loaded = resolveSkillPrecedence(sourceSkills.flat());
     return this.loaded;
   }
 
@@ -39,26 +35,14 @@ export class SkillsService {
 async function loadSourceSkills(source: SkillSource): Promise<LoadedSkill[]> {
   try {
     const entries = await fs.readdir(source.dir, { withFileTypes: true });
-    const skills: LoadedSkill[] = [];
+    const loaded = await Promise.all([
+      loadSkillFromDir(source, source.dir),
+      ...entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => loadSkillFromDir(source, path.join(source.dir, entry.name))),
+    ]);
 
-    const directSourceSkill = await loadSkillFromDir(source, source.dir);
-    if (directSourceSkill) {
-      skills.push(directSourceSkill);
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const skillDir = path.join(source.dir, entry.name);
-      const loaded = await loadSkillFromDir(source, skillDir);
-      if (loaded) {
-        skills.push(loaded);
-      }
-    }
-
-    return skills;
+    return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
   } catch {
     return [];
   }
@@ -67,9 +51,8 @@ async function loadSourceSkills(source: SkillSource): Promise<LoadedSkill[]> {
 async function loadSkillFromDir(source: SkillSource, skillDir: string): Promise<LoadedSkill | undefined> {
   const skillFile = path.join(skillDir, "SKILL.md");
   try {
-    const raw = await fs.readFile(skillFile, "utf8");
+    const [raw, stat] = await Promise.all([fs.readFile(skillFile, "utf8"), fs.stat(skillFile)]);
     const parsed = parseSkillMarkdown(raw);
-    const stat = await fs.stat(skillFile);
     return {
       skillId: `${source.source}:${parsed.frontmatter.name}`,
       name: parsed.frontmatter.name,

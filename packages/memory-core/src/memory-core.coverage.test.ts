@@ -197,6 +197,15 @@ describe("memory candidate collection", () => {
 
     expect(item?.text).toBe("abcd\n...[truncated]");
   });
+
+  it("never exceeds the per-candidate budget even when it is smaller than the truncation marker", () => {
+    const [item] = collectMemoryCandidates(
+      [{ type: "transcript", events: [transcriptEvent("one", { message: "abcdefghijklmnopqrstuvwxyz" })] }],
+      { maxTranscriptEvents: 1, maxFileCandidates: 0, maxCharsPerCandidate: 10 },
+    );
+
+    expect(item?.text).toBe("abcdefghij");
+  });
 });
 
 describe("memory ranking and citations", () => {
