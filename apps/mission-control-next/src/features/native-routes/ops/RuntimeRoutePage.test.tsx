@@ -1019,32 +1019,32 @@ describe("RuntimeRoutePage", () => {
       );
     });
 
-    expect(collectText(renderer!.root)).toContain("tool.failed");
-    expect(collectText(renderer!.root)).toContain("approval.created");
-    expect(collectText(renderer!.root)).toContain("daemon.started");
+    expect(collectText(renderer!.root)).toContain("Tool failed");
+    expect(collectText(renderer!.root)).toContain("Approval created");
+    expect(collectText(renderer!.root)).toContain("Daemon started");
     expect(findExactButton(renderer!.root, "All").props).toMatchObject({
       role: "radio",
       "aria-checked": true,
     });
 
     await act(async () => findExactButton(renderer!.root, "Errors").props.onClick());
-    expect(collectText(renderer!.root)).toContain("tool.failed");
-    expect(collectText(renderer!.root)).not.toContain("approval.created");
+    expect(collectText(renderer!.root)).toContain("Tool failed");
+    expect(collectText(renderer!.root)).not.toContain("Approval created");
     expect(findExactButton(renderer!.root, "Errors").props).toMatchObject({
       role: "radio",
       "aria-checked": true,
     });
 
     await act(async () => findExactButton(renderer!.root, "Approvals").props.onClick());
-    expect(collectText(renderer!.root)).toContain("approval.created");
-    expect(collectText(renderer!.root)).not.toContain("daemon.started");
+    expect(collectText(renderer!.root)).toContain("Approval created");
+    expect(collectText(renderer!.root)).not.toContain("Daemon started");
 
     await act(async () => findExactButton(renderer!.root, "Runtime").props.onClick());
     const runtimeFeedText = collectText(findFirstByClass(renderer!.root, "mc-next-activity-feed"));
-    expect(runtimeFeedText).toContain("daemon.started");
-    expect(runtimeFeedText).toContain("heartbeat");
-    expect(runtimeFeedText).not.toContain("approval.resolved");
-    expect(runtimeFeedText).not.toContain("tool.failed");
+    expect(runtimeFeedText).toContain("Daemon started");
+    expect(runtimeFeedText).toContain("Heartbeat");
+    expect(runtimeFeedText).not.toContain("Approval resolved");
+    expect(runtimeFeedText).not.toContain("Tool failed");
   });
 
   it("renders activity events with duplicate timestamp fallbacks without duplicate key warnings", async () => {

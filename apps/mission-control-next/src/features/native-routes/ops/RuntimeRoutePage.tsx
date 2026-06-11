@@ -1767,7 +1767,7 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
 }
 
 export function humanizeEventLabel(value: string): string {
-  const words = value.split(/[_\s]+/).filter(Boolean).join(" ");
+  const words = value.split(/[_.\s]+/).filter(Boolean).join(" ");
   return words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 }
 
