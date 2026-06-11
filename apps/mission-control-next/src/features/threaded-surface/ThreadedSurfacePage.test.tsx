@@ -424,8 +424,8 @@ describe("ThreadedSurfacePage", () => {
       ".mc-next-threaded-stage.has-code-panel.has-context",
     ];
 
-    for (const breakpoint of ["1360", "1023"]) {
-      const start = css.indexOf(`@media (max-width: ${breakpoint}px)`);
+    for (const blockHeader of ["@media (width < 1180px)", "@media (max-width: 1023px)"]) {
+      const start = css.indexOf(blockHeader);
       const next = css.indexOf("@media", start + 1);
       const block = css.slice(start, next === -1 ? undefined : next);
       expect(start).toBeGreaterThanOrEqual(0);

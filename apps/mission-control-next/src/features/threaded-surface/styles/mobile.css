@@ -1,4 +1,10 @@
-@media (max-width: 1680px) {
+/* Page-scroll fallback. Below this width (or on very short windows) the
+   contained work-area layout cannot fit the conversation, side panel, and
+   context drawer at once, so surfaces fall back to stacked document flow
+   with a sticky composer. Laptop widths (>=1180px) keep the contained
+   layout: the banded blocks below adapt panel columns instead of giving up
+   containment. */
+@media (max-width: 1680px) and (max-height: 699px), (width < 1180px) {
   .mc-next-app-frame,
   .mc-next-body.is-work-area,
   .mc-next-stage-work,
@@ -60,7 +66,7 @@
   }
 }
 
-@media (min-width: 1361px) and (max-width: 1680px) {
+@media (min-width: 1180px) and (max-width: 1680px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
     grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--mc-workbench-panel-width, 35rem), 38vw));
@@ -86,6 +92,15 @@
     max-width: none;
   }
 
+  /* In the contained layout the full-width context drawer becomes its own
+     stage row. Cap it so a tall drawer cannot crush the conversation row —
+     the drawer scrolls internally instead. */
+  .mc-next-surface-host-work .mc-next-threaded-stage.has-workbench.has-context .mc-next-threaded-context-panel,
+  .mc-next-surface-host-work .mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-context-panel,
+  .mc-next-surface-host-work .mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-context-panel {
+    max-height: 32dvh;
+  }
+
   .mc-next-threaded-stage.has-workbench.has-context .mc-next-threaded-context-panel.utility,
   .mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-context-panel.utility,
   .mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-context-panel.utility {
@@ -105,7 +120,25 @@
   }
 }
 
-@media (max-width: 1360px) {
+/* Contained two-column band. Single-column stacking needs document scroll,
+   which the contained layout does not have, so panels stay beside the
+   conversation at laptop widths with their columns capped to always fit. */
+@media (min-width: 1180px) and (max-width: 1360px) {
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--mc-workbench-panel-width, 35rem), 38vw));
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(21rem, min(var(--mc-workbench-panel-width, 35rem), 42vw));
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context {
+    grid-template-columns: minmax(32rem, 1fr) minmax(15rem, min(var(--mc-context-panel-width, 20rem), 26vw));
+  }
+}
+
+@media (width < 1180px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context,
