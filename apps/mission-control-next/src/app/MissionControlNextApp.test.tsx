@@ -433,7 +433,7 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
       findButton(renderer, "Light theme").props.onClick();
-      findButton(renderer, "Open context inspector").props.onClick();
+      findButton(renderer, "Context inspector").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
@@ -726,7 +726,7 @@ describe("MissionControlNextApp", () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
 
     await act(async () => {
-      findButton(renderer, "Open context inspector").props.onClick();
+      findButton(renderer, "Context inspector").props.onClick();
     });
 
     const rendered = JSON.stringify(renderer.toJSON());

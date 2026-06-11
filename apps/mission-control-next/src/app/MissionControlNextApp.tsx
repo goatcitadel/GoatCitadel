@@ -13,7 +13,6 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Rocket,
-  Search,
   ShieldCheck,
   SlidersHorizontal,
   SunMedium,
@@ -542,9 +541,14 @@ export function MissionControlNextApp() {
               </nav>
             </div>
             <div className="mc-next-topbar-right">
-              <button type="button" className="mc-next-command-search" onClick={() => setInspectorOpen(true)}>
-                <Search size={15} />
-                <span>Open context inspector</span>
+              <button
+                type="button"
+                className="mc-next-command-search"
+                onClick={() => setInspectorOpen(true)}
+                title="Context inspector"
+              >
+                <PanelRightOpen size={15} />
+                <span>Context inspector</span>
               </button>
               <button
                 type="button"

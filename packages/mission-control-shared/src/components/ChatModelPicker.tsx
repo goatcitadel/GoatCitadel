@@ -76,6 +76,12 @@ function formatCapabilities(capabilities: ChatModelProviderOption["capabilities"
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+const PROBE_SOURCE_LABELS: Record<string, string> = {
+  live: "live probe",
+  template_fallback: "provider template",
+  error_fallback: "fallback after probe error",
+};
+
 function buildProviderMetadata(
   activeProvider: ChatModelProviderOption | undefined,
   model?: string,
@@ -86,8 +92,11 @@ function buildProviderMetadata(
   const endpoint = formatHostLabel(activeProvider.baseUrl);
   const cost = formatCost(activeProvider.inputCostPerMillionTokens, activeProvider.outputCostPerMillionTokens);
   const capabilities = formatCapabilities(activeProvider.capabilities);
+  const probeSourceLabel = activeProvider.modelProbeSource
+    ? (PROBE_SOURCE_LABELS[activeProvider.modelProbeSource] ?? activeProvider.modelProbeSource)
+    : null;
   const probe = activeProvider.modelProbeState
-    ? `${activeProvider.modelProbeState}${activeProvider.modelProbeSource ? ` via ${activeProvider.modelProbeSource}` : ""}`
+    ? `${activeProvider.modelProbeState}${probeSourceLabel ? ` via ${probeSourceLabel}` : ""}`
     : null;
   return [
     { label: "Runtime", value: activeProvider.isLocalRuntime ? "Local" : "Cloud" },

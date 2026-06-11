@@ -1942,7 +1942,9 @@ export function MissionThreadedControllerHost({
     () =>
       workTrust ?? {
         workspaceLabel: workspaceName,
-        gatewayTone: "muted",
+        // Missing trust state is a signal, not a neutral fact — render it as a
+        // warning so it does not blend in with the healthy chips around it.
+        gatewayTone: "warning",
         gatewayLabel: "Gateway state unavailable",
         approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
         runStateSummary: visibleRunStateSummary,
