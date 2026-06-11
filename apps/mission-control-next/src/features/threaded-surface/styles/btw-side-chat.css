@@ -7,7 +7,7 @@
   max-height: min(30rem, calc(100dvh - 5.5rem));
   min-height: 18rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color, var(--mc-mode-chat)) 38%, var(--mc-border-subtle));
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 94%, var(--background));
   box-shadow:
     0 22px 60px rgba(0, 0, 0, 0.34),
@@ -113,7 +113,7 @@
   min-width: 0;
   padding: 0.48rem 0.56rem;
   border: 1px solid color-mix(in oklab, var(--mc-border-subtle) 84%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 84%, transparent);
 }
 
@@ -156,7 +156,7 @@
 .mc-next-btw-side-chat-error {
   padding: 0.44rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--destructive) 40%, var(--mc-border-subtle));
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--destructive) 9%, transparent);
   color: color-mix(in oklab, var(--destructive) 72%, var(--foreground));
 }
@@ -179,7 +179,7 @@
   resize: vertical;
   padding: 0.48rem 0.54rem;
   border: 1px solid var(--mc-border-subtle);
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--background) 88%, transparent);
   color: var(--foreground);
   font: inherit;
@@ -212,7 +212,7 @@
     top: auto;
     width: auto;
     max-height: min(70dvh, 32rem);
-    border-radius: 0.56rem;
+    border-radius: var(--r-sm);
   }
 
   .mc-next-btw-side-chat-header {

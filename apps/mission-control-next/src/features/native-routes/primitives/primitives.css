@@ -56,7 +56,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   font-weight: 700;
@@ -67,7 +67,7 @@
   display: inline-block;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--accent, var(--mc-area-color));
   box-shadow: 0 0 10px color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, transparent);
 }
@@ -84,7 +84,7 @@
   margin: 0;
   max-width: 64ch;
   color: var(--fg-secondary, var(--text-secondary));
-  font-size: var(--text-sm, 0.8125rem);
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -110,7 +110,7 @@
 }
 
 .mc-next-stage-head-metric-label {
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-muted, var(--text-muted));
@@ -155,7 +155,7 @@
   max-width: 100%;
   height: 1.55rem;
   min-height: 1.55rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
@@ -174,7 +174,7 @@
 .mc-next-chip-3-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--fg-muted, var(--text-muted));
   flex: 0 0 auto;
 }
@@ -312,9 +312,9 @@
   padding: 0.35rem 0;
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   border-bottom: 0;
-  border-radius: 0.42rem 0.42rem 0 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
   background: var(--bg-surface-1, var(--mc-surface-1));
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   color: var(--fg-secondary, var(--text-secondary));
 }
 
@@ -342,7 +342,7 @@
 }
 
 .mc-next-context-strip-cell-label {
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-muted, var(--text-muted));
@@ -381,7 +381,7 @@
   display: flex;
   width: 100%;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   overflow: hidden;
   background: var(--bg-surface-2, var(--mc-surface-2));
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
@@ -440,11 +440,11 @@
   gap: 0.35rem;
   height: 1.4rem;
   padding: 0 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
-  font: 600 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  font: 600 var(--text-xs) / 1 var(--font-sans, var(--mc-font-sans));
   white-space: nowrap;
   vertical-align: middle;
 }
@@ -452,7 +452,7 @@
 .mc-next-status-chip[data-size="md"] {
   height: 1.65rem;
   padding: 0 0.75rem;
-  font-size: var(--text-sm, 0.8125rem);
+  font-size: var(--text-sm);
 }
 
 .mc-next-status-chip-icon {
@@ -601,7 +601,7 @@
   gap: 0.4rem;
   height: 1.45rem;
   padding: 0 0.55rem;
-  border-radius: var(--r-pill, 999px);
+  border-radius: var(--r-pill);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
@@ -657,7 +657,7 @@
   text-align: center;
   gap: 0.8rem;
   padding: 2.5rem 1.5rem;
-  border-radius: var(--r-md, var(--mc-radius-md));
+  border-radius: var(--r-md);
   border: 1px dashed var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
@@ -681,7 +681,7 @@
   justify-content: center;
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: var(--r-sm, var(--mc-radius-sm));
+  border-radius: var(--r-sm);
   background: var(--bg-surface-2, var(--mc-surface-2));
   color: var(--fg-muted, var(--text-muted));
 }
@@ -704,18 +704,18 @@
 
 .mc-next-empty-state-title {
   margin: 0;
-  font: 600 var(--text-lg, 1rem) / 1.25 var(--font-sans, var(--mc-font-sans));
+  font: 600 var(--text-lg) / 1.25 var(--font-sans, var(--mc-font-sans));
   letter-spacing: -0.01em;
   color: var(--fg-primary, var(--foreground));
 }
 
 .mc-next-empty-state[data-size="compact"] .mc-next-empty-state-title {
-  font-size: var(--text-md, 0.875rem);
+  font-size: var(--text-md);
 }
 
 .mc-next-empty-state-description {
   margin: 0;
-  font-size: var(--text-sm, 0.8125rem);
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--fg-secondary, var(--text-secondary));
 }
@@ -740,7 +740,7 @@
   gap: 0.5rem;
   flex-wrap: wrap;
   justify-content: center;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
 }
 
 /* ============================================================
@@ -753,7 +753,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font: 500 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  font: 500 var(--text-xs) / 1 var(--font-sans, var(--mc-font-sans));
   color: var(--fg-secondary, var(--text-secondary));
   vertical-align: baseline;
 }
@@ -764,7 +764,7 @@
 }
 
 .mc-next-kbd-hint[data-size="md"] {
-  font-size: var(--text-sm, 0.8125rem);
+  font-size: var(--text-sm);
 }
 
 .mc-next-kbd-hint-label {
@@ -790,7 +790,7 @@
   min-width: 1.35rem;
   height: 1.35rem;
   padding: 0 0.35rem;
-  border-radius: var(--r-xs, 0.32rem);
+  border-radius: var(--r-xs);
   border: 1px solid var(--border-default, var(--border));
   background: var(--bg-surface-2, var(--mc-surface-2));
   color: var(--fg-primary, var(--foreground));
@@ -801,7 +801,7 @@
 .mc-next-kbd-hint[data-size="md"] kbd {
   min-width: 1.55rem;
   height: 1.55rem;
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-kbd-hint-sep {
@@ -833,7 +833,7 @@
   max-height: min(60vh, 540px);
   display: flex;
   flex-direction: column;
-  border-radius: var(--r-md, var(--mc-radius-md));
+  border-radius: var(--r-md);
   border: 1px solid var(--border-strong, var(--border-default));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-primary, var(--foreground));
@@ -860,13 +860,13 @@
 
 .command-palette-head h3 {
   margin: 0;
-  font: 600 var(--text-md, 0.875rem) / 1.2 var(--font-sans, var(--mc-font-sans));
+  font: 600 var(--text-md) / 1.2 var(--font-sans, var(--mc-font-sans));
   color: var(--fg-primary, var(--foreground));
 }
 
 .command-palette-hint {
   margin: 0;
-  font: 500 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  font: 500 var(--text-xs) / 1 var(--font-sans, var(--mc-font-sans));
   color: var(--fg-muted, var(--text-muted));
 }
 
@@ -885,7 +885,7 @@
   border: 0;
   background: transparent;
   color: var(--fg-primary, var(--foreground));
-  font: 500 var(--text-sm, 0.8125rem) / 1.4 var(--font-sans, var(--mc-font-sans));
+  font: 500 var(--text-sm) / 1.4 var(--font-sans, var(--mc-font-sans));
   outline: none;
 }
 
@@ -896,7 +896,7 @@
 }
 
 .command-palette-shortcut {
-  font: 600 var(--text-xs, 0.75rem) / 1 var(--font-mono, var(--mc-font-mono));
+  font: 600 var(--text-xs) / 1 var(--font-mono, var(--mc-font-mono));
   color: var(--fg-muted, var(--text-muted));
   flex: 0 0 auto;
 }
@@ -929,6 +929,6 @@
 .command-palette-empty {
   padding: 1.5rem 1rem;
   text-align: center;
-  font: 500 var(--text-sm, 0.8125rem) / 1.4 var(--font-sans, var(--mc-font-sans));
+  font: 500 var(--text-sm) / 1.4 var(--font-sans, var(--mc-font-sans));
   color: var(--fg-muted, var(--text-muted));
 }

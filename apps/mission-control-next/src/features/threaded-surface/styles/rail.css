@@ -38,7 +38,7 @@
 .mc-next-threaded-context-panel,
 .mc-next-threaded-header,
 .mc-next-threaded-empty {
-  border-radius: 1.25rem;
+  border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
   box-shadow: var(--mc-shadow-soft);
@@ -98,7 +98,7 @@
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  border-radius: 1.25rem;
+  border-radius: var(--r-lg);
   border: 1px dashed color-mix(in oklab, var(--mc-area-color) 48%, var(--border));
   background: color-mix(in oklab, var(--mc-area-color) 12%, var(--card));
   color: var(--foreground);
@@ -152,7 +152,7 @@
   height: 26px;
   min-height: 26px;
   padding: 0;
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-rail-actions .mc-next-threaded-secondary span {
@@ -219,7 +219,7 @@
   max-width: 100%;
   min-height: 1.5rem;
   padding: 0.18rem 0.42rem;
-  border-radius: 0.3rem;
+  border-radius: var(--r-xs);
   border: 1px solid var(--mc-border-subtle);
   background: transparent;
   color: var(--foreground);
@@ -243,7 +243,7 @@
   background: var(--primary);
   border-color: var(--primary);
   color: var(--primary-foreground);
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
   font-weight: 700;
 }
 
@@ -279,7 +279,7 @@
 .mc-next-threaded-filters.posture .mc-next-threaded-filter {
   min-height: 1.5rem;
   padding: 0.2rem 0.46rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: var(--text-xs);
   font-weight: 600;
 }
@@ -287,7 +287,7 @@
 .mc-next-threaded-filters.secondary .mc-next-threaded-filter {
   min-height: 1.5rem;
   padding: 0.18rem 0.46rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: var(--text-xs);
 }
 
@@ -299,7 +299,7 @@
 .mc-next-threaded-mode-dot {
   width: 0.48rem;
   height: 0.48rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--mc-mode-chat);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-mode-chat) 16%, transparent);
 }
@@ -343,7 +343,7 @@
   padding: 0 0.48rem;
   min-height: 26px;
   margin: 0 4px;
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
   border: 1px solid var(--mc-border-subtle);
   background: var(--mc-surface-1);
 }
@@ -369,7 +369,7 @@
   gap: 0.7rem;
   padding: 0.9rem;
   border: 1px solid var(--border);
-  border-radius: 1rem;
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -383,7 +383,7 @@
   min-height: 2.55rem;
   padding: 0 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 0.9rem;
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--background) 86%, var(--mc-surface-1));
 }
 
@@ -456,7 +456,7 @@
   min-width: 0;
   min-height: 2.24rem;
   padding: 0.22rem 0.36rem 0.24rem 0.58rem;
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
@@ -502,7 +502,7 @@
   align-self: center;
   min-height: 2.45rem;
   padding: 0.35rem 0.6rem;
-  border-radius: 0.9rem;
+  border-radius: var(--r-md);
   border: 1px solid var(--border-subtle);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--text-secondary);
@@ -609,7 +609,7 @@
   text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.2;
   color: var(--text-secondary);
 }
@@ -618,7 +618,7 @@
   display: inline-flex;
   width: fit-content;
   color: color-mix(in oklab, var(--mc-mode-chat) 74%, var(--foreground));
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.1;
   white-space: nowrap;
 }
@@ -637,7 +637,7 @@
   align-items: center;
   min-height: 1rem;
   padding: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: transparent;
   color: var(--text-muted);
   font-size: var(--text-xs);

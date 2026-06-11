@@ -27,7 +27,7 @@
   justify-self: center;
   min-height: 2rem;
   padding: 0 0.85rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 40%, var(--border));
   background: color-mix(in oklab, var(--mc-surface-2) 94%, var(--background));
   color: var(--foreground);
@@ -94,7 +94,7 @@
   display: grid;
   gap: 0.5rem;
   padding: 0.68rem;
-  border-radius: 0.58rem;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
   border-color: color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
   background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--card));
@@ -134,7 +134,7 @@
   max-width: 100%;
   min-height: 1.75rem;
   padding: 0 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--gc-risk-caution) 14%, transparent);
   color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
   font-size: var(--text-xs);
@@ -182,7 +182,7 @@
   width: 100%;
   min-height: 2.7rem;
   padding: 0.72rem 0.8rem;
-  border-radius: 0.9rem;
+  border-radius: var(--r-md);
   border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
   color: var(--foreground);
@@ -222,7 +222,7 @@
   top: 0.42rem;
   bottom: 0.85rem;
   width: 2px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-area-color) 42%, transparent);
   opacity: 0.55;
   transition:
@@ -245,7 +245,7 @@
 
 .mc-next-thread-turn.selected {
   background: color-mix(in oklab, var(--mc-area-color) 4%, transparent);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
 }
 
 .mc-next-thread-turn.grouped {
@@ -259,7 +259,7 @@
 
 .mc-next-thread-turn.grouped .mc-next-thread-bubble .mc-next-thread-meta {
   opacity: 0.55;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-thread-turn.delegation.compact {
@@ -277,7 +277,7 @@
   list-style: none;
   padding: 0.65rem 0.75rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--mc-border-subtle));
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
   color: var(--foreground);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
@@ -332,7 +332,7 @@
   list-style: none;
   padding: 0.55rem 0.7rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.65rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 88%, var(--background));
   color: var(--foreground);
   font-size: var(--text-sm);
@@ -368,7 +368,7 @@
 .mc-next-thread-step-output {
   width: 100%;
   padding: 0.58rem;
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
   background: color-mix(in oklab, var(--background) 72%, var(--mc-surface-1));
   color: var(--foreground);
@@ -396,7 +396,7 @@
 
 .mc-next-thread-turn-surface {
   cursor: pointer;
-  border-radius: 0.62rem;
+  border-radius: var(--r-sm);
   transition: background-color var(--motion-fast) var(--motion-ease);
 }
 
@@ -413,12 +413,12 @@
 .mc-next-thread-turn-surface:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
-  border-radius: 0.62rem;
+  border-radius: var(--r-sm);
 }
 
 .mc-next-thread-bubble {
   padding: 0.6rem 0.78rem;
-  border-radius: 0.62rem;
+  border-radius: var(--r-sm);
   border: 1px solid transparent;
   background: transparent;
 }
@@ -441,7 +441,7 @@
   min-width: 0;
   padding: 0.54rem 0.6rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-border-subtle));
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 74%, transparent);
   color: var(--foreground);
 }
@@ -504,7 +504,7 @@
   min-height: 1.75rem;
   max-width: 100%;
   padding: 0 0.56rem;
-  border-radius: 0.36rem;
+  border-radius: var(--r-xs);
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
   color: var(--foreground);
@@ -527,7 +527,7 @@
   margin-left: 0.42rem;
   padding: 0 0.42rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 28%, var(--mc-border-subtle));
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-area-color) 10%, transparent);
   color: color-mix(in oklab, var(--foreground) 82%, var(--mc-area-color));
   font-size: var(--text-xs);
@@ -677,7 +677,7 @@
 .mc-assistant-code-shell {
   margin: 0.6rem 0;
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   overflow: hidden;
   background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
 }
@@ -694,7 +694,7 @@
 
 .mc-assistant-code-language {
   font-family: var(--mc-font-mono);
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -709,7 +709,7 @@
   width: 1.4rem;
   height: 1.4rem;
   padding: 0;
-  border-radius: 0.32rem;
+  border-radius: var(--r-xs);
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
   color: var(--text-secondary);
@@ -771,7 +771,7 @@
   width: 0.5ch;
   height: 1.05em;
   margin-left: 0.16rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-area-color) 82%, var(--foreground));
   box-shadow: 0 0 6px color-mix(in oklab, var(--mc-area-color) 55%, transparent);
   vertical-align: -0.12em;
@@ -809,7 +809,7 @@
 
 .mc-next-assistant-streaming-skeleton > span {
   height: 0.62rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: linear-gradient(
     90deg,
     color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2)),
@@ -896,7 +896,7 @@
   max-width: 1.55rem;
   min-height: 1.55rem;
   padding: 0;
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -935,7 +935,7 @@
   gap: 0.5rem;
   min-height: 1.65rem;
   padding: 0.18rem 0.6rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
@@ -947,7 +947,7 @@
   display: inline-block;
   width: 0.5rem;
   height: 0.5rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--fg-muted, var(--text-muted));
   flex: 0 0 auto;
 }
@@ -993,7 +993,7 @@
   justify-content: space-between;
   gap: 0.6rem;
   padding: 0.55rem 0.7rem;
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-2, var(--mc-surface-2));
   color: var(--fg-secondary, var(--text-secondary));
@@ -1045,7 +1045,7 @@
   display: grid;
   gap: 0.5rem;
   padding: 0.68rem;
-  border-radius: var(--r-sm, 0.58rem);
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border-default, var(--border)));
   background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--bg-surface-1, var(--mc-surface-1)));
   color: var(--fg-primary, var(--foreground));
@@ -1176,11 +1176,11 @@
   appearance: none;
   width: 2.2rem;
   height: 2.2rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 1.1rem;
+  font-size: var(--text-xl);
   cursor: pointer;
 }
 
@@ -1202,7 +1202,7 @@
   gap: 0.4rem;
   max-width: 100%;
   padding: 0.22rem 0.55rem 0.22rem 0.32rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
   background: color-mix(in oklab, var(--mc-surface-2) 70%, transparent);
   color: var(--text-secondary);
@@ -1225,7 +1225,7 @@
   align-items: start;
   gap: 0.25rem;
   min-width: min(100%, 18rem);
-  border-radius: 0.65rem;
+  border-radius: var(--r-sm);
   border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
   background: color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2));
 }
@@ -1243,7 +1243,7 @@
   justify-content: center;
   width: 1.15rem;
   height: 1.15rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-area-color) 24%, var(--mc-surface-1));
   color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
   font-size: 0.66rem;
@@ -1262,7 +1262,7 @@
 
 .mc-next-thread-citations > article > p {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1328,7 +1328,7 @@
   min-width: 0;
   min-height: 4.4rem;
   padding: 0.58rem;
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
   background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
 }
@@ -1381,7 +1381,7 @@
   min-width: 0;
   min-height: 5.2rem;
   padding: 0.64rem;
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
   background: color-mix(in oklab, var(--card) 92%, transparent);
   color: var(--foreground);

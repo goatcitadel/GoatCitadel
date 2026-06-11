@@ -187,7 +187,7 @@
   min-width: 0;
   min-height: 1.75rem;
   padding: 0.2rem 0.46rem;
-  border-radius: 0.34rem;
+  border-radius: var(--r-xs);
   font-size: var(--text-xs);
 }
 
@@ -217,7 +217,7 @@
   gap: 0.18rem;
   align-items: center;
   padding: 0.08rem 0.32rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   color: var(--text-secondary);
   font-size: var(--text-xs);

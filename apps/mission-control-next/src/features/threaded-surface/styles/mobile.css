@@ -497,6 +497,6 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-banner {
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: var(--mc-surface-3);
 }
