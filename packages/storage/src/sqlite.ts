@@ -1855,6 +1855,7 @@ function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "model", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "label", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "summary", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "degraded_handoff_step_ids_json", "TEXT");
 }
 
 function createChatImageRoutePreferenceSchema(db: DatabaseSync): void {
@@ -1944,6 +1945,7 @@ function createChatPlansAndSummariesSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_session_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_turn_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "citations_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "degraded_handoff_step_ids_json", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_execution_plan_steps", "durable_run_id", "TEXT");
 
   db.exec(`
@@ -2897,6 +2899,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       child_session_id TEXT,
       child_turn_id TEXT,
       citations_json TEXT,
+      degraded_handoff_step_ids_json TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT,
       duration_ms INTEGER

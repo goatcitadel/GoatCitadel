@@ -85,6 +85,7 @@ describe("ChatDelegationStepRepository", () => {
       childSessionId: "child-a",
       childTurnId: "child-turn-a",
       citations: [citation()],
+      degradedHandoffStepIds: ["step-researcher"],
       startedAt: "2026-03-26T00:00:02.000Z",
       finishedAt: "2026-03-26T00:00:03.000Z",
       durationMs: 1000,
@@ -109,9 +110,11 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(full.childSessionId, "child-a");
     assert.equal(full.childTurnId, "child-turn-a");
     assert.deepEqual(full.citations, [citation()]);
+    assert.deepEqual(full.degradedHandoffStepIds, ["step-researcher"]);
     assert.equal(full.durationMs, 1000);
     assert.equal(minimal.status, "pending");
     assert.equal(minimal.citations, undefined);
+    assert.equal(minimal.degradedHandoffStepIds, undefined);
 
     const patched = repo.patch("step-b", {
       status: "completed",
@@ -126,6 +129,7 @@ describe("ChatDelegationStepRepository", () => {
       childSessionId: "child-b",
       childTurnId: "child-turn-b",
       citations: [],
+      degradedHandoffStepIds: ["step-researcher", "step-reviewer"],
       finishedAt: "2026-03-26T00:00:04.000Z",
       durationMs: 2000,
     });
@@ -141,12 +145,14 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(patched.childSessionId, "child-b");
     assert.equal(patched.childTurnId, "child-turn-b");
     assert.deepEqual(patched.citations, []);
+    assert.deepEqual(patched.degradedHandoffStepIds, ["step-researcher", "step-reviewer"]);
     assert.equal(patched.durationMs, 2000);
 
     const preserved = repo.patch("step-b", {});
     assert.equal(preserved.status, "completed");
     assert.equal(preserved.model, "claude-test");
     assert.deepEqual(preserved.citations, []);
+    assert.deepEqual(preserved.degradedHandoffStepIds, ["step-researcher", "step-reviewer"]);
 
     assert.deepEqual(
       repo.listByRun("run-a").map((step) => step.stepId),
@@ -243,6 +249,10 @@ describe("ChatDelegationStepRepository", () => {
     assert.deepEqual(repo.get("step-a").citations, []);
     setStepField(db, "step-a", "citations_json", "{bad json");
     assert.deepEqual(repo.get("step-a").citations, []);
+    setStepField(db, "step-a", "degraded_handoff_step_ids_json", JSON.stringify(["step-failed", 123, "step-other"]));
+    assert.deepEqual(repo.get("step-a").degradedHandoffStepIds, ["step-failed", "step-other"]);
+    setStepField(db, "step-a", "degraded_handoff_step_ids_json", "{}");
+    assert.deepEqual(repo.get("step-a").degradedHandoffStepIds, []);
 
     setStepField(db, "step-a", "started_at", new Uint8Array([1]));
     assert.throws(() => repo.get("step-a"), /Delegation step step-a not found/);

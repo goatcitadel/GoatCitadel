@@ -447,6 +447,50 @@ describe("deriveCoworkRunViewModel", () => {
     );
   });
 
+  it("marks degraded handoff sources and synthesizers in role items", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestration: {
+        runId: "run-degraded",
+        status: "partial",
+        objective: "Synthesize a degraded research handoff.",
+        workflowTemplate: "cowork.research",
+        routeDecision: { selectedRoles: ["researcher", "synthesizer"] },
+        steps: [
+          {
+            stepId: "research-1",
+            role: "Researcher",
+            label: "Research",
+            status: "failed",
+            output: "Useful source notes were gathered before failure.",
+            summary: "Research failed after gathering evidence.",
+          },
+          {
+            stepId: "synth-1",
+            role: "Synthesizer",
+            label: "Synthesis",
+            status: "completed",
+            summary: "Final answer synthesized.",
+            degradedHandoffStepIds: ["research-1"],
+          },
+        ],
+      } as never,
+    });
+
+    expect(viewModel.roleItems.items[0]).toMatchObject({
+      id: "role-research-1",
+      tone: "warning",
+    });
+    expect(viewModel.roleItems.items[0]?.note).toContain("Used by downstream synthesis despite failed status.");
+    expect(viewModel.roleItems.items[1]).toMatchObject({
+      id: "role-synth-1",
+      tone: "warning",
+    });
+    expect(viewModel.roleItems.items[1]?.note).toContain(
+      "Synthesized from 1 failed-but-usable upstream handoff.",
+    );
+  });
+
   it("prioritizes user input blockers, durable recovery, delegation failures, and trace fallback", () => {
     const viewModel = deriveCoworkRunViewModel({
       items: [],

@@ -4,65 +4,60 @@ import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
-describe("ChatAgentOrchestrator loop44 cowork runtime repair coverage", () => {
-  it("repairs workspace route guidance prompts with product, ops, and synthesis branches after repo evidence", async () => {
-    const result = await runRepoGroundedCoworkRepair({
+const MODEL_ANSWER = "I can give a brief plan, but the requested role sections and evidence are incomplete.";
+
+describe("ChatAgentOrchestrator loop44 cowork eval-turn pass-through", () => {
+  it("passes a repo-grounded cowork answer through verbatim without forced repo prefetch runs", async () => {
+    const result = await runRepoGroundedCoworkEvalTurn({
       sessionId: "sess-loop44-workspace-routes-guidance",
       task: "Use role-labeled Product, Ops, and Synthesis sections to inspect workspace routes, guidance docs, related services, route default active view, archived/all filtering, guidance-scope boundaries, slug conflicts, prefs durability, and first fresh regression checks to add.",
       instruction: "Keep exactly these sections in order: `Product`, `Ops`, `Synthesis`.",
       evidence: WORKSPACE_GUIDANCE_EVIDENCE,
     });
 
-    expect(result.assistantContent).toContain("Product");
-    expect(result.assistantContent).toContain("first fresh regression slice");
-    expect(result.assistantContent).toContain(
-      "archive filtering, slug-conflict clarity, and guidance-scope boundaries",
-    );
-    expect(result.assistantContent).toContain("Ops");
-    expect(result.assistantContent).toContain("route default/archived/all matrix");
-    expect(result.assistantContent).toContain("Synthesis");
-    expect(result.assistantContent).toContain("First fresh regression bundle");
-    expect(result.assistantContent).toContain("apps/gateway/src/routes/workspaces.ts");
+    expect(result.assistantContent).toBe(MODEL_ANSWER);
+    expect(result.invokeTool).not.toHaveBeenCalled();
+    expect(result.createChatCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs Rank 1 durable hardening prompts across QA, Product, and Ops sections", async () => {
-    const result = await runPlainCoworkRepair({
+  it("passes a plain cowork answer through verbatim without role-contract rewriting", async () => {
+    const result = await runPlainCoworkEvalTurn({
       sessionId: "sess-loop44-rank1-hardening",
       task: "Use role-labeled QA, Product, and Ops sections to propose the Rank 1 hardening suite for paused versus waiting typed DurableWakeResult outcomes, approval wake skip ordering, and operator-visible lifecycle truth. Keep two-worker lease recovery out of this first suite.",
       instruction: "Keep exactly these sections in order: `QA`, `Product`, `Ops`.",
     });
 
-    expect(result.assistantContent).toContain("QA");
-    expect(result.assistantContent).toContain("Test 1, paused versus waiting typed outcome");
-    expect(result.assistantContent).toContain("post-confirmation clears stale failure metadata and wakes once");
-    expect(result.assistantContent).toContain("Product");
-    expect(result.assistantContent).toContain(
-      "Product boundary: this first suite intentionally stops at the three requested seams",
-    );
-    expect(result.assistantContent).toContain("Ops");
-    expect(result.assistantContent).toContain("Treat the Rank 1 suite as three checks");
+    expect(result.assistantContent).toBe(MODEL_ANSWER);
+    expect(result.invokeTool).not.toHaveBeenCalled();
+    expect(result.createChatCompletion).toHaveBeenCalledTimes(1);
   });
 });
 
-async function runPlainCoworkRepair(input: {
+interface CoworkEvalTurnResult {
+  assistantContent: string;
+  createChatCompletion: ReturnType<typeof vi.fn>;
+  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+}
+
+async function runPlainCoworkEvalTurn(input: {
   sessionId: string;
   task: string;
   instruction: string;
-}): Promise<{ assistantContent: string }> {
-  return runCoworkRepair({
+}): Promise<CoworkEvalTurnResult> {
+  return runCoworkEvalTurn({
     ...input,
     toolNames: [],
     invokeTool: vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(),
   });
 }
 
-async function runRepoGroundedCoworkRepair(input: {
+async function runRepoGroundedCoworkEvalTurn(input: {
   sessionId: string;
   task: string;
   instruction: string;
   evidence: Record<string, string>;
-}): Promise<{ assistantContent: string }> {
-  return runCoworkRepair({
+}): Promise<CoworkEvalTurnResult> {
+  return runCoworkEvalTurn({
     sessionId: input.sessionId,
     task: input.task,
     instruction: input.instruction,
@@ -71,13 +66,13 @@ async function runRepoGroundedCoworkRepair(input: {
   });
 }
 
-async function runCoworkRepair(input: {
+async function runCoworkEvalTurn(input: {
   sessionId: string;
   task: string;
   instruction: string;
   toolNames: string[];
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
-}): Promise<{ assistantContent: string }> {
+}): Promise<CoworkEvalTurnResult> {
   const wrappedPrompt = [
     "## Prompt Lab Run Contract",
     "- Mode: cowork",
@@ -103,7 +98,7 @@ async function runCoworkRepair(input: {
         index: 0,
         message: {
           role: "assistant",
-          content: "I can give a brief plan, but the requested role sections and evidence are incomplete.",
+          content: MODEL_ANSWER,
         },
       },
     ],
@@ -115,7 +110,7 @@ async function runCoworkRepair(input: {
     invokeTool: input.invokeTool,
   });
 
-  return orchestrator.run({
+  const result = await orchestrator.run({
     sessionId: input.sessionId,
     turnId: randomUUID(),
     userMessageId: `${input.sessionId}-message`,
@@ -130,6 +125,12 @@ async function runCoworkRepair(input: {
     normalizationProfile: "prompt_pack_harness",
     historyMessages: [{ role: "user", content: wrappedPrompt }],
   });
+
+  return {
+    assistantContent: result.assistantContent,
+    createChatCompletion,
+    invokeTool: input.invokeTool,
+  };
 }
 
 function createEvidenceTool(

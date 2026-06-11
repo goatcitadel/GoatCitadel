@@ -54,7 +54,11 @@ export async function executeOrchestrationPlan(input: {
     if (executions.some((execution) => execution.status === "running")) {
       break;
     }
-    const stageHadSuccess = executions.some((execution) => execution.status === "completed");
+    // A failed step that still produced usable output (e.g. a researcher whose
+    // turn tripped the tool circuit breaker after gathering evidence) keeps the
+    // workflow moving: downstream roles can synthesize from the degraded
+    // handoff instead of collapsing the whole run.
+    const stageHadSuccess = executions.some((execution) => isUsableHandoffStep(execution));
     if (!stageHadSuccess) {
       break;
     }
@@ -75,12 +79,18 @@ export async function executeOrchestrationPlan(input: {
     ...completedSteps.flatMap((step) => step.citations),
     ...(repairedFinal.finalStep?.citations ?? []),
   ]);
+  const integritySignals = dedupeStrings([
+    ...(completedSteps.some((step) => step.degradedHandoffStepIds?.length)
+      ? ["orchestration_synthesis_from_degraded_handoffs"]
+      : []),
+    ...(repairedFinal.integritySignals ?? []),
+  ]);
 
   return {
     finalOutput,
     finalSummary,
     finalStep: repairedFinal.finalStep,
-    integritySignals: repairedFinal.integritySignals,
+    integritySignals,
     citations,
     routeDecision: input.plan.routeDecision,
     stepResults: completedSteps,
@@ -154,6 +164,69 @@ function validateOrchestrationPlan(plan: OrchestrationPlan): void {
   }
 }
 
+function isUsableHandoffStep(step: OrchestrationStepExecutionResult | undefined): boolean {
+  if (!step) {
+    return false;
+  }
+  if (step.status === "completed") {
+    return Boolean(step.output?.trim());
+  }
+  if (step.status !== "failed") {
+    return false;
+  }
+  // Degraded handoff: the step's turn failed (tool budget, circuit breaker,
+  // provider flake) but it still produced substantive output. Downstream
+  // synthesis/critique roles work from that output rather than aborting; the
+  // failure stays visible on the step record itself. Delegated steps copy the
+  // failure message into output when the model produced nothing, so output
+  // that merely restates the error or a wait placeholder is NOT usable.
+  const output = step.output?.trim() ?? "";
+  if (!output) {
+    return false;
+  }
+  if (output === step.error?.trim()) {
+    return false;
+  }
+  if (/^\(delegate returned no output\)$/i.test(output) || /^Delegate is (?:still )?waiting/i.test(output)) {
+    return false;
+  }
+  return true;
+}
+
+function getDegradedHandoffStepIds(
+  step: OrchestrationPlan["steps"][number],
+  priorSteps: OrchestrationStepExecutionResult[],
+): string[] {
+  const requiresHandoff =
+    step.role === "synthesizer" || step.role === "critic" || step.role === "reviewer" || step.role === "qa-validator";
+  if (!requiresHandoff) {
+    return [];
+  }
+  const declaredDependencies = step.dependsOnStepIds ?? [];
+  const dependencySteps =
+    declaredDependencies.length === 0
+      ? priorSteps
+      : declaredDependencies
+          .map((dependencyId) => priorSteps.find((priorStep) => priorStep.stepId === dependencyId))
+          .filter((priorStep): priorStep is OrchestrationStepExecutionResult => Boolean(priorStep));
+  return dependencySteps
+    .filter((priorStep) => priorStep.status === "failed" && isUsableHandoffStep(priorStep))
+    .map((priorStep) => priorStep.stepId);
+}
+
+function withDegradedHandoffStepIds(
+  step: OrchestrationStepExecutionResult,
+  degradedHandoffStepIds: string[],
+): OrchestrationStepExecutionResult {
+  if (degradedHandoffStepIds.length === 0) {
+    return step;
+  }
+  return {
+    ...step,
+    degradedHandoffStepIds: dedupeStrings([...(step.degradedHandoffStepIds ?? []), ...degradedHandoffStepIds]),
+  };
+}
+
 function getMissingHandoffFailure(
   step: OrchestrationPlan["steps"][number],
   priorSteps: OrchestrationStepExecutionResult[],
@@ -167,11 +240,10 @@ function getMissingHandoffFailure(
   const declaredDependencies = step.dependsOnStepIds ?? [];
   const hasCompletedOutput =
     declaredDependencies.length === 0
-      ? priorSteps.some((priorStep) => priorStep.status === "completed" && priorStep.output?.trim())
-      : declaredDependencies.every((dependencyId) => {
-          const dependency = priorSteps.find((priorStep) => priorStep.stepId === dependencyId);
-          return dependency?.status === "completed" && dependency.output?.trim();
-        });
+      ? priorSteps.some((priorStep) => isUsableHandoffStep(priorStep))
+      : declaredDependencies.some((dependencyId) =>
+          isUsableHandoffStep(priorSteps.find((priorStep) => priorStep.stepId === dependencyId)),
+        );
   if (hasCompletedOutput) {
     return undefined;
   }
@@ -215,14 +287,16 @@ async function executeStep(input: {
       citations: [],
     };
   }
+  const degradedHandoffStepIds = getDegradedHandoffStepIds(input.step, input.priorSteps);
   if (input.step.delegatedRole && input.callbacks.executeDelegatedStep) {
-    return input.callbacks.executeDelegatedStep({
+    const delegatedResult = await input.callbacks.executeDelegatedStep({
       task: input.task,
       plan: input.plan,
       stepIndex: input.stepIndex,
       priorSteps: input.priorSteps,
       step: input.step,
     });
+    return withDegradedHandoffStepIds(delegatedResult, degradedHandoffStepIds);
   }
   try {
     const response = await input.callbacks.createChatCompletion({
@@ -261,6 +335,7 @@ async function executeStep(input: {
       status: "completed",
       output,
       summary: summarizeOutput(output),
+      degradedHandoffStepIds: degradedHandoffStepIds.length > 0 ? degradedHandoffStepIds : undefined,
       citations: readCompletionCitations(response),
       routing: readCompletionRouting(response),
     };
@@ -282,6 +357,7 @@ async function executeStep(input: {
       status: "failed",
       summary: `${toTitleCase(input.step.role)} failed`,
       error: (error as Error).message,
+      degradedHandoffStepIds: degradedHandoffStepIds.length > 0 ? degradedHandoffStepIds : undefined,
       citations: [],
     };
   }
@@ -819,7 +895,7 @@ function buildGenericIncompleteSynthesisFallback(input: {
     "",
   ];
   for (const step of input.steps) {
-    lines.push(`### ${formatStepTitle(step)} (${step.status})`);
+    lines.push(`### ${formatStepTitle(step)} (${formatHandoffStatus(step)})`);
     lines.push("");
     if (step.output?.trim()) {
       lines.push(step.output.trim());
@@ -854,7 +930,7 @@ function buildPriorOutputHandoffs(steps: OrchestrationStepExecutionResult[]): st
     remaining -= excerpt.length;
     sections.push(
       [
-        `### ${formatStepTitle(step)} (${step.status})`,
+        `### ${formatStepTitle(step)} (${formatHandoffStatus(step)})`,
         excerpt,
         raw.length > excerpt.length ? "[truncated]" : undefined,
       ]
@@ -867,6 +943,10 @@ function buildPriorOutputHandoffs(steps: OrchestrationStepExecutionResult[]): st
 
 function formatStepTitle(step: Pick<OrchestrationStepExecutionResult, "label" | "role">): string {
   return step.label?.trim() || toTitleCase(step.role);
+}
+
+function formatHandoffStatus(step: OrchestrationStepExecutionResult): string {
+  return step.status === "failed" && isUsableHandoffStep(step) ? `${step.status} (degraded)` : step.status;
 }
 
 function escapeRegExp(value: string): string {
@@ -896,6 +976,10 @@ function dedupeCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] 
     deduped.push(citation);
   }
   return deduped;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function extractCompletionText(response: ChatCompletionResponse): string {

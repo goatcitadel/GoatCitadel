@@ -36,10 +36,17 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxDelayMs: 60_000,
   backoffMultiplier: 2,
 };
-const DURABLE_LEASE_TTL_MS = 15_000;
+// The lease must survive sustained event-loop starvation: a single native
+// browser navigation or repo-wide search can stall the loop for 60-90s on a
+// loaded workstation, and a 15s TTL caused the reaper to fail healthy runs at
+// checkpoint run_started while their turns completed normally.
+const DURABLE_LEASE_TTL_MS = 120_000;
 const DURABLE_WORKER_POLL_MIN_MS = 750;
 const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
+// Transient lease-renewal errors (storage contention, CAS retry exhaustion)
+// should not abort an in-flight run; only repeated consecutive failures may.
+const DURABLE_LEASE_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3;
 const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
@@ -1075,6 +1082,14 @@ export class DurableRunService {
       const expectedAtMs = Date.now() + DURABLE_LEASE_HEARTBEAT_MS;
       heartbeatTimer = setTimeout(() => void heartbeat(expectedAtMs), DURABLE_LEASE_HEARTBEAT_MS);
     };
+    let consecutiveHeartbeatFailures = 0;
+    let lastSuccessfulRenewalMs = Date.now();
+    const heartbeatToleranceExhausted = (): boolean =>
+      consecutiveHeartbeatFailures >= DURABLE_LEASE_HEARTBEAT_MAX_CONSECUTIVE_FAILURES ||
+      // Wall-clock bound: regardless of attempt count, once the lease could
+      // have expired from another worker's perspective we must stop executing
+      // or risk a double-run after the reaper reclaims it.
+      Date.now() - lastSuccessfulRenewalMs >= DURABLE_LEASE_TTL_MS;
     const heartbeat = async (expectedAtMs: number) => {
       if (!active) {
         return;
@@ -1084,12 +1099,19 @@ export class DurableRunService {
       try {
         current = this.ctx.storage.durableRuns.getRun(run.runId);
       } catch (error) {
+        consecutiveHeartbeatFailures += 1;
+        if (!heartbeatToleranceExhausted()) {
+          scheduleHeartbeat();
+          return;
+        }
         active = false;
         controller.abort(error instanceof Error ? error : new Error(String(error)));
         rejectHeartbeatFailure(error instanceof Error ? error : new Error(String(error)));
         return;
       }
       if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        // Definitive ownership loss is not retryable: another worker (or the
+        // reaper) owns the run now, so executing further would double-run it.
         active = false;
         const error = new Error(`Durable run ${run.runId} lease ownership moved to another worker.`);
         controller.abort(error);
@@ -1106,9 +1128,22 @@ export class DurableRunService {
           updatedAt: now,
         });
         if (!renewed) {
-          throw new Error(`Durable run ${run.runId} lease renewal lost ownership.`);
+          // A clean false/undefined from renewLease is a definitive CAS loss
+          // (another worker holds the lease) — abort immediately, no strikes.
+          active = false;
+          const error = new Error(`Durable run ${run.runId} lease renewal lost ownership.`);
+          controller.abort(error);
+          rejectHeartbeatFailure(error);
+          return;
         }
+        consecutiveHeartbeatFailures = 0;
+        lastSuccessfulRenewalMs = Date.now();
       } catch (error) {
+        consecutiveHeartbeatFailures += 1;
+        if (!heartbeatToleranceExhausted()) {
+          scheduleHeartbeat();
+          return;
+        }
         active = false;
         controller.abort(error instanceof Error ? error : new Error(String(error)));
         rejectHeartbeatFailure(

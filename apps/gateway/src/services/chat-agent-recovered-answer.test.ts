@@ -3,7 +3,6 @@ import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
   buildFetchedContentBudgetFallback,
   buildRecoveredEvidenceAnswer,
-  buildRecoveredRepoGroundedAnswer,
   buildSearchResultBudgetFallback,
   collectObservedToolEvidencePaths,
   formatRecoveredSearchLead,
@@ -107,57 +106,6 @@ describe("chat agent recovered answer helpers", () => {
     expect(fallback).toContain("deep pass finished");
   });
 
-  it("falls back across file reads and search snippets for repo-grounded answers", () => {
-    const noEvidence = buildRecoveredRepoGroundedAnswer("Summarize the code", [
-      toolRun({
-        toolName: "file.read_range",
-        args: { path: "apps/gateway/src/services/chat-agent-orchestrator.ts" },
-        result: { path: "apps/gateway/src/services/chat-agent-orchestrator.ts", content: "" },
-      }),
-    ]);
-    expect(noEvidence).toBeUndefined();
-
-    const answer = buildRecoveredRepoGroundedAnswer("Compare the implementation details", [
-      toolRun({
-        toolName: "code.search",
-        result: {
-          matches: [
-            { path: "apps/gateway/src/services/chat-agent-orchestrator.ts" },
-            { path: "apps/gateway/src/services/chat-agent-orchestrator.test.ts" },
-          ],
-        },
-      }),
-      toolRun({
-        toolName: "fs.read",
-        args: { path: "apps/gateway/src/services/chat-agent-orchestrator.ts" },
-        result: {
-          path: "apps/gateway/src/services/chat-agent-orchestrator.ts",
-          content:
-            "The orchestrator records trace state, persists tool evidence, and compares recovery paths before writing assistant output.",
-        },
-      }),
-      toolRun({
-        toolName: "browser.search",
-        result: {
-          results: [
-            {
-              title: "Trace evidence",
-              url: "https://example.com/trace",
-              snippet:
-                "Trace evidence from the runtime compares provider output with persisted tool runs before synthesis.",
-            },
-          ],
-        },
-      }),
-    ]);
-
-    expect(answer).toContain("Observed from the files I did inspect");
-    expect(answer).toContain("chat-agent-orchestrator.ts");
-    expect(collectObservedToolEvidencePaths([toolRun({ toolName: "code.search", result: { matches: [] } })])).toEqual(
-      [],
-    );
-  });
-
   it("summarizes tool runs for synthesis across file, browser, and generic results", () => {
     expect(
       summarizeToolRunForSynthesis(
@@ -206,6 +154,9 @@ describe("chat agent recovered answer helpers", () => {
     expect(
       summarizeToolRunForSynthesis(toolRun({ toolName: "custom.tool", result: { value: "x".repeat(400) } })),
     ).toContain("...");
+    expect(collectObservedToolEvidencePaths([toolRun({ toolName: "code.search", result: { matches: [] } })])).toEqual(
+      [],
+    );
   });
 
   it("handles empty recovery inputs and plain text formatting boundaries", () => {
@@ -414,17 +365,6 @@ describe("chat agent recovered answer helpers", () => {
       ),
     ).toContain("Pricing login support demo trial");
 
-    expect(
-      buildRecoveredRepoGroundedAnswer("Summarize the inspected file", [
-        toolRun({
-          toolName: "fs.read",
-          result: {
-            content:
-              "The inspected implementation stores durable tool results and exposes concise recovery status to the operator.",
-          },
-        }),
-      ]),
-    ).toBeUndefined();
   });
 });
 

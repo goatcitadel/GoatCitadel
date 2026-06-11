@@ -728,7 +728,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       trace: PromptPackRunRecord["trace"];
       content: string;
       expectedStatus: PromptPackRunRecord["status"];
-      expectedError: RegExp;
+      expectedError?: RegExp;
     }> = [
       {
         label: "approval",
@@ -752,13 +752,16 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         expectedError: /failed state/i,
       },
       {
+        // Durable-layer failure with a completed trace and retained output is
+        // recorded as a scorable completed run with a durable_failed integrity
+        // signal instead of erasing the turn.
         label: "failed-durable",
         trace: createTrace("sess-failed-durable", {
           durable: { status: "failed", runId: "durable-failed" } as never,
         }),
         content: "Durable failed.",
-        expectedStatus: "failed",
-        expectedError: /Durable execution/i,
+        expectedStatus: "completed",
+        expectedError: undefined,
       },
     ];
 
@@ -844,7 +847,11 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       const result = await service.runPromptPackTest("pack-1", `test-${testCase.label}`);
 
       expect(result.status).toBe(testCase.expectedStatus);
-      expect(result.error).toMatch(testCase.expectedError);
+      if (testCase.expectedError) {
+        expect(result.error).toMatch(testCase.expectedError);
+      } else {
+        expect(result.error).toBeUndefined();
+      }
       expect(patchRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: result.status }));
     }
   });

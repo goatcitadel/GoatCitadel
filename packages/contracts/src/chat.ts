@@ -1069,6 +1069,7 @@ export interface ChatOrchestrationStepSummary {
   durationMs?: number;
   summary?: string;
   error?: string;
+  degradedHandoffStepIds?: string[];
 }
 
 export interface ChatOrchestrationSummary {
@@ -1265,6 +1266,7 @@ export interface ChatDelegationStepRecord {
   output?: string;
   error?: string;
   failureGuidance?: string;
+  degradedHandoffStepIds?: string[];
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;

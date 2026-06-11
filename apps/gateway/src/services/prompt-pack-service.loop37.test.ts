@@ -58,7 +58,7 @@ describe("prompt-pack loop37 harness prompt behavior", () => {
     );
   });
 
-  it("adds code no-tools guardrails for typed wake outcome contracts instead of inventing repo paths", () => {
+  it("keeps generic code no-tools guardrails without prompt-keyed wake-outcome steering", () => {
     const profile = resolvePromptPackExecutionProfile({
       test: {
         mode: "code",
@@ -71,8 +71,8 @@ describe("prompt-pack loop37 harness prompt behavior", () => {
     );
 
     expect(prompt).toContain("Because tools are disabled, do not invent repo-native file paths");
-    expect(prompt).toContain("For typed wake outcome no-tools prompts, name the variants exactly");
-    expect(prompt).toContain("mark the shared contract location as a proposed/assumed location");
+    // Prompt-keyed steering was removed: the contract stays test-agnostic.
+    expect(prompt).not.toContain("For typed wake outcome no-tools prompts");
     expect(prompt).toContain("## User Task");
   });
 

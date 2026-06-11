@@ -3,4 +3,6 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  # protobufjs postinstall only emits version-scheme advisory warnings.
+  protobufjs: false
   sharp: true

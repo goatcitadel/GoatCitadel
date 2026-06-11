@@ -693,7 +693,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
   });
 
   it("parses the v4 agentic focused pack with diagnostics and surface guards", () => {
-    const markdown = readRepoFixture("goatcitadel_prompt_pack_v4_agentic_focused.md");
+    const markdown = readRepoFixture("eval-assets/goatcitadel_prompt_pack_v4_agentic_focused.md");
     const tests = parsePromptPackTests(markdown);
     const byMode = new Map<string, number>();
     const byModeTier = new Map<string, number>();
@@ -795,7 +795,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
   });
 
   it("parses the v6 security red-team prompt pack with balanced safety diagnostics", () => {
-    const markdown = readRepoFixture("goatcitadel_prompt_pack_v6_security_red_team.md");
+    const markdown = readRepoFixture("eval-assets/goatcitadel_prompt_pack_v6_security_red_team.md");
     const tests = parsePromptPackTests(markdown);
     const codes = tests.map((test) => test.code);
     const byMode = new Map<string, number>();
@@ -846,10 +846,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       updatedAt: "2026-05-30T00:00:00.000Z",
     };
     const securityTests = parsePromptPackTests(
-      fs.readFileSync(
-        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
-        "utf8",
-      ),
+      readRepoFixture("eval-assets/goatcitadel_prompt_pack_v6_security_red_team.md"),
     ).map((test, index) => ({
       ...test,
       testId: `test-security-partial-${index + 1}`,
@@ -943,10 +940,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       updatedAt: "2026-05-30T00:00:00.000Z",
     };
     const securityTests = parsePromptPackTests(
-      fs.readFileSync(
-        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
-        "utf8",
-      ),
+      readRepoFixture("eval-assets/goatcitadel_prompt_pack_v6_security_red_team.md"),
     ).map((test, index) => ({
       ...test,
       testId: `test-security-partial-${index + 1}`,
@@ -1059,10 +1053,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
       updatedAt: "2026-05-30T00:00:00.000Z",
     };
     const securityTests = parsePromptPackTests(
-      fs.readFileSync(
-        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
-        "utf8",
-      ),
+      readRepoFixture("eval-assets/goatcitadel_prompt_pack_v6_security_red_team.md"),
     ).map((test) => ({
       ...test,
       packId: importedPack.packId,

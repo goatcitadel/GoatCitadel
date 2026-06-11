@@ -55,10 +55,13 @@ describe("PromptPackService loop40 run outcome persistence", () => {
       expectedError: "Assistant turn finished in failed state.",
     },
     {
+      // A durable-layer failure (lease reaped under load) must not erase a
+      // completed turn with output: the run stays scorable and the degradation
+      // is recorded as the durable_failed integrity signal instead.
       name: "failed durable run",
       trace: { status: "completed" as const, durable: { status: "failed" as const } },
-      expectedStatus: "failed" as const,
-      expectedError: "Durable execution finished in failed state.",
+      expectedStatus: "completed" as const,
+      expectedError: undefined,
     },
   ])("persists $name prompt-pack runs with diagnostic status and retained output", async (scenario) => {
     const harness = createHarness({
@@ -79,6 +82,19 @@ describe("PromptPackService loop40 run outcome persistence", () => {
       error: scenario.expectedError,
       responseText: `Output retained for ${scenario.name}.`,
     });
+  });
+
+  it("keeps durable-failed completed runs scorable with a degraded integrity signal", async () => {
+    const harness = createHarness({
+      traceOverride: { status: "completed" as const, durable: { status: "failed" as const } },
+      assistantContent: "Output retained for durable degradation.",
+    });
+
+    const run = await harness.service.runPromptPackTest("pack-1", "test-loop40");
+
+    expect(run.status).toBe("completed");
+    expect(run.integrity?.signals).toContain("durable_failed");
+    expect(run.integrity?.validationStatus).toBe("valid");
   });
 
   it("persists agent execution errors as failed prompt-pack runs without reraising", async () => {

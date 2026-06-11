@@ -82,6 +82,7 @@ export interface ActiveChatDelegationStep {
   output?: string;
   error?: string;
   failureGuidance?: string;
+  degradedHandoffStepIds?: string[];
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
@@ -115,6 +116,7 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     output: step.output,
     error: step.error,
     failureGuidance: step.failureGuidance,
+    degradedHandoffStepIds: step.degradedHandoffStepIds,
     durableRunId: step.durableRunId,
     childSessionId: step.childSessionId,
     childTurnId: step.childTurnId,

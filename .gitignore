@@ -42,6 +42,10 @@ workspace/chat/
 docs/review/r*-*.md
 cowork-pptx-e2e-initial.md
 apps/gateway/backups/
+apps/mission-control-windows/bin/
+apps/mission-control-windows/obj/
+apps/mission-control-windows/Tests/bin/
+apps/mission-control-windows/Tests/obj/
 backups/
 data/postgres/
 output/

@@ -34,6 +34,8 @@ const PROMPT_LAB_MIN_MAX_TOKENS = {
   cowork: 2200,
   code: 2400,
 } as const satisfies Record<ChatMode, number>;
+const PROMPT_LAB_MIN_TURN_BUDGET_MS = 240_000;
+const PROMPT_LAB_MIN_COMPLETION_TIMEOUT_MS = 150_000;
 
 // Generous-but-bounded per-web-mode turn and completion budgets. Each pair keeps
 // completionTimeoutMs <= turnBudgetMs and stays above the branch's
@@ -231,8 +233,19 @@ export function applyPromptLabHarnessBudget(
     ? PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN
     : PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN[input.mode];
   const synthesisReserveMs = input.mode === "chat" ? 20_000 : 30_000;
+  // Harness rows run real multi-step tool work: a 120s wall (the chat quick/off
+  // default, sized to keep live chat responsive) starves the final synthesis
+  // when a single repo search or browser navigation takes 30-90s on a loaded
+  // machine. Evals prefer a complete, honest answer over snappiness.
+  const turnBudgetMs = Math.max(budget.turnBudgetMs, PROMPT_LAB_MIN_TURN_BUDGET_MS);
+  const completionTimeoutMs = Math.min(
+    turnBudgetMs,
+    Math.max(budget.completionTimeoutMs, PROMPT_LAB_MIN_COMPLETION_TIMEOUT_MS),
+  );
   return {
     ...budget,
+    turnBudgetMs,
+    completionTimeoutMs,
     maxToolLoops: Math.max(budget.maxToolLoops, maxToolLoops),
     maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, maxToolRunsPerTurn),
     searchMaxResults: Math.max(budget.searchMaxResults, PROMPT_LAB_SEARCH_MAX_RESULTS[input.mode]),

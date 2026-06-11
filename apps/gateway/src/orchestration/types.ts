@@ -111,6 +111,7 @@ export interface OrchestrationStepExecutionResult {
   summary?: string;
   error?: string;
   failureGuidance?: string;
+  degradedHandoffStepIds?: string[];
   repairedFromStepId?: string;
   childRunId?: string;
   durableRunId?: string;

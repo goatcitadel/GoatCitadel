@@ -181,9 +181,32 @@ describe("chat-agent-budget", () => {
 
     expect(applyPromptLabHarnessBudget(base, { mode: "chat" })).toBe(base);
     expect(applyPromptLabExplicitToolBudget(base)).toBe(base);
-    expect(applyPromptLabHarnessBudget(base, { mode: "code", promptLabHarness: true })).toEqual(base);
+    // Harness rows get a real-tool-work time floor (240s/150s); other limits
+    // keep the larger existing values.
+    expect(applyPromptLabHarnessBudget(base, { mode: "code", promptLabHarness: true })).toEqual({
+      ...base,
+      turnBudgetMs: 240_000,
+      completionTimeoutMs: 150_000,
+    });
     expect(applyPromptLabExplicitToolBudget({ ...base, maxToolLoops: 1, maxToolRunsPerTurn: 2 }, true)).toEqual(
       expect.objectContaining({ maxToolLoops: 6, maxToolRunsPerTurn: 12 }),
+    );
+  });
+
+  it("never shrinks turn budgets that already exceed the harness floor", () => {
+    const base = {
+      turnBudgetMs: 480_000,
+      completionTimeoutMs: 240_000,
+      maxToolLoops: 10,
+      maxToolRunsPerTurn: 30,
+      searchMaxResults: 12,
+      maxTokens: 5000,
+      minSynthesisReserveMs: 30000,
+      expensiveToolMinimumRemainingMs: 30000,
+    };
+
+    expect(applyPromptLabHarnessBudget(base, { mode: "cowork", promptLabHarness: true })).toEqual(
+      expect.objectContaining({ turnBudgetMs: 480_000, completionTimeoutMs: 240_000 }),
     );
   });
 

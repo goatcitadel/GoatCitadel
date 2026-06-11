@@ -754,7 +754,8 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
         ADD COLUMN IF NOT EXISTS child_session_id TEXT,
         ADD COLUMN IF NOT EXISTS child_turn_id TEXT,
-        ADD COLUMN IF NOT EXISTS citations_json TEXT;
+        ADD COLUMN IF NOT EXISTS citations_json TEXT,
+        ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT;
     `,
   },
   {

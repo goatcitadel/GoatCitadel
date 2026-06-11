@@ -568,7 +568,7 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     expect(result.approvalExpiresAt).toBeUndefined();
   });
 
-  it("repairs env-loaded prompt-pack source-label prompts into concrete test scaffolding", async () => {
+  it("passes degraded prompt-pack answers through verbatim without forced prefetch tool runs", async () => {
     const prompt = [
       "## Prompt Lab Run Contract",
       "- Mode: code",
@@ -582,25 +582,8 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     ].join("\n");
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(completion("Need answer with observed/inferred maybe incomplete."));
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockImplementation(async (request) => ({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: `audit-env-source-${String(request.args.path).replace(/[^a-z0-9]+/gi, "-")}`,
-        result:
-          request.args.path === "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts"
-            ? {
-                path: request.args.path,
-                content: "describe('parsePromptPackTests', () => { it('loads packs', () => undefined); });",
-              }
-            : {
-                path: request.args.path,
-                content:
-                  "class PromptPackService { ensurePromptPackLoaded() { return process.env.GOATCITADEL_PROMPT_PACK_PATH; } }",
-              },
-      }));
+      .mockResolvedValue(completion("Need answer with observed/inferred maybe incomplete."));
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range", "code.search_files"]),
@@ -620,125 +603,15 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
       }),
     );
 
-    expect(result.assistantContent).toContain("preserves the real env prompt-pack source label");
-    expect(result.assistantContent).toContain("GOATCITADEL_PROMPT_PACK_PATH");
-    expect(result.assistantContent).toContain("replacePackTests");
-    expect(result.assistantContent).toContain("Exact files used:");
-    expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.parser-report.test.ts");
-    expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.ts");
-  });
-
-  it("repairs expanded-pack judge-default prompts into concrete scoring test scaffolding", async () => {
-    const prompt = [
-      "## Prompt Lab Run Contract",
-      "- Mode: code",
-      "- Tool tier: implicit-tools",
-      "",
-      "## User Task",
-      "Inspect the repo if needed and propose the exact minimal automated test that proves judge defaults use the expanded pack instead of the frozen baseline.",
-      "",
-      "Answer contract:",
-      "- Include `Setup`, `Act`, `Assert`, and `Failure signature` details.",
-    ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(completion("Need answer with observed/inferred maybe incomplete."));
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockImplementation(async (request) => ({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: `audit-judge-defaults-${String(request.args.path).replace(/[^a-z0-9]+/gi, "-")}`,
-        result:
-          request.args.path === "apps/gateway/src/services/prompt-pack-service.scoring.test.ts"
-            ? {
-                path: request.args.path,
-                content: "describe('autoScorePromptPackTest', () => { it('scores packs', () => undefined); });",
-              }
-            : {
-                path: request.args.path,
-                content:
-                  "class PromptPackService { autoScorePromptPackTest() { return getPromptJudgeModelDefaults(); } }",
-              },
-      }));
-    const orchestrator = new ChatAgentOrchestrator({
-      storage: createMockStorage() as never,
-      listToolCatalog: () => createToolCatalog(["file.read_range", "code.search_files"]),
-      createChatCompletion,
-      invokeTool,
-    });
-
-    const result = await orchestrator.run(
-      turnInput({
-        content: prompt,
-        mode: "code",
-        providerId: "openai",
-        model: "gpt-5.4",
-        thinkingLevel: "extended",
-        normalizationProfile: "prompt_pack_harness",
-        historyMessages: [{ role: "user", content: prompt }],
-      }),
-    );
-
-    expect(result.assistantContent).toContain("scores the expanded pack with expanded judge defaults");
-    expect(result.assistantContent).toContain("getPromptJudgeModelDefaults");
-    expect(result.assistantContent).toContain('judgeProviderId: "openai-codex"');
-    expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.scoring.test.ts");
-    expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.ts");
-  });
-
-  it("repairs typed wake outcome prompts from concrete contract, producer, consumer, and validation reads", async () => {
-    const prompt = [
-      "## Prompt Lab Run Contract",
-      "- Mode: code",
-      "- Tool tier: implicit-tools",
-      "",
-      "## User Task",
-      "Use file or code tools to inspect typed wake outcomes. Identify the exact patch points, name the contract file, producer call sites, consumer/status shaping, and validation step.",
-      "",
-      "Answer contract:",
-      "- Cite the exact files used.",
-      "- Name the contract file, producer call sites, consumer/status shaping, and validation step.",
-    ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(completion("Need answer with observed/inferred maybe incomplete."));
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockImplementation(async (request) => ({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: `audit-typed-wake-${String(request.args.path).replace(/[^a-z0-9]+/gi, "-")}`,
-        result: {
-          path: request.args.path,
-          content: typedWakeFixtureContent(String(request.args.path)),
-        },
-      }));
-    const orchestrator = new ChatAgentOrchestrator({
-      storage: createMockStorage() as never,
-      listToolCatalog: () => createToolCatalog(["file.read_range", "code.search_files"]),
-      createChatCompletion,
-      invokeTool,
-    });
-
-    const result = await orchestrator.run(
-      turnInput({
-        content: prompt,
-        mode: "code",
-        providerId: "openai",
-        model: "gpt-5.4",
-        thinkingLevel: "extended",
-        normalizationProfile: "prompt_pack_harness",
-        historyMessages: [{ role: "user", content: prompt }],
-      }),
-    );
-
-    expect(result.assistantContent).toContain("## Contract file");
-    expect(result.assistantContent).toContain("packages/contracts/src/durable.ts");
-    expect(result.assistantContent).toContain("wakeDurableRun(...)");
-    expect(result.assistantContent).toContain("handleWakeEffect(...)");
-    expect(result.assistantContent).toContain("approval-resolution-effects-service.test.ts");
-    expect(result.assistantContent).toContain("## Validation step");
+    // Eval-integrity turn: the model's own (even degraded) answer is persisted
+    // verbatim. The controller must not execute file reads or repo searches on
+    // the model's behalf, and must not substitute canned test scaffolding or
+    // append a citation/files appendix.
+    expect(result.assistantContent).toBe("Need answer with observed/inferred maybe incomplete.");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toEqual([]);
+    expect(result.assistantContent).not.toContain("Exact files used:");
+    expect(result.assistantContent).not.toContain("Source URLs:");
   });
 });
 
@@ -794,23 +667,4 @@ function extractRequestToolNames(request: ChatCompletionRequest | undefined): st
       return typeof record.function?.name === "string" ? record.function.name : undefined;
     })
     .filter((name): name is string => Boolean(name));
-}
-
-function typedWakeFixtureContent(path: string): string {
-  if (path === "packages/contracts/src/durable.ts") {
-    return "export type DurableWakeOutcome = 'woke' | 'skipped_not_waiting' | 'failed';\nexport interface DurableWakeResult { outcome: DurableWakeOutcome; }";
-  }
-  if (path === "apps/gateway/src/services/durable-run-service.ts") {
-    return "export class DurableRunService { public async wakeDurableRun(): Promise<DurableWakeResult> { return { outcome: 'woke' }; } }";
-  }
-  if (path === "apps/gateway/src/services/approval-resolution-effects-service.ts") {
-    return "export class ApprovalEffectsService { private async handleWakeEffect() { return buildRecoveredWakeResult(); } }";
-  }
-  if (path === "apps/gateway/src/services/durable-run-service.test.ts") {
-    return "it('covers wakeDurableRun outcomes', async () => { await service.wakeDurableRun('run-1'); });";
-  }
-  if (path === "apps/gateway/src/services/approval-resolution-effects-service.test.ts") {
-    return "it('handles skipped_not_waiting and woke outcomes', async () => { await service.handleWakeEffect(); });";
-  }
-  return "";
 }

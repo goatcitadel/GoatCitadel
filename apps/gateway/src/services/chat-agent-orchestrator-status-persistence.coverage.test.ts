@@ -7,12 +7,30 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
-import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
+import {
+  createMockStorage,
+  createToolCatalog,
+  namedToolCallCompletion,
+} from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator status and approval persistence coverage", () => {
-  it("persists Prompt Lab prefetch approval and finishes the stream without a message", async () => {
+  it("soft-fails approval-required tool runs on Prompt Lab eval turns and completes with the model's answer", async () => {
     const storage = createObservableStorage();
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    const modelAnswer =
+      "The read of `apps/gateway/src/services/durable-run-service.ts` was approval-gated, so I could not inspect its contents directly. No file evidence is available for this turn.";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("file.read_range", {
+          path: "apps/gateway/src/services/durable-run-service.ts",
+          startLine: 1,
+          endLine: 40,
+        }),
+      )
+      .mockResolvedValue({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: modelAnswer } }],
+      });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
       outcome: "approval_required",
       policyReason: "file read requires operator approval",
@@ -45,13 +63,16 @@ describe("ChatAgentOrchestrator status and approval persistence coverage", () =>
         "Cite the exact files used.",
       ].join("\n"),
       mode: "cowork",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [],
     });
     input.historyMessages = [{ role: "user", content: input.content }];
 
     const chunks = await collectStream(orchestrator, input);
 
-    expect(createChatCompletion).not.toHaveBeenCalled();
+    // Tool runs are model-initiated only: the single invocation comes from the
+    // model's own tool call, not a forced prefetch on the model's behalf.
+    expect(invokeTool).toHaveBeenCalledTimes(1);
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "file.read_range",
@@ -60,36 +81,15 @@ describe("ChatAgentOrchestrator status and approval persistence coverage", () =>
         }),
       }),
     );
-    expect(storage.patch).toHaveBeenCalledWith(input.turnId, expect.objectContaining({ status: "waiting_for_tool" }));
-    expect(storage.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "approval-prefetch-file-read",
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        toolName: "file.read_range",
-        status: "pending",
-        expiresAt: "2026-03-22T13:00:00.000Z",
-      }),
-    );
-    expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(false);
-    expect(chunks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "approval_required",
-          approval: expect.objectContaining({
-            approvalId: "approval-prefetch-file-read",
-            toolName: "file.read_range",
-          }),
-        }),
-      ]),
-    );
-    expect(finalTrace(chunks)).toMatchObject({
-      status: "waiting_for_approval",
-      failure: expect.objectContaining({
-        failureClass: "approval_required",
-        retryable: true,
-      }),
-    });
+    // Approvals never park eval turns: nothing is persisted as pending and the
+    // stream does not surface an approval_required pause.
+    expect(storage.upsert).not.toHaveBeenCalled();
+    expect(chunks.some((chunk) => chunk.type === "approval_required")).toBe(false);
+    // The turn completes with the model's own text passed through verbatim.
+    expect(chunks.some((chunk) => chunk.type === "message_done" && chunk.content === modelAnswer)).toBe(true);
+    const trace = finalTrace(chunks);
+    expect(trace?.status).not.toBe("waiting_for_approval");
+    expect(trace).toMatchObject({ status: "completed" });
   });
 
   it("persists local filesystem probe approval before provider synthesis", async () => {

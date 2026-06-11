@@ -560,27 +560,6 @@ export function buildRecoveredEvidenceAnswer(
   return lines.join("\n");
 }
 
-export function buildRecoveredRepoGroundedAnswer(
-  userPrompt: string,
-  toolRuns: ChatToolRunRecord[],
-): string | undefined {
-  const evidencePaths = collectObservedToolEvidencePaths(toolRuns).slice(0, 4);
-  if (evidencePaths.length < 1) {
-    return undefined;
-  }
-  const points = collectRecoveredAnswerPoints(toolRuns, userPrompt, 4);
-  if (points.length < 1) {
-    return undefined;
-  }
-  return [
-    "Observed from the files I did inspect:",
-    ...points.map((point) => `- ${truncatePlainText(point, 220)}`),
-    "",
-    `Files: ${evidencePaths.map((path) => `\`${path}\``).join(", ")}`,
-    "Anything beyond those files is unverified from the current trace.",
-  ].join("\n");
-}
-
 function buildRecoveredEvidenceIntro(userPrompt: string): string {
   const normalized = userPrompt.toLowerCase();
   if (

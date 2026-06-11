@@ -169,63 +169,21 @@ describe("ChatAgentOrchestrator loop39 runtime and delegation repair behavior", 
     );
   });
 
-  it("repairs workspace guidance override-chain delegation prompts with provenance boundaries", async () => {
-    const result = await runCoworkRepair({
-      sessionId: "sess-loop39-workspace-guidance",
-      task: "Use role-labeled sections to inspect workspace loading, guidance docs, project-binding behavior, and the effective override chain.",
-      instruction: "Keep exactly these sections in order: `Researcher`, `Architect`, `QA`.",
-    });
-
-    expect(result.assistantContent).toContain("Guidance file map");
-    expect(result.assistantContent).toContain("Effective override chain");
-    expect(result.assistantContent).toContain("choose workspace guidance when");
-    expect(result.assistantContent).toContain("project-binding metadata");
-  });
-
-  it("repairs memory lifecycle delegation prompts across storage truth and operator surfaces", async () => {
-    const result = await runCoworkRepair({
-      sessionId: "sess-loop39-memory-lifecycle",
-      task: "Use role-labeled Researcher, Architect, QA, Product, and Ops sections to inspect memory lifecycle routes, services, UI copy, and operator-facing maintenance behavior.",
-      instruction: "Keep exactly these sections in order: `Researcher`, `Architect`, `QA`, `Product`, `Ops`.",
-    });
-
-    expect(result.assistantContent).toContain(
-      "route -> persisted context repo -> Mission Control Next memory route -> shared operator snapshot hook",
-    );
-    expect(result.assistantContent).toContain("fresh cache hits");
-    expect(result.assistantContent).toContain("maintenance-action honesty");
-    expect(result.assistantContent).toContain("UI labels as lifecycle truth");
-  });
-
-  it("repairs approval partial-failure delegation prompts without collapsing downstream wake state", async () => {
-    const result = await runCoworkRepair({
-      sessionId: "sess-loop39-approval-partial",
-      task: "Use role-labeled Researcher, Product, QA, and Ops sections to inspect approval resolution, wake helpers, downstream effect visibility, and partial-failure cases.",
-      instruction: "Keep exactly these sections in order: `Researcher`, `Product`, `QA`, `Ops`.",
-    });
-
-    expect(result.assistantContent).toContain("Canonical approval success");
-    expect(result.assistantContent).toContain("approval decision was saved");
-    expect(result.assistantContent).toContain("wake effect was not recorded");
-    expect(result.assistantContent).toContain("Do not collapse accepted approval");
-  });
-
-  it("repairs book club cadence delegation into planner, risk, handoff, and recommendation sections", async () => {
-    const result = await runCoworkRepair({
+  it("passes cowork eval-turn model output through verbatim without role-contract rewriting", async () => {
+    const result = await runCoworkEvalTurn({
       sessionId: "sess-loop39-book-club",
       task: 'Cowork request: "Coordinate a decision about whether our book club should switch from monthly to biweekly meetings."',
       instruction:
         "Use role-labeled sections in this exact order: `Planner`, `Operator Handoff`, `Members`, `Organizer`, `Risk Review`, `Synthesis`. End with a single recommendation.",
     });
 
-    expect(result.assistantContent).toContain("## Planner");
-    expect(result.assistantContent).toContain("## Operator Handoff");
-    expect(result.assistantContent).toContain("enthusiasm may look high at first");
-    expect(result.assistantContent).toContain("pilot biweekly meetings");
+    expect(result.assistantContent).toBe(
+      "I can give a brief plan, but the exact roles are not expanded yet.",
+    );
   });
 });
 
-async function runCoworkRepair(input: {
+async function runCoworkEvalTurn(input: {
   sessionId: string;
   task: string;
   instruction: string;

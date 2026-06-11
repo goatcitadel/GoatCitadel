@@ -739,6 +739,15 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
 
+.mc-next-panel-list li[data-tone="warning"] {
+  border-color: color-mix(in oklab, var(--warning) 46%, var(--border));
+  background: color-mix(in oklab, var(--warning) 9%, var(--card));
+}
+
+.mc-next-panel-list li[data-tone="warning"] .mc-next-panel-list-head span {
+  color: color-mix(in oklab, var(--warning) 82%, var(--foreground));
+}
+
 .mc-next-workbench-run-detail {
   display: grid;
   gap: 0.62rem;

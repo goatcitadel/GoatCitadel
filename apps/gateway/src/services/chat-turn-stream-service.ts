@@ -426,7 +426,9 @@ export async function executePreparedModeOrchestration(
           runtimeStatus:
             step.status === "running"
               ? "running"
-              : step.status === "failed" && activeToolWork
+              : step.degradedHandoffStepIds?.length
+                ? "degraded"
+                : step.status === "failed" && activeToolWork
                 ? "degraded"
                 : step.status === "failed"
                   ? "failed"
@@ -459,6 +461,7 @@ export async function executePreparedModeOrchestration(
           error: step.error,
           failureGuidance:
             step.failureGuidance ?? (step.error ? buildDelegationFailureGuidance(step.error, step.role) : undefined),
+          degradedHandoffStepIds: step.degradedHandoffStepIds,
           childSessionId: step.childSessionId,
           childTurnId: step.childTurnId,
           citations: step.citations,

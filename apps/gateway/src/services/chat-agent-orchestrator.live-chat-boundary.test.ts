@@ -9,7 +9,7 @@ import {
 } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => {
-  it("does not inject prompt-pack markdown import fallback content on live chat turns", async () => {
+  it("passes model output through verbatim without forced repo prefetch on harness turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -20,6 +20,14 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
       "## User Task",
       "Inspect the repo if needed and explain how prompt-pack markdown is auto-loaded or imported today, including any source-label or source-of-truth ambiguity that remains.",
     ].join("\n");
+    const modelAnswer = [
+      "## Observed",
+      "- `apps/gateway/src/services/prompt-pack-service.ts`",
+      "- `packages/storage/src/prompt-pack-repo.ts`",
+      "",
+      "## Unverified (inspection incomplete)",
+      "- The actual auto-loading/import mechanism is not visible in the captured excerpts.",
+    ].join("\n");
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "glm-5",
       choices: [
@@ -27,87 +35,12 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
           index: 0,
           message: {
             role: "assistant",
-            content: [
-              "## Observed",
-              "- `apps/gateway/src/services/prompt-pack-service.ts`",
-              "- `packages/storage/src/prompt-pack-repo.ts`",
-              "",
-              "## Unverified (inspection incomplete)",
-              "- The actual auto-loading/import mechanism is not visible in the captured excerpts.",
-            ].join("\n"),
+            content: modelAnswer,
           },
         },
       ],
     });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-import-search",
-        result: {
-          matches: [
-            { path: "apps/gateway/src/services/prompt-pack-service.ts", name: "prompt-pack-service.ts", type: "file" },
-            { path: "apps/gateway/src/routes/prompt-packs.ts", name: "prompt-packs.ts", type: "file" },
-            { path: "packages/storage/src/prompt-pack-repo.ts", name: "prompt-pack-repo.ts", type: "file" },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-import-service-read",
-        result: {
-          path: "apps/gateway/src/services/prompt-pack-service.ts",
-          startLine: 1400,
-          endLine: 1450,
-          content: [
-            "async ensurePromptPackLoaded(): Promise<PromptPackRecord | undefined> {",
-            "  const sourcePath = process.env.GOATCITADEL_PROMPT_PACK_PATH?.trim();",
-            "  const markdown = await fs.readFile(sourcePath, 'utf8');",
-            "  const imported = this.importPromptPack({",
-            "    content: markdown,",
-            "    sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE,",
-            "  });",
-            "}",
-            "importPromptPack(input: { content: string; name?: string; sourceLabel?: string; packId?: string }) {",
-            "  const tests = parsePromptPackTests(input.content);",
-            "}",
-          ].join("\n"),
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-import-route-read",
-        result: {
-          path: "apps/gateway/src/routes/prompt-packs.ts",
-          startLine: 100,
-          endLine: 125,
-          content: [
-            "fastify.post('/api/v1/prompt-packs/import', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.importPromptPack(body.data));",
-            "});",
-          ].join("\n"),
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-import-repo-read",
-        result: {
-          path: "packages/storage/src/prompt-pack-repo.ts",
-          startLine: 1,
-          endLine: 220,
-          content: [
-            "interface PromptPackRow {",
-            "  source_label: string | null;",
-            "  policy_v2_source: string | null;",
-            "}",
-            "const resolvedSource = input.policySource ?? existingSource ?? 'inherited_default';",
-          ].join("\n"),
-        },
-      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
@@ -131,20 +64,17 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(
-      invokeTool.mock.calls.some(
-        (call) =>
-          call[0].toolName === "file.read_range" &&
-          String(call[0].args.path) === "apps/gateway/src/services/prompt-pack-service.ts",
-      ),
-    ).toBe(true);
-    expect(result.assistantContent).toContain("## Observed");
-    expect(result.assistantContent).toContain("inspection incomplete");
+    // Eval-integrity turn: the controller never executes repo inspection on the
+    // model's behalf, and the model's own answer is persisted verbatim — no
+    // injected fallback details the model never produced.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe(modelAnswer);
     expect(result.assistantContent).not.toContain("GOATCITADEL_PROMPT_PACK_PATH");
     expect(result.assistantContent).not.toContain("/api/v1/prompt-packs/import");
   });
 
-  it("does not inject prompt-pack operator-surface fallback content on live chat turns", async () => {
+  it("passes explicit-tools harness output through verbatim without controller-initiated tool runs", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -155,6 +85,17 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
       "## User Task",
       "Use file or code tools to inspect report rendering, trend rendering, and benchmark status/report APIs. Explain what evidence each surface exposes to an operator and cite the exact files used.",
     ].join("\n");
+    const modelAnswer = [
+      "## Exact files used",
+      "- `F:/code/personal-ai/apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts`",
+      "- `F:/code/personal-ai/artifacts/cost-reports/cost-report-2026-03-20-22.md`",
+      "- `F:/code/personal-ai/artifacts/cost-reports/cost-report-2026-03-21-08.md`",
+      "- `F:/code/personal-ai/apps/gateway/src/routes/prompt-packs.ts`",
+      "- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`",
+      "",
+      "## Patch points",
+      "- Consumer/status candidate: `F:/code/personal-ai/apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts`.",
+    ].join("\n");
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "gpt-5.4",
       choices: [
@@ -162,123 +103,12 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
           index: 0,
           message: {
             role: "assistant",
-            content: [
-              "## Exact files used",
-              "- `F:/code/personal-ai/apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts`",
-              "- `F:/code/personal-ai/artifacts/cost-reports/cost-report-2026-03-20-22.md`",
-              "- `F:/code/personal-ai/artifacts/cost-reports/cost-report-2026-03-21-08.md`",
-              "- `F:/code/personal-ai/apps/gateway/src/routes/prompt-packs.ts`",
-              "- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`",
-              "",
-              "## Patch points",
-              "- Consumer/status candidate: `F:/code/personal-ai/apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts`.",
-            ].join("\n"),
+            content: modelAnswer,
           },
         },
       ],
     });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-operator-surface-search",
-        result: {
-          matches: [
-            { path: "apps/gateway/src/services/prompt-pack-service.ts", name: "prompt-pack-service.ts", type: "file" },
-            { path: "apps/gateway/src/routes/prompt-packs.ts", name: "prompt-packs.ts", type: "file" },
-            {
-              path: "apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts",
-              name: "chat.prompt-pack-benchmark.test.ts",
-              type: "file",
-            },
-            {
-              path: "artifacts/cost-reports/cost-report-2026-03-20-22.md",
-              name: "cost-report-2026-03-20-22.md",
-              type: "file",
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-operator-surface-service-read",
-        result: {
-          path: "apps/gateway/src/services/prompt-pack-service.ts",
-          startLine: 847,
-          endLine: 1000,
-          content: [
-            "getPromptPackReport(packId: string): PromptPackReportRecord {",
-            "  return { pack, tests, runs, scores, autoScoresV2, humanReviewsV2, latestAssessments, summary };",
-            "}",
-            "getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {",
-            "  return { run, progress: { totalItems: runRow.total_items, completedItems: Math.max(runRow.completed_items, items.length) }, modelSummaries };",
-            "}",
-            "getPromptPackCapabilityTrends(packId: string): { items: CapabilityTrendSeries[] } {",
-            "  return { items: capabilities.map((entry) => ({ capability: entry.key, points, threshold: entry.threshold, breached })) };",
-            "}",
-            "function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {",
-            "  lines.push('## Snapshot');",
-            "  lines.push('### Latest Run');",
-            "  lines.push('### Auto Score (V2)');",
-            "  lines.push('### Integrity');",
-            "  lines.push('### Trace Summary');",
-            "  lines.push('### Citations');",
-            "  lines.push('## Outstanding');",
-            "}",
-          ].join("\n"),
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-operator-surface-route-read",
-        result: {
-          path: "apps/gateway/src/routes/prompt-packs.ts",
-          startLine: 303,
-          endLine: 405,
-          content: [
-            "fastify.get('/api/v1/prompt-packs/:packId/report', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.getPromptPackReport(params.data.packId));",
-            "});",
-            "fastify.post('/api/v1/prompt-packs/:packId/benchmark/run', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.runPromptPackBenchmark(params.data.packId, { testCodes: body.data.testCodes, providers: body.data.providers }));",
-            "});",
-            "fastify.get('/api/v1/prompt-packs/benchmark/:benchmarkRunId', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.getPromptPackBenchmarkStatus(params.data.benchmarkRunId));",
-            "});",
-            "fastify.post('/api/v1/prompt-packs/benchmark/:benchmarkRunId/cancel', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.cancelPromptPackBenchmark(params.data.benchmarkRunId));",
-            "});",
-            "fastify.get('/api/v1/prompt-packs/:packId/trends', async (request, reply) => {",
-            "  return reply.send(fastify.gateway.getPromptPackCapabilityTrends(params.data.packId));",
-            "});",
-          ].join("\n"),
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-pack-operator-surface-benchmark-test-read",
-        result: {
-          path: "apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts",
-          startLine: 1,
-          endLine: 124,
-          content: [
-            "it('returns benchmark status for a benchmark run id', async () => {",
-            "  expect(response.json()).toMatchObject({",
-            "    progress: { totalItems: 10, completedItems: 4 },",
-            "  });",
-            "});",
-            "it('cancels a benchmark run by id', async () => {",
-            "  expect(response.json()).toMatchObject({",
-            "    run: { status: 'cancelled' },",
-            "  });",
-            "});",
-          ].join("\n"),
-        },
-      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
@@ -302,15 +132,15 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
-      toolName: "code.search_files",
-      args: expect.objectContaining({
-        query: "prompt-pack-service.ts",
-      }),
-    });
-    expect(result.assistantContent).toContain("## Exact files used");
-    expect(result.assistantContent).toContain("apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts");
-    expect(result.assistantContent).toContain("artifacts/cost-reports/cost-report-2026-03-20-22.md");
+    // Eval-integrity turn: even on an explicit-tools contract, tool runs are
+    // model-initiated only — the controller does not search or read the repo on
+    // the model's behalf, does not replace the answer with a compliance
+    // fallback, and does not append operator-surface details the model never
+    // produced.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe(modelAnswer);
+    expect(result.assistantContent).not.toContain("Missing required tool evidence");
     expect(result.assistantContent).not.toContain("GET /api/v1/prompt-packs/:packId/report");
     expect(result.assistantContent).not.toContain("top failure signals");
   });
@@ -453,5 +283,59 @@ describe("ChatAgentOrchestrator live-chat and harness boundary behavior", () => 
     // No Prompt Lab contract → no enforcement, prose answer accepted as-is
     expect(result.assistantContent).toBe("Here is a plain answer without any tools.");
     expect(result.assistantContent).not.toContain("Missing required tool evidence");
+  });
+
+  it("still parks on approval for LIVE turns even when the user pastes a Prompt Lab run contract", async () => {
+    // Eval-integrity semantics are keyed strictly on the server-set
+    // normalizationProfile. A live user pasting contract text (e.g. to debug a
+    // failing pack row) must keep normal approval parking — content sniffing
+    // must never silently soft-fail their approval prompts.
+    const pastedContract = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Why did this row pause? Read `apps/gateway/src/services/durable-run-service.ts` and tell me.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue(
+      namedToolCallCompletion("file.read_range", {
+        path: "apps/gateway/src/services/durable-run-service.ts",
+        startLine: 1,
+        endLine: 40,
+      }),
+    );
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "approval_required",
+      policyReason: "file read requires operator approval",
+      auditEventId: "audit-live-pasted-contract-approval",
+      approvalId: "approval-live-pasted-contract",
+      expiresAt: "2026-03-22T13:00:00.000Z",
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-live-pasted-contract-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-live-pasted-contract-1",
+      content: pastedContract,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      // No normalizationProfile: this is a live turn.
+      historyMessages: [{ role: "user", content: pastedContract }],
+    });
+
+    expect(result.turnTrace.status).toBe("waiting_for_approval");
   });
 });

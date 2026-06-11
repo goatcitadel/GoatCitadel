@@ -265,6 +265,7 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_session_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_turn_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS citations_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
   });
 
   it("repairs execution plan step durable run columns for older Postgres runtimes", () => {

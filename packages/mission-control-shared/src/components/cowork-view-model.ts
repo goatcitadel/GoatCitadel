@@ -51,6 +51,7 @@ export interface CoworkViewItem {
   status?: string;
   meta?: string;
   note?: string;
+  tone?: "warning";
 }
 
 export interface CoworkRunMapNode {
@@ -195,6 +196,10 @@ function normalizeSummary(value?: string | null, maxLength = 160): string | unde
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function mergeNotes(primary?: string, secondary?: string): string | undefined {
+  return [primary, secondary].filter((value): value is string => Boolean(value)).join(" ") || undefined;
 }
 
 function limitItems<T>(items: T[], maxVisible: number): { items: T[]; overflow: number } {
@@ -803,24 +808,55 @@ export function deriveCoworkRunViewModel(input: {
     MAX_VISIBLE_PLAN_STEPS,
   );
 
+  const degradedSourceStepIds = new Set(
+    roleSteps.flatMap((step) => step.degradedHandoffStepIds ?? []),
+  );
   const roleItems = limitItems(
     [
-      ...roleSteps.map((step) => ({
-        id: `role-${step.stepId}`,
-        title: step.label ?? step.role,
-        status: humanizeStatus(step.status),
-        meta: [step.providerId ?? "provider auto", step.model]
-          .filter((value): value is string => Boolean(value))
-          .join(" · "),
-        note: normalizeSummary(step.summary ?? step.error, 120),
-      })),
-      ...delegationSteps.map((step) => ({
-        id: `delegation-${step.stepId}`,
-        title: `${step.label ?? step.role} delegation`,
-        status: humanizeStatus(step.status),
-        meta: step.output ? "Output ready in run details" : undefined,
-        note: normalizeSummary(step.summary ?? step.output ?? step.error, 120),
-      })),
+      ...roleSteps.map((step) => {
+        const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
+        const usedByDownstream = degradedSourceStepIds.has(step.stepId);
+        return {
+          id: `role-${step.stepId}`,
+          title: step.label ?? step.role,
+          status: humanizeStatus(step.status),
+          meta: [step.providerId ?? "provider auto", step.model]
+            .filter((value): value is string => Boolean(value))
+            .join(" · "),
+          note: mergeNotes(
+            normalizeSummary(step.summary ?? step.error, 120),
+            degradedHandoffCount > 0
+              ? `Synthesized from ${degradedHandoffCount} failed-but-usable upstream handoff${
+                  degradedHandoffCount === 1 ? "" : "s"
+                }.`
+              : usedByDownstream
+                ? "Used by downstream synthesis despite failed status."
+                : undefined,
+          ),
+          tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
+        };
+      }),
+      ...delegationSteps.map((step) => {
+        const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
+        const usedByDownstream = degradedSourceStepIds.has(step.stepId);
+        return {
+          id: `delegation-${step.stepId}`,
+          title: `${step.label ?? step.role} delegation`,
+          status: humanizeStatus(step.status),
+          meta: step.output ? "Output ready in run details" : undefined,
+          note: mergeNotes(
+            normalizeSummary(step.summary ?? step.output ?? step.error, 120),
+            degradedHandoffCount > 0
+              ? `Synthesized from ${degradedHandoffCount} failed-but-usable upstream handoff${
+                  degradedHandoffCount === 1 ? "" : "s"
+                }.`
+              : usedByDownstream
+                ? "Used by downstream synthesis despite failed status."
+                : undefined,
+          ),
+          tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
+        };
+      }),
     ],
     MAX_VISIBLE_ROLE_ITEMS,
   );

@@ -36,10 +36,11 @@ describe("prompt-pack service loop 29 behavior coverage", () => {
     );
     expect(input.prompt).toContain("Cover exactly these named perspectives/lenses: `Budget`, `Accessibility`.");
     expect(input.prompt).toContain("Keep the final answer controller-owned.");
-    expect(input.prompt).toContain(
-      "Deliver the roadmap itself with phases, dependencies, staffing assumptions, and risk gates.",
-    );
-    expect(input.prompt).toContain("End with exactly one synthesized recommendation");
+    // Prompt-keyed steering ("Deliver the roadmap itself...", "End with exactly
+    // one synthesized recommendation") was removed: the contract stays
+    // test-agnostic so the model's own task adherence is what gets scored.
+    expect(input.prompt).not.toContain("Deliver the roadmap itself");
+    expect(input.prompt).not.toContain("End with exactly one synthesized recommendation");
   });
 
   it("flags strict prompt-contract failures before a run can be treated as scorable", () => {

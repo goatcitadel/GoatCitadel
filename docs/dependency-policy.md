@@ -6,6 +6,8 @@ This document defines the minimum dependency hygiene expected for GoatCitadel `1
 
 - Direct and transitive JavaScript dependencies are pinned through `pnpm-lock.yaml`.
 - Release builds must use `pnpm install --frozen-lockfile`.
+- Direct `npm install` / `npm ci` is not a supported release or development install path for this monorepo. npm v12's `allowScripts` policy is not maintained as GoatCitadel release evidence; use the pinned pnpm toolchain below.
+- Dependency install scripts are governed through the pnpm build approval policy in `pnpm-workspace.yaml`. New build-script allowances or denials require script review plus proportional validation.
 - Packaging and release scripts are part of the locked release surface and should be reviewed like product code.
 
 ## Update Cadence

@@ -567,7 +567,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     );
     const homeEnergyPromptInput = buildPromptPackPromptInput(homeEnergyPrompt, homeEnergyProfile).prompt;
     expect(homeEnergyPromptInput).toContain("- Required tool families: web lookup tools");
-    expect(homeEnergyPromptInput).toContain("Home-energy extraction prompt");
+    // The run contract is test-agnostic: prompt-keyed steering lines (e.g. the
+    // old "Home-energy extraction prompt" hint) must never be injected.
+    expect(homeEnergyPromptInput).not.toContain("Home-energy extraction prompt");
   });
 
   it("resumes stale benchmark runs when status is requested", () => {
@@ -1145,6 +1147,9 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(implicitCodeInput.prompt).toContain("This is a repo-grounded code evaluation.");
     expect(implicitCodeInput.prompt).toContain("Repo inspection assist: enabled.");
 
+    // The run contract is test-agnostic: prompt-keyed answer hints (candidate
+    // file lists, section coaching) were removed so the model's own repo
+    // inspection is what gets evaluated.
     const autoScoreRouteInput = buildPromptPackPromptInput(
       [
         "Inspect the repo and identify where Prompt Pack auto-scoring is routed from HTTP request to service logic to storage.",
@@ -1153,16 +1158,14 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
       ].join("\n"),
       implicitCodeProfile,
     );
-    expect(autoScoreRouteInput.prompt).toContain("Prompt Pack auto-score route hint");
-    expect(autoScoreRouteInput.prompt).toContain("apps/gateway/src/routes/prompt-packs.ts");
-    expect(autoScoreRouteInput.prompt).toContain("packages/storage/src/prompt-pack-auto-score-v2-repo.ts");
+    expect(autoScoreRouteInput.prompt).not.toContain("Prompt Pack auto-score route hint");
+    expect(autoScoreRouteInput.prompt).not.toContain("apps/gateway/src/routes/prompt-packs.ts");
 
     const autoScoreUiInput = buildPromptPackPromptInput(
       "Use repo inspection to find where Prompt Pack auto-score evidence is rendered in Mission Control.",
       implicitCodeProfile,
     );
-    expect(autoScoreUiInput.prompt).toContain("Prompt Pack auto-score UI hint");
-    expect(autoScoreUiInput.prompt).toContain("Distinguish UI-rendering files from supporting API/contract files");
+    expect(autoScoreUiInput.prompt).not.toContain("Prompt Pack auto-score UI hint");
 
     const exactSectionCoworkProfile = resolvePromptPackExecutionProfile({
       test: {

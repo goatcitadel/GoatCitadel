@@ -2215,6 +2215,35 @@ describe("ThreadedWorkflowPanel", () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain("Review output");
   });
 
+  it("renders degraded cowork synthesis notes with a warning tone", async () => {
+    const panel = buildCoworkPanel();
+    Object.assign(panel.props.viewModel, {
+      roleItems: {
+        items: [
+          {
+            id: "role-synth",
+            title: "Synthesis",
+            status: "completed",
+            note: "Synthesized from 1 failed-but-usable upstream handoff.",
+            tone: "warning",
+          },
+        ],
+        overflow: 0,
+      },
+    });
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={panel} />);
+      await Promise.resolve();
+    });
+
+    expect(JSON.stringify(renderer!.toJSON())).toContain("failed-but-usable upstream handoff");
+    expect(
+      renderer!.root.findAll((node) => node.type === "li" && node.props["data-tone"] === "warning"),
+    ).toHaveLength(1);
+  });
+
   it("invokes cowork next-action variants and stop callbacks without runtime visibility", async () => {
     const cases = [
       { kind: "retry_turn", label: "Retry turn", prop: "onRetryTurn" },

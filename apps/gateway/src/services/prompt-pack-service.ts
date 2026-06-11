@@ -7,6 +7,7 @@ import { logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
+const PROMPT_PACK_EVAL_ASSETS_DIR = "eval-assets";
 const SECURITY_RED_TEAM_PACK_FILE = "goatcitadel_prompt_pack_v6_security_red_team.md";
 import type {
   CapabilityTrendSeries,
@@ -545,7 +546,11 @@ export class PromptPackService {
       const durableStatus = effectiveTrace?.durable?.status;
       const missingOutput = rawResponseText.length === 0;
       const failedByTrace = traceStatus === "failed" || traceStatus === "cancelled";
-      const failedByDurable = durableStatus === "failed";
+      // A durable-layer failure (lease reaped under event-loop starvation, late
+      // bookkeeping error) must not erase a turn that completed with output: the
+      // run stays scorable and the durable_failed integrity signal records the
+      // degradation for the report.
+      const failedByDurable = durableStatus === "failed" && (traceStatus !== "completed" || missingOutput);
       const approvalPending = traceStatus === "waiting_for_approval";
       const userInputPending = traceStatus === "waiting_for_user_input";
       const status: PromptPackRunRecord["status"] =
@@ -3432,7 +3437,7 @@ function derivePromptPackReportExecutionStyleSlug(report: PromptPackReportRecord
 }
 
 function formatPromptPackExecutionStyleSlug(style: PromptPackExecutionStyle): "agentic" | "harness" {
-  return style === "agentic_surface" ? "agentic" : "harness";
+  return style === "single_turn_harness" ? "harness" : "agentic";
 }
 
 function formatPromptPackReportProviderModelLabel(report: PromptPackReportRecord): string {
@@ -3727,6 +3732,10 @@ function buildSecurityEvalSafetyPosture(): PromptPackSecurityEvalPackRecord["saf
 
 function resolveSecurityRedTeamPackPath(rootDir: string): string | undefined {
   const candidates = [
+    path.resolve(rootDir, PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(process.cwd(), "..", "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
     path.resolve(rootDir, SECURITY_RED_TEAM_PACK_FILE),
     path.resolve(process.cwd(), SECURITY_RED_TEAM_PACK_FILE),
     path.resolve(process.cwd(), "..", "..", SECURITY_RED_TEAM_PACK_FILE),
@@ -3912,6 +3921,40 @@ export function collectPromptPackPlatformSignals(
     signals.push("source-hygiene review needed");
   }
   return [...new Set(signals)];
+}
+
+/**
+ * Maps platform signals that DEFINITIVELY implicate the harness or provider
+ * runtime (protocol breakage, trace failure) to a failure attribution so those
+ * non-pass verdicts are not blamed on model reasoning by default. Signals that
+ * can equally be caused by the model's own behavior (off-surface tool calls,
+ * tool-budget overruns from retry storms) deliberately do NOT shift blame:
+ * since the harness no longer forces or filters tool use, those are the
+ * model's choices and stay under model attribution.
+ */
+function derivePromptPackPlatformSignalAttributionV3(
+  test: PromptPackTestRecord,
+  run: PromptPackRunRecord | undefined,
+): PromptPackFailureAttributionRecordV3 | undefined {
+  if (!run) {
+    return undefined;
+  }
+  const expectedFamilies = collectPromptPackExpectedToolFamilies(test, run);
+  const actualFamilies = collectPromptPackObservedToolFamilies(run);
+  const platformSignals = collectPromptPackPlatformSignals(test, run, expectedFamilies, actualFamilies);
+  const toEvidence = (signal: string): string =>
+    `platform_signal_${signal.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}`;
+  const runtimeSignals = platformSignals.filter(
+    (signal) => signal === "provider/tool protocol failure" || signal === "trace failure",
+  );
+  if (runtimeSignals.length > 0) {
+    return {
+      primary: "runtime_or_infra_failure",
+      confidence: "low",
+      evidence: runtimeSignals.map(toEvidence).slice(0, 5),
+    };
+  }
+  return undefined;
 }
 
 function promptPackResponseSeparatesReliedAndAttemptedSources(responseText: string): boolean {
@@ -4120,6 +4163,18 @@ export function renderPromptPackMarkdownReport(
     }
   }
 
+  // Determinism tripwire index (one pass): byte-identical long responses
+  // across different runs of the same test indicate non-model content.
+  const longResponseOccurrences = new Map<string, number>();
+  for (const candidate of report.runs) {
+    const text = candidate.responseText?.trim() ?? "";
+    if (text.length <= 200) {
+      continue;
+    }
+    const key = `${candidate.testId}\u0000${text}`;
+    longResponseOccurrences.set(key, (longResponseOccurrences.get(key) ?? 0) + 1);
+  }
+
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
     const assessment = latestAssessmentByTest.get(test.testId);
@@ -4270,6 +4325,19 @@ export function renderPromptPackMarkdownReport(
       }
       if (integrity.responseChecksumSha256) {
         lines.push(`- Response checksum: \`${integrity.responseChecksumSha256}\``);
+      }
+      // Determinism tripwire: two different runs of the same test producing
+      // byte-identical long output is how fabricated (harness-authored)
+      // responses were caught — sampled model output does not repeat verbatim.
+      // (Advisory: deterministic providers at temperature 0 can also trigger it.)
+      const latestResponseText = run.responseText?.trim() ?? "";
+      if (latestResponseText.length > 200) {
+        const occurrenceCount = longResponseOccurrences.get(`${test.testId} ${latestResponseText}`) ?? 0;
+        if (occurrenceCount > 1) {
+          lines.push(
+            `- Determinism alarm: response text is byte-identical to ${occurrenceCount - 1} other run(s) of this test (suspected non-model content).`,
+          );
+        }
       }
     }
 
@@ -4937,11 +5005,32 @@ export function evaluatePromptPackRunIntegrity(input: {
   const completionStatus = input.trace?.completion?.status;
   const finishReason = input.trace?.completion?.finishReason;
   const signals: string[] = [];
+  // Signals that describe degradation around a completed turn rather than a
+  // broken response. They stay visible in reports but do not invalidate the
+  // run for scoring.
+  const degradedOnlySignals = new Set<string>();
   if (input.trace?.status === "failed" || input.trace?.status === "cancelled") {
     signals.push("run_failed");
   }
   if (input.trace?.durable?.status === "failed") {
     signals.push("durable_failed");
+    if (input.trace?.status === "completed" && responseText.length > 0) {
+      degradedOnlySignals.add("durable_failed");
+    }
+  }
+  const completionRepair = input.trace?.completion?.repair;
+  if (completionRepair?.applied) {
+    const repairKind = completionRepair.kind ?? "unknown";
+    const repairSignal = `response_repaired_${repairKind}`;
+    signals.push(repairSignal);
+    // Only repairs whose content came from a genuine model re-ask are
+    // non-invalidating. Deterministic/controller-authored replacements
+    // (deterministic_empty_output_synthesis, cowork_contract_normalization,
+    // prompt_pack_harness_normalization, unknown kinds) invalidate the run:
+    // their text is not the model's answer.
+    if (repairKind === "incomplete_truncated_completion" || repairKind === "degraded_answer_synthesis") {
+      degradedOnlySignals.add(repairSignal);
+    }
   }
   if (
     input.trace?.failure?.message &&
@@ -4955,8 +5044,9 @@ export function evaluatePromptPackRunIntegrity(input: {
   }
 
   if (!responseText) {
+    const invalidatingEmptySignals = signals.filter((signal) => !degradedOnlySignals.has(signal));
     return {
-      validationStatus: signals.length > 0 ? "invalid" : "unknown",
+      validationStatus: invalidatingEmptySignals.length > 0 ? "invalid" : "unknown",
       signals: [...signals, "no_assistant_output"],
       completionStatus,
       finishReason,
@@ -4993,8 +5083,9 @@ export function evaluatePromptPackRunIntegrity(input: {
   }
   signals.push(...evaluatePromptPackStrictPromptConstraints(input.prompt, responseText));
 
+  const invalidatingSignals = signals.filter((signal) => !degradedOnlySignals.has(signal));
   return {
-    validationStatus: signals.length > 0 ? "invalid" : "valid",
+    validationStatus: invalidatingSignals.length > 0 ? "invalid" : "valid",
     signals,
     completionStatus,
     finishReason,
@@ -5747,17 +5838,6 @@ export function buildPromptPackPromptInput(
   const visibleContextPreferencePrompt =
     /\bhow I like technical answers formatted\b/i.test(prompt) &&
     /\b(?:user-visible|visible)\s+context\s+only\b/i.test(prompt);
-  const promptPackAutoScoreRoutePrompt =
-    /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(prompt) ||
-    (/\bprompt[- ]pack\b/i.test(prompt) &&
-      /\bauto[- ]scor(?:e|ing)\b/i.test(prompt) &&
-      (/\bhttp request\b/i.test(prompt) || /\bservice logic\b/i.test(prompt) || /\bstorage\b/i.test(prompt)));
-  const promptPackAutoScoreUiPrompt =
-    /\bprompt[- ]pack\b/i.test(prompt) &&
-    /\bauto-score evidence\b/i.test(prompt) &&
-    /\bmission control\b/i.test(prompt);
-  const promptPackReportLabelPrompt =
-    /\bprompt[- ]pack report label\b/i.test(prompt) && /\boutdated v2-only label\b/i.test(prompt);
   const shouldWrapPrompt =
     profile.mode !== "chat" ||
     profile.toolTier === "explicit-tools" ||
@@ -5855,31 +5935,9 @@ export function buildPromptPackPromptInput(
         "- If the prompt still requires perspectives or lenses, name what each one contributed inside the controller-owned answer.",
       );
     }
-    if (/create a 6-month roadmap/i.test(prompt)) {
-      harnessLines.push(
-        "- Deliver the roadmap itself with phases, dependencies, staffing assumptions, and risk gates.",
-      );
-      harnessLines.push("- Do not critique or review an imagined draft instead of producing the roadmap.");
-    }
-    if (/one synthesized recommendation|one operator-ready recommendation/i.test(prompt)) {
-      harnessLines.push("- End with exactly one synthesized recommendation that integrates all required perspectives.");
-    }
-    if (/\bportland,\s*oregon\b/i.test(prompt) && /\bmuseum\b/i.test(prompt) && /\blive music\b/i.test(prompt)) {
-      harnessLines.push(
-        "- Portland weekend activity prompt: synthesize a recommendation from any successful sources plus criteria. Do not end with a `keep going` continuation stub if at least one source or criteria path was available.",
-      );
-      harnessLines.push(
-        "- Compare museum, nature walk, and live music on weather exposure, timing/tickets, energy, cost, transit/parking, and verification needs; give one default recommendation.",
-      );
-    }
-    if (/\bair purifier\b/i.test(prompt) && /\bwildfire smoke\b/i.test(prompt)) {
-      harnessLines.push(
-        "- Air-purifier wildfire-smoke prompt: return a buying checklist, not a meta research scaffold. Criteria should cover HEPA/high-efficiency filtration, CADR or room-size match, ozone avoidance, filter cost/availability, noise, and continuous operation.",
-      );
-      harnessLines.push(
-        "- Do not recommend a specific product unless the opened/read evidence supports that exact model. Prefer EPA/CARB/health-agency sources over retailer or review-list sources.",
-      );
-    }
+    // Test-keyed steering lines were removed deliberately: the run contract
+    // must stay test-agnostic so pack scores measure the model, not coaching
+    // injected for specific prompts.
     if (profile.toolTier === "no-tools") {
       harnessLines.push(
         "- In no-tools Cowork runs, prefer terse bullets over long paragraphs. Keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
@@ -5928,36 +5986,6 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- If exact line numbers are requested, provide them only when tool output directly supports them.",
     );
-    if (promptPackAutoScoreRoutePrompt) {
-      harnessLines.push(
-        "- Prompt Pack auto-score route hint: start with these exact candidate files before generic searches: `apps/gateway/src/routes/prompt-packs.ts`, `apps/gateway/src/services/prompt-pack-service.ts`, `apps/gateway/src/services/prompt-pack-policy.ts`, `packages/storage/src/prompt-pack-auto-score-v2-repo.ts`, and `packages/contracts/src/prompt-pack.ts`.",
-      );
-      harnessLines.push(
-        "- For the compact source-map variant, output one row/sentence each for HTTP request, service logic, storage, and contracts/default schema; for the exact route-trace variant, use exactly the requested `Route`, `Service`, `Storage`, `Current default schema`, and `One regression risk` sections.",
-      );
-      harnessLines.push(
-        "- A final answer that only lists `Exact files used` or `Patch points` is non-compliant for this row. You must include the route-to-service-to-storage flow in the requested sections before any evidence appendix.",
-      );
-      harnessLines.push(
-        "- Required source-map facts to verify from file reads: the Fastify route delegates to `promptPacks.autoScorePromptPackTest(...)`; the service resolves run/schema/policy/judge and creates v2/v3 auto-score records; storage persists `PromptPackAutoScoreRecord` rows in `prompt-pack-auto-score-v2-repo.ts`; the default schema is v3 from `prompt-pack-policy.ts`.",
-      );
-    }
-    if (promptPackAutoScoreUiPrompt) {
-      harnessLines.push(
-        "- Prompt Pack auto-score UI hint: start with `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`, `apps/mission-control-next/src/features/prompt-packs/AssessmentTab.tsx`, `packages/mission-control-shared/src/api/prompt-packs.ts`, and `packages/contracts/src/prompt-pack.ts`.",
-      );
-      harnessLines.push(
-        "- Distinguish UI-rendering files from supporting API/contract files. Name exact user-visible fields and one v3 attribution display risk.",
-      );
-    }
-    if (promptPackReportLabelPrompt) {
-      harnessLines.push(
-        "- Prompt Pack report-label prompt: do not create a document artifact. Inspect `apps/gateway/src/services/prompt-pack-service.ts` and `apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`.",
-      );
-      harnessLines.push(
-        "- If current user-facing report wording is already schema-neutral, answer `## No change` with exact files checked. If you find a user-facing stale `latest v2 rows` label, answer `## Change` and name the exact wording change plus validation command.",
-      );
-    }
     if (profile.toolTier === "no-tools") {
       harnessLines.push(
         "- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
@@ -5965,11 +5993,6 @@ export function buildPromptPackPromptInput(
       harnessLines.push(
         "- Because tools are disabled, do not invent repo-native file paths, function names, scripts, or framework details. Frame any codebase-specific item as a proposed contract, assumption, or unknown unless the prompt itself provides it.",
       );
-      if (/typed wake outcome contract/i.test(prompt) || /wake outcomes?/i.test(prompt)) {
-        harnessLines.push(
-          "- For typed wake outcome no-tools prompts, name the variants exactly, but mark the shared contract location as a proposed/assumed location instead of inventing an observed repo path. Avoid generic paths like `src/shared/...` unless the prompt itself names them.",
-        );
-      }
     }
   }
 
@@ -6077,14 +6100,6 @@ export function buildPromptPackPromptInput(
       harnessLines.push(
         "- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.",
       );
-      if (/\breducing home energy use\b/i.test(prompt) && /\bReturn a table\b/i.test(prompt)) {
-        harnessLines.push(
-          "- Home-energy extraction prompt: search a concrete source query such as `site:energy.gov Energy Saver reducing home energy use tips` or `ENERGY STAR save energy at home`; prefer DOE or ENERGY STAR pages over generic source-evaluation pages.",
-        );
-        harnessLines.push(
-          "- Return only the requested table. Each tip must be a concrete household action, and every Source cell must cite the page that supports that row.",
-        );
-      }
       harnessLines.push(
         "- Use one focused search, open or extract at most two high-quality sources, and then synthesize from the successful evidence instead of retrying blocked hosts.",
       );
@@ -7379,7 +7394,11 @@ export function mergePromptPackAutoScoresV3(input: {
       judgeStatus,
     });
     if (attribution.primary === "not_applicable") {
-      attribution = {
+      // Before defaulting blame onto the model, consult the platform signals.
+      // A non-pass on a run whose own runtime cluster says "review routing or
+      // harness policy" is evidence of a harness problem, not model reasoning.
+      const platformAttribution = derivePromptPackPlatformSignalAttributionV3(input.test, input.run);
+      attribution = platformAttribution ?? {
         primary: "model_reasoning_failure",
         confidence: "low",
         evidence: ["non_pass_without_specific_rule_signal"],

@@ -25,6 +25,7 @@ interface ChatDelegationStepRow {
   child_session_id: string | null;
   child_turn_id: string | null;
   citations_json: string | null;
+  degraded_handoff_step_ids_json: string | null;
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;
@@ -45,10 +46,10 @@ export class ChatDelegationStepRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_steps (
         step_id, run_id, role, label, step_index, status, provider_id, model, summary, output, error, started_at, finished_at, duration_ms
-        , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json
+        , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json, degraded_handoff_step_ids_json
       ) VALUES (
         @stepId, @runId, @role, @label, @index, @status, @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
-        @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson
+        @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson, @degradedHandoffStepIdsJson
       )
     `);
     this.patchStmt = db.prepare(`
@@ -66,6 +67,7 @@ export class ChatDelegationStepRepository {
         child_session_id = @childSessionId,
         child_turn_id = @childTurnId,
         citations_json = @citationsJson,
+        degraded_handoff_step_ids_json = @degradedHandoffStepIdsJson,
         finished_at = @finishedAt,
         duration_ms = @durationMs
       WHERE step_id = @stepId
@@ -102,6 +104,7 @@ export class ChatDelegationStepRepository {
     childSessionId?: string;
     childTurnId?: string;
     citations?: ChatCitationRecord[];
+    degradedHandoffStepIds?: string[];
     startedAt?: string;
     finishedAt?: string;
     durationMs?: number;
@@ -123,6 +126,8 @@ export class ChatDelegationStepRepository {
       childSessionId: input.childSessionId ?? null,
       childTurnId: input.childTurnId ?? null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
+      degradedHandoffStepIdsJson:
+        input.degradedHandoffStepIds !== undefined ? JSON.stringify(input.degradedHandoffStepIds) : null,
       startedAt: input.startedAt ?? new Date().toISOString(),
       finishedAt: input.finishedAt ?? null,
       durationMs: input.durationMs ?? null,
@@ -145,6 +150,7 @@ export class ChatDelegationStepRepository {
       childSessionId?: string;
       childTurnId?: string;
       citations?: ChatCitationRecord[];
+      degradedHandoffStepIds?: string[];
       finishedAt?: string;
       durationMs?: number;
     },
@@ -168,6 +174,12 @@ export class ChatDelegationStepRepository {
           ? JSON.stringify(input.citations)
           : current.citations
             ? JSON.stringify(current.citations)
+            : null,
+      degradedHandoffStepIdsJson:
+        input.degradedHandoffStepIds !== undefined
+          ? JSON.stringify(input.degradedHandoffStepIds)
+          : current.degradedHandoffStepIds !== undefined
+            ? JSON.stringify(current.degradedHandoffStepIds)
             : null,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
       durationMs: input.durationMs !== undefined ? input.durationMs : (current.durationMs ?? null),
@@ -261,6 +273,9 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
     (typeof value.child_session_id === "string" || value.child_session_id === null) &&
     (typeof value.child_turn_id === "string" || value.child_turn_id === null) &&
     (typeof value.citations_json === "string" || value.citations_json === null) &&
+    (typeof value.degraded_handoff_step_ids_json === "string" ||
+      value.degraded_handoff_step_ids_json === null ||
+      value.degraded_handoff_step_ids_json === undefined) &&
     typeof value.started_at === "string" &&
     (typeof value.finished_at === "string" || value.finished_at === null) &&
     (typeof value.duration_ms === "number" || value.duration_ms === null)
@@ -307,6 +322,7 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     childSessionId: row.child_session_id ?? undefined,
     childTurnId: row.child_turn_id ?? undefined,
     citations: parseCitations(row.citations_json),
+    degradedHandoffStepIds: parseStringArray(row.degraded_handoff_step_ids_json),
   };
 }
 
@@ -316,4 +332,15 @@ function parseCitations(raw: string | null): ChatCitationRecord[] | undefined {
   }
   const parsed = safeJsonParse<unknown>(raw, []);
   return Array.isArray(parsed) ? (parsed as ChatCitationRecord[]) : [];
+}
+
+function parseStringArray(raw: string | null | undefined): string[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, []);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter((item): item is string => typeof item === "string");
 }

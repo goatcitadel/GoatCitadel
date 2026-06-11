@@ -368,6 +368,7 @@ async function codeSearchFiles(request: ToolInvokeRequest, config: ToolPolicyCon
   const normalizedQuery = caseSensitive ? query : query.toLowerCase();
   const matches: Array<{ path: string; name: string; type: "file" | "dir" }> = [];
   const pending = [fullRoot];
+  let skippedDirs = 0;
 
   while (pending.length > 0 && matches.length < limit) {
     const current = pending.pop() as string;
@@ -383,10 +384,13 @@ async function codeSearchFiles(request: ToolInvokeRequest, config: ToolPolicyCon
 
     const entries = await fs.readdir(current, { withFileTypes: true });
     for (const entry of entries) {
-      if (shouldSkipSearchEntry(entry.name)) {
+      const entryPath = path.join(current, entry.name);
+      if (shouldSkipSearchEntry(entry.name) || shouldSkipSearchEntryAtRoot(fullRoot, entryPath, entry.isDirectory())) {
+        if (entry.isDirectory()) {
+          skippedDirs += 1;
+        }
         continue;
       }
-      const entryPath = path.join(current, entry.name);
       const haystack = caseSensitive ? entry.name : entry.name.toLowerCase();
       if (haystack.includes(normalizedQuery)) {
         matches.push({
@@ -409,6 +413,7 @@ async function codeSearchFiles(request: ToolInvokeRequest, config: ToolPolicyCon
     query,
     count: matches.length,
     matches,
+    ...(skippedDirs > 0 ? { skippedDirs } : {}),
   };
 }
 
@@ -5552,6 +5557,8 @@ async function searchFileContents(input: {
     lineText: string;
   }> = [];
   const pending = [fullRoot];
+  let skippedDirs = 0;
+  let skippedOversizeFiles = 0;
 
   while (pending.length > 0 && matches.length < input.limit) {
     const current = pending.pop() as string;
@@ -5559,10 +5566,13 @@ async function searchFileContents(input: {
     if (stat.isDirectory()) {
       const entries = await fs.readdir(current, { withFileTypes: true });
       for (const entry of entries) {
-        if (shouldSkipSearchEntry(entry.name)) {
+        const entryPath = path.join(current, entry.name);
+        if (shouldSkipSearchEntry(entry.name) || shouldSkipSearchEntryAtRoot(fullRoot, entryPath, entry.isDirectory())) {
+          if (entry.isDirectory()) {
+            skippedDirs += 1;
+          }
           continue;
         }
-        const entryPath = path.join(current, entry.name);
         if (entry.isDirectory()) {
           pending.push(entryPath);
           continue;
@@ -5575,6 +5585,10 @@ async function searchFileContents(input: {
       continue;
     }
     if (input.codeOnly && !looksLikeCodeFile(path.basename(current))) {
+      continue;
+    }
+    if (stat.size > SEARCH_MAX_CONTENT_FILE_BYTES) {
+      skippedOversizeFiles += 1;
       continue;
     }
     const content = await fs.readFile(current, "utf8");
@@ -5601,6 +5615,13 @@ async function searchFileContents(input: {
     pattern: input.pattern,
     count: matches.length,
     matches,
+    ...(skippedDirs > 0 ? { skippedDirs } : {}),
+    ...(skippedOversizeFiles > 0
+      ? {
+          skippedOversizeFiles,
+          skippedOversizeNote: `files larger than ${SEARCH_MAX_CONTENT_FILE_BYTES} bytes were not content-searched; use file.read_range for those`,
+        }
+      : {}),
   };
 }
 
@@ -5799,15 +5820,58 @@ function normalizePathForGrantMatch(candidate: string): string {
   return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
 }
 
+// Directory names skipped at every depth during local search traversal.
+// Only unambiguous VCS/dependency/build outputs and agent/editor state belong
+// here: anything that could plausibly be a source directory in a user's repo
+// (artifacts, logs, postgres, ...) must NOT be name-skipped globally or
+// searches silently miss real code (e.g. packages/storage/src/postgres).
+const SEARCH_SKIPPED_DIR_NAMES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".cache",
+  ".claude",
+  ".codex-temp",
+  ".scratch",
+]);
+
+// Heavy runtime/output directories skipped only when they sit DIRECTLY under
+// the search root (searching from the repo root skips them; explicitly
+// searching inside one still works). These are multi-GB on this workstation
+// (installer artifacts, stored tool outputs, database files) and were the
+// reason repo-wide queries took 30-90 seconds — and they leak prior eval
+// evidence back into new runs.
+const SEARCH_ROOT_SKIPPED_RELATIVE_DIRS = new Set([
+  "artifacts",
+  "eval-assets",
+  "logs",
+  "workspace",
+  "data/postgres",
+  "data/tool-artifacts",
+]);
+
+// Files larger than this are skipped for content search: reading multi-MB
+// binaries or logs into memory for substring matching is wasted I/O. Skips are
+// counted in the result so the model knows the search was not exhaustive.
+const SEARCH_MAX_CONTENT_FILE_BYTES = 1_500_000;
+
 function shouldSkipSearchEntry(name: string): boolean {
-  return (
-    name === ".git" ||
-    name === "node_modules" ||
-    name === "dist" ||
-    name === "build" ||
-    name === "coverage" ||
-    name === ".next"
-  );
+  return SEARCH_SKIPPED_DIR_NAMES.has(name);
+}
+
+function shouldSkipSearchEntryAtRoot(rootPath: string, entryPath: string, isDirectory: boolean): boolean {
+  if (!isDirectory) {
+    return false;
+  }
+  const relative = path.relative(rootPath, entryPath).replace(/\\/g, "/").toLowerCase();
+  if (!relative || relative.startsWith("..")) {
+    return false;
+  }
+  return SEARCH_ROOT_SKIPPED_RELATIVE_DIRS.has(relative);
 }
 
 function looksLikeCodeFile(name: string): boolean {

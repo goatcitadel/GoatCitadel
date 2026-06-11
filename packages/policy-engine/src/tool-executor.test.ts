@@ -680,6 +680,46 @@ describe("executeTool", () => {
     expect((result.matches as Array<Record<string, unknown>>)[0]?.path).toBe(filePath);
   });
 
+  it("skips eval-assets from root code searches but allows explicit eval-assets searches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const packPath = path.join(testWorkspaceRoot, "eval-assets", "goatcitadel_prompt_pack_v4_agentic_focused.md");
+    await fs.mkdir(path.dirname(packPath), { recursive: true });
+    await fs.writeFile(packPath, "unique-eval-self-reference\n", "utf8");
+
+    const rootResult = await executeTool(
+      {
+        toolName: "code.search",
+        args: { path: testWorkspaceRoot, query: "unique-eval-self-reference" },
+        agentId: "agent",
+        sessionId: "sess-eval-assets-root-search",
+      },
+      policyConfig,
+      storageStub,
+    );
+    expect(rootResult).toMatchObject({
+      path: testWorkspaceRoot,
+      pattern: "unique-eval-self-reference",
+      count: 0,
+    });
+
+    const explicitResult = await executeTool(
+      {
+        toolName: "code.search",
+        args: { path: path.dirname(packPath), query: "unique-eval-self-reference" },
+        agentId: "agent",
+        sessionId: "sess-eval-assets-explicit-search",
+      },
+      policyConfig,
+      storageStub,
+    );
+    expect(explicitResult).toMatchObject({
+      path: path.dirname(packPath),
+      pattern: "unique-eval-self-reference",
+      count: 1,
+    });
+    expect((explicitResult.matches as Array<Record<string, unknown>>)[0]?.path).toBe(packPath);
+  });
+
   it("searches file names with code.search_files", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(testWorkspaceRoot, "src", "chat-agent-orchestrator.test.ts");

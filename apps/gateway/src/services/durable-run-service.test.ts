@@ -830,11 +830,16 @@ describe("DurableRunService", () => {
       });
 
       service.startWorker();
+      // Heartbeat renewal failures are tolerated for two consecutive beats and
+      // abort the run on the third (DURABLE_LEASE_HEARTBEAT_MAX_CONSECUTIVE_FAILURES).
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(runs.get(run.runId)?.status).not.toBe("failed");
+      await vi.advanceTimersByTimeAsync(5_100);
       await vi.advanceTimersByTimeAsync(5_100);
       await Promise.allSettled([...backgroundTasks]);
       resolveWorkflow();
 
-      expect(renewLease).toHaveBeenCalled();
+      expect(renewLease).toHaveBeenCalledTimes(3);
       expect(runs.get(run.runId)?.status).toBe("failed");
       expect(timeline.map((item) => item.eventType)).toContain("run_failed");
     } finally {

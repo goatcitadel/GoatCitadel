@@ -214,7 +214,11 @@ export class ChatDelegationService {
     options: ChatDelegationRunOptions = {},
   ): Promise<ChatDelegateResponse> {
     const deps = this.deps;
-    deps.getSession(sessionId);
+    const parentSession = deps.getSession(sessionId) as { origin?: string } | undefined;
+    // Prompt-pack sessions are headless evals: children must inherit the
+    // eval-integrity profile or they could park on approvals forever.
+    const inheritedNormalizationProfile =
+      parentSession?.origin === "prompt_pack" ? ("prompt_pack_harness" as const) : undefined;
     const objective = input.objective.trim();
     if (!objective) {
       throw new Error("objective is required");
@@ -471,6 +475,7 @@ export class ChatDelegationService {
                 subagentPolicy: "off",
                 retrievalMode: prefs.retrievalMode ?? "standard",
                 toolAutonomy: prefs.toolAutonomy,
+                normalizationProfile: inheritedNormalizationProfile,
                 operatorId: input.operatorId,
                 authActorId: input.authActorId,
                 authActorSource: input.authActorSource,

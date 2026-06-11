@@ -4,65 +4,37 @@ import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
-describe("ChatAgentOrchestrator loop41 durable runtime patch-plan repairs", () => {
-  it.each([
-    {
-      name: "wake lifecycle ordering",
-      task: "Inspect the repo if needed and identify the exact patch points so wake lifecycle writes reflect actual outcome ordering across approval-wait storage and durable wake calls. Concretely read `apps/gateway/src/services/approval-resolution-effects-service.ts`, `packages/storage/src/approval-effect-repo.ts`, `packages/storage/src/approval-wait-run-repo.ts`, and `apps/gateway/src/services/durable-run-service.ts`.",
-      expected: [
-        "## Ordered steps",
-        "ApprovalEffectsService.handleWakeEffect",
-        "markResolved",
-        "completeEffect",
-        "## Partial-failure case to preserve visibly",
-      ],
-    },
-    {
-      name: "runtime lifecycle provenance",
-      task: "Inspect the repo if needed and identify the exact patch points for canonical-linkage-first reads, provenance fields, and lifecycle assembly. Concretely read `packages/contracts/src/runtime-lifecycle.ts`, `apps/gateway/src/services/runtime-lifecycle-read-service.ts`, `apps/gateway/src/services/runtime-lifecycle-read-service.test.ts`, and `packages/storage/src/realtime-event-repo.ts`.",
-      expected: [
-        "## Reader path",
-        "## Provenance field additions",
-        "## Diagnostics path",
-        "## Regression test to add",
-        "approval_linkage",
-      ],
-    },
-    {
-      name: "two-worker durable harness",
-      task: "Inspect the repo if needed and identify the exact patch points for two-worker harness coverage: claim and recovery test, claim race, recovery, and single-process limitations. Concretely read `packages/storage/src/durable-run-repo.test.ts`, `packages/storage/src/durable-run-repo.ts`, `apps/gateway/src/services/durable-run-service.ts`, and `apps/gateway/src/services/durable-run-service.test.ts`.",
-      expected: [
-        "## Harness entrypoint",
-        "createSharedRepos",
-        "## Worker orchestration helper",
-        "## Scenario 1: claim race",
-        "## Scenario 2: lease-expiry recovery",
-      ],
-    },
-    {
-      name: "approval effects outbox hardening",
-      task: "Inspect the repo if needed and identify the exact patch points for approval-effects hardening across approval resolution, downstream effect handling, idempotent effect tracking, the outbox path, and canonical approval state. Concretely read `apps/gateway/src/services/approval-lifecycle-service.ts`, `apps/gateway/src/services/approval-resolution-effects-service.ts`, `packages/storage/src/approval-effect-repo.ts`, `apps/gateway/src/services/approval-resolution-effects-service.test.ts`, and `apps/gateway/src/routes/approvals.ts`.",
-      expected: [
-        "## Canonical approval writes",
-        "## Downstream effect tracking writes",
-        "## Idempotency or dedupe mechanism",
-        "## Proving test",
-        "approval_effects.idempotency_key",
-      ],
-    },
-  ])("repairs $name prompts with concrete durable/runtime evidence", async ({ task, expected }) => {
-    const result = await runPatchPlanRepair(task);
+const WAKE_LIFECYCLE_TASK =
+  "Inspect the repo if needed and identify the exact patch points so wake lifecycle writes reflect actual outcome ordering across approval-wait storage and durable wake calls. Concretely read `apps/gateway/src/services/approval-resolution-effects-service.ts`, `packages/storage/src/approval-effect-repo.ts`, `packages/storage/src/approval-wait-run-repo.ts`, and `apps/gateway/src/services/durable-run-service.ts`.";
 
-    for (const text of expected) {
-      expect(result.assistantContent).toContain(text);
-    }
-    expect(result.assistantContent).toContain("## Exact files used");
-    expect(result.assistantContent).not.toContain("generic patch");
-    expect(result.assistantContent).not.toContain("maybe incomplete");
+describe("ChatAgentOrchestrator loop41 durable runtime patch-plan eval integrity", () => {
+  it("passes the model's patch-plan answer through verbatim without controller prefetch or fabricated evidence", async () => {
+    const modelAnswer =
+      "A generic patch should update the runtime and tests. Parts of this answer may be incomplete.";
+    const invokeTool = createPatchPlanEvidenceTool();
+    const result = await runPatchPlanTurn(WAKE_LIFECYCLE_TASK, modelAnswer, invokeTool);
+
+    // Eval-integrity invariant: the persisted assistant text is the model's own
+    // output, even when it reads degraded — no deterministic patch-plan scaffold,
+    // no appended file-evidence sections.
+    expect(result.assistantContent).toBe(modelAnswer);
+    expect(result.assistantContent).not.toContain("## Exact files used");
+    expect(result.assistantContent).not.toContain("## Ordered steps");
+
+    // Eval-integrity invariant: the controller never executes file reads or repo
+    // searches on the model's behalf, even though the run contract enables
+    // repo-inspection assist and the prompt names concrete files.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toHaveLength(0);
+    expect(result.turnTrace.status).toBe("completed");
   });
 });
 
-async function runPatchPlanRepair(task: string): Promise<{ assistantContent: string }> {
+async function runPatchPlanTurn(
+  task: string,
+  modelAnswer: string,
+  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>,
+) {
   const wrappedPrompt = [
     "## Prompt Lab Run Contract",
     "- Mode: code",
@@ -79,14 +51,14 @@ async function runPatchPlanRepair(task: string): Promise<{ assistantContent: str
     "- Keep the patch plan grouped by exact patch area.",
     "- Include a validation or regression-test step.",
   ].join("\n");
-  const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+  const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
     model: "gpt-5.4",
     choices: [
       {
         index: 0,
         message: {
           role: "assistant",
-          content: "A generic patch should update the runtime and tests. Parts of this answer may be incomplete.",
+          content: modelAnswer,
         },
       },
     ],
@@ -95,7 +67,7 @@ async function runPatchPlanRepair(task: string): Promise<{ assistantContent: str
     storage: createMockStorage() as never,
     listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
     createChatCompletion,
-    invokeTool: createPatchPlanEvidenceTool(),
+    invokeTool,
   });
 
   return orchestrator.run({
@@ -115,7 +87,9 @@ async function runPatchPlanRepair(task: string): Promise<{ assistantContent: str
   });
 }
 
-function createPatchPlanEvidenceTool(): (request: ToolInvokeRequest) => Promise<ToolInvokeResult> {
+function createPatchPlanEvidenceTool(): ReturnType<
+  typeof vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>
+> {
   return vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
     if (request.toolName === "code.search_files") {
       return {
@@ -174,42 +148,4 @@ const EVIDENCE_BY_PATH: Record<string, string> = {
     "  reconcileRecoverableRuns() { return this.storage.durableRuns.listExpiredRunningRunIds(new Date().toISOString()); }",
     "}",
   ].join("\n"),
-  "packages/contracts/src/runtime-lifecycle.ts": [
-    "export type RuntimeLifecycleFieldSource = 'approval_linkage' | 'fallback_payload' | 'fallback_preview' | 'realtime_links';",
-    "export interface RuntimeLifecycleResolution { fallbackSources: RuntimeLifecycleFieldSource[]; }",
-  ].join("\n"),
-  "apps/gateway/src/services/runtime-lifecycle-read-service.ts": [
-    "export class RuntimeLifecycleReadService {",
-    "  getRuntimeLifecycle(input) { const preferApprovalCanonical = Boolean(input.approvalId); return { preferApprovalCanonical }; }",
-    "  private applyApprovalCanonical() { return 'approval_linkage'; }",
-    "  private listApprovalEffects() { return []; }",
-    "}",
-  ].join("\n"),
-  "apps/gateway/src/services/runtime-lifecycle-read-service.test.ts":
-    "describe('RuntimeLifecycleReadService', () => { function createHost() { return { approval_linkage: true }; } });",
-  "packages/storage/src/realtime-event-repo.ts":
-    "export class RealtimeEventRepository { append(input) { return input.links; } list() { return []; } }",
-  "packages/storage/src/durable-run-repo.test.ts":
-    "describe('DurableRunRepository', () => { function createRepo(dbPath) { return new DurableRunRepository(dbPath); } });",
-  "packages/storage/src/durable-run-repo.ts": [
-    "export class DurableRunRepository {",
-    "  tryClaimQueuedRun(input) { return { status: 'running', leaseOwnerId: input.workerId, leaseHeartbeatAt: input.now, leaseExpiresAt: input.expiresAt }; }",
-    "  renewLease(input) { return input.workerId === 'worker-b' ? {} : undefined; }",
-    "  listExpiredRunningRunIds(now) { return ['run-expired']; }",
-    "}",
-  ].join("\n"),
-  "apps/gateway/src/services/durable-run-service.test.ts":
-    "describe('DurableRunService', () => { it('rejects stale heartbeat and terminal writes after lease ownership moves', async () => {}); });",
-  "apps/gateway/src/services/approval-lifecycle-service.ts": [
-    "export class ApprovalLifecycleService {",
-    "  resolveApproval(input) {",
-    "    this.host.storage.approvals.resolve(input.approvalId, input);",
-    "    this.host.enqueueApprovalResolutionEffects(input.approval, input);",
-    "  }",
-    "}",
-  ].join("\n"),
-  "apps/gateway/src/services/approval-resolution-effects-service.test.ts":
-    "describe('ApprovalEffectsService', () => { it('enqueues the canonical approval effect set from current linkage', async () => {}); });",
-  "apps/gateway/src/routes/approvals.ts":
-    "export async function approvalsRoutes(app) { app.post('/approvals/:id/resolve', async () => approvals.resolveApproval()); }",
 };

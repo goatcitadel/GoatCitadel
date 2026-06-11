@@ -36,7 +36,7 @@ const PERSONAL_PATH_SCAN_SKIP_PATTERNS = [
   /^docs\/antigravity\//i,
   /^docs\/QA_MANUAL_TEST_PLAN\.md$/i,
   /^docs\/GATEWAY_DECOMPOSITION_(?:REVIEW|IMPLEMENTATION_PLANNING)_PROMPT\.md$/i,
-  /^goatcitadel_prompt_pack\.md$/i,
+  /^eval-assets\/goatcitadel_prompt_pack\.md$/i,
 ];
 
 export function collectRepoHygieneFindings(input) {

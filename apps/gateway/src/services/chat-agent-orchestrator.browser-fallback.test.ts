@@ -860,7 +860,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Node.js 22");
   });
 
-  it("uses the Prompt Lab user task, not the wrapper, for implicit recency searches", async () => {
+  it("does not force implicit recency searches on Prompt Lab eval turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -907,7 +907,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       invokeTool,
     });
 
-    await orchestrator.run({
+    const result = await orchestrator.run({
       sessionId: "sess-prompt-lab-airport-status-1",
       turnId: randomUUID(),
       userMessageId: "msg-prompt-lab-airport-status-1",
@@ -923,19 +923,11 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    const query = String(
-      (
-        invokeTool.mock.calls as unknown as Array<
-          [
-            {
-              args: Record<string, unknown>;
-            },
-          ]
-        >
-      )[0]?.[0].args.query ?? "",
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
+    expect(result.assistantContent).toContain(
+      "I checked for current airport closure signals but need the airport name to verify a specific case.",
     );
-    expect(query).toMatch(/airport closure/i);
-    expect(query).not.toMatch(/prompt lab|run contract|answer in chat mode|finish with a complete answer/i);
   });
 
   it("redirects community browser.navigate urls to a better recent source when the prompt did not ask for community results", async () => {
@@ -4858,7 +4850,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Source used");
   });
 
-  it("grounds Prompt Lab current-hours prompts to a concrete public-place query", async () => {
+  it("passes the model's own current-hours web query through unmodified on eval turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -4928,8 +4920,10 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     });
 
     expect(["browser.search", "browser_search"]).toContain(String(invokeTool.mock.calls[0]?.[0].toolName ?? ""));
+    // Eval-integrity turns never rewrite the model's tool arguments: the
+    // vague query is the model's own choice and is what gets scored.
     expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
-      query: "New York Public Library Stephen A. Schwarzman Building hours official",
+      query: "Use a web lookup to answer a current-hours question for a named public place of your choice",
     });
   });
 
@@ -5107,7 +5101,8 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
     expect(result.assistantContent).toContain("## Researcher");
     expect(result.assistantContent).toContain("## Synthesis");
-    expect(result.assistantContent).toContain("https://example.test/storm");
+    expect(result.assistantContent).toContain("Source used: Storm safety.");
+    expect(result.assistantContent).not.toContain("Source URLs:");
     expect(result.assistantContent).not.toContain("## Coder");
     expect(result.assistantContent).not.toContain("## Architect");
     expect(result.assistantContent).not.toContain("file-specific evidence");
@@ -5116,7 +5111,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).not.toContain('Say "keep going"');
   });
 
-  it("sharpens vague Prompt Lab Cowork web queries and preserves exact role order only", async () => {
+  it("passes vague cowork web queries through unmodified without rewriting the model answer into role scaffolds", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: cowork",
@@ -5191,20 +5186,18 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
+    // Eval-integrity turns never rewrite the model's tool arguments: even a
+    // vague query is the model's own choice and is what gets scored.
     expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
       toolName: "browser.search",
       args: expect.objectContaining({
-        query: "Seattle this weekend weather forecast outdoor public events parks official",
+        query: "Decide whether a public outdoor activity is a good idea this weekend in a city of your choice.",
       }),
     });
     expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
-    expect(result.assistantContent).toContain("Researcher");
-    expect(result.assistantContent).toContain("Planner");
-    expect(result.assistantContent).toContain("Risk Review");
-    expect(result.assistantContent).toContain("https://forecast.weather.gov/MapClick.php?lat=47.6&lon=-122.3");
-    expect(result.assistantContent).not.toContain("## Synthesis");
+    expect(result.assistantContent).toBe("I found a few sources, but the result needs a structured handoff.");
     expect(result.assistantContent).not.toContain("## Sources Used");
-    expect(result.assistantContent).not.toContain("\nSource URLs:");
+    expect(result.assistantContent).not.toContain("Source URLs:");
     expect(result.assistantContent).not.toContain("file-specific evidence");
     expect(result.assistantContent).not.toContain("repo-level claims");
     expect(result.assistantContent).not.toContain("Cannot read properties");
@@ -5544,7 +5537,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Memory inspected");
   });
 
-  it("targets Prompt Lab memory preference searches to the requested preference domain", async () => {
+  it("does not prefetch memory searches for Prompt Lab memory preference prompts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -5597,19 +5590,13 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "memory.search",
-        args: expect.objectContaining({
-          query: "answer length preference concise short detailed response length",
-        }),
-      }),
-    );
-    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("memory.search");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
     expect(result.assistantContent).toContain("answer-length preference");
+    expect(result.assistantContent).toContain("I did not create or update memory.");
   });
 
-  it("prefetches session status for Prompt Lab Cowork planning-tool approval prompts", async () => {
+  it("does not prefetch session status for Prompt Lab Cowork planning-tool approval prompts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: cowork",
@@ -5665,10 +5652,9 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "session.status" }));
-    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("session.status");
-    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).not.toContain("code.search_files");
-    expect(result.assistantContent).toContain("Approval checkpoint");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
+    expect(result.assistantContent).toContain("Approval checkpoint: stop here.");
   });
 
   it("keeps delegated Prompt Lab Cowork web turns from honoring suggested local code tools", async () => {
@@ -5796,7 +5782,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Memory provenance");
   });
 
-  it("repairs non-code Prompt Lab Cowork scaffolds into everyday planning content", async () => {
+  it("passes non-code Prompt Lab Cowork answers through without deterministic everyday-planning repair", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: cowork",
@@ -5855,14 +5841,13 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     });
 
     expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
-    expect(result.assistantContent).toContain("Phase 1");
-    expect(result.assistantContent).toContain("Saved assumptions");
-    expect(result.assistantContent).toContain("Resume question");
-    expect(result.assistantContent).not.toContain("file-specific evidence");
-    expect(result.assistantContent).not.toContain("repo-level claims");
+    expect(result.assistantContent).toContain("No file-specific evidence was retained from the tool trace.");
+    expect(result.assistantContent).not.toContain("Phase 1");
+    expect(result.assistantContent).not.toContain("Saved assumptions");
+    expect(result.assistantContent).not.toContain("Resume question");
   });
 
-  it("appends only response-relevant web citation URLs for Prompt Lab source conflicts", async () => {
+  it("does not append web citation URLs to Prompt Lab source-conflict answers", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: cowork",
@@ -5940,28 +5925,29 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
+    // Eval-integrity turns never rewrite the model's tool arguments.
     expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
       toolName: "browser.search",
       args: expect.objectContaining({
-        query: "NYC DSNY holiday schedule NYC311 trash recycling compost collection holiday",
+        query: "city service holiday availability",
       }),
     });
-    expect(result.assistantContent).toContain("https://portal.311.nyc.gov/check-status/");
-    expect(result.assistantContent).toContain(
+    expect(result.assistantContent).toContain("https://mygarbagecollection.com/nyc-garbage-collection-schedule/");
+    expect(result.assistantContent.match(/Source URLs:/g)).toHaveLength(1);
+    expect(result.assistantContent).not.toContain("https://portal.311.nyc.gov/check-status/");
+    expect(result.assistantContent).not.toContain(
       "https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
     );
-    expect(result.assistantContent).not.toContain("https://mygarbagecollection.com/nyc-garbage-collection-schedule/");
-    expect(result.assistantContent.match(/Source URLs:/g)).toHaveLength(1);
     expect(result.assistantContent).not.toContain("https://user.com/not-a-source");
     expect(result.assistantContent).not.toContain("https://docs.user.com/not-a-source");
     expect(result.assistantContent).not.toContain("https://lacity.gov/myla311");
     expect(result.assistantContent).not.toContain("https://www.chicago.gov/city/en/depts/311.html");
-    expect(result.turnTrace.citations.map((citation) => citation.url)).not.toContain(
+    expect((result.turnTrace.citations ?? []).map((citation) => citation.url)).not.toContain(
       "https://docs.user.com/not-a-source",
     );
   });
 
-  it("prefetches required web evidence for Prompt Lab Chat source-conflict prompts", async () => {
+  it("does not prefetch web evidence for Prompt Lab Chat source-conflict prompts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -6017,13 +6003,8 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "browser.search",
-        args: expect.objectContaining({ query: "Seattle Center official events this weekend schedule" }),
-      }),
-    );
-    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("browser.search");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
     expect(result.assistantContent).toContain("official venue/organizer page");
   });
 
@@ -6085,7 +6066,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Non-verified gut-check");
   });
 
-  it("prefetches the Mission Control Next prompt-pack workbench for explicit UI inspection prompts", async () => {
+  it("does not prefetch the Mission Control Next prompt-pack workbench for explicit UI inspection prompts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: code",
@@ -6127,7 +6108,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       invokeTool,
     });
 
-    await orchestrator.run({
+    const result = await orchestrator.run({
       sessionId: "sess-prompt-lab-ui-prefetch-1",
       turnId: randomUUID(),
       userMessageId: "msg-prompt-lab-ui-prefetch-1",
@@ -6143,12 +6124,11 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
-      toolName: "file.read_range",
-      args: expect.objectContaining({
-        path: "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
-      }),
-    });
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
+    expect(result.assistantContent).toContain(
+      "Place the Harness/Agentic segmented control near the run controls and mirror it in run details.",
+    );
   });
 
   it("strips web tools from normal turns when web mode is off", async () => {

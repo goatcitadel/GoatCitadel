@@ -1,12 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ToolInvokeRequest,
+  ToolInvokeResult,
+} from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
-  it("persists approval state when prompt-lab repo search prefetch requires approval", async () => {
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+  it("soft-fails a model-initiated repo search that requires approval on prompt-lab eval turns", async () => {
+    const finalAnswer = [
+      "Evidence review based on the available conversation context:",
+      "the repo search tool is approval-gated in this environment, so I could not",
+      "inspect skill-import-service.ts directly. The skill import path, overlap",
+      "detection behavior, and provenance metadata claims below are therefore",
+      "stated as unverified pending operator review.",
+    ].join(" ");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        toolCallCompletion("call-loop35-search-1", "code_search_files", { path: ".", query: "skill import" }),
+      )
+      .mockResolvedValueOnce(textCompletion(finalAnswer));
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
       outcome: "approval_required",
       policyReason: "code search requires approval",
@@ -25,27 +42,56 @@ describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
 
     const result = await orchestrator.run(input);
 
-    expect(createChatCompletion).not.toHaveBeenCalled();
+    // No controller prefetch: the only tool run is the one the model requested.
+    expect(invokeTool).toHaveBeenCalledTimes(1);
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "code.search_files",
-        args: expect.objectContaining({ path: "." }),
+        args: expect.objectContaining({ path: ".", query: "skill import" }),
       }),
     );
-    expect(result.requiresApproval).toEqual({
-      approvalId: "approval-loop35-search",
-      toolName: "code.search_files",
-      reason: "Approval required by policy.",
-      expiresAt: "2026-03-22T14:00:00.000Z",
-    });
-    expect(result.turnTrace).toMatchObject({
-      status: "waiting_for_approval",
-      failure: expect.objectContaining({ failureClass: "approval_required" }),
-    });
+    // Approval soft-fails: the eval turn is never parked on an approval.
+    expect(result.requiresApproval).toBeUndefined();
+    expect(result.turnTrace.status).toBe("completed");
+    expect(
+      result.turnTrace.toolRuns.some(
+        (run) => run.toolName === "code.search_files" && run.status === "approval_required",
+      ),
+    ).toBe(true);
+    // The model is told not to retry the gated tool and continues the turn.
+    const followUpMessages = requestMessages(createChatCompletion.mock.calls[1]?.[0]);
+    expect(
+      followUpMessages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("do not request `code.search_files` again"),
+      ),
+    ).toBe(true);
+    // The model's own answer passes through verbatim.
+    expect(result.assistantContent).toBe(finalAnswer);
   });
 
-  it("persists approval state when prompt-lab concrete read prefetch requires approval after search hits", async () => {
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+  it("soft-fails a model-initiated concrete read that requires approval after search hits on prompt-lab eval turns", async () => {
+    const finalAnswer = [
+      "Search results located apps/gateway/src/services/skill-import-service.ts and",
+      "docs/SKILL_ADOPTION_MATRIX.md, but reading skill-import-service.ts is",
+      "approval-gated here, so its contents remain unverified. Operators can review",
+      "those two files directly; I have only the search-hit paths as evidence.",
+    ].join(" ");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        toolCallCompletion("call-loop35-search-2", "code_search_files", { path: ".", query: "skill import" }),
+      )
+      .mockResolvedValueOnce(
+        toolCallCompletion("call-loop35-read-1", "file_read_range", {
+          path: "apps/gateway/src/services/skill-import-service.ts",
+          startLine: 1,
+          endLine: 120,
+        }),
+      )
+      .mockResolvedValueOnce(textCompletion(finalAnswer));
     const invokeTool = vi
       .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
@@ -77,7 +123,8 @@ describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
 
     const result = await orchestrator.run(input);
 
-    expect(createChatCompletion).not.toHaveBeenCalled();
+    // Both tool runs are model-initiated; the controller adds none of its own.
+    expect(invokeTool).toHaveBeenCalledTimes(2);
     expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
       toolName: "code.search_files",
       args: expect.objectContaining({ path: "." }),
@@ -88,16 +135,25 @@ describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
         path: "apps/gateway/src/services/skill-import-service.ts",
       }),
     });
-    expect(result.requiresApproval).toEqual({
-      approvalId: "approval-loop35-read",
-      toolName: "file.read_range",
-      reason: "Approval required by policy.",
-      expiresAt: "2026-03-22T14:30:00.000Z",
-    });
-    expect(result.turnTrace).toMatchObject({
-      status: "waiting_for_approval",
-      failure: expect.objectContaining({ failureClass: "approval_required" }),
-    });
+    // The approval-gated read soft-fails instead of parking the eval turn.
+    expect(result.requiresApproval).toBeUndefined();
+    expect(result.turnTrace.status).toBe("completed");
+    expect(
+      result.turnTrace.toolRuns.some(
+        (run) => run.toolName === "file.read_range" && run.status === "approval_required",
+      ),
+    ).toBe(true);
+    const followUpMessages = requestMessages(createChatCompletion.mock.calls[2]?.[0]);
+    expect(
+      followUpMessages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("do not request `file.read_range` again"),
+      ),
+    ).toBe(true);
+    // The model's own answer passes through verbatim.
+    expect(result.assistantContent).toBe(finalAnswer);
   });
 
   it("persists approval state when live-data browser search requires approval", async () => {
@@ -210,7 +266,7 @@ describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
 });
 
 function createOrchestrator(
-  createChatCompletion: () => Promise<ChatCompletionResponse>,
+  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>,
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>,
   toolNames = ["code.search_files", "file.read_range"],
 ): ChatAgentOrchestrator {
@@ -220,6 +276,46 @@ function createOrchestrator(
     createChatCompletion,
     invokeTool,
   });
+}
+
+function requestMessages(request: ChatCompletionRequest | undefined): Array<{ role: string; content?: unknown }> {
+  return (request?.messages ?? []) as unknown as Array<{ role: string; content?: unknown }>;
+}
+
+function toolCallCompletion(
+  toolCallId: string,
+  functionName: string,
+  args: Record<string, unknown>,
+): ChatCompletionResponse {
+  return {
+    model: "gpt-5.4",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: toolCallId,
+              type: "function",
+              function: {
+                name: functionName,
+                arguments: JSON.stringify(args),
+              },
+            },
+          ],
+        } as never,
+      },
+    ],
+  };
+}
+
+function textCompletion(content: string): ChatCompletionResponse {
+  return {
+    model: "gpt-5.4",
+    choices: [{ index: 0, message: { role: "assistant", content } }],
+  };
 }
 
 function promptLabTurnInput(sessionId: string, task: string) {

@@ -596,6 +596,148 @@ describe("orchestration engine", () => {
       "orchestration_final_synthesis_fallback",
     ]);
   });
+
+  it("marks synthesizer with degradedHandoffStepIds when a failed researcher output was used", async () => {
+    const plan: OrchestrationPlan = {
+      ...createPlan(),
+      workflowTemplate: "cowork.research",
+      summary: "Delegated research with degraded handoff.",
+      steps: [
+        {
+          stepId: "step-researcher",
+          index: 0,
+          role: "researcher",
+          stage: 1,
+          objective: "Gather evidence.",
+          parallelizable: false,
+          delegatedRole: "researcher",
+        },
+        {
+          stepId: "step-synthesizer",
+          index: 1,
+          role: "synthesizer",
+          stage: 2,
+          objective: "Synthesize the final answer.",
+          parallelizable: false,
+          delegatedRole: "synthesizer",
+        },
+      ],
+    };
+
+    const executeDelegatedStep = vi.fn(async (input: { step: { stepId: string; role: string } }) => {
+      if (input.step.role === "researcher") {
+        return {
+          stepId: input.step.stepId,
+          role: "researcher",
+          index: 0,
+          startedAt: NOW,
+          finishedAt: NOW,
+          status: "failed" as const,
+          output: "Gathered evidence: EPA guidance covers HEPA filtration and CADR sizing.",
+          summary: "Research hit the tool budget after gathering evidence.",
+          error: "Tool run budget exceeded for this turn after 7 tool calls.",
+          failureGuidance: "Continue from gathered evidence.",
+          childSessionId: "child-researcher",
+          childTurnId: "turn-researcher",
+          citations: [],
+        };
+      }
+      return {
+        stepId: input.step.stepId,
+        role: "synthesizer",
+        index: 1,
+        startedAt: NOW,
+        finishedAt: NOW,
+        status: "completed" as const,
+        output: "Final recommendation synthesized from the degraded research handoff.",
+        summary: "Synthesis complete.",
+        childSessionId: "child-synthesizer",
+        childTurnId: "turn-synthesizer",
+        citations: [],
+      };
+    });
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan,
+      callbacks: {
+        createChatCompletion: vi.fn(),
+        executeDelegatedStep: executeDelegatedStep as never,
+      },
+    });
+
+    const synthesizerCall = executeDelegatedStep.mock.calls.find(
+      (call) => (call[0] as { step: { role: string } }).step.role === "synthesizer",
+    );
+    expect(synthesizerCall).toBeDefined();
+    expect(result.stepResults.find((step) => step.stepId === "step-synthesizer")?.degradedHandoffStepIds).toEqual([
+      "step-researcher",
+    ]);
+    expect(result.integritySignals).toContain("orchestration_synthesis_from_degraded_handoffs");
+    expect(result.finalOutput).toContain("Final recommendation synthesized");
+    expect(result.finalOutput).not.toContain("Synthesis Incomplete");
+  });
+
+  it("blocks the synthesizer when failed steps only carry their failure message as output", async () => {
+    const failureText = "Provider request failed: upstream timeout.";
+    const plan: OrchestrationPlan = {
+      ...createPlan(),
+      workflowTemplate: "cowork.research",
+      summary: "Delegated research with no usable handoff.",
+      steps: [
+        {
+          stepId: "step-researcher",
+          index: 0,
+          role: "researcher",
+          stage: 1,
+          objective: "Gather evidence.",
+          parallelizable: false,
+          delegatedRole: "researcher",
+        },
+        {
+          stepId: "step-synthesizer",
+          index: 1,
+          role: "synthesizer",
+          stage: 2,
+          objective: "Synthesize the final answer.",
+          parallelizable: false,
+          delegatedRole: "synthesizer",
+        },
+      ],
+    };
+
+    const executeDelegatedStep = vi.fn(async (input: { step: { stepId: string; role: string } }) => ({
+      stepId: input.step.stepId,
+      role: input.step.role,
+      index: 0,
+      startedAt: NOW,
+      finishedAt: NOW,
+      status: "failed" as const,
+      // Delegated steps copy the failure message into output when the model
+      // produced nothing; that must not count as a usable handoff.
+      output: failureText,
+      summary: "Research failed.",
+      error: failureText,
+      childSessionId: `child-${input.step.stepId}`,
+      childTurnId: `turn-${input.step.stepId}`,
+      citations: [],
+    }));
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan,
+      callbacks: {
+        createChatCompletion: vi.fn(),
+        executeDelegatedStep: executeDelegatedStep as never,
+      },
+    });
+
+    const synthesizerCall = executeDelegatedStep.mock.calls.find(
+      (call) => (call[0] as { step: { role: string } }).step.role === "synthesizer",
+    );
+    expect(synthesizerCall).toBeUndefined();
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
+  });
 });
 
 function createWorkstreamPlan(): OrchestrationPlan {

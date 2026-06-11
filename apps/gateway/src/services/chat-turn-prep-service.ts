@@ -30,6 +30,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
+import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
@@ -568,7 +569,15 @@ export async function resolvePreparedTurnOrchestration(
       sessionId: prepared.session.sessionId,
       workspaceId: prepared.workspaceId,
       mode,
-      objective: prepared.content,
+      // The objective is operator-facing and is echoed into delegated step
+      // prompts and synthesis fallbacks. On prompt-pack runs, keep it to the
+      // user's task: the Prompt Lab run contract must not leak into it. Live
+      // turns keep their content verbatim even when it happens to contain a
+      // "## User Task" heading.
+      objective:
+        prepared.normalized.normalizationProfile === "prompt_pack_harness"
+          ? extractPrimaryUserTaskContent(prepared.content) || prepared.content
+          : prepared.content,
       prefs: prepared.prefs,
       conversation: prepared.conversationMessages,
       historyMessages: prepared.history,
@@ -811,6 +820,7 @@ export function buildChatOrchestrationSummary(input: {
       durationMs: step.durationMs,
       summary: step.summary,
       error: step.error,
+      degradedHandoffStepIds: step.degradedHandoffStepIds,
     })),
     integritySignals: input.integritySignals,
   };

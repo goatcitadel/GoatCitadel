@@ -4,41 +4,34 @@ import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
-describe("ChatAgentOrchestrator loop42 orchestration repair coverage", () => {
+const COWORK_MODEL_OUTPUT = "I can give a brief plan, but the requested roles and provenance are not expanded yet.";
+const CODE_MODEL_OUTPUT =
+  "A generic patch should update runtime labels and tests. Parts of this answer may be incomplete.";
+
+describe("ChatAgentOrchestrator loop42 eval-integrity passthrough coverage", () => {
   it.each([
     {
       sessionId: "sess-loop42-farmers-market",
       task: 'Cowork request: "Help me decide when to go to a farmers market this weekend without inventing exact crowd data."',
       instruction: "Use role-labeled sections in this exact order: `Researcher`, `Risk Review`, `Operator Handoff`.",
-      expected: [
-        "no market-specific source was retained",
-        "trust the official market organizer's current hours/events page",
-        "within the first 30-45 minutes after opening",
-      ],
     },
     {
       sessionId: "sess-loop42-public-venue",
       task: 'Cowork request: "Shortlist a public venue for a small meetup, but do not contact or book anything."',
       instruction: "Use role-labeled sections in this exact order: `Researcher`, `Risk Review`, `Operator Handoff`.",
-      expected: [
-        "Meeting Room & Facility Rentals - Los Angeles Public Library",
-        "Verify capacity, reservation rules",
-        "do not contact anyone, submit a form, book a room, or publish details",
-      ],
     },
-  ])("repairs everyday cowork delegation for $sessionId", async ({ sessionId, task, instruction, expected }) => {
-    const result = await runCoworkRepair({ sessionId, task, instruction });
+  ])("passes cowork eval-turn model output through verbatim for $sessionId", async ({ sessionId, task, instruction }) => {
+    const result = await runCoworkEvalTurn({ sessionId, task, instruction });
 
-    for (const text of expected) {
-      expect(result.assistantContent).toContain(text);
-    }
-    expect(result.assistantContent).toContain("## Researcher");
-    expect(result.assistantContent).toContain("## Risk Review");
-    expect(result.assistantContent).toContain("## Operator Handoff");
+    expect(result.assistantContent).toBe(COWORK_MODEL_OUTPUT);
+    expect(result.assistantContent).not.toContain("## Researcher");
+    expect(result.assistantContent).not.toContain("## Risk Review");
+    expect(result.assistantContent).not.toContain("## Operator Handoff");
+    expect(result.assistantContent).not.toContain("Source URLs:");
   });
 
-  it("repairs Mission Control lifecycle truth-labeling patch plans from concrete repo evidence", async () => {
-    const result = await runPatchPlanRepair(
+  it("passes code eval-turn model output through verbatim with no forced prefetch tool runs", async () => {
+    const result = await runCodeEvalTurn(
       [
         "Inspect the repo if needed and identify the exact patch points for Mission Control truth labeling.",
         "The answer must distinguish canonical lifecycle linkage from inferred fallback linkage and missing links.",
@@ -46,37 +39,18 @@ describe("ChatAgentOrchestrator loop42 orchestration repair coverage", () => {
       ].join(" "),
     );
 
-    expect(result.assistantContent).toContain("## API field changes");
-    expect(result.assistantContent).toContain("## UI rendering changes");
-    expect(result.assistantContent).toContain("## Exact label set");
-    expect(result.assistantContent).toContain("`Canonical`, `Inferred`, `Missing`");
-    expect(result.assistantContent).toContain("## UI regression check");
-    expect(result.assistantContent).toContain(
-      "apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.test.tsx",
-    );
-    expect(result.assistantContent).not.toContain("generic patch");
-  });
+    // The model never requested a tool, so any tool run would be harness-forced.
+    expect(result.invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toHaveLength(0);
 
-  it("repairs explicit event-authority envelope patch plans from concrete repo evidence", async () => {
-    const result = await runPatchPlanRepair(
-      [
-        "Inspect the repo if needed and identify the exact patch points for an explicit event authority envelope patch plan.",
-        "The answer must cover eventClass, eventAuthority, links, producer propagation, storage round-trip, and consumer contract.",
-        "Concretely read `apps/gateway/src/services/tool-invocation-coordinator-service.ts`, `packages/storage/src/realtime-event-repo.ts`, `apps/gateway/src/routes/events.ts`, and `packages/mission-control-shared/src/api/types.ts`.",
-      ].join(" "),
-    );
-
-    expect(result.assistantContent).toContain("## Producer contract");
-    expect(result.assistantContent).toContain("## Storage contract");
-    expect(result.assistantContent).toContain("## Consumer contract");
-    expect(result.assistantContent).toContain("## Event families");
-    expect(result.assistantContent).toContain("## Propagation test to add");
-    expect(result.assistantContent).toContain("eventClass`, `eventAuthority`, and `links");
-    expect(result.assistantContent).not.toContain("generic patch");
+    expect(result.assistantContent).toBe(CODE_MODEL_OUTPUT);
+    expect(result.assistantContent).not.toContain("## Exact files used");
+    expect(result.assistantContent).not.toContain("## Patch points");
+    expect(result.assistantContent).not.toContain("Source URLs:");
   });
 });
 
-async function runCoworkRepair(input: {
+async function runCoworkEvalTurn(input: {
   sessionId: string;
   task: string;
   instruction: string;
@@ -99,7 +73,7 @@ async function runCoworkRepair(input: {
         index: 0,
         message: {
           role: "assistant",
-          content: "I can give a brief plan, but the requested roles and provenance are not expanded yet.",
+          content: COWORK_MODEL_OUTPUT,
         },
       },
     ],
@@ -128,7 +102,11 @@ async function runCoworkRepair(input: {
   });
 }
 
-async function runPatchPlanRepair(task: string): Promise<{ assistantContent: string }> {
+async function runCodeEvalTurn(task: string): Promise<{
+  assistantContent: string;
+  turnTrace: { toolRuns: unknown[] };
+  invokeTool: ReturnType<typeof vi.fn>;
+}> {
   const wrappedPrompt = [
     "## Prompt Lab Run Contract",
     "- Mode: code",
@@ -152,19 +130,20 @@ async function runPatchPlanRepair(task: string): Promise<{ assistantContent: str
         index: 0,
         message: {
           role: "assistant",
-          content: "A generic patch should update runtime labels and tests. Parts of this answer may be incomplete.",
+          content: CODE_MODEL_OUTPUT,
         },
       },
     ],
   });
+  const invokeTool = createMissionControlTruthEvidenceTool();
   const orchestrator = new ChatAgentOrchestrator({
     storage: createMockStorage() as never,
     listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
     createChatCompletion,
-    invokeTool: createMissionControlTruthEvidenceTool(),
+    invokeTool,
   });
 
-  return orchestrator.run({
+  const result = await orchestrator.run({
     sessionId: `sess-loop42-truth-labels-${randomUUID()}`,
     turnId: randomUUID(),
     userMessageId: `msg-loop42-truth-labels-${randomUUID()}`,
@@ -179,9 +158,12 @@ async function runPatchPlanRepair(task: string): Promise<{ assistantContent: str
     normalizationProfile: "prompt_pack_harness",
     historyMessages: [{ role: "user", content: wrappedPrompt }],
   });
+  return { assistantContent: result.assistantContent, turnTrace: result.turnTrace, invokeTool };
 }
 
-function createMissionControlTruthEvidenceTool(): (request: ToolInvokeRequest) => Promise<ToolInvokeResult> {
+function createMissionControlTruthEvidenceTool(): ReturnType<
+  typeof vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>
+> {
   return vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
     if (request.toolName === "code.search_files") {
       return {
@@ -243,27 +225,5 @@ const TRUTH_LABELING_EVIDENCE_BY_PATH: Record<string, string> = {
     "describe('ApprovalsRoutePage', () => {",
     "  it('renders lifecycle linkage metadata from fetchRuntimeLifecycle', async () => {});",
     "});",
-  ].join("\n"),
-  "apps/gateway/src/services/tool-invocation-coordinator-service.ts": [
-    "export class ToolInvocationCoordinatorService {",
-    "  publishToolEvent(input) {",
-    "    return this.events.append({ eventClass: 'tool.invocation', eventAuthority: 'retained', links: input.links });",
-    "  }",
-    "}",
-  ].join("\n"),
-  "packages/storage/src/realtime-event-repo.ts": [
-    "export class RealtimeEventRepository {",
-    "  append(input) { return { eventClass: input.eventClass, eventAuthority: input.eventAuthority, links: input.links }; }",
-    "  list() { return [{ eventClass: 'tool.invocation', eventAuthority: 'retained', links: { runId: 'run-1' } }]; }",
-    "}",
-  ].join("\n"),
-  "apps/gateway/src/routes/events.ts":
-    "export async function eventsRoutes(app) { app.get('/api/v1/events', async () => realtimeEvents.list()); }",
-  "packages/mission-control-shared/src/api/types.ts": [
-    "export interface RealtimeEventDto {",
-    "  eventClass: string;",
-    "  eventAuthority: 'retained' | 'durable_history' | 'derived_projection';",
-    "  links?: Record<string, string>;",
-    "}",
   ].join("\n"),
 };

@@ -1,34 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
+import { ChatAgentOrchestrator, type ChatAgentTurnResult } from "./chat-agent-orchestrator.js";
 import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
 
-describe("ChatAgentOrchestrator loop40 durable orchestration repair behavior", () => {
+describe("ChatAgentOrchestrator loop40 durable orchestration eval-integrity behavior", () => {
   it.each([
     {
       name: "expired lease recovery",
       task: "Inspect the repo if needed and propose the exact minimal automated test that proves an expired durable-run lease can be recovered by a different worker while a still-active leased run is left alone.",
-      expected: [
-        "apps/gateway/src/services/durable-run-service.test.ts",
-        "expired run is reclaimed",
-        "still-active leased run is left untouched",
-        "not requeued or rebound",
-      ],
     },
     {
       name: "lease release transitions",
       task: "Inspect the repo if needed and propose the exact minimal automated test that proves waiting, paused, and terminal durable-run transitions release any active lease.",
-      expected: [
-        "apps/gateway/src/services/durable-run-service.test.ts",
-        "waiting wake path",
-        "operator pause path",
-        "terminal transition path",
-        "clears `leaseOwnerId`",
-      ],
     },
-  ])("repairs durable-run minimal test prompts for $name", async ({ task, expected }) => {
-    const result = await runDurablePromptLabRepair({
+  ])("passes the model's durable-run answer through verbatim for $name", async ({ task }) => {
+    const modelAnswer =
+      "Need answer with observed/inferred maybe incomplete. Best next move: retry file reads with a narrower query.";
+    const { result } = await runDurablePromptLabTurn({
       sessionId: `sess-loop40-${task.includes("expired") ? "lease-recovery" : "lease-release"}`,
       task,
       answerContract: [
@@ -36,20 +25,17 @@ describe("ChatAgentOrchestrator loop40 durable orchestration repair behavior", (
         "- Name the target test file or suite.",
         "- Provide `Setup`, `Act`, `Assert`, and `Failure signature` bullets.",
       ],
-      weakAnswer:
-        "Need answer with observed/inferred maybe incomplete. Best next move: retry file reads with a narrower query.",
+      modelAnswer,
     });
 
-    for (const text of expected) {
-      expect(result.assistantContent).toContain(text);
-    }
-    expect(result.assistantContent).toContain("Exact files used:");
-    expect(result.assistantContent).not.toContain("maybe incomplete");
-    expect(result.assistantContent).not.toContain("chat-durable-run-service.test.ts");
+    expect(result.assistantContent).toBe(modelAnswer);
+    expect(result.assistantContent).not.toContain("Exact files used:");
+    expect(result.turnTrace.status).toBe("completed");
   });
 
-  it("repairs persisted durable lease patch-plan prompts into storage, claim, recovery, and heartbeat steps", async () => {
-    const result = await runDurablePromptLabRepair({
+  it("runs no forced tool calls and appends no patch-plan scaffold when the model makes no tool calls", async () => {
+    const modelAnswer = "A generic patch plan should add a lease table and retry later.";
+    const { result, invokeTool } = await runDurablePromptLabTurn({
       sessionId: "sess-loop40-persisted-durable-leases",
       task: "Inspect the repo if needed and identify the exact patch points for persisted leases across durable-run storage, claim logic, and recovery logic. Concretely read `packages/contracts/src/durable.ts`, `packages/storage/src/durable-run-repo.ts`, `apps/gateway/src/services/durable-run-service.ts`, and `apps/gateway/src/services/durable-run-service.test.ts`. Include schema or storage changes, claim path changes, recovery path changes, heartbeat path changes, migration note, and a two-worker validation step.",
       answerContract: [
@@ -57,27 +43,25 @@ describe("ChatAgentOrchestrator loop40 durable orchestration repair behavior", (
         "- Cite the exact files whose contents you concretely read.",
         "- Keep the patch plan grouped by storage, claim, recovery, heartbeat, migration, and validation.",
       ],
-      weakAnswer: "A generic patch plan should add a lease table and retry later.",
+      modelAnswer,
     });
 
-    expect(result.assistantContent).toContain("## Schema or storage changes");
-    expect(result.assistantContent).toContain("packages/contracts/src/durable.ts");
-    expect(result.assistantContent).toContain("packages/storage/src/durable-run-repo.ts");
-    expect(result.assistantContent).toContain("apps/gateway/src/services/durable-run-service.ts");
-    expect(result.assistantContent).toContain("## Claim path changes");
-    expect(result.assistantContent).toContain("## Recovery path changes");
-    expect(result.assistantContent).toContain("## Heartbeat path changes");
-    expect(result.assistantContent).toContain("## Two-worker validation step");
-    expect(result.assistantContent).not.toContain("lease table");
+    expect(result.assistantContent).toBe(modelAnswer);
+    expect(result.assistantContent).not.toContain("## Schema or storage changes");
+    expect(result.assistantContent).not.toContain("## Claim path changes");
+    expect(result.assistantContent).not.toContain("## Recovery path changes");
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toHaveLength(0);
+    expect(result.turnTrace.status).toBe("completed");
   });
 });
 
-async function runDurablePromptLabRepair(input: {
+async function runDurablePromptLabTurn(input: {
   sessionId: string;
   task: string;
   answerContract: string[];
-  weakAnswer: string;
-}): Promise<{ assistantContent: string }> {
+  modelAnswer: string;
+}): Promise<{ result: ChatAgentTurnResult; invokeTool: ReturnType<typeof createDurableEvidenceTool> }> {
   const wrappedPrompt = [
     "## Prompt Lab Run Contract",
     "- Mode: code",
@@ -98,19 +82,20 @@ async function runDurablePromptLabRepair(input: {
         index: 0,
         message: {
           role: "assistant",
-          content: input.weakAnswer,
+          content: input.modelAnswer,
         },
       },
     ],
   });
+  const invokeTool = createDurableEvidenceTool();
   const orchestrator = new ChatAgentOrchestrator({
     storage: createMockStorage() as never,
     listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
     createChatCompletion,
-    invokeTool: createDurableEvidenceTool(),
+    invokeTool,
   });
 
-  return orchestrator.run({
+  const result = await orchestrator.run({
     sessionId: input.sessionId,
     turnId: randomUUID(),
     userMessageId: `${input.sessionId}-message`,
@@ -125,9 +110,11 @@ async function runDurablePromptLabRepair(input: {
     normalizationProfile: "prompt_pack_harness",
     historyMessages: [{ role: "user", content: wrappedPrompt }],
   });
+
+  return { result, invokeTool };
 }
 
-function createDurableEvidenceTool(): (request: ToolInvokeRequest) => Promise<ToolInvokeResult> {
+function createDurableEvidenceTool() {
   return vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
     if (request.toolName === "code.search_files") {
       return {
