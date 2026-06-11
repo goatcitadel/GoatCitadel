@@ -1146,7 +1146,7 @@
   background: transparent;
   display: grid;
   place-items: center;
-  z-index: 1000;
+  z-index: var(--z-modal);
 }
 
 .mc-next-attachment-lightbox::backdrop {

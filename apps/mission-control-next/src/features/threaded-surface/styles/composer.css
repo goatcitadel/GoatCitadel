@@ -209,7 +209,7 @@
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: var(--card, var(--background));
   box-shadow: 0 12px 32px color-mix(in oklab, var(--gc-shadow, rgba(0, 0, 0, 0.4)) 60%, transparent);
-  z-index: 60;
+  z-index: var(--z-popover);
 }
 
 .mc-next-workbench-more-popover .mc-next-panel-button {
@@ -632,7 +632,7 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 }
 
 .chat-plus-popover {
-  z-index: 80;
+  z-index: var(--z-popover);
   display: grid;
   gap: 0.22rem;
   width: min(320px, calc(100vw - 1rem));
@@ -1843,15 +1843,15 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 }
 
 .mc-next-code-session-inspector-row strong[data-tone="good"] {
-  color: color-mix(in oklab, var(--success, #22c55e) 82%, var(--foreground));
+  color: color-mix(in oklab, var(--success) 82%, var(--foreground));
 }
 
 .mc-next-code-session-inspector-row strong[data-tone="warning"] {
-  color: color-mix(in oklab, var(--warning, #f59e0b) 82%, var(--foreground));
+  color: color-mix(in oklab, var(--warning) 82%, var(--foreground));
 }
 
 .mc-next-code-session-inspector-row strong[data-tone="danger"] {
-  color: color-mix(in oklab, var(--destructive, #ef4444) 82%, var(--foreground));
+  color: color-mix(in oklab, var(--danger) 82%, var(--foreground));
 }
 
 .mc-next-code-session-inspector-row strong[data-tone="muted"] {
@@ -1896,7 +1896,7 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 .mc-next-code-inspector-sheet {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-sheet);
   display: grid;
   justify-items: end;
 }

@@ -141,7 +141,7 @@
     top: 5.2rem;
     left: 0.9rem;
     bottom: 0.9rem;
-    z-index: 72;
+    z-index: var(--z-mobile-rail);
     width: min(22rem, calc(100vw - 1.8rem));
     max-height: none;
     transform: translateX(-108%);
@@ -163,9 +163,9 @@
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 68;
+    z-index: var(--z-side-sheet);
     border: 0;
-    background: rgba(15, 23, 42, 0.32);
+    background: var(--bg-scrim);
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-stage,

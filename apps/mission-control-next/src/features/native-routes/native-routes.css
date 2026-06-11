@@ -1863,7 +1863,7 @@
 }
 
 .mc-next-project-readiness-item.is-attention svg {
-  color: color-mix(in oklab, #f59e0b 76%, var(--foreground));
+  color: color-mix(in oklab, var(--warning) 76%, var(--foreground));
 }
 
 .mc-next-project-readiness-item strong,
@@ -2191,7 +2191,7 @@
 }
 
 .mc-next-settings-wizard-step.complete {
-  border-color: color-mix(in oklab, oklch(0.74 0.16 154) 30%, var(--border));
+  border-color: color-mix(in oklab, var(--success) 30%, var(--border));
 }
 
 .mc-next-settings-wizard-index {
@@ -2209,8 +2209,8 @@
 }
 
 .mc-next-settings-wizard-step.complete .mc-next-settings-wizard-index {
-  border-color: color-mix(in oklab, oklch(0.74 0.16 154) 36%, var(--border));
-  color: oklch(0.74 0.16 154);
+  border-color: color-mix(in oklab, var(--success) 36%, var(--border));
+  color: var(--success);
 }
 
 .mc-next-settings-wizard-step.pending {
@@ -2793,8 +2793,8 @@
 }
 
 .mc-next-settings-notice.success {
-  border-color: color-mix(in oklab, oklch(0.74 0.16 154) 34%, var(--border));
-  background: color-mix(in oklab, oklch(0.74 0.16 154) 10%, var(--card));
+  border-color: color-mix(in oklab, var(--success) 34%, var(--border));
+  background: color-mix(in oklab, var(--success) 10%, var(--card));
 }
 
 .mc-next-settings-notice.warning {
@@ -3227,7 +3227,7 @@
 
 .mc-next-kanban-column {
   min-width: 0;
-  background: var(--mc-surface-1, #f5f5f5);
+  background: var(--mc-surface-1);
   border-radius: var(--r-sm);
   padding: 0.75rem;
   min-height: 6rem;
@@ -3262,8 +3262,8 @@
 }
 
 .mc-next-kanban-card {
-  background: var(--mc-surface-2, #ffffff);
-  border: 1px solid var(--border, #e5e5e5);
+  background: var(--mc-surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--r-xs);
   padding: 0.5rem 0.75rem;
   color: var(--foreground);
@@ -3274,15 +3274,15 @@
 }
 
 .mc-next-kanban-card.tone-active {
-  border-color: color-mix(in srgb, var(--gc-risk-info, #0ea5e9) 54%, var(--border, #e5e5e5));
+  border-color: color-mix(in oklab, var(--mc-area-color) 54%, var(--border));
 }
 
 .mc-next-kanban-card.tone-warning {
-  border-color: color-mix(in srgb, var(--gc-risk-caution, #b45309) 54%, var(--border, #e5e5e5));
+  border-color: color-mix(in oklab, var(--warning) 54%, var(--border));
 }
 
 .mc-next-kanban-card.tone-success {
-  border-color: color-mix(in srgb, var(--gc-risk-success, #15803d) 50%, var(--border, #e5e5e5));
+  border-color: color-mix(in oklab, var(--success) 50%, var(--border));
 }
 
 .mc-next-kanban-card label {
@@ -3303,7 +3303,7 @@
   gap: 0.25rem 0.5rem;
   color: var(--text-secondary);
   font-family: var(--mc-font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
 }
 
@@ -3313,7 +3313,7 @@
   align-items: center;
   gap: 0.25rem;
   border-radius: var(--r-xs);
-  background: var(--mc-surface-muted, rgb(148 163 184 / 0.12));
+  background: color-mix(in oklab, var(--fg-muted) 12%, transparent);
   padding: 0.16rem 0.42rem;
   color: var(--foreground);
   font-size: var(--text-xs);
@@ -3335,11 +3335,11 @@
 }
 
 .mc-next-kanban-card .distress.critical {
-  color: var(--gc-risk-danger, #b91c1c);
+  color: var(--danger);
 }
 
 .mc-next-kanban-card .distress.warn {
-  color: var(--gc-risk-caution, #b45309);
+  color: var(--warning);
 }
 
 .mc-next-kanban-card .retry {

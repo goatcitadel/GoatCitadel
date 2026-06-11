@@ -1,6 +1,6 @@
 .mc-next-btw-side-chat {
   position: fixed;
-  z-index: 68;
+  z-index: var(--z-side-sheet);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(22rem, calc(100vw - 1.75rem));

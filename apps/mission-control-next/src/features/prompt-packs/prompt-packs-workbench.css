@@ -241,8 +241,8 @@
   bottom: -4px;
   width: 2px;
   margin-left: -1px;
-  background: #f4ead6;
-  box-shadow: 0 0 10px rgba(244, 234, 214, 0.55);
+  background: var(--accent-strong);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent-strong) 55%, transparent);
   border-radius: 2px;
   pointer-events: none;
 }
@@ -746,7 +746,7 @@
   flex: 0 0 auto;
   margin-top: 0.42rem;
   border-radius: var(--r-pill);
-  background: rgba(148, 163, 184, 0.5);
+  background: color-mix(in oklab, var(--fg-muted) 55%, transparent);
 }
 
 .mc-pp-status-dot.result-passing {

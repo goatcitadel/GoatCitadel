@@ -254,7 +254,7 @@
 }
 
 .mc-gc-combobox-content {
-  z-index: 74;
+  z-index: var(--z-dropdown);
   overflow: hidden;
   max-width: min(20rem, calc(100vw - 1.25rem));
 }
@@ -340,7 +340,7 @@
 .mc-next-topbar {
   position: sticky;
   top: 0;
-  z-index: 40;
+  z-index: var(--z-topbar);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1046,7 +1046,7 @@
   position: fixed;
   top: 5.3rem;
   right: 1rem;
-  z-index: 55;
+  z-index: var(--z-panel);
   width: min(24rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 6.3rem);
   padding: 1rem;
@@ -1315,7 +1315,7 @@
   position: fixed;
   right: 1rem;
   bottom: 1rem;
-  z-index: 60;
+  z-index: var(--z-toast);
   display: grid;
   gap: 0.65rem;
   width: min(16rem, calc(100vw - 2rem));
@@ -1789,7 +1789,7 @@
     top: 0;
     left: 0;
     bottom: 0;
-    z-index: 65;
+    z-index: var(--z-nav-drawer);
     width: min(22rem, calc(100vw - 1rem));
     max-width: calc(100vw - 1rem);
     min-height: 100dvh;
@@ -1829,9 +1829,9 @@
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: var(--z-scrim);
     border: 0;
-    background: rgba(15, 23, 42, 0.32);
+    background: var(--bg-scrim);
   }
 }
 
