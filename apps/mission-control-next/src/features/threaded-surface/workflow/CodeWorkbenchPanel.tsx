@@ -12,8 +12,6 @@ import {
   type ReactNode,
 } from "react";
 import type {
-  ChatSessionWorkbenchFileOperationKind,
-  ChatSessionWorkbenchFileOperationRequest,
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
@@ -33,6 +31,8 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "../../native-routes/primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
+import { useOptionalStableHandler } from "../useStableHandler";
+import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -497,29 +497,6 @@ function CodeSourceChooser({
   );
 }
 
-const WORKBENCH_FILE_ACTIONS: Array<{ operation: ChatSessionWorkbenchFileOperationKind; label: string }> = [
-  { operation: "create_file", label: "Create file" },
-  { operation: "create_folder", label: "Create folder" },
-  { operation: "rename", label: "Rename" },
-  { operation: "delete", label: "Delete" },
-  { operation: "duplicate", label: "Duplicate" },
-  { operation: "move", label: "Move" },
-];
-
-function workbenchFileActionNeedsTarget(operation: ChatSessionWorkbenchFileOperationKind): boolean {
-  return operation === "rename" || operation === "duplicate" || operation === "move";
-}
-
-function workbenchFileActionPathPlaceholder(operation: ChatSessionWorkbenchFileOperationKind): string {
-  if (operation === "create_file") {
-    return "src/new-file.ts";
-  }
-  if (operation === "create_folder") {
-    return "src/new-folder";
-  }
-  return "src/current-file.ts";
-}
-
 function isCodeModeArtifactAvailable(run: CodeModeRunRecord, artifactKind: CodeModeRunArtifactKind): boolean {
   if (artifactKind === "stdout") {
     return Boolean(run.stdoutArtifact);
@@ -799,11 +776,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [expandedInspectorSections, setExpandedInspectorSections] = useState(readStoredInspectorSections);
-  const [fileActionOperation, setFileActionOperation] = useState<ChatSessionWorkbenchFileOperationKind>("create_file");
-  const [fileActionPath, setFileActionPath] = useState("");
-  const [fileActionTargetPath, setFileActionTargetPath] = useState("");
-  const [fileActionNotice, setFileActionNotice] = useState<string | null>(null);
   const isMounted = useIsMounted();
+  const stableOnFileOperation = useOptionalStableHandler(onFileOperation);
   const hasPatchDiff = Boolean(diff?.diff.trim());
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
   const activePatchBlock = activeBlock && isPendingPatchBlock(activeBlock) ? activeBlock : null;
@@ -999,13 +973,6 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     worktreeBlockedReason ??
     draftConflictReason ??
     (changedFiles.length === 0 ? "No worktree changes to revert." : null);
-  const fileActionTargetRequired = workbenchFileActionNeedsTarget(fileActionOperation);
-  const fileActionBlockedReason =
-    worktreeBlockedReason ??
-    draftConflictReason ??
-    (!onFileOperation ? "File tree operations are unavailable." : null) ??
-    (!fileActionPath.trim() ? "Enter a project-relative path." : null) ??
-    (fileActionTargetRequired && !fileActionTargetPath.trim() ? "Enter a target path." : null);
   const workbenchFileItems = useMemo(
     () => (workbenchTree?.items ?? []).filter((item) => item.kind === "file"),
     [workbenchTree?.items],
@@ -1253,13 +1220,6 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   useEffect(() => {
     setActiveBlockIndex(0);
   }, [codeBlocks.length, selectedTurn?.turnId]);
-
-  useEffect(() => {
-    if (!selectedFile?.path || fileActionPath.trim()) {
-      return;
-    }
-    setFileActionPath(selectedFile.path);
-  }, [fileActionPath, selectedFile?.path]);
 
   useEffect(() => {
     if (!moreMenuOpen || typeof document === "undefined") {
@@ -1553,42 +1513,6 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     onSelectFile(relativePath);
   };
 
-  const runFileAction = async () => {
-    if (fileActionBlockedReason || busy || !onFileOperation) {
-      return;
-    }
-    const input: ChatSessionWorkbenchFileOperationRequest = {
-      operation: fileActionOperation,
-      path: fileActionPath.trim(),
-      targetPath: fileActionTargetRequired ? fileActionTargetPath.trim() : undefined,
-    };
-    let completed: boolean | void;
-    try {
-      completed = await onFileOperation(input);
-    } catch (error) {
-      if (!isMounted()) {
-        return;
-      }
-      setFileActionNotice(error instanceof Error ? `File action failed: ${error.message}` : "File action failed.");
-      return;
-    }
-    if (!isMounted()) {
-      return;
-    }
-    if (completed === false) {
-      setFileActionNotice("File action failed.");
-      return;
-    }
-    const actionLabel = WORKBENCH_FILE_ACTIONS.find((item) => item.operation === fileActionOperation)?.label;
-    setFileActionNotice(`${actionLabel} done.`);
-    if (fileActionOperation !== "delete") {
-      setFileActionPath(fileActionTargetRequired ? fileActionTargetPath.trim() : fileActionPath.trim());
-    }
-    if (fileActionTargetRequired) {
-      setFileActionTargetPath("");
-    }
-  };
-
   const runValidationCommandLine = (commandLine: string) => {
     if (!onRunValidationCommand || validationBlockedReason || busy) {
       return;
@@ -1859,75 +1783,12 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             <p className="mc-next-workbench-empty">No worktree is active yet. Create one to unlock the repo view.</p>
           ) : workbenchTree ? (
             <>
-              <div className="mc-next-code-source-form" aria-label="File tree actions">
-                <label className="mc-next-code-source-field">
-                  <span>Action</span>
-                  <select
-                    value={fileActionOperation}
-                    onChange={(event) => {
-                      setFileActionOperation(event.target.value as ChatSessionWorkbenchFileOperationKind);
-                      setFileActionNotice(null);
-                    }}
-                  >
-                    {WORKBENCH_FILE_ACTIONS.map((item) => (
-                      <option key={item.operation} value={item.operation}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="mc-next-code-source-field">
-                  <span>Path</span>
-                  <input
-                    value={fileActionPath}
-                    placeholder={workbenchFileActionPathPlaceholder(fileActionOperation)}
-                    onChange={(event) => {
-                      setFileActionPath(event.target.value);
-                      setFileActionNotice(null);
-                    }}
-                  />
-                </label>
-                {fileActionTargetRequired ? (
-                  <label className="mc-next-code-source-field">
-                    <span>Target</span>
-                    <input
-                      value={fileActionTargetPath}
-                      placeholder="src/new-name.ts"
-                      onChange={(event) => {
-                        setFileActionTargetPath(event.target.value);
-                        setFileActionNotice(null);
-                      }}
-                    />
-                  </label>
-                ) : null}
-                <div className="mc-next-code-source-actions">
-                  <button
-                    type="button"
-                    className="mc-next-panel-button"
-                    disabled={!selectedFile}
-                    onClick={() => {
-                      if (selectedFile?.path) {
-                        setFileActionPath(selectedFile.path);
-                        setFileActionNotice(null);
-                      }
-                    }}
-                  >
-                    Use selected
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-panel-button primary"
-                    disabled={busy || Boolean(fileActionBlockedReason)}
-                    title={fileActionBlockedReason ?? undefined}
-                    onClick={() => {
-                      void runFileAction();
-                    }}
-                  >
-                    Run action
-                  </button>
-                </div>
-                {fileActionNotice ? <p className="mc-next-workbench-empty">{fileActionNotice}</p> : null}
-              </div>
+              <WorkbenchFileActionForm
+                busy={busy}
+                repoBlockedReason={worktreeBlockedReason ?? draftConflictReason}
+                selectedFilePath={selectedFile?.path}
+                onFileOperation={stableOnFileOperation}
+              />
               {workbenchTree.items.length ? (
                 <WorkbenchFileTree
                   storageScopeKey={workbenchState?.sessionId ?? "workbench"}
