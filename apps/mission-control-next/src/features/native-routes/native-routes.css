@@ -28,7 +28,7 @@
   align-items: center;
   gap: 0.45rem;
   padding: 0.42rem 0.5rem;
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
 }
 
 .mc-next-shell[data-area="settings"] .mc-next-rail-link strong,
@@ -103,7 +103,7 @@
   justify-content: center;
   width: 2.75rem;
   height: 2.75rem;
-  border-radius: 0.95rem;
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--mc-area-color) 16%, var(--card));
   color: var(--accent-strong);
 }
@@ -130,7 +130,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -142,7 +142,7 @@
   display: inline-block;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--mc-area-color);
   box-shadow: 0 0 10px color-mix(in oklab, var(--mc-area-color) 60%, transparent);
   flex: 0 0 auto;
@@ -161,7 +161,7 @@
 }
 
 .mc-next-directory-copy span {
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   line-height: 1.45;
   max-width: 64ch;
 }
@@ -172,7 +172,7 @@
   gap: 0.4rem;
   padding: 0.45rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--card));
   color: var(--foreground);
 }
@@ -202,7 +202,7 @@
 }
 
 .mc-next-directory-head-metric-label {
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   line-height: 1.22;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -244,7 +244,7 @@
   align-items: center;
   gap: 0.4rem;
   padding: 0.4rem 0.65rem;
-  border-radius: var(--r-xs, 0.32rem);
+  border-radius: var(--r-xs);
   border: 1px solid var(--gc-area-chat);
   background: color-mix(in oklab, var(--gc-area-chat) 14%, var(--mc-surface-1));
   color: var(--foreground);
@@ -342,17 +342,17 @@
 
 .mc-next-memory-shell .mc-next-settings-field span {
   letter-spacing: 0.08em;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
 }
 
 .mc-next-memory-shell .mc-next-settings-input,
 .mc-next-memory-shell .mc-next-settings-textarea {
-  border-radius: var(--r-sm, 0.5rem);
-  font-size: var(--text-sm, 0.8125rem);
+  border-radius: var(--r-sm);
+  font-size: var(--text-sm);
 }
 
 .mc-next-memory-shell .mc-next-settings-code-block {
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
 }
 
@@ -361,7 +361,7 @@
   gap: 0.48rem;
   margin-top: 0.55rem;
   padding: 0.58rem;
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 24%, var(--border));
   background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--mc-surface-1));
 }
@@ -392,11 +392,11 @@
 
 .mc-next-memory-shell .mc-next-runtime-metric {
   padding: 0.42rem 0.5rem;
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
 }
 
 .mc-next-memory-shell .mc-next-runtime-metric strong {
-  font-size: 1.05rem;
+  font-size: var(--text-xl);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
@@ -408,7 +408,7 @@
 }
 
 .mc-next-approvals-explainer-error strong {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -447,7 +447,7 @@
   align-self: start;
   padding: 0.62rem 0.68rem;
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
   box-shadow: none;
 }
@@ -496,7 +496,7 @@
 }
 
 .mc-next-directory-card-head h2 {
-  font-size: 0.76rem;
+  font-size: var(--text-sm);
   line-height: 1.16;
 }
 
@@ -517,12 +517,12 @@
   min-width: 0;
   padding: 0.4rem 0.45rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-directory-stats strong {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -553,7 +553,7 @@
   min-width: 0;
   padding: 0.5rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
 }
 
@@ -617,7 +617,7 @@
   align-items: start;
   padding: 0.85rem 0.95rem;
   border: 1px solid var(--border);
-  border-radius: var(--r-md, 0.9rem);
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--mc-surface-1) 96%, transparent);
 }
 
@@ -626,7 +626,7 @@
   gap: 0.45rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
-  border-radius: 0.55rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
 }
 
@@ -658,7 +658,7 @@
   margin: 0.55rem 0 0;
   padding: 0.55rem 0.65rem;
   border: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
-  border-radius: 0.55rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
 }
 
@@ -668,7 +668,7 @@
   gap: 0.65rem;
   align-items: baseline;
   padding: 0.28rem 0.35rem;
-  border-radius: 0.35rem;
+  border-radius: var(--r-xs);
   background: color-mix(in oklab, var(--mc-surface-1) 78%, transparent);
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
 }
@@ -685,7 +685,7 @@
 .mc-next-approvals-decision-context-row dd {
   margin: 0;
   min-width: 0;
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   line-height: 1.35;
   color: var(--foreground);
   overflow-wrap: anywhere;
@@ -698,12 +698,12 @@
 
 .mc-next-approvals-decision-context-mono {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-approvals-decision-context-aside {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-approvals-decision-context-empty {
@@ -738,7 +738,7 @@
 .mc-next-approvals-view-button {
   padding: 0.28rem 0.48rem;
   font-size: 0.66rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font: inherit;
   line-height: 1.18;
   white-space: normal;
@@ -783,7 +783,7 @@
   min-height: 4.1rem;
   height: auto;
   padding: 0.52rem;
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   text-align: left;
   line-height: 1.3;
   white-space: normal;
@@ -880,7 +880,7 @@
 
 .mc-next-approvals-copy h3 {
   margin: 0;
-  font-size: 0.84rem;
+  font-size: var(--text-sm);
   line-height: 1.3;
 }
 
@@ -893,7 +893,7 @@
   min-height: 1.55rem;
   padding: 0.24rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   font-size: 0.66rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -921,7 +921,7 @@
 .mc-next-approvals-summary {
   padding: 0.52rem 0.58rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--border));
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-area-color) 8%, var(--card));
 }
 
@@ -944,14 +944,14 @@
   padding-inline-end: calc(0.55rem + var(--mc-scrollbar-safe-gutter));
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   font-size: 0.66rem;
   background: color-mix(in oklab, var(--background) 84%, var(--mc-surface-1));
 }
 
 .mc-next-approvals-support-grid > .mc-next-directory-card.mc-next-directory-card-compact {
   position: relative;
-  border-radius: 0.55rem;
+  border-radius: var(--r-sm);
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 4%, transparent), transparent 60%),
     color-mix(in oklab, var(--mc-surface-1) 96%, transparent);
@@ -961,7 +961,7 @@
   > .mc-next-directory-card.mc-next-directory-card-compact
   .mc-next-directory-card-head
   h2 {
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   letter-spacing: -0.01em;
 }
 
@@ -975,7 +975,7 @@
 }
 
 .mc-next-approvals-compact-list li {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 
@@ -993,7 +993,7 @@
   max-width: 100%;
   padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -1024,7 +1024,7 @@
 .mc-next-runtime-notice {
   padding: 0.5rem 0.56rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
@@ -1064,7 +1064,7 @@
   min-width: 0;
   padding: 0.54rem 0.58rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   text-align: left;
@@ -1117,7 +1117,7 @@
   min-width: 0;
   padding: 0.46rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -1128,7 +1128,7 @@
 }
 
 .mc-next-runtime-metric strong {
-  font-size: 0.76rem;
+  font-size: var(--text-sm);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -1143,7 +1143,7 @@
   gap: 0.5rem;
   padding: 0.58rem;
   border: 1px solid color-mix(in oklab, var(--warning) 34%, var(--border));
-  border-radius: 0.55rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--warning) 8%, var(--mc-surface-1));
 }
 
@@ -1162,7 +1162,7 @@
 }
 
 .mc-next-runtime-handoff-heading strong {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   line-height: 1.2;
 }
 
@@ -1186,12 +1186,12 @@
   min-width: 0;
   padding: 0.45rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 82%, transparent);
 }
 
 .mc-next-runtime-handoff-grid strong {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
@@ -1206,7 +1206,7 @@
   max-width: 100%;
   padding: 0.34rem 0.4rem;
   border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
-  border-radius: 0.36rem;
+  border-radius: var(--r-xs);
   background: color-mix(in oklab, var(--background) 78%, transparent);
   color: var(--foreground);
   font-size: 0.67rem;
@@ -1245,7 +1245,7 @@
   min-height: 6.1rem;
   padding: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -1273,7 +1273,7 @@
 .mc-next-release-proof-card strong {
   min-width: 0;
   color: var(--foreground);
-  font-size: 0.76rem;
+  font-size: var(--text-sm);
   line-height: 1.18;
   overflow-wrap: anywhere;
 }
@@ -1336,7 +1336,7 @@
   min-height: 5.4rem;
   padding: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 5%, transparent), transparent 68%),
     color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
@@ -1370,7 +1370,7 @@
   width: 1.28rem;
   height: 1.28rem;
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--foreground);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
   font-size: 0.62rem;
@@ -1381,7 +1381,7 @@
 .mc-next-cowork-checkpoint-card strong {
   display: block;
   min-width: 0;
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   line-height: 1.18;
   overflow-wrap: anywhere;
 }
@@ -1419,14 +1419,14 @@
   min-height: 4.35rem;
   padding: 0.44rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-cowork-execution-truth {
   padding: 0.44rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--cowork-execution-accent) 22%, var(--border));
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--cowork-execution-accent) 7%, transparent);
 }
 
@@ -1485,7 +1485,7 @@
   min-height: 0;
   padding: 0.55rem 0.55rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 14%, var(--border));
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 4%, transparent), transparent 60%),
     color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
@@ -1500,7 +1500,7 @@
   height: 1px;
   background: linear-gradient(90deg, var(--mc-area-color), transparent 70%);
   opacity: 0.5;
-  border-radius: var(--r-sm, 0.5rem) var(--r-sm, 0.5rem) 0 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
   pointer-events: none;
 }
 
@@ -1509,7 +1509,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -1532,7 +1532,7 @@
   min-width: 0;
   padding: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--card) 94%, transparent);
   text-align: left;
   white-space: normal;
@@ -1543,7 +1543,7 @@
   display: block;
   min-width: 0;
   max-width: 100%;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.35;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -1578,7 +1578,7 @@
 
 .mc-next-project-counts span {
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--text-secondary);
   font-size: 0.58rem;
   padding: 0.12rem 0.32rem;
@@ -1595,14 +1595,14 @@
   gap: 0.55rem;
   margin-top: 0.65rem;
   padding: 0.65rem;
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-project-empty-guide strong {
   color: var(--foreground);
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   line-height: 1.2;
 }
 
@@ -1630,7 +1630,7 @@
   gap: 0.18rem;
   padding: 0.58rem 0.64rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background:
     linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 10%, transparent), transparent 62%),
     color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
@@ -1655,7 +1655,7 @@
 
 .mc-next-project-home-head strong {
   color: var(--foreground);
-  font-size: 1rem;
+  font-size: var(--text-lg);
   line-height: 1.2;
 }
 
@@ -1687,7 +1687,7 @@
 .mc-next-project-intake-head strong,
 .mc-next-project-intake-head span {
   color: color-mix(in oklab, var(--mc-area-color) 62%, var(--text-muted));
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1713,7 +1713,7 @@
   min-height: 6.8rem;
   padding: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: inherit;
   text-align: left;
@@ -1758,7 +1758,7 @@
 .mc-next-project-intake-card strong {
   min-width: 0;
   color: var(--foreground);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.2;
 }
 
@@ -1793,7 +1793,7 @@
   min-height: 4.6rem;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: inherit;
   text-align: left;
@@ -1829,7 +1829,7 @@
 
 .mc-next-project-lane-resume strong {
   color: var(--foreground);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.25;
 }
 
@@ -1853,7 +1853,7 @@
   align-items: start;
   padding: 0.46rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--card) 94%, transparent);
 }
 
@@ -1870,7 +1870,7 @@
 .mc-next-project-recent-item strong,
 .mc-next-project-control-heading strong {
   color: var(--foreground);
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   line-height: 1.3;
 }
 
@@ -1880,7 +1880,7 @@
   min-width: 0;
   padding: 0.44rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -1895,7 +1895,7 @@
 .mc-next-project-control-section {
   padding: 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -1936,7 +1936,7 @@
   justify-content: center;
   width: 1.6rem;
   height: 1.6rem;
-  border-radius: 0.36rem;
+  border-radius: var(--r-xs);
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
@@ -2034,7 +2034,7 @@
   padding: 0.5rem 0.62rem;
   padding-inline-end: calc(0.62rem + var(--mc-scrollbar-safe-gutter));
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   font: 400 13px/1.4 var(--mc-font-sans);
@@ -2084,7 +2084,7 @@
   min-height: 1.9rem;
   padding: 0.42rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
 }
@@ -2110,7 +2110,7 @@
   min-height: 1.55rem;
   padding: 0.22rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.42rem;
+  border-radius: var(--r-sm);
   font-size: 0.66rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -2145,12 +2145,12 @@
   gap: 0.16rem;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-settings-metric strong {
-  font-size: 1.05rem;
+  font-size: var(--text-xl);
   line-height: 1.25;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -2180,7 +2180,7 @@
   align-items: start;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2200,7 +2200,7 @@
   justify-content: center;
   width: 1.25rem;
   height: 1.25rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
   color: var(--foreground);
@@ -2219,7 +2219,7 @@
 
 .mc-next-settings-wizard-step strong {
   display: block;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.35;
 }
 
@@ -2235,7 +2235,7 @@
   gap: 0.24rem;
   padding: 0.58rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background:
     linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 14%, transparent), transparent 62%),
     color-mix(in oklab, var(--card) 94%, transparent);
@@ -2292,7 +2292,7 @@
   min-height: 7.2rem;
   padding: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2329,7 +2329,7 @@
 .mc-next-library-action-card strong {
   min-width: 0;
   color: var(--foreground);
-  font-size: 0.76rem;
+  font-size: var(--text-sm);
   line-height: 1.18;
   overflow-wrap: anywhere;
 }
@@ -2357,7 +2357,7 @@
   height: auto;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: inherit;
   text-align: left;
@@ -2444,7 +2444,7 @@
   display: block;
   overflow: hidden;
   min-width: 0;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2473,7 +2473,7 @@
   min-width: 0;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2494,7 +2494,7 @@
   max-width: 100%;
   min-height: 1.35rem;
   padding: 0.16rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--text-secondary);
@@ -2509,7 +2509,7 @@
   overflow: auto;
   max-width: 100%;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: var(--r-sm, 0.5rem);
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   scrollbar-gutter: stable;
 }
@@ -2584,7 +2584,7 @@
   min-height: 1.35rem;
   padding: 0.16rem 0.42rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
   font-size: 0.62rem;
@@ -2622,7 +2622,7 @@
   min-height: 1.35rem;
   padding: 0.14rem 0.42rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
   color: var(--text-secondary);
   font-size: 0.62rem;
@@ -2642,7 +2642,7 @@
   min-width: 0;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2659,7 +2659,7 @@
 
 .mc-next-provenance-coverage-item strong {
   color: var(--foreground);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.25;
 }
 
@@ -2702,7 +2702,7 @@
   min-width: 0;
   padding: 0.34rem 0.38rem;
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
-  border-radius: 0.4rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
 }
 
@@ -2742,7 +2742,7 @@
 
 .mc-next-memory-provenance-list > div {
   display: block;
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 
@@ -2767,7 +2767,7 @@
   gap: 0.3rem;
   padding: 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2786,7 +2786,7 @@
 .mc-next-settings-notice {
   padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -2825,7 +2825,7 @@
   gap: 0.5rem;
   padding: 0.7rem 0.8rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.6rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -2838,7 +2838,7 @@
 
 .mc-next-settings-posture-card-head h3 {
   margin: 0;
-  font-size: 0.84rem;
+  font-size: var(--text-sm);
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -2869,7 +2869,7 @@
 
 .mc-next-settings-posture-card-row-name {
   min-width: 0;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   color: var(--foreground);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -2878,7 +2878,7 @@
 .mc-next-settings-posture-card-empty {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-activity-feed {
@@ -2901,7 +2901,7 @@
   min-width: 0;
   padding: 0.42rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
 }
 
@@ -2938,7 +2938,7 @@
   min-width: 0;
   padding: 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
 }
 
@@ -2992,7 +2992,7 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 0.55rem;
   padding: 0.72rem 0.8rem;
-  border-radius: 1rem;
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   box-shadow: none;
   backdrop-filter: none;
@@ -3009,13 +3009,13 @@
 .mc-next-shell[data-area="library"] .tune-posture-value,
 .mc-next-shell[data-area="ops"] .tune-posture-value,
 .mc-next-shell[data-area="settings"] .tune-posture-value {
-  font-size: 0.92rem;
+  font-size: var(--text-md);
 }
 
 .mc-next-shell[data-area="library"] .tune-posture-note,
 .mc-next-shell[data-area="ops"] .tune-posture-note,
 .mc-next-shell[data-area="settings"] .tune-posture-note {
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-shell[data-area="library"] .operator-summary-strip,
@@ -3030,7 +3030,7 @@
 .mc-next-shell[data-area="settings"] .operator-summary-card {
   min-width: 0;
   padding: 0.8rem 0.9rem;
-  border-radius: 1rem;
+  border-radius: var(--r-md);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   box-shadow: none;
 }
@@ -3126,7 +3126,7 @@
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   border: 1px solid var(--mc-border-subtle);
   border-left: 0.1875rem solid var(--mc-border-strong);
-  border-radius: 0.375rem;
+  border-radius: var(--r-xs);
   padding: 0.625rem 0.75rem;
 }
 .mc-next-approvals-shell-card-risk-danger {
@@ -3147,7 +3147,7 @@
 }
 .mc-next-approvals-shell-summary {
   flex: 1;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.4;
 }
 .mc-next-approvals-shell-chip {
@@ -3171,7 +3171,7 @@
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 0.125rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 .mc-next-approvals-shell-details dt {
   color: var(--muted-foreground);
@@ -3208,8 +3208,8 @@
 
 .mc-next-kanban-toolbar button {
   padding: 0.4rem 0.8rem;
-  border-radius: 0.375rem;
-  font-size: 0.85rem;
+  border-radius: var(--r-xs);
+  font-size: var(--text-md);
 }
 
 .mc-next-kanban-toolbar button:disabled {
@@ -3228,7 +3228,7 @@
 .mc-next-kanban-column {
   min-width: 0;
   background: var(--mc-surface-1, #f5f5f5);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.75rem;
   min-height: 6rem;
 }
@@ -3241,14 +3241,14 @@
 }
 
 .mc-next-kanban-column header h3 {
-  font-size: 0.85rem;
+  font-size: var(--text-md);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
 }
 
 .mc-next-kanban-column header .count {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   opacity: 0.7;
 }
 
@@ -3264,10 +3264,10 @@
 .mc-next-kanban-card {
   background: var(--mc-surface-2, #ffffff);
   border: 1px solid var(--border, #e5e5e5);
-  border-radius: 0.375rem;
+  border-radius: var(--r-xs);
   padding: 0.5rem 0.75rem;
   color: var(--foreground);
-  font-size: 0.85rem;
+  font-size: var(--text-md);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -3312,17 +3312,17 @@
   width: fit-content;
   align-items: center;
   gap: 0.25rem;
-  border-radius: 0.375rem;
+  border-radius: var(--r-xs);
   background: var(--mc-surface-muted, rgb(148 163 184 / 0.12));
   padding: 0.16rem 0.42rem;
   color: var(--foreground);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 
 .mc-next-kanban-card small {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   opacity: 0.7;
 }
 
@@ -3330,7 +3330,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
 }
 
@@ -3346,7 +3346,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-kanban-card .run-id {
@@ -3358,10 +3358,10 @@
 
 .mc-next-kanban-empty {
   border: 1px dashed var(--mc-border-subtle);
-  border-radius: 0.375rem;
+  border-radius: var(--r-xs);
   padding: 0.65rem;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
@@ -3433,7 +3433,7 @@
 
 .mc-next-runtime-spend-chart-axis-label {
   font-family: var(--mc-font-mono);
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   fill: var(--text-muted);
 }
 
@@ -3466,7 +3466,7 @@
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
   background: color-mix(in oklab, var(--gc-risk-caution) 14%, var(--card));
   color: color-mix(in oklab, var(--gc-risk-caution) 78%, var(--foreground));
-  border-radius: 0.36rem;
+  border-radius: var(--r-xs);
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 0.66rem;
@@ -3480,7 +3480,7 @@
   min-height: 9rem;
   padding: 1rem;
   border: 1px dashed color-mix(in oklab, var(--border) 90%, transparent);
-  border-radius: 0.6rem;
+  border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
 }
 
@@ -3492,7 +3492,7 @@
 }
 
 .mc-next-runtime-spend-chart-empty strong {
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   color: var(--text-primary);
 }
 
@@ -3532,7 +3532,7 @@
 .mc-next-shell .artifacts-generated-card,
 .mc-next-shell .chat-trace-card,
 .mc-next-shell .chat-preset-picker-card {
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
   box-shadow: none;
@@ -3552,10 +3552,117 @@
   line-height: 1.35;
 }
 
-/* Chat trace internals (packages/mission-control-shared/components/chat/):
-   ChatExecutionPlanSummary and ChatToolArtifactInspector render inside the
-   .chat-trace-card bridge above; these defaults keep them presentable wherever
-   that card mounts. */
+/* Chat trace internals (packages/mission-control-shared/components/):
+   ChatTraceCard mounts on the threaded context drawer's Trace tab and carries
+   ChatExecutionPlanSummary and ChatToolArtifactInspector inside the
+   .chat-trace-card bridge above. */
+
+.mc-next-shell .chat-trace-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.62rem;
+}
+
+.mc-next-shell .chat-trace-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-shell .chat-trace-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.mc-next-shell .chat-trace-meta {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-trace-body {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mc-next-shell .chat-trace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.3rem 0.6rem;
+  font-size: var(--text-xs);
+  color: var(--fg-secondary);
+}
+
+.mc-next-shell .chat-trace-section {
+  display: grid;
+  gap: 0.3rem;
+  font-size: var(--text-xs);
+  color: var(--fg-secondary);
+}
+
+.mc-next-shell .chat-trace-section > strong {
+  color: var(--fg-primary);
+  letter-spacing: 0.01em;
+}
+
+.mc-next-shell .chat-trace-section p {
+  margin: 0;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-citation-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-shell .chat-citation-list li {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-xs);
+  background: var(--bg-surface-2);
+  font-size: var(--text-xs);
+}
+
+.mc-next-shell .chat-citation-list li p {
+  margin: 0;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-citation-list a {
+  color: var(--fg-primary);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-tool-artifact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.mc-next-shell .chat-tool-artifact-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem 0.4rem;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-surface-2);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
 
 .mc-next-shell .chat-execution-plan-summary {
   display: grid;
@@ -3729,7 +3836,7 @@
   max-width: 100%;
   min-height: 1.18rem;
   padding: 0.08rem 0.34rem;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
@@ -3743,7 +3850,7 @@
 .mc-next-shell .workflow-status-stack > .error,
 .mc-next-shell .workflow-status-stack > .office-subtitle {
   padding: 0.42rem 0.48rem;
-  border-radius: 0.46rem;
+  border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
@@ -3753,7 +3860,7 @@
 }
 
 .mc-next-shell .status-banner {
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
   color: var(--foreground);
