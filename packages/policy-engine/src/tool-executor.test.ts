@@ -30,7 +30,12 @@ vi.mock("./browser-tools.js", () => ({
   executeBrowserTool: mocked.executeBrowserTool,
 }));
 
-import { executeTool, resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
+import {
+  executeTool,
+  resolveExecutableCommand,
+  resolveFixedOutboundHostsForTool,
+  resolveRestrictedCommand,
+} from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
@@ -149,6 +154,10 @@ describe("executeTool", () => {
     await expect(executeTool(request, policyConfig, storageStub)).rejects.toThrow(
       "Unsupported tool executor: custom.unknown",
     );
+  });
+
+  it("adds the fixed WhatsApp Graph host for reaction tools", () => {
+    expect(resolveFixedOutboundHostsForTool("whatsapp.react")).toContain("graph.facebook.com");
   });
 
   it("blocks tool side effects that contain an active browser canary", async () => {

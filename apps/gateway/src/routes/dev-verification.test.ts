@@ -390,7 +390,7 @@ describe("dev verification routes", () => {
     }));
     const getRunId = vi.fn((approvalId: string) => (approvalId === "approval-orphan" ? "run-orphan" : "run-dead"));
     const markResolved = vi.fn();
-    const updateRun = vi.fn();
+    const updateRun = vi.fn((input: Record<string, unknown>) => input);
     const upsertDeadLetter = vi.fn(() => ({ deadLetterId: "dead-letter-1" }));
 
     app = Fastify();
@@ -450,10 +450,12 @@ describe("dev verification routes", () => {
       orphanRecovery: {
         approvalId: "approval-orphan",
         runId: "run-orphan",
+        status: "running",
       },
       deadLetterRecovery: {
         approvalId: "approval-dead",
         runId: "run-dead",
+        status: "dead_lettered",
         deadLetterId: "dead-letter-1",
       },
     });

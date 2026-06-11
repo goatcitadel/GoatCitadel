@@ -529,7 +529,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       orphanApproval.approvalId,
       orphanApprovalResolved.resolvedAt,
     );
-    fastify.services.devVerification.storage.durableRuns.updateRun({
+    const orphanRun = fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: orphanRunId,
       status: "running",
       startedAt: now,
@@ -570,7 +570,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       deadLetterApproval.approvalId,
       deadLetterApprovalResolved.resolvedAt,
     );
-    fastify.services.devVerification.storage.durableRuns.updateRun({
+    const deadLetterRun = fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: deadLetterRunId,
       status: "dead_lettered",
       startedAt: now,
@@ -592,10 +592,13 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       orphanRecovery: {
         approvalId: orphanApproval.approvalId,
         runId: orphanRunId,
+        status: orphanRun.status,
+        leaseExpiresAt: orphanRun.leaseExpiresAt,
       },
       deadLetterRecovery: {
         approvalId: deadLetterApproval.approvalId,
         runId: deadLetterRunId,
+        status: deadLetterRun.status,
         deadLetterId: deadLetter.deadLetterId,
       },
     });

@@ -85,6 +85,7 @@ const FIXED_OUTBOUND_HOSTS_BY_TOOL = new Map<string, string[]>([
   ["telegram.react", ["api.telegram.org"]],
   ["telegram.send", ["api.telegram.org"]],
   ["telegram.unsend", ["api.telegram.org"]],
+  ["whatsapp.react", ["graph.facebook.com"]],
   ["whatsapp.send", ["graph.facebook.com"]],
   ["zalo.send", ["openapi.zalo.me"]],
 ]);

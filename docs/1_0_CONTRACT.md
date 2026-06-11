@@ -112,6 +112,10 @@ That means:
 
 GoatCitadel may not claim `1.0` until all of these are true:
 
+The gate list below is the runtime/product readiness contract. Release-certificate-only evidence such as
+`verify:a2a:full`, `docs:check`, and `security:trivy` is still required for exact-SHA release certificates and is
+mapped separately through `release-certificate.json` and [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md).
+
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
 - `verify:surface:regression` is green across the current Mission Control Next release-surface manifest; governance/docs checks compare that manifest with the canonical route model and release-scope table so newly promoted routes do not silently fall out of release coverage and non-ship routes remain visibly labeled

@@ -2427,18 +2427,16 @@ export async function runDurableRecoveryLane(context, options = {}) {
         const orphanRunId = seeded.body?.orphanRecovery?.runId;
         const deadLetterRunId = seeded.body?.deadLetterRecovery?.runId;
         const deadLetterId = seeded.body?.deadLetterRecovery?.deadLetterId;
-
-        const orphanBeforeRestart = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/durable/runs/${encodeURIComponent(orphanRunId)}`,
-        );
-        assertOk(orphanBeforeRestart, "read orphan durable run before restart");
-        if (orphanBeforeRestart.body?.status !== "running") {
-          throw new Error(`expected orphan durable run ${orphanRunId} to start as running`);
+        if (seeded.body?.orphanRecovery?.status !== "running") {
+          throw new Error(
+            `expected orphan durable run ${orphanRunId} to seed as running; got ${seeded.body?.orphanRecovery?.status ?? "unknown"}`,
+          );
         }
-
-        const deadLettersBeforeRecovery = await requestJson(stack.gatewayUrl, "/api/v1/durable/dead-letters?limit=20");
-        assertOk(deadLettersBeforeRecovery, "list dead letters before recovery");
+        if (seeded.body?.deadLetterRecovery?.status !== "dead_lettered") {
+          throw new Error(
+            `expected dead-letter durable run ${deadLetterRunId} to seed as dead_lettered; got ${seeded.body?.deadLetterRecovery?.status ?? "unknown"}`,
+          );
+        }
 
         await stopProcess(stack.gateway);
         stack = await startVerificationStack(context, {
@@ -2462,6 +2460,9 @@ export async function runDurableRecoveryLane(context, options = {}) {
         ) {
           throw new Error(`expected orphan durable run ${orphanRunId} timeline to include run_started after restart`);
         }
+
+        const deadLettersBeforeRecovery = await requestJson(stack.gatewayUrl, "/api/v1/durable/dead-letters?limit=20");
+        assertOk(deadLettersBeforeRecovery, "list dead letters before recovery");
 
         const recoveredDeadLetter = await requestJson(
           stack.gatewayUrl,
@@ -2489,7 +2490,7 @@ export async function runDurableRecoveryLane(context, options = {}) {
         const outPath = path.join(context.artifactRoot, "diagnostics", "durable-recovery-stack-proof.json");
         await writeJson(outPath, {
           seeded: seeded.body,
-          orphanBeforeRestart: orphanBeforeRestart.body,
+          orphanSeededBeforeRestart: seeded.body?.orphanRecovery,
           deadLettersBeforeRecovery: deadLettersBeforeRecovery.body,
           orphanAfterRestart: orphanAfterRestart.body,
           orphanTimeline: orphanTimeline.body,
