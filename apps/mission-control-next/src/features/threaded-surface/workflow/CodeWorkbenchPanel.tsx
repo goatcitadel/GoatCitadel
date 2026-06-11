@@ -31,6 +31,7 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "../../native-routes/primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
+import { useModalDialogBehavior } from "../useModalDialogBehavior";
 import { useOptionalStableHandler, useStableHandler } from "../useStableHandler";
 import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
 import { WorkbenchFilePicker } from "./WorkbenchFilePicker";
@@ -787,6 +788,15 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runLogCleared, setRunLogCleared] = useState(false);
   const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const inspectorSheetRef = useRef<HTMLDivElement | null>(null);
+  const closeInspectorDrawer = useCallback(() => {
+    setInspectorDrawerOpen(false);
+  }, []);
+  useModalDialogBehavior({
+    open: inspectorDrawerOpen,
+    onClose: closeInspectorDrawer,
+    containerRef: inspectorSheetRef,
+  });
   const [expandedInspectorSections, setExpandedInspectorSections] = useState(readStoredInspectorSections);
   const isMounted = useIsMounted();
   const stableOnFileOperation = useOptionalStableHandler(onFileOperation);
@@ -2541,6 +2551,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       </div>
       {inspectorDrawerOpen ? (
         <div
+          ref={inspectorSheetRef}
           className="mc-next-code-inspector-sheet"
           role="dialog"
           aria-modal="true"
@@ -2550,12 +2561,12 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             type="button"
             className="mc-next-code-inspector-scrim"
             aria-label="Close inspector"
-            onClick={() => setInspectorDrawerOpen(false)}
+            onClick={closeInspectorDrawer}
           />
           <div className="mc-next-code-inspector-sheet-body">
             <CodeSessionInspector
               expandedSections={expandedInspectorSections}
-              onClose={() => setInspectorDrawerOpen(false)}
+              onClose={closeInspectorDrawer}
               onToggleSection={handleToggleInspectorSection}
               sections={inspectorSections}
               variant="drawer"
