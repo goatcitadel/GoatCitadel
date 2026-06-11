@@ -418,7 +418,11 @@ export function MissionControlNextApp() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setRoute(resolveRouteFromLocation(window.location.href));
+      // Match `navigate`: keep the current surface mounted while a lazy route
+      // chunk loads instead of flashing the Suspense fallback on browser back.
+      startTransition(() => {
+        setRoute(resolveRouteFromLocation(window.location.href));
+      });
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
@@ -817,18 +821,18 @@ export function MissionControlNextApp() {
             <StatusPill
               icon={<Workflow size={15} />}
               label="Approvals"
-              value={`${pendingApprovals} pending`}
+              value={status.dashboard ? `${pendingApprovals} pending` : "—"}
               onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme ?? theme })}
             />
             <StatusPill
               icon={<BookOpenText size={15} />}
               label="Sessions"
-              value={`${status.dashboard?.sessions.length ?? 0} visible`}
+              value={status.dashboard ? `${status.dashboard.sessions.length} visible` : "—"}
             />
             <StatusPill
               icon={<Wrench size={15} />}
               label="Spend"
-              value={formatUsd(status.dashboard?.dailyCostUsd ?? 0)}
+              value={status.dashboard ? formatUsd(status.dashboard.dailyCostUsd ?? 0) : "—"}
             />
             <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} />
           </footer>

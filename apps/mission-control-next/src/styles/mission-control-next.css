@@ -1376,6 +1376,33 @@
   color: var(--text-muted);
 }
 
+.notification-count {
+  padding: 0.05rem 0.38rem;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--fg-muted) 12%, transparent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.notification-item.info .notification-tone {
+  color: color-mix(in oklab, var(--area-chat) 70%, var(--fg-secondary));
+}
+
+.notification-item.success .notification-tone {
+  color: color-mix(in oklab, var(--success) 70%, var(--fg-secondary));
+}
+
+.notification-item.warning .notification-tone {
+  color: color-mix(in oklab, var(--warning) 70%, var(--fg-secondary));
+}
+
+.notification-item.error .notification-tone {
+  color: color-mix(in oklab, var(--danger) 70%, var(--fg-secondary));
+}
+
 .notification-copy > p:last-of-type {
   color: var(--text-secondary);
   font-size: var(--text-sm);
