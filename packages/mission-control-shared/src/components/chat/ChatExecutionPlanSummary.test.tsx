@@ -100,9 +100,11 @@ describe("ChatExecutionPlanSummary", () => {
     expect(text).toContain("Depends on: done");
     expect(text).toContain("Delegated role: QA");
     expect(text).toContain("Error: Reviewer failed");
-    expect(text).toContain(
-      "Lineage: durable durable-1 | child session session-child | child turn turn-child | deprecated childRunId legacy-child",
-    );
+    expect(text).toContain("Runs as a durable background task · delegated to a child session");
+    expect(text).not.toContain("durable-1");
+    expect(text).not.toContain("session-child");
+    expect(text).not.toContain("legacy-child");
+    expect(text).not.toContain("deprecated");
   });
 
   it("renders code checklist density and status labels without expanded-only copy", () => {

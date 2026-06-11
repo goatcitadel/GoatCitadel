@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { MessageSquareText, RotateCcw, SendHorizontal, X } from "lucide-react";
-import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import type { ChatStreamingPreview, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 
@@ -101,7 +101,7 @@ export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSi
       return;
     }
     list.scrollTop = list.scrollHeight;
-  }, [sideChat?.open, sideChat?.sending, turns.length]);
+  }, [sideChat?.open, sideChat?.sending, sideChat?.streamingPreview?.visibleText.length, turns.length]);
 
   useEffect(() => {
     if (!sideChat?.open) {
@@ -267,7 +267,11 @@ export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSi
         {sideChat.loading && turns.length === 0 ? <p className="mc-next-btw-side-chat-status">Opening...</p> : null}
         {!sideChat.loading && turns.length === 0 ? <p className="mc-next-btw-side-chat-empty">No aside yet.</p> : null}
         {turns.map((turn) => (
-          <BtwSideChatTurn key={turn.turnId} turn={turn} />
+          <BtwSideChatTurn
+            key={turn.turnId}
+            turn={turn}
+            streamingPreview={sideChat.streamingPreview?.turnId === turn.turnId ? sideChat.streamingPreview : null}
+          />
         ))}
         {sideChat.sending ? <p className="mc-next-btw-side-chat-status thinking">Thinking...</p> : null}
         {sideChat.error ? (
@@ -299,8 +303,15 @@ export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSi
   );
 }
 
-function BtwSideChatTurn({ turn }: { turn: ChatThreadTurnRecord }) {
-  const assistantContent = turn.assistantMessage?.content?.trim();
+function BtwSideChatTurn({
+  turn,
+  streamingPreview,
+}: {
+  turn: ChatThreadTurnRecord;
+  streamingPreview: ChatStreamingPreview | null;
+}) {
+  const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  const assistantContent = (isStreamingTurn ? streamingPreview?.visibleText : turn.assistantMessage?.content)?.trim();
 
   return (
     <article className="mc-next-btw-side-chat-turn">

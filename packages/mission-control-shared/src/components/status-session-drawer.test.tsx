@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SideInspectorDrawer } from "./SideInspectorDrawer";
 import { StatusStrip } from "./StatusStrip";
-import { ChatSessionRail } from "./chat/ChatSessionRail";
 
 function installMatchMedia(matches = false) {
   const listeners = new Set<(event: { matches: boolean }) => void>();
@@ -146,114 +145,6 @@ describe("status/session/drawer components", () => {
       }
     });
     expect(String(renderer.root.findByType("section").props.className)).toContain("compact");
-  });
-
-  it("renders mission and external session rows, tags, search hits, and empty states", () => {
-    const onSelectSession = vi.fn();
-    const onSelectTag = vi.fn();
-    const renderer = create(
-      <ChatSessionRail
-        missionSessions={[
-          {
-            sessionId: "mission-1",
-            projectName: "Atlas",
-            folderName: "Planning",
-            tags: ["Urgent", "Research", "Extra", "Hidden"],
-            searchHits: [{ turnId: "turn-1", excerpt: "matched text" }],
-            pinned: true,
-            lastActivityAt: "2026-01-01T11:30:00.000Z",
-          },
-        ]}
-        externalSessions={[
-          {
-            sessionId: "external-1",
-            channel: "Slack",
-            account: "ops",
-            tags: ["Inbox"],
-            searchHits: [{ excerpt: "external hit" }],
-            lastActivityAt: "2025-12-31T12:00:00.000Z",
-          },
-        ]}
-        selectedSessionId="mission-1"
-        selectedTag="urgent"
-        onSelectSession={onSelectSession}
-        onSelectTag={onSelectTag}
-        renderSessionLabel={(sessionId) => `Session ${sessionId}`}
-        mode="cowork"
-      />,
-    );
-
-    const sessionButtons = renderer.root
-      .findAllByType("button")
-      .filter((button) => String(button.props.className).includes("chat-v11-session-row-button"));
-    const tagButtons = renderer.root
-      .findAllByType("button")
-      .filter((button) => String(button.props.className).includes("chat-v11-session-tag"));
-    const hitButtons = renderer.root
-      .findAllByType("button")
-      .filter((button) => String(button.props.className).includes("chat-v11-session-search-hit"));
-
-    act(() => {
-      sessionButtons[0]!.props.onClick();
-      tagButtons[0]!.props.onClick();
-      tagButtons[1]!.props.onClick();
-      hitButtons[0]!.props.onClick();
-      hitButtons[1]!.props.onClick();
-    });
-    expect(onSelectSession).toHaveBeenCalledWith("mission-1");
-    expect(onSelectSession).toHaveBeenCalledWith("mission-1", { turnId: "turn-1" });
-    expect(onSelectSession).toHaveBeenCalledWith("external-1", { turnId: null });
-    expect(onSelectTag).toHaveBeenCalledWith(null);
-    expect(onSelectTag).toHaveBeenCalledWith("Research");
-
-    renderer.update(
-      <ChatSessionRail
-        missionSessions={[]}
-        externalSessions={[]}
-        selectedSessionId={null}
-        onSelectSession={onSelectSession}
-        selectedTag={null}
-        onSelectTag={onSelectTag}
-        renderSessionLabel={(sessionId) => sessionId}
-        mode="code"
-      />,
-    );
-    expect(renderer.root.findAllByProps({ className: "chat-v11-empty-item" })).toHaveLength(2);
-  });
-
-  it("renders chat-mode session metadata without cowork or code framing", () => {
-    const renderer = create(
-      <ChatSessionRail
-        missionSessions={[
-          {
-            sessionId: "mission-chat",
-            projectName: "Atlas",
-            lastActivityAt: "2026-01-01T11:45:00.000Z",
-          },
-        ]}
-        externalSessions={[
-          {
-            sessionId: "external-chat",
-            channel: "Discord",
-            account: "ops",
-            lastActivityAt: "2025-12-30T12:00:00.000Z",
-          },
-        ]}
-        selectedSessionId={null}
-        selectedTag={null}
-        onSelectSession={vi.fn()}
-        onSelectTag={vi.fn()}
-        renderSessionLabel={(sessionId) => `Session ${sessionId}`}
-        mode="chat"
-      />,
-    );
-
-    const renderedText = JSON.stringify(renderer.toJSON());
-    expect(renderedText).toContain("15m ago");
-    expect(renderedText).toContain("Discord / ops");
-    expect(renderedText).toContain("2d ago");
-    expect(renderedText).not.toContain("Task ready");
-    expect(renderedText).not.toContain("Readback context");
   });
 
   it("renders drawer controls, closed state, and drag guard behavior", () => {

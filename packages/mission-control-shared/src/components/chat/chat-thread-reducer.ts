@@ -76,6 +76,8 @@ export function updateThreadFromStreamChunk(
         webMode: prefs?.webMode ?? "auto",
         memoryMode: prefs?.memoryMode ?? "auto",
         thinkingLevel: prefs?.thinkingLevel ?? "standard",
+        speedMode: prefs?.speedMode ?? "standard",
+        subagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
         effectiveToolAutonomy: prefs?.planningMode === "advisory" ? "manual" : prefs?.toolAutonomy,
         startedAt,
         toolRuns: [],
@@ -132,10 +134,11 @@ export function updateThreadFromStreamChunk(
   const turns = current.turns.slice();
   turns[turnIndex] = nextTurn;
 
+  // message_start owns moving selection and the active leaf to a new turn. In-place
+  // turn updates must not re-point them: a late chunk for an older turn would
+  // otherwise drag the active leaf (and the next send's parent turn) back to it.
   return {
     ...current,
-    activeLeafTurnId: chunk.turnId,
-    selectedTurnId: chunk.turnId,
     turns,
   };
 }
@@ -270,18 +273,36 @@ function applyTraceUpdate(turn: ChatThreadTurnRecord, trace: ChatThreadTurnRecor
     citations: dedupeCitations(trace.citations ?? turn.trace.citations),
     routing: trace.routing ?? turn.trace.routing,
   };
+  const nextAssistantMessage = (() => {
+    if (!turn.assistantMessage) {
+      return turn.assistantMessage;
+    }
+    const nextMessageId = mergedTrace.assistantMessageId ?? turn.assistantMessage.messageId;
+    if (nextMessageId === turn.assistantMessage.messageId) {
+      return turn.assistantMessage;
+    }
+    return { ...turn.assistantMessage, messageId: nextMessageId };
+  })();
+  if (nextAssistantMessage === turn.assistantMessage && isShallowEqualRecord(mergedTrace, turn.trace)) {
+    return turn;
+  }
   return {
     ...turn,
     trace: mergedTrace,
     toolRuns: mergedTrace.toolRuns,
     citations: mergedTrace.citations,
-    assistantMessage: turn.assistantMessage
-      ? {
-          ...turn.assistantMessage,
-          messageId: mergedTrace.assistantMessageId ?? turn.assistantMessage.messageId,
-        }
-      : turn.assistantMessage,
+    assistantMessage: nextAssistantMessage,
   };
+}
+
+function isShallowEqualRecord(next: object, prev: object): boolean {
+  const keys = new Set([...Object.keys(next), ...Object.keys(prev)]);
+  for (const key of keys) {
+    if (!Object.is((next as Record<string, unknown>)[key], (prev as Record<string, unknown>)[key])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function appendOrReplaceToolRun(
@@ -328,5 +349,7 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       provenance: existing.provenance ?? citation.provenance,
     };
   }
-  return deduped;
+  // Every duplicate either merges into an earlier slot or is dropped, so an equal
+  // length means nothing changed — keep the original array's identity.
+  return deduped.length === citations.length ? citations : deduped;
 }

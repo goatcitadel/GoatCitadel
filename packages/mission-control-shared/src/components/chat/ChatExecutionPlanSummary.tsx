@@ -43,6 +43,23 @@ function getPlanProgressLabel(plan: ChatExecutionPlanRecord): string {
   return `${completed}/${plan.steps.length} completed`;
 }
 
+function describePlanStepDelegation(step: ChatExecutionPlanStepRecord): string | null {
+  // Raw lineage ids (durableRunId/childSessionId/childTurnId/childRunId) are
+  // operator-debug data; end users only need to know the step runs elsewhere.
+  const durable = Boolean(step.durableRunId);
+  const delegated = Boolean(step.childSessionId || step.childTurnId || step.childRunId);
+  if (durable && delegated) {
+    return "Runs as a durable background task · delegated to a child session";
+  }
+  if (durable) {
+    return "Runs as a durable background task";
+  }
+  if (delegated) {
+    return "Delegated to a child session";
+  }
+  return null;
+}
+
 export function ChatExecutionPlanSummary({
   plan,
 }: {
@@ -50,6 +67,7 @@ export function ChatExecutionPlanSummary({
 }) {
   const density = getPlanDensity(plan.mode);
   const currentStep = getCurrentPlanStep(plan);
+  const currentStepDelegation = currentStep ? describePlanStepDelegation(currentStep) : null;
 
   return (
     <div className="chat-execution-plan-summary">
@@ -76,41 +94,28 @@ export function ChatExecutionPlanSummary({
             <p>Status: {formatPlanStepStatus(currentStep)}</p>
             {currentStep.summary ? <p>{currentStep.summary}</p> : null}
             {currentStep.error ? <p>Error: {currentStep.error}</p> : null}
-            {currentStep.durableRunId || currentStep.childSessionId || currentStep.childTurnId || currentStep.childRunId ? (
-              <p>
-                Lineage:
-                {currentStep.durableRunId ? ` durable ${currentStep.durableRunId}` : ""}
-                {currentStep.childSessionId ? ` | child session ${currentStep.childSessionId}` : ""}
-                {currentStep.childTurnId ? ` | child turn ${currentStep.childTurnId}` : ""}
-                {currentStep.childRunId ? ` | deprecated childRunId ${currentStep.childRunId}` : ""}
-              </p>
-            ) : null}
+            {currentStepDelegation ? <p>{currentStepDelegation}</p> : null}
           </div>
         ) : null
       ) : (
         <ol className="chat-trace-list">
-          {plan.steps.map((step) => (
-            <li key={step.stepId}>
-              <span>{step.objective}</span>
-              <span>{formatPlanStepStatus(step)}</span>
-              {density === "expanded" && step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
-              {density === "expanded" && step.expectedOutput ? <p>Output: {step.expectedOutput}</p> : null}
-              {density === "expanded" && step.suggestedTools?.length ? <p>Tools: {step.suggestedTools.join(", ")}</p> : null}
-              {density === "expanded" && step.dependsOnStepIds?.length ? <p>Depends on: {step.dependsOnStepIds.join(", ")}</p> : null}
-              {step.summary ? <p>{step.summary}</p> : null}
-              {step.error ? <p>Error: {step.error}</p> : null}
-              {step.delegatedRole ? <p>Delegated role: {step.delegatedRole}</p> : null}
-              {step.durableRunId || step.childSessionId || step.childTurnId || step.childRunId ? (
-                <p>
-                  Lineage:
-                  {step.durableRunId ? ` durable ${step.durableRunId}` : ""}
-                  {step.childSessionId ? ` | child session ${step.childSessionId}` : ""}
-                  {step.childTurnId ? ` | child turn ${step.childTurnId}` : ""}
-                  {step.childRunId ? ` | deprecated childRunId ${step.childRunId}` : ""}
-                </p>
-              ) : null}
-            </li>
-          ))}
+          {plan.steps.map((step) => {
+            const delegationNote = describePlanStepDelegation(step);
+            return (
+              <li key={step.stepId}>
+                <span>{step.objective}</span>
+                <span>{formatPlanStepStatus(step)}</span>
+                {density === "expanded" && step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
+                {density === "expanded" && step.expectedOutput ? <p>Output: {step.expectedOutput}</p> : null}
+                {density === "expanded" && step.suggestedTools?.length ? <p>Tools: {step.suggestedTools.join(", ")}</p> : null}
+                {density === "expanded" && step.dependsOnStepIds?.length ? <p>Depends on: {step.dependsOnStepIds.join(", ")}</p> : null}
+                {step.summary ? <p>{step.summary}</p> : null}
+                {step.error ? <p>Error: {step.error}</p> : null}
+                {step.delegatedRole ? <p>Delegated role: {step.delegatedRole}</p> : null}
+                {delegationNote ? <p>{delegationNote}</p> : null}
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>

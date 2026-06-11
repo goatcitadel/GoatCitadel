@@ -370,7 +370,7 @@ describe("shared loop 24 component tails", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
   });
 
-  it("renders compact execution plan lineage and suppressed childRunId branches", () => {
+  it("renders compact execution plan delegation notes without raw lineage ids", () => {
     const basePlan = {
       planId: "plan-1",
       mode: "chat",
@@ -391,21 +391,22 @@ describe("shared loop 24 component tails", () => {
       ],
     } as any;
 
-    expect(textOf(create(<ChatExecutionPlanSummary plan={basePlan} />).toJSON())).toContain(
-      "deprecated childRunId legacy-child-run",
+    const withChildRun = textOf(create(<ChatExecutionPlanSummary plan={basePlan} />).toJSON());
+    expect(withChildRun).toContain("Delegated to a child session");
+    expect(withChildRun).not.toContain("legacy-child-run");
+    expect(withChildRun).not.toContain("deprecated");
+    const withoutDelegation = textOf(
+      create(
+        <ChatExecutionPlanSummary
+          plan={{
+            ...basePlan,
+            steps: [{ ...basePlan.steps[0], childRunId: undefined, status: "pending" }],
+          }}
+        />,
+      ).toJSON(),
     );
-    expect(
-      textOf(
-        create(
-          <ChatExecutionPlanSummary
-            plan={{
-              ...basePlan,
-              steps: [{ ...basePlan.steps[0], childRunId: undefined, status: "pending" }],
-            }}
-          />,
-        ).toJSON(),
-      ),
-    ).toMatch(/Status:\s+pending/);
+    expect(withoutDelegation).toMatch(/Status:\s+pending/);
+    expect(withoutDelegation).not.toContain("Delegated to a child session");
   });
 
   it("renders WorkbenchMonacoEditor fallback and runtime update paths", async () => {

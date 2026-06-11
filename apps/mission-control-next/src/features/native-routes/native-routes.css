@@ -3552,6 +3552,108 @@
   line-height: 1.35;
 }
 
+/* Chat trace internals (packages/mission-control-shared/components/chat/):
+   ChatExecutionPlanSummary and ChatToolArtifactInspector render inside the
+   .chat-trace-card bridge above; these defaults keep them presentable wherever
+   that card mounts. */
+
+.mc-next-shell .chat-execution-plan-summary {
+  display: grid;
+  gap: 0.35rem;
+  font-size: var(--text-sm);
+  color: var(--fg-secondary);
+}
+
+.mc-next-shell .chat-execution-plan-summary p {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-execution-plan-summary strong {
+  color: var(--fg-primary);
+}
+
+.mc-next-shell .chat-trace-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-shell .chat-trace-list li {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-xs);
+  background: var(--bg-surface-2);
+  font-size: var(--text-xs);
+}
+
+.mc-next-shell .chat-trace-list li > span {
+  color: var(--fg-primary);
+}
+
+.mc-next-shell .chat-trace-list li > span + span {
+  color: var(--fg-muted);
+}
+
+.mc-next-shell .chat-trace-list li p {
+  margin: 0;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-tool-artifact-inspector {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+  margin-top: 0.3rem;
+}
+
+.mc-next-shell .chat-tool-artifact-link {
+  padding: 0.18rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-shell .chat-tool-artifact-caption {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell .chat-tool-artifact-panel {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.mc-next-shell .chat-tool-artifact-panel p {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.mc-next-shell .chat-tool-artifact-panel pre {
+  margin: 0;
+  max-height: 18rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-secondary);
+}
+
 .mc-next-shell .page-guide-card,
 .mc-next-shell .page-header-hint,
 .mc-next-shell .tune-hub-guide,

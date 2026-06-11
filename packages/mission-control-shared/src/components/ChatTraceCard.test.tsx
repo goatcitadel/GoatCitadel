@@ -177,9 +177,11 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("Open the best unblocked source and confirm release details.");
     expect(text).toContain("Status: pending");
     expect(text).toContain("Repeated browser.navigate call detected.");
-    expect(fullText).toContain(
-      "Lineage: durable durable-child-2 | child session delegate-session-2 | child turn delegate-turn-2 | deprecated childRunId legacy-child-2",
-    );
+    expect(fullText).toContain("Runs as a durable background task · delegated to a child session");
+    expect(fullText).not.toContain("durable-child-2");
+    expect(fullText).not.toContain("delegate-session-2");
+    expect(fullText).not.toContain("legacy-child-2");
+    expect(fullText).not.toContain("deprecated");
     expect(
       renderer.root.findAll(
         (node) => typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),

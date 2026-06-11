@@ -144,6 +144,8 @@ describe("chat-thread-reducer", () => {
     expect(next.selectedTurnId).toBe("turn-new");
     expect(next.turns.at(-1)?.assistantMessage?.content).toBe("");
     expect(next.turns.at(-1)?.trace.mode).toBe("code");
+    expect(next.turns.at(-1)?.trace.speedMode).toBe("fast");
+    expect(next.turns.at(-1)?.trace.subagentPolicy).toBe("always");
     expect(next.turns.at(-1)?.trace.effectiveToolAutonomy).toBe("manual");
     expect(next.turns.at(-1)?.trace.routing).toMatchObject({
       primaryProviderId: "openai",
@@ -488,6 +490,56 @@ describe("chat-thread-reducer", () => {
     )!;
     expect(noAssistantTrace.turns[0]?.assistantMessage).toBeUndefined();
     expect(noAssistantTrace.turns[0]?.trace.assistantMessageId).toBe("assistant-from-trace");
+  });
+
+  it("preserves selection fields on in-place turn updates and skips no-op trace updates", () => {
+    const base = baseThread();
+    const current = base as never;
+
+    // A chunk for an older turn must not drag selection or the active leaf to it.
+    const withTool = updateThreadFromStreamChunk(
+      current,
+      {
+        type: "tool_start",
+        sessionId,
+        turnId: "turn-1",
+        toolRun: {
+          toolRunId: "tool-old",
+          turnId: "turn-1",
+          toolName: "web.search",
+          status: "running",
+          startedAt: "2026-05-04T12:00:02.000Z",
+        },
+      } as never,
+      null,
+      sessionId,
+      null,
+    )!;
+    expect(withTool.selectedTurnId).toBe("turn-2");
+    expect(withTool.activeLeafTurnId).toBe("turn-2");
+
+    // A trace update that changes nothing keeps the thread reference stable.
+    const sameTrace = updateThreadFromStreamChunk(
+      current,
+      { type: "trace_update", sessionId, turnId: "turn-2", trace: { status: "completed" } } as never,
+      null,
+      sessionId,
+      null,
+    );
+    expect(sameTrace).toBe(current);
+
+    // A real trace change re-allocates the turn but keeps the assistant message
+    // identity when its messageId is unchanged.
+    const withStatusChange = updateThreadFromStreamChunk(
+      current,
+      { type: "trace_update", sessionId, turnId: "turn-2", trace: { status: "running" } } as never,
+      null,
+      sessionId,
+      null,
+    )!;
+    expect(withStatusChange).not.toBe(current);
+    expect(withStatusChange.turns[1]?.trace.status).toBe("running");
+    expect(withStatusChange.turns[1]?.assistantMessage).toBe(base.turns[1]!.assistantMessage);
   });
 
   it("updates capability suggestions, user-input waits, and leaves unknown turn chunks unchanged", () => {

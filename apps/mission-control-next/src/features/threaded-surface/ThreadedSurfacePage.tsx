@@ -61,6 +61,7 @@ import "./styles/timeline.css";
 import "./styles/composer.css";
 import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";
+import "./styles/generated-artifact.css";
 
 const MODE_META: Record<
   ChatMode,
