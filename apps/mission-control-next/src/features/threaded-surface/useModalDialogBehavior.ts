@@ -48,6 +48,11 @@ export function useModalDialogBehavior({ open, onClose, containerRef }: ModalDia
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        /*
+         * Capture-phase stopPropagation scopes Escape to this modal layer:
+         * bubble-phase listeners (more-menu, panel-switcher dropdowns) must
+         * not also close while the modal sits on top. Next press reaches them.
+         */
         event.stopPropagation();
         onCloseRef.current();
         return;
