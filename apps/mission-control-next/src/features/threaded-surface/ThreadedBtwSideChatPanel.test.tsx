@@ -29,6 +29,7 @@ function buildSideChat(overrides: Partial<MissionThreadedBtwSideChatProps> = {})
     parentTitle: "Parent thread",
     childSessionId: "child-1",
     thread: null,
+    streamingPreview: null,
     draft: "",
     loading: false,
     sending: false,
