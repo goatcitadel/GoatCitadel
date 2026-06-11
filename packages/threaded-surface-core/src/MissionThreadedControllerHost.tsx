@@ -2826,6 +2826,7 @@ export function MissionThreadedControllerHost({
       const stripped =
         queueCommand?.kind === "steer" ? queueCommand.text : draft.trimStart().replace(/^\/steer\s*/i, "");
       if (stripped) {
+        setFollowThreadOutput(true);
         await handleSteerMidTurn(stripped);
         setDraft("");
         return;
@@ -2879,6 +2880,10 @@ export function MissionThreadedControllerHost({
     }
 
     try {
+      // Sending a message is an explicit "show me the answer" intent: re-arm
+      // auto-follow so the new turn and its streamed response stay in view
+      // even if the operator had scrolled up earlier in the session.
+      setFollowThreadOutput(true);
       await attachPendingKnowledgeSources();
       await handleSend();
     } catch (cause) {
@@ -2900,6 +2905,7 @@ export function MissionThreadedControllerHost({
     pushLocalNotice,
     selectedSessionId,
     setDraft,
+    setFollowThreadOutput,
     setPendingAttachments,
     setQueuedOutbound,
     setUiError,

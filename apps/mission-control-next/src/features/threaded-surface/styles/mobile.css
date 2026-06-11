@@ -145,7 +145,7 @@
     width: min(22rem, calc(100vw - 1.8rem));
     max-height: none;
     transform: translateX(-108%);
-    transition: transform 180ms ease;
+    transition: transform var(--motion-slow) var(--motion-ease);
     /*
      * When closed (no .open class), the rail is transformed off-screen but
      * still in the layout. Block pointer events so taps don't hit invisible

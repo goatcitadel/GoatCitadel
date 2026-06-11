@@ -318,7 +318,7 @@
   min-height: 1.2rem;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 140ms ease;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-strip.compact,
@@ -335,8 +335,8 @@
   pointer-events: none;
   visibility: hidden;
   transition:
-    max-height 140ms ease,
-    opacity 140ms ease;
+    max-height var(--motion-fast) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-actions,

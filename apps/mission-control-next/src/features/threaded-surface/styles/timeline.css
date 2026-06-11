@@ -69,6 +69,27 @@
   scroll-margin-block: 1rem;
 }
 
+/*
+ * Blocking approval / user-input prompts mount directly above the composer
+ * while the operator is mid-flow. Ease them in instead of popping a large
+ * card into the layout in a single frame.
+ */
+@keyframes mcBlockingPromptEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-card,
+.mc-next-thread-blocking-prompt .chat-user-input-card {
+  animation: mcBlockingPromptEnter var(--motion-slow) var(--motion-ease) both;
+}
+
 .mc-next-thread-blocking-prompt .chat-approval-card {
   display: grid;
   gap: 0.5rem;
@@ -531,6 +552,16 @@
 .mc-next-thread-bubble.assistant {
   background: transparent;
   padding-inline: 0.2rem;
+  /*
+   * Ease the streaming -> settled hand-off. Without this the tinted border,
+   * background, and 0.78rem padding all snap away in the same frame the
+   * message DOM remounts, producing a visible "pop" right as the operator
+   * starts reading the finished answer.
+   */
+  transition:
+    background-color var(--motion-slow) var(--motion-ease),
+    border-color var(--motion-slow) var(--motion-ease),
+    padding var(--motion-slow) var(--motion-ease);
 }
 
 .mc-next-thread-bubble.assistant.streaming {
@@ -684,9 +715,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition:
-    color 140ms ease,
-    background-color 140ms ease,
-    border-color 140ms ease;
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
 }
 
 .mc-assistant-code-copy:hover {
@@ -830,6 +861,7 @@
 
   .mc-next-thread-jump-latest,
   .mc-next-thread-turn-surface,
+  .mc-next-thread-bubble.assistant,
   .mc-next-attachment-inline-image,
   .mc-next-thread-citations > article {
     transition: none;
@@ -845,6 +877,11 @@
     animation: none;
     opacity: 0.65;
     box-shadow: none;
+  }
+
+  .mc-next-thread-blocking-prompt .chat-approval-card,
+  .mc-next-thread-blocking-prompt .chat-user-input-card {
+    animation: none;
   }
 }
 
@@ -875,7 +912,7 @@
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
-  transition: opacity 140ms ease;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn.routine-chat:hover .mc-assistant-copy-button,
@@ -1035,8 +1072,8 @@
   object-fit: contain;
   cursor: zoom-in;
   transition:
-    transform 160ms ease,
-    box-shadow 160ms ease;
+    transform var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-base) var(--motion-ease);
 }
 
 .mc-next-attachment-inline-image:hover {
@@ -1172,9 +1209,9 @@
   font-size: var(--text-xs);
   line-height: 1.2;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-thread-citations > article:hover {

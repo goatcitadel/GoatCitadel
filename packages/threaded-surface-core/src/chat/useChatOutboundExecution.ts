@@ -1414,13 +1414,23 @@ export function useChatOutboundExecution(input: {
     [loadSessionCoreState, pendingUserInput, pushLocalNotice, selectedSession, setError],
   );
 
-  const streamStatus: ChatStreamStatus = useMemo(() => {
-    if (error) return "error";
-    if (sending && activeStreamRef.current) return "streaming";
-    if (sending) return "connecting";
-    if (queuedOutbound.some((item) => !item.paused)) return "queued";
-    return "idle";
-  }, [error, queuedOutbound, sending]);
+  /*
+   * Computed per render on purpose: the value depends on activeStreamRef,
+   * which a useMemo dependency list cannot observe. Memoizing on
+   * [error, queuedOutbound, sending] froze the status at "connecting" for
+   * the entire life of a stream (the ref is assigned after the memo runs and
+   * never invalidates it). The result is a primitive, so recomputing is free
+   * and the status flips to "streaming" on the first preview-flush render.
+   */
+  const streamStatus: ChatStreamStatus = error
+    ? "error"
+    : sending && activeStreamRef.current
+      ? "streaming"
+      : sending
+        ? "connecting"
+        : queuedOutbound.some((item) => !item.paused)
+          ? "queued"
+          : "idle";
 
   // Clear deferred approval-resolve refresh timers when the operator switches
   // sessions, so the previous session is not re-fetched for up to ~3s afterwards.

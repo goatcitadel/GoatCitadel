@@ -251,9 +251,9 @@
   font: 600 0.72rem/1.1 var(--mc-font-sans);
   cursor: pointer;
   transition:
-    transform 140ms ease,
-    filter 140ms ease,
-    background-color 140ms ease;
+    transform var(--motion-fast) var(--motion-ease),
+    filter var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-new-session-button[data-mode="chat"] {
@@ -745,9 +745,9 @@
   overflow-wrap: anywhere;
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-approvals-view-button:hover,
@@ -790,9 +790,9 @@
   overflow-wrap: anywhere;
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-sr-only {
@@ -903,9 +903,9 @@
   overflow-wrap: anywhere;
   text-decoration: none;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-approvals-support-grid {
@@ -1002,9 +1002,9 @@
   overflow-wrap: anywhere;
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-directory-action:hover {
@@ -1942,10 +1942,10 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-project-card-glyph:hover,
@@ -2120,9 +2120,9 @@
   overflow-wrap: anywhere;
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-settings-filter.active {
@@ -2367,9 +2367,9 @@
   overflow-wrap: anywhere;
   cursor: pointer;
   transition:
-    border-color 140ms ease,
-    background-color 140ms ease,
-    transform 140ms ease;
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-settings-selectable-list.is-compact .mc-next-settings-selectable {
@@ -3444,8 +3444,8 @@
 
 .mc-next-runtime-spend-chart-segment {
   transition:
-    opacity 140ms ease,
-    fill 140ms ease;
+    opacity var(--motion-fast) var(--motion-ease),
+    fill var(--motion-fast) var(--motion-ease);
   opacity: 0.92;
 }
 

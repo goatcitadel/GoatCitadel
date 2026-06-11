@@ -23,6 +23,11 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 
 export type RealtimeNotificationDescriptor = ReturnType<typeof deriveRealtimeNotification>;
 
+/** How long an info/success toast stays up before it dismisses itself. */
+const AUTO_DISMISS_TOAST_MS = 6000;
+/** Floor so a toast restored from an old timestamp still gets a beat on screen. */
+const MIN_REMAINING_TOAST_MS = 800;
+
 export interface UseShellNotificationsOptions {
   notificationPreferences: UiNotificationPreferences;
 }
@@ -76,6 +81,28 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
   const dismissNotification = useCallback((id: string) => {
     setNotifications((current) => current.filter((item) => item.id !== id));
   }, []);
+
+  // Auto-expire informational toasts so the stack does not accumulate stale
+  // chrome the operator has to clear by hand. Warnings and errors persist
+  // until explicitly dismissed — they may require action. A grouped repeat
+  // refreshes the item's timestamp, which naturally extends its lifetime.
+  useEffect(() => {
+    const expiring = notifications.filter((item) => item.tone === "info" || item.tone === "success");
+    if (expiring.length === 0) {
+      return;
+    }
+    const timers = expiring.map((item) =>
+      setTimeout(
+        () => dismissNotification(item.id),
+        Math.max(MIN_REMAINING_TOAST_MS, item.timestamp + AUTO_DISMISS_TOAST_MS - Date.now()),
+      ),
+    );
+    return () => {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+    };
+  }, [dismissNotification, notifications]);
 
   const deliverRealtimeNotification = useCallback(
     (notification: RealtimeNotificationDescriptor) => {

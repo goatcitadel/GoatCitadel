@@ -641,6 +641,20 @@
   cursor: pointer;
   box-shadow: none;
   font-size: 0.66rem;
+  /*
+   * Single motion baseline for every button in the shell. Without this, the
+   * shared :hover transform (translateY(-1px) below) snaps instantly on most
+   * buttons while a few classes glide — adjacent controls visibly disagree.
+   * box-shadow and color are included so .gc-button's own transition list
+   * (which this higher-specificity rule overrides inside the shell) keeps
+   * animating those properties too.
+   */
+  transition:
+    transform var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
 }
 
 .mc-next-button {
@@ -1318,6 +1332,17 @@
   text-rendering: geometricPrecision;
 }
 
+@keyframes mcNotificationEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .notification-item {
   display: flex;
   justify-content: space-between;
@@ -1327,6 +1352,7 @@
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
   box-shadow: var(--mc-shadow-soft);
+  animation: mcNotificationEnter var(--motion-slow) var(--motion-ease) both;
 }
 
 .notification-copy {
@@ -1568,7 +1594,7 @@
   border-radius: 999px;
   background: white;
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
-  transition: transform 160ms ease;
+  transition: transform var(--motion-base) var(--motion-ease);
 }
 
 .gateway-access-row .gc-switch-root[data-state="checked"] .gc-switch-thumb,
@@ -1770,7 +1796,7 @@
     max-height: 100dvh;
     border-radius: 0 1.15rem 1.15rem 0;
     transform: translateX(-108%);
-    transition: transform 180ms ease;
+    transition: transform var(--motion-slow) var(--motion-ease);
   }
 
   .mc-next-rail.open {
@@ -1899,7 +1925,8 @@
   .mc-next-icon-button,
   .mc-next-rail,
   .mc-spin,
-  .gc-button {
+  .gc-button,
+  .notification-item {
     transition: none;
     animation: none;
   }
@@ -1931,11 +1958,11 @@
   letter-spacing: 0.01em;
   cursor: pointer;
   transition:
-    transform 140ms ease,
-    border-color 140ms ease,
-    background-color 140ms ease,
-    color 140ms ease,
-    box-shadow 140ms ease;
+    transform var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
 }
 
 .gc-button:hover:not(:disabled) {

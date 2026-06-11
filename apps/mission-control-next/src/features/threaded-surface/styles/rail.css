@@ -514,7 +514,7 @@
 }
 
 .mc-next-threaded-session-toggle svg {
-  transition: transform 180ms ease;
+  transition: transform var(--motion-slow) var(--motion-ease);
 }
 
 .mc-next-threaded-session-toggle svg.open {

@@ -25,8 +25,6 @@ export interface ScrollToBottomContentSignals {
   streamStatus: string;
   /** Streaming preview identity/length signal. Grows while text is revealed. */
   streamingPreviewSignal: string | null;
-  /** Currently selected turn id (only re-triggers the follow write). */
-  selectedTurnId: string | null;
   /** Current stream error, if any (only re-triggers the follow write). */
   streamError: string | null;
 }
@@ -90,7 +88,6 @@ export function useScrollToBottom<
     queuedCount,
     streamStatus,
     streamingPreviewSignal,
-    selectedTurnId,
     streamError,
   } = signals;
 
@@ -189,7 +186,6 @@ export function useScrollToBottom<
     noticeCount,
     emitBottomState,
     queuedCount,
-    selectedTurnId,
     streamError,
     streamStatus,
     streamingPreviewSignal,

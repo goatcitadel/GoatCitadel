@@ -19,7 +19,6 @@ function baseSignals(overrides: Partial<ScrollToBottomContentSignals> = {}): Scr
     queuedCount: 0,
     streamStatus: "idle",
     streamingPreviewSignal: null,
-    selectedTurnId: "turn-1",
     streamError: null,
     ...overrides,
   };

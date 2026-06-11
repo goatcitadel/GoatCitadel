@@ -23,6 +23,7 @@ import {
   useChannelActivitySnapshots,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
   if (!activity) {
@@ -38,6 +39,21 @@ function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot 
       <span>{activity.label}</span>
     </span>
   );
+}
+
+/*
+ * Each turn subscribes to channel activity on its own. Keeping the store
+ * subscription out of ThreadedTimeline keeps `renderUserMetaAddon` stable, so
+ * a realtime activity event (possibly for another session) no longer
+ * invalidates the memo of every visible turn card.
+ */
+function TurnChannelActivityBadge({ sessionId, messageId }: { sessionId: string | null; messageId: string }) {
+  const activities = useChannelActivitySnapshots(sessionId);
+  const activity = useMemo(
+    () => activities.find((item) => item.messageId === messageId) ?? null,
+    [activities, messageId],
+  );
+  return <ChannelActivityBadge activity={activity} />;
 }
 
 function isSafeCitationHref(url: string): boolean {
@@ -252,25 +268,38 @@ export function ThreadedTimeline({
   const threadTurnCount = props.thread?.turns.length ?? 0;
   const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
-  const channelActivities = useChannelActivitySnapshots(props.thread?.sessionId ?? null);
-  const channelActivityByMessageId = useMemo(
-    () => new Map(channelActivities.map((activity) => [activity.messageId, activity])),
-    [channelActivities],
-  );
+  const sessionId = props.thread?.sessionId ?? null;
   const selectedContextTurnIdSet = useMemo(
     () => new Set(props.selectedContextTurnIds ?? []),
     [props.selectedContextTurnIds],
   );
   const renderUserMetaAddon = useCallback(
     (turn: ChatThreadTurnRecord) => (
-      <ChannelActivityBadge activity={channelActivityByMessageId.get(turn.userMessage.messageId) ?? null} />
+      <TurnChannelActivityBadge sessionId={sessionId} messageId={turn.userMessage.messageId} />
     ),
-    [channelActivityByMessageId],
+    [sessionId],
   );
   const renderCitationList = useCallback(
     (turn: ChatThreadTurnRecord) => <ThreadCitationList citations={turn.citations} />,
     [],
   );
+
+  /*
+   * The controller host rebuilds every handler per render (and renders at
+   * animation-frame cadence during streaming). Stable wrappers keep
+   * ChatThreadTurnCard's memo effective so only the streaming card re-renders
+   * per preview flush.
+   */
+  const onToggleContextTurn = useStableHandler(props.onToggleContextTurn);
+  const onSelectTurn = useStableHandler(props.onSelectTurn);
+  const onStartNewThreadFromTurn = useStableHandler(props.onStartNewThreadFromTurn);
+  const onSwitchBranch = useStableHandler(props.onSwitchBranch);
+  const onRetryTurn = useStableHandler(props.onRetryTurn);
+  const onOpenRunDetails = useStableHandler(props.onOpenRunDetails);
+  const onOpenGeneratedArtifact = useStableHandler(props.onOpenGeneratedArtifact);
+  const onCreateGeneratedArtifact = useStableHandler(props.onCreateGeneratedArtifact);
+  const onCreateGeneratedArtifactVersion = useStableHandler(props.onCreateGeneratedArtifactVersion);
+  const onOpenUniversalRunDetailStable = useOptionalStableHandler(onOpenUniversalRunDetail);
   const defaultWindowStart = Math.max(0, threadTurnCount - THREAD_WINDOW_SIZE);
   const effectiveWindowStart = Math.min(manualWindowStart ?? defaultWindowStart, defaultWindowStart);
   const windowedThreadItems = useMemo(
@@ -320,7 +349,6 @@ export function ThreadedTimeline({
       queuedCount: props.queuedCount,
       streamStatus: props.streamStatus,
       streamingPreviewSignal,
-      selectedTurnId: props.selectedTurnId,
       streamError: props.streamError,
     },
   });
@@ -377,7 +405,7 @@ export function ThreadedTimeline({
               <ChatThreadDelegationSummary
                 delegationRun={props.delegationRun ?? null}
                 mode={props.mode}
-                onOpenRunDetails={props.onOpenRunDetails}
+                onOpenRunDetails={onOpenRunDetails}
               />
               {windowedThreadItems.map((item, itemIndex) => {
                 if (item.kind === "gap") {
@@ -402,16 +430,16 @@ export function ThreadedTimeline({
                     visualStreamMode={props.visualStreamMode}
                     renderUserMetaAddon={renderUserMetaAddon}
                     renderCitationList={renderCitationList}
-                    onToggleContextTurn={props.onToggleContextTurn}
-                    onSelectTurn={props.onSelectTurn}
-                    onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
-                    onSwitchBranch={props.onSwitchBranch}
-                    onRetryTurn={props.onRetryTurn}
-                    onOpenRunDetails={props.onOpenRunDetails}
-                    onOpenUniversalRunDetail={onOpenUniversalRunDetail}
-                    onOpenGeneratedArtifact={props.onOpenGeneratedArtifact}
-                    onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
-                    onCreateGeneratedArtifactVersion={props.onCreateGeneratedArtifactVersion}
+                    onToggleContextTurn={onToggleContextTurn}
+                    onSelectTurn={onSelectTurn}
+                    onStartNewThreadFromTurn={onStartNewThreadFromTurn}
+                    onSwitchBranch={onSwitchBranch}
+                    onRetryTurn={onRetryTurn}
+                    onOpenRunDetails={onOpenRunDetails}
+                    onOpenUniversalRunDetail={onOpenUniversalRunDetailStable}
+                    onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+                    onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+                    onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
                   />
                 );
               })}
