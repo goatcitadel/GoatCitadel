@@ -31,8 +31,10 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "../../native-routes/primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { useOptionalStableHandler } from "../useStableHandler";
+import { useOptionalStableHandler, useStableHandler } from "../useStableHandler";
 import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
+import { WorkbenchFilePicker } from "./WorkbenchFilePicker";
+import { DEFAULT_VALIDATION_COMMAND, WorkbenchValidationControls } from "./WorkbenchValidationControls";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -743,7 +745,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [newArtifactPending, setNewArtifactPending] = useState(false);
   const prevTurnIdRef = useRef<string | null>(null);
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
-  const [validationCommand, setValidationCommand] = useState("pnpm test");
+  const validationCommandRef = useRef(DEFAULT_VALIDATION_COMMAND);
+  const handleValidationCommandChange = useCallback((commandLine: string) => {
+    validationCommandRef.current = commandLine;
+  }, []);
   const [filePanePercent, setFilePanePercent] = useState(readStoredFilePanePercent);
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const [confirmRevertFilePath, setConfirmRevertFilePath] = useState<string | null>(null);
@@ -769,7 +774,6 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runComparisonError, setRunComparisonError] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
-  const [filePickerQuery, setFilePickerQuery] = useState("");
   const [diffViewMode, setDiffViewMode] = useState<"side-by-side" | "unified">("side-by-side");
   const [runLogViewMode, setRunLogViewMode] = useState<"rendered" | "raw">("rendered");
   const [runLogCleared, setRunLogCleared] = useState(false);
@@ -977,13 +981,6 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     () => (workbenchTree?.items ?? []).filter((item) => item.kind === "file"),
     [workbenchTree?.items],
   );
-  const filteredFilePickerItems = useMemo(() => {
-    const query = filePickerQuery.trim().toLowerCase();
-    if (!query) {
-      return workbenchFileItems.slice(0, 12);
-    }
-    return workbenchFileItems.filter((item) => item.path.toLowerCase().includes(query)).slice(0, 12);
-  }, [filePickerQuery, workbenchFileItems]);
   const runLogText = [
     output?.output,
     ...visibleRunItems.flatMap((run) => [run.stdoutPreview, run.stderrPreview]),
@@ -1525,11 +1522,19 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     onRunValidationCommand({ command, args });
     setActivePane("output");
   };
-  const runValidationFromInput = () => runValidationCommandLine(validationCommand);
+  const stableRunValidationCommandLine = useStableHandler(runValidationCommandLine);
+  const runValidationFromInput = () => runValidationCommandLine(validationCommandRef.current);
   const openQuickFilePicker = () => {
     setCommandPaletteOpen(false);
     setFilePickerOpen(true);
   };
+  const handleFilePickerSelect = useStableHandler((relativePath: string) => {
+    requestFileSelection(relativePath);
+    setFilePickerOpen(false);
+  });
+  const handleFilePickerClose = useCallback(() => {
+    setFilePickerOpen(false);
+  }, []);
   const openWorkbenchCommandPalette = () => {
     setFilePickerOpen(false);
     setCommandPaletteOpen(true);
@@ -1664,39 +1669,14 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           >
             Export
           </button>
-          <input
-            className="mc-next-workbench-command-input"
-            value={validationCommand}
-            onChange={(event) => setValidationCommand(event.target.value)}
-            disabled={busy}
-            aria-label="Validation command"
+          <WorkbenchValidationControls
+            busy={busy}
+            blockedReason={validationBlockedReason}
+            available={Boolean(onRunValidationCommand)}
+            presets={validationPresets}
+            onCommandChange={handleValidationCommandChange}
+            onRunCommandLine={stableRunValidationCommandLine}
           />
-          <button
-            type="button"
-            className="mc-next-panel-button"
-            onClick={runValidationFromInput}
-            disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
-            title={
-              validationBlockedReason ?? (!onRunValidationCommand ? "Validation backend is unavailable." : undefined)
-            }
-          >
-            Test
-          </button>
-          {validationPresets.map((preset) => (
-            <button
-              key={preset.label}
-              type="button"
-              className="mc-next-panel-button"
-              disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
-              title={validationBlockedReason ?? preset.command}
-              onClick={() => {
-                setValidationCommand(preset.command);
-                runValidationCommandLine(preset.command);
-              }}
-            >
-              {preset.label}
-            </button>
-          ))}
         </div>
         <span aria-hidden="true" className="mc-next-workbench-action-divider" />
         <div className="mc-next-workbench-action-cluster" data-cluster="destructive" ref={moreMenuRef}>
@@ -1864,41 +1844,11 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           ) : null}
 
           {filePickerOpen ? (
-            <section className="mc-next-workbench-command-surface" aria-label="Workbench file picker">
-              <div className="mc-next-panel-list-head">
-                <strong>File picker</strong>
-                <button type="button" className="mc-next-panel-button" onClick={() => setFilePickerOpen(false)}>
-                  Close
-                </button>
-              </div>
-              <input
-                className="mc-next-workbench-command-input"
-                value={filePickerQuery}
-                onChange={(event) => setFilePickerQuery(event.target.value)}
-                placeholder="Filter files"
-                aria-label="Filter files"
-              />
-              {filteredFilePickerItems.length > 0 ? (
-                <ul className="mc-next-workbench-command-list">
-                  {filteredFilePickerItems.map((item) => (
-                    <li key={item.path}>
-                      <button
-                        type="button"
-                        className="mc-next-panel-button"
-                        onClick={() => {
-                          requestFileSelection(item.path);
-                          setFilePickerOpen(false);
-                        }}
-                      >
-                        {item.path}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mc-next-workbench-empty">No matching files.</p>
-              )}
-            </section>
+            <WorkbenchFilePicker
+              items={workbenchFileItems}
+              onSelect={handleFilePickerSelect}
+              onClose={handleFilePickerClose}
+            />
           ) : null}
 
           {commandPaletteOpen ? (
