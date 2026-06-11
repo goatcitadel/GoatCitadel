@@ -39,6 +39,9 @@
   background: var(--mc-shell-bg);
   color: var(--foreground);
   font-size: var(--text-sm);
+  /* Native controls (range sliders, checkboxes, progress) pick up the area
+     accent instead of the browser default blue. */
+  accent-color: var(--mc-area-color);
 }
 
 .mc-next-shell.ui-density-comfortable {
@@ -865,6 +868,10 @@
   background: transparent;
   color: inherit;
   text-align: left;
+  /* The rail link is a <button>; buttons inherit white-space: nowrap from the
+     component-library reset, which defeats the description line-clamp below
+     and hard-clips text mid-character. */
+  white-space: normal;
   cursor: pointer;
 }
 
@@ -1156,6 +1163,11 @@
   padding: 0 8px;
   border-top: 1px solid var(--mc-border-subtle);
   background: var(--background);
+  /* Shell chrome like the topbar: stage content that overflows its grid row
+     (directory pages at short viewports) must slide under the strip, not
+     paint across it. */
+  position: relative;
+  z-index: var(--z-topbar);
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 0.62rem;

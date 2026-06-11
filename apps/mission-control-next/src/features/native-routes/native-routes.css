@@ -2931,9 +2931,12 @@
 }
 
 .mc-next-ops-attention-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  /* Wrapping flex instead of a two-column grid: the actions cluster wants
+     up to 15rem, which crushed the copy column (and its status chip) to a
+     sliver in narrow panels. Wrapped, the actions drop below the copy. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 0.55rem;
   min-width: 0;
   padding: 0.55rem;
@@ -2953,6 +2956,7 @@
 .mc-next-ops-attention-copy {
   display: grid;
   gap: 0.28rem;
+  flex: 1 1 14rem;
   min-width: 0;
 }
 
@@ -2969,7 +2973,8 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.35rem;
-  min-width: min(15rem, 100%);
+  flex: 0 1 auto;
+  margin-left: auto;
 }
 
 .mc-next-shell[data-area="library"] .page-header,

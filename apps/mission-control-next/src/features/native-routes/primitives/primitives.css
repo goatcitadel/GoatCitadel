@@ -171,6 +171,15 @@
   padding: 0 0.55rem;
 }
 
+/* The state label needs its own ellipsis: without it a squeezed chip hard-cuts
+   the text flush against the mid segment ("cron_job_ruoperational_si"). */
+.mc-next-chip-3-state > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mc-next-chip-3-dot {
   width: 6px;
   height: 6px;
