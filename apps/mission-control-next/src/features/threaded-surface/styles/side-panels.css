@@ -123,15 +123,27 @@
   font-weight: 650;
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color var(--motion-base) var(--motion-ease),
+    color var(--motion-base) var(--motion-ease);
 }
 
 .mc-next-threaded-panel-menu-item:hover,
-.mc-next-threaded-panel-menu-item:focus-visible,
 .mc-next-threaded-panel-menu-item.active,
 .mc-next-utility-panel-tab:hover,
-.mc-next-utility-panel-tab:focus-visible,
 .mc-next-utility-panel-tab.active {
   background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+}
+
+.mc-next-threaded-panel-menu-item:focus-visible,
+.mc-next-utility-panel-tab:focus-visible {
+  background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.mc-next-threaded-panel-menu-item:focus:not(:focus-visible),
+.mc-next-utility-panel-tab:focus:not(:focus-visible) {
   outline: none;
 }
 

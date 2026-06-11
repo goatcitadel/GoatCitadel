@@ -23,6 +23,8 @@ export interface ScrollToBottomContentSignals {
   queuedCount: number;
   /** Current stream status. */
   streamStatus: string;
+  /** Streaming preview identity/length signal. Grows while text is revealed. */
+  streamingPreviewSignal: string | null;
   /** Currently selected turn id (only re-triggers the follow write). */
   selectedTurnId: string | null;
   /** Current stream error, if any (only re-triggers the follow write). */
@@ -87,6 +89,7 @@ export function useScrollToBottom<
     noticeCount,
     queuedCount,
     streamStatus,
+    streamingPreviewSignal,
     selectedTurnId,
     streamError,
   } = signals;
@@ -132,7 +135,10 @@ export function useScrollToBottom<
     const observer = new window.IntersectionObserver(
       (entries) => {
         const entry = entries[0];
-        emitBottomState(Boolean(entry?.isIntersecting) || isThreadScrollNearBottom(scrollElement));
+        const atBottom = Boolean(entry?.isIntersecting) || isThreadScrollNearBottom(scrollElement);
+        if (atBottom || !followOutput) {
+          emitBottomState(atBottom);
+        }
       },
       {
         root: scrollElement,
@@ -141,7 +147,7 @@ export function useScrollToBottom<
     );
     observer.observe(endElement);
     return () => observer.disconnect();
-  }, [emitBottomState, sessionId, threadTurnCount]);
+  }, [emitBottomState, followOutput, sessionId, threadTurnCount]);
 
   const jumpToLatest = useCallback(() => {
     threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
@@ -186,6 +192,7 @@ export function useScrollToBottom<
     selectedTurnId,
     streamError,
     streamStatus,
+    streamingPreviewSignal,
     threadTurnCount,
   ]);
 
@@ -209,6 +216,7 @@ export function useScrollToBottom<
     emitBottomState,
     queuedCount,
     streamStatus,
+    streamingPreviewSignal,
     threadTurnCount,
   ]);
 

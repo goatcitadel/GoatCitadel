@@ -45,6 +45,16 @@
   --text-md: 0.875rem;
   --text-lg: 1rem;
   --text-xl: 1.125rem;
+
+  --success: var(--risk-safe);
+  --warning: var(--risk-caution);
+  --danger: var(--risk-danger);
+  --text-tertiary: var(--fg-faint, #5a6068);
+
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 220ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 .mc-next-shell.theme-signal-noir {

@@ -953,6 +953,63 @@ describe("ThreadedTimeline", () => {
     scrollIntoView.mockRestore();
   });
 
+  it("keeps auto-follow pinned as the visible streaming preview grows", async () => {
+    const onBottomStateChange = vi.fn();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const props = buildProps({
+      mode: "chat",
+      followOutput: true,
+      streamStatus: "streaming",
+      onBottomStateChange,
+      delegationRun: null,
+      activeStreamingTurnId: "turn-1",
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "Streaming answer",
+        visibleText: "Streaming",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={props as any} />);
+      await Promise.resolve();
+    });
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline
+          props={
+            {
+              ...props,
+              streamingPreview: {
+                ...props.streamingPreview,
+                visibleText: "Streaming answer with more visible text",
+                updatedAt: 2,
+              },
+            } as any
+          }
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+    vi.unstubAllGlobals();
+    scrollIntoView.mockRestore();
+  });
+
   it("stops auto-follow while the operator is reading above the bottom and resumes at the bottom", async () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());

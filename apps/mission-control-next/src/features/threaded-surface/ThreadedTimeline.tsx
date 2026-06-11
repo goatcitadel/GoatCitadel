@@ -300,6 +300,13 @@ export function ThreadedTimeline({
         : props.streamStatus === "connecting"
           ? `${toTitleCase(props.mode)} stream connecting.`
           : "");
+  const streamingPreviewSignal = props.streamingPreview
+    ? [
+        props.streamingPreview.turnId,
+        props.streamingPreview.visibleText.length,
+        props.streamingPreview.isRunning ? "running" : "idle",
+      ].join(":")
+    : (props.activeStreamingTurnId ?? null);
 
   const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
     followOutput: props.followOutput,
@@ -312,6 +319,7 @@ export function ThreadedTimeline({
       noticeCount: props.notices.length,
       queuedCount: props.queuedCount,
       streamStatus: props.streamStatus,
+      streamingPreviewSignal,
       selectedTurnId: props.selectedTurnId,
       streamError: props.streamError,
     },

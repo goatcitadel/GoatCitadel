@@ -204,6 +204,8 @@ async function main() {
   console.error("Use canonical tokens from mission-control-next-tokens.css instead:");
   console.error("  --gc-area-*  →  --area-*");
   console.error("  --gc-risk-*  →  --risk-*");
+  console.error("  status colors → --success / --warning / --danger");
+  console.error("  muted tertiary text → --text-tertiary");
   console.error("  --mc-radius-*  →  --r-*");
   console.error("  --mc-font-*  →  --font-*");
   console.error("");
