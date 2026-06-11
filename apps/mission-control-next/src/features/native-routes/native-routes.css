@@ -3212,9 +3212,22 @@
 }
 
 .mc-next-kanban-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   padding: 0.4rem 0.8rem;
   border-radius: var(--r-xs);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-1);
+  color: var(--fg-primary);
   font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.mc-next-kanban-toolbar button:hover:not(:disabled),
+.mc-next-kanban-toolbar button:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border-default));
+  background: var(--bg-surface-3);
 }
 
 .mc-next-kanban-toolbar button:disabled {
@@ -3323,6 +3336,26 @@
   color: var(--foreground);
   font-size: var(--text-xs);
   font-weight: 600;
+}
+
+.mc-next-kanban-status.tone-active {
+  background: color-mix(in oklab, var(--mc-area-color) 16%, transparent);
+  color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+}
+
+.mc-next-kanban-status.tone-warning {
+  background: color-mix(in oklab, var(--warning) 16%, transparent);
+  color: color-mix(in oklab, var(--warning) 72%, var(--foreground));
+}
+
+.mc-next-kanban-status.tone-danger {
+  background: color-mix(in oklab, var(--danger) 18%, transparent);
+  color: color-mix(in oklab, var(--danger) 72%, var(--foreground));
+}
+
+.mc-next-kanban-status.tone-success {
+  background: color-mix(in oklab, var(--success) 14%, transparent);
+  color: color-mix(in oklab, var(--success) 70%, var(--foreground));
 }
 
 .mc-next-kanban-card small {

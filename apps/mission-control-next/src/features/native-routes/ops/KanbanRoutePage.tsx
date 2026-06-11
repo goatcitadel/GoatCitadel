@@ -224,12 +224,19 @@ function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
         <span>{card.surfaceLabel}</span>
         <span>{card.updatedDisplay}</span>
       </div>
-      <span className="mc-next-kanban-status">
+      <span className={`mc-next-kanban-status tone-${card.statusTone}`}>
         <Activity className="h-3 w-3" /> {card.statusLabel}
       </span>
       {card.attentionReason ? <small>{card.attentionReason}</small> : null}
       {card.contextMode || card.profileId ? (
-        <small>{[card.contextMode, card.profileId].filter(Boolean).join(" - ")}</small>
+        <small>
+          {[
+            card.contextMode ? `Context: ${card.contextMode}` : null,
+            card.profileId ? `Profile: ${card.profileId}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
       ) : null}
       {card.diagnosticSummary.critical > 0 ? (
         <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress critical">
@@ -240,7 +247,9 @@ function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
           <Activity className="h-3 w-3" /> {card.diagnosticSummary.warning} warning
         </span>
       ) : null}
-      <small className="run-id">Run {card.runId}</small>
+      <small className="run-id" title={`Run ${card.runId}`}>
+        Run {card.runId.slice(0, 8)}
+      </small>
     </li>
   );
 }

@@ -4,7 +4,7 @@ const STALE_RUN_AFTER_MS = 30 * 60 * 1000;
 
 export type KanbanColumnId = "queued" | "running" | "needs_attention" | "closed";
 
-export type KanbanStatusTone = "neutral" | "active" | "warning" | "success";
+export type KanbanStatusTone = "neutral" | "active" | "warning" | "danger" | "success";
 
 export interface KanbanCardModel {
   taskId: string;
@@ -78,7 +78,7 @@ export function toKanbanCard(run: AgenticRunListItem, options: ToKanbanCardOptio
     column,
     surfaceLabel: run.surface ? formatLabel(run.surface) : "Unknown surface",
     statusLabel: stale ? "Stale" : formatStatusLabel(run.status ?? run.taskStatus),
-    statusTone: getStatusTone(column),
+    statusTone: getStatusTone(column, run.status),
     updatedDisplay: formatAge(run.updatedAt, nowMs),
     stale,
     attentionReason: getAttentionReason(run.status, run.taskStatus, stale),
@@ -104,9 +104,16 @@ function isStaleActiveRun(
   return (now ? now() : Date.now()) - updatedMs > STALE_RUN_AFTER_MS;
 }
 
-function getStatusTone(column: KanbanColumnId): KanbanStatusTone {
+function getStatusTone(column: KanbanColumnId, runStatus?: AgenticRunStatus): KanbanStatusTone {
   if (column === "running") return "active";
-  if (column === "needs_attention") return "warning";
+  if (column === "needs_attention") {
+    // Hard failures read differently from soft attention states (stale,
+    // paused, waiting for approval) so a failed run is not a neutral-looking
+    // chip next to a merely idle one.
+    return runStatus === "failed" || runStatus === "cancelled" || runStatus === "stopped_by_limit"
+      ? "danger"
+      : "warning";
+  }
   if (column === "closed") return "success";
   return "neutral";
 }

@@ -6922,7 +6922,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   value: selectedProfile ? describeToolApprovalMode(selectedProfile.approvalMode) : "-",
                 },
                 { label: "Tool patterns", value: String(selectedProfile?.toolPatterns.length ?? 0) },
-                { label: "Read access", value: selectedProfile?.readAccessMode ?? "Global default" },
+                { label: "Read access", value: describeReadAccessMode(selectedProfile?.readAccessMode ?? "") },
               ]}
             >
               {selectedProfile ? (

@@ -1247,8 +1247,8 @@ export function RuntimeRoutePage({
                     >
                       <ThreePartChip
                         tone={toneForActivityEvent(item.eventType, item.eventClass)}
-                        state={item.eventType}
-                        mid={item.eventClass ?? item.source ?? ""}
+                        state={humanizeEventLabel(item.eventType)}
+                        mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
                         age={formatDateTime(item.timestamp)}
                       />
                       {item.source ? <span className="mc-next-activity-feed-source">{item.source}</span> : null}
@@ -1764,6 +1764,11 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
     default:
       return "Activity";
   }
+}
+
+export function humanizeEventLabel(value: string): string {
+  const words = value.split(/[_\s]+/).filter(Boolean).join(" ");
+  return words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 }
 
 export function toneForActivityEvent(eventType: string, eventClass?: string | null): ChipTone {
