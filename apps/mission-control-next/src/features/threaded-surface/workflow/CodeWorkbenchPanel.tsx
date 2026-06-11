@@ -697,6 +697,14 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [workbenchState?.packageManager],
   );
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("files");
+  /*
+   * Keep-alive for tab panes: a pane mounts on first visit and then stays
+   * mounted (hidden) so its Monaco editors keep their instances, view state,
+   * and scroll position across tab switches instead of cold-remounting.
+   */
+  const visitedPanesRef = useRef<Set<WorkbenchPaneId>>(new Set());
+  visitedPanesRef.current.add(activePane);
+  const paneMounted = (paneId: WorkbenchPaneId) => visitedPanesRef.current.has(paneId);
   const workbenchTabIdPrefix = useId();
   const workbenchTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const workbenchPaneDefs = useMemo(() => buildWorkbenchPaneDefs(Boolean(generatedArtifact)), [generatedArtifact]);
@@ -1928,8 +1936,13 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </section>
           ) : null}
 
-          {activePane === "files" ? (
-            <div role="tabpanel" id={buildWorkbenchPanelId("files")} aria-labelledby={buildWorkbenchTabId("files")}>
+          {paneMounted("files") ? (
+            <div
+              role="tabpanel"
+              hidden={activePane !== "files"}
+              id={buildWorkbenchPanelId("files")}
+              aria-labelledby={buildWorkbenchTabId("files")}
+            >
               {selectedFile ? (
                 <div className="mc-next-workbench-pane">
                   <div className="mc-next-panel-list-head">
@@ -1952,9 +1965,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "selected-diff" ? (
+          {paneMounted("selected-diff") ? (
             <div
               role="tabpanel"
+              hidden={activePane !== "selected-diff"}
               id={buildWorkbenchPanelId("selected-diff")}
               aria-labelledby={buildWorkbenchTabId("selected-diff")}
             >
@@ -1998,9 +2012,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "repo-diff" ? (
+          {paneMounted("repo-diff") ? (
             <div
               role="tabpanel"
+              hidden={activePane !== "repo-diff"}
               id={buildWorkbenchPanelId("repo-diff")}
               aria-labelledby={buildWorkbenchTabId("repo-diff")}
             >
@@ -2022,10 +2037,11 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "review-packet" ? (
+          {paneMounted("review-packet") ? (
             <div
               className="mc-next-workbench-pane mc-next-workbench-review-packet"
               role="tabpanel"
+              hidden={activePane !== "review-packet"}
               id={buildWorkbenchPanelId("review-packet")}
               aria-labelledby={buildWorkbenchTabId("review-packet")}
             >
@@ -2094,10 +2110,11 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "output" ? (
+          {paneMounted("output") ? (
             <div
               className="mc-next-workbench-pane"
               role="tabpanel"
+              hidden={activePane !== "output"}
               id={buildWorkbenchPanelId("output")}
               aria-labelledby={buildWorkbenchTabId("output")}
             >
@@ -2445,9 +2462,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "snippets" ? (
+          {paneMounted("snippets") ? (
             <div
               role="tabpanel"
+              hidden={activePane !== "snippets"}
               id={buildWorkbenchPanelId("snippets")}
               aria-labelledby={buildWorkbenchTabId("snippets")}
             >
@@ -2491,9 +2509,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
 
-          {activePane === "artifact" ? (
+          {paneMounted("artifact") ? (
             <div
               role="tabpanel"
+              hidden={activePane !== "artifact"}
               id={buildWorkbenchPanelId("artifact")}
               aria-labelledby={buildWorkbenchTabId("artifact")}
             >

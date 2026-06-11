@@ -2019,6 +2019,13 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   gap: 0.52rem;
 }
 
+/* Inactive workbench tab panes stay mounted (Monaco keep-alive) and are hidden
+   via the hidden attribute; the override keeps it winning over class-level
+   display rules such as .mc-next-workbench-review-packet's grid. */
+.mc-next-workbench-main > [role="tabpanel"][hidden] {
+  display: none !important;
+}
+
 .mc-next-workbench-empty {
   padding: 0.58rem;
   border-radius: 0.48rem;
