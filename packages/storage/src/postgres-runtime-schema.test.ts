@@ -265,7 +265,18 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_session_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_turn_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS citations_json TEXT/);
-    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
+  });
+
+  it("adds the degraded handoff column as a NEW migration so already-migrated runtimes receive it", () => {
+    // v24 is hash-protected as an applied migration; appending the column there
+    // would never run on runtimes whose schema_migrations already contain 24.
+    const degradedMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "chat_delegation_step_degraded_handoff_repairs",
+    );
+
+    assert.equal(degradedMigration?.version, 62);
+    assert.match(degradedMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(degradedMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
   });
 
   it("repairs execution plan step durable run columns for older Postgres runtimes", () => {

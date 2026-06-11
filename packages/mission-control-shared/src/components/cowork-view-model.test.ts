@@ -473,6 +473,14 @@ describe("deriveCoworkRunViewModel", () => {
             summary: "Final answer synthesized.",
             degradedHandoffStepIds: ["research-1"],
           },
+          {
+            stepId: "critic-1",
+            role: "Critic",
+            label: "Critique",
+            status: "completed",
+            summary: "Critique of degraded research.",
+            degradedHandoffStepIds: ["research-1"],
+          },
         ],
       } as never,
     });
@@ -489,6 +497,11 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.roleItems.items[1]?.note).toContain(
       "Synthesized from 1 failed-but-usable upstream handoff.",
     );
+    expect(viewModel.roleItems.items[2]).toMatchObject({
+      id: "role-critic-1",
+      tone: "warning",
+    });
+    expect(viewModel.roleItems.items[2]?.note).toContain("Worked from 1 failed-but-usable upstream handoff.");
   });
 
   it("prioritizes user input blockers, durable recovery, delegation failures, and trace fallback", () => {

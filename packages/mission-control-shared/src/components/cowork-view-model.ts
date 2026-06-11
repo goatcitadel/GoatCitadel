@@ -202,6 +202,13 @@ function mergeNotes(primary?: string, secondary?: string): string | undefined {
   return [primary, secondary].filter((value): value is string => Boolean(value)).join(" ") || undefined;
 }
 
+// Synthesizers "synthesize"; critic/reviewer/qa steps that proceed from a
+// degraded handoff get role-neutral wording.
+function describeDegradedHandoffNote(role: string | undefined, count: number): string {
+  const verb = /synthes/i.test(role ?? "") ? "Synthesized from" : "Worked from";
+  return `${verb} ${count} failed-but-usable upstream handoff${count === 1 ? "" : "s"}.`;
+}
+
 function limitItems<T>(items: T[], maxVisible: number): { items: T[]; overflow: number } {
   return {
     items: items.slice(0, maxVisible),
@@ -809,7 +816,7 @@ export function deriveCoworkRunViewModel(input: {
   );
 
   const degradedSourceStepIds = new Set(
-    roleSteps.flatMap((step) => step.degradedHandoffStepIds ?? []),
+    [...roleSteps, ...delegationSteps].flatMap((step) => step.degradedHandoffStepIds ?? []),
   );
   const roleItems = limitItems(
     [
@@ -826,9 +833,7 @@ export function deriveCoworkRunViewModel(input: {
           note: mergeNotes(
             normalizeSummary(step.summary ?? step.error, 120),
             degradedHandoffCount > 0
-              ? `Synthesized from ${degradedHandoffCount} failed-but-usable upstream handoff${
-                  degradedHandoffCount === 1 ? "" : "s"
-                }.`
+              ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
               : usedByDownstream
                 ? "Used by downstream synthesis despite failed status."
                 : undefined,
@@ -847,9 +852,7 @@ export function deriveCoworkRunViewModel(input: {
           note: mergeNotes(
             normalizeSummary(step.summary ?? step.output ?? step.error, 120),
             degradedHandoffCount > 0
-              ? `Synthesized from ${degradedHandoffCount} failed-but-usable upstream handoff${
-                  degradedHandoffCount === 1 ? "" : "s"
-                }.`
+              ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
               : usedByDownstream
                 ? "Used by downstream synthesis despite failed status."
                 : undefined,

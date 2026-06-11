@@ -754,8 +754,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
         ADD COLUMN IF NOT EXISTS child_session_id TEXT,
         ADD COLUMN IF NOT EXISTS child_turn_id TEXT,
-        ADD COLUMN IF NOT EXISTS citations_json TEXT,
-        ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT;
+        ADD COLUMN IF NOT EXISTS citations_json TEXT;
     `,
   },
   {
@@ -1693,6 +1692,17 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       ALTER TABLE prompt_pack_runs
         ADD COLUMN IF NOT EXISTS final_response_text TEXT,
         ADD COLUMN IF NOT EXISTS final_response_signals_json TEXT;
+    `,
+  },
+  {
+    // Applied migrations are immutable (verify:storage:migration-parity pins
+    // v1-v28 by SQL hash); columns for already-shipped tables land as new
+    // versions so runtimes that are past the original migration still get them.
+    version: 62,
+    name: "chat_delegation_step_degraded_handoff_repairs",
+    sql: `
+      ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT;
     `,
   },
 ];
