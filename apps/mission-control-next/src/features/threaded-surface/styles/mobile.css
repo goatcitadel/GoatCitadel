@@ -39,6 +39,17 @@
     max-height: min(68dvh, 52rem);
   }
 
+  /* Page-scroll mode disables the contained work-area layout, but the
+     host-work override in timeline-frame.css still pins the composer into the
+     document flow — below the fold on common laptop heights. Restore the
+     unified sticky behavior so the input is reachable the moment the surface
+     loads. */
+  .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+
   .mc-next-surface-host-work .mc-next-threaded-side-panel,
   .mc-next-surface-host-work .mc-next-threaded-context-panel,
   .mc-next-surface-host-work .mc-next-threaded-side-panel.cowork,
