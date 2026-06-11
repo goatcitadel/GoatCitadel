@@ -469,7 +469,7 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
       shell-quote:
-        specifier: ^1.8.4
+        specifier: 1.8.4
         version: 1.8.4
       sonner:
         specifier: ^2.0.7

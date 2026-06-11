@@ -39,6 +39,7 @@ All notable changes to GoatCitadel are documented in this file.
 - Memory admin defaults to the shipped operator lifecycle path, and Discord interaction/autocomplete response failures now emit diagnostics instead of being silently swallowed.
 - Release verification now builds `@goatcitadel/extensions-sdk` before fast test/smoke steps so clean generated-output lanes do not depend on prior local build artifacts.
 - MCP 1.0 authoring now keeps the visible runtime-invokable surface to local `stdio` plus the internal Approval Inbox template, with generic remote transports gated behind an explicit experimental flag.
+- Mission Control shared now pins `shell-quote` to `1.8.4` so the lockfile cannot resolve the vulnerable `<=1.8.3` range affected by CVE-2026-9277, where `quote()` failed to escape newlines in object `.op` values. The current command explainer imports only `parse()`, so the bump is precautionary for this package while preserving the fixed `quote()` behavior if the dependency surface expands later.
 
 ### Verification
 

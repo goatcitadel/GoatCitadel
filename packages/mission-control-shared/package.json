@@ -57,7 +57,7 @@
   ],
   "dependencies": {
     "@assistant-ui/react": "^0.12.25",
-    "shell-quote": "^1.8.4",
+    "shell-quote": "1.8.4",
     "@assistant-ui/react-markdown": "^0.12.9",
     "@fontsource-variable/geist": "^5.2.8",
     "@goatcitadel/contracts": "workspace:*",
