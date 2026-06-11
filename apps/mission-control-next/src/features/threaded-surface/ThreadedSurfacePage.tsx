@@ -1016,14 +1016,15 @@ function ThreadedPanelSwitcher({
         <ChevronDown size={13} />
       </button>
       {open ? (
-        <div className="mc-next-threaded-panel-menu" role="menu">
+        <div className="mc-next-threaded-panel-menu" role="menu" aria-label="Right panel menu">
           {UTILITY_PANEL_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
               <button
                 key={item.id}
                 type="button"
-                role="menuitem"
+                role="menuitemradio"
+                aria-checked={activePanel === item.id}
                 className={`mc-next-threaded-panel-menu-item${activePanel === item.id ? " active" : ""}`}
                 onClick={() => {
                   onSelectPanel(item.id);
@@ -1073,13 +1074,14 @@ function ThreadedUtilityPanel({
           Close
         </button>
       </div>
-      <div className="mc-next-utility-panel-tabs">
+      <div className="mc-next-utility-panel-tabs" role="group" aria-label="Right drawer panels">
         {UTILITY_PANEL_ITEMS.map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
               type="button"
+              aria-pressed={activePanel === item.id}
               className={`mc-next-utility-panel-tab${activePanel === item.id ? " active" : ""}`}
               onClick={() => onSelectPanel(item.id)}
             >

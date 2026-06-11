@@ -109,6 +109,8 @@
   --mc-scrollbar-track: rgba(28, 35, 48, 0.58);
   --mc-scrollbar-thumb: rgba(164, 177, 201, 0.44);
   --mc-scrollbar-thumb-hover: rgba(189, 202, 225, 0.62);
+  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  --focus-ring-offset: 2px;
   --surface-app: var(--background);
   --surface-shell: var(--mc-surface-1);
   --surface-sidebar: var(--mc-surface-2);
@@ -163,6 +165,8 @@
   --mc-scrollbar-track: rgba(150, 138, 110, 0.32);
   --mc-scrollbar-thumb: rgba(74, 66, 50, 0.34);
   --mc-scrollbar-thumb-hover: rgba(74, 66, 50, 0.5);
+  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  --focus-ring-offset: 2px;
   --surface-app: var(--background);
   --surface-shell: var(--mc-surface-1);
   --surface-sidebar: var(--mc-surface-2);
@@ -446,9 +450,9 @@
   font-size: 0.68rem;
   cursor: pointer;
   transition:
-    background-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    background-color var(--motion-base) var(--motion-ease),
+    color var(--motion-base) var(--motion-ease),
+    transform var(--motion-base) var(--motion-ease);
 }
 
 .mc-next-primary-link span {
@@ -461,6 +465,11 @@
 .mc-next-primary-link:focus-visible {
   background: var(--mc-surface-3);
   color: var(--foreground);
+}
+
+.mc-next-primary-link:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .mc-next-primary-link.active {

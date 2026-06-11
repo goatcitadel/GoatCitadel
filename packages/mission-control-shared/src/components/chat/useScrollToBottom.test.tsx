@@ -18,6 +18,7 @@ function baseSignals(overrides: Partial<ScrollToBottomContentSignals> = {}): Scr
     noticeCount: 0,
     queuedCount: 0,
     streamStatus: "idle",
+    streamingPreviewSignal: null,
     selectedTurnId: "turn-1",
     streamError: null,
     ...overrides,
@@ -138,6 +139,41 @@ describe("useScrollToBottom", () => {
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("auto-follows visible streaming preview growth while the turn count is unchanged", () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const onBottomStateChange = vi.fn();
+
+    render({
+      followOutput: true,
+      onBottomStateChange,
+      signals: baseSignals({
+        latestTraceStatus: "running",
+        streamStatus: "streaming",
+        streamingPreviewSignal: "turn-1:8:running",
+      }),
+    });
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+
+    render({
+      followOutput: true,
+      onBottomStateChange,
+      signals: baseSignals({
+        latestTraceStatus: "running",
+        streamStatus: "streaming",
+        streamingPreviewSignal: "turn-1:42:running",
+      }),
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("scrolls synchronously to the end when requestAnimationFrame is unavailable", () => {
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
     vi.stubGlobal("requestAnimationFrame", undefined);
@@ -204,6 +240,40 @@ describe("useScrollToBottom", () => {
       observerCallback?.([{ isIntersecting: true }]);
     });
     expect(onBottomStateChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("does not let the sentinel observer disable follow mode during content growth", () => {
+    const observe = vi.fn();
+    let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
+    class FakeIntersectionObserver {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        observerCallback = callback;
+      }
+      observe = observe;
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      takeRecords = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as unknown as typeof IntersectionObserver);
+    vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const onBottomStateChange = vi.fn();
+    render({ followOutput: true, onBottomStateChange, signals: baseSignals({ streamStatus: "streaming" }) });
+    const scrollElement = container?.querySelector(".scroll") as HTMLElement;
+    setScrollMetrics(scrollElement, { scrollHeight: 1200, scrollTop: 100, clientHeight: 400 });
+    onBottomStateChange.mockClear();
+
+    act(() => {
+      observerCallback?.([{ isIntersecting: false }]);
+    });
+
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
   it("disconnects the observer and cancels a pending follow frame on unmount", async () => {
