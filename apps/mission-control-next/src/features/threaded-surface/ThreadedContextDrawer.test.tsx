@@ -1,7 +1,31 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
+
+function traceFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "completed",
+    failure: null,
+    mode: "chat",
+    webMode: "off",
+    memoryMode: "workspace",
+    thinkingLevel: "standard",
+    startedAt: "2026-05-01T00:00:00.000Z",
+    toolRuns: [],
+    citations: [],
+    routing: {
+      fallbackUsed: false,
+      primaryProviderId: "openai",
+      primaryModel: "gpt-5.4-mini",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4-mini",
+      fallbackReason: null,
+    },
+    ...overrides,
+  };
+}
 
 function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   const match = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
@@ -172,20 +196,15 @@ describe("ThreadedContextDrawer", () => {
               onPrefPatch: vi.fn(),
               activeGeneratedArtifact: null,
               onCloseGeneratedArtifact: vi.fn(),
+              selectedSession: {
+                sessionId: "session-1",
+                title: "Session title",
+                pinned: false,
+                lifecycleStatus: "active",
+              },
               selectedTurn: {
                 turnId: "turn-1",
-                trace: {
-                  status: "completed",
-                  failure: null,
-                  routing: {
-                    fallbackUsed: false,
-                    primaryProviderId: "openai",
-                    primaryModel: "gpt-5.4-mini",
-                    effectiveProviderId: "openai",
-                    effectiveModel: "gpt-5.4-mini",
-                    fallbackReason: null,
-                  },
-                },
+                trace: traceFixture(),
               },
               onExportRunBundle,
             } as any
@@ -264,9 +283,16 @@ describe("ThreadedContextDrawer", () => {
           props={baseProps({
             selectedProviderId: null,
             selectedModel: null,
+            selectedSession: {
+              sessionId: "session-1",
+              workspaceId: "workspace-7",
+              title: "Session title",
+              pinned: false,
+              lifecycleStatus: "active",
+            },
             selectedTurn: {
               turnId: "turn-failed",
-              trace: {
+              trace: traceFixture({
                 status: "failed",
                 failure: { message: "Tool execution failed." },
                 routing: {
@@ -277,7 +303,7 @@ describe("ThreadedContextDrawer", () => {
                   effectiveModel: "claude",
                   fallbackReason: "Primary timed out.",
                 },
-              },
+              }),
             },
           })}
         />,
@@ -289,7 +315,13 @@ describe("ThreadedContextDrawer", () => {
     });
     expect(collectText(renderer!.root)).toContain("Fallback used");
     expect(collectText(renderer!.root)).toContain("Tool execution failed.");
-    expect(collectText(renderer!.root)).toMatch(/Primary:\s+n\/a/);
+    // The rich trace card replaces the old thin routing section and receives
+    // the session's workspace so the artifact inspector can fetch raw output.
+    const traceCard = renderer!.root.findByType(ChatTraceCard);
+    expect(traceCard.props.workspaceId).toBe("workspace-7");
+    expect(collectText(renderer!.root)).toContain("Requested: not recorded");
+    expect(collectText(renderer!.root)).toContain("Effective: anthropic · claude");
+    expect(collectText(renderer!.root)).toMatch(/Fallback reason:\s+Primary timed out\./);
 
     await act(async () => {
       renderer!.update(<ThreadedContextDrawer surface="chat" props={baseProps({ selectedProviderId: null })} />);
@@ -316,9 +348,8 @@ describe("ThreadedContextDrawer", () => {
             onCloseGeneratedArtifact: undefined,
             selectedTurn: {
               turnId: "turn-running",
-              trace: {
+              trace: traceFixture({
                 status: "running",
-                failure: null,
                 routing: {
                   fallbackUsed: false,
                   primaryProviderId: "openai",
@@ -327,7 +358,7 @@ describe("ThreadedContextDrawer", () => {
                   effectiveModel: "gpt",
                   fallbackReason: null,
                 },
-              },
+              }),
             },
           })}
         />,

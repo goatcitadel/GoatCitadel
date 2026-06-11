@@ -9,7 +9,7 @@ import {
   resolveDelegationRoute,
   resolveSelectedTurn,
 } from "./useChatDelegationPolicyActions";
-import { updateThreadFromStreamChunk } from "../chat-thread-reducer";
+import { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

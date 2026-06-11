@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { deriveCoworkRunViewModel, resolveActiveWorkflowTurn } from "../cowork-view-model";
 import { resolveSelectedTurnId } from "./chat-page-pure-helpers";
-import { updateThreadFromStreamChunk, type PendingStreamTurnSeed } from "../chat-thread-reducer";
+import {
+  updateThreadFromStreamChunk,
+  type PendingStreamTurnSeed,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 
 const sessionId = "session-loop24";
 

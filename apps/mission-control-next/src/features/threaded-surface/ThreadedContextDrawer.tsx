@@ -7,6 +7,7 @@ import type {
   ChatSubagentPolicy,
   ChatThinkingLevel,
 } from "@goatcitadel/contracts";
+import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { StatusChip } from "../native-routes/primitives";
@@ -209,25 +210,11 @@ export function ThreadedContextDrawer({
                   </div>
                 ) : null}
               </section>
-              <section className="mc-next-context-card">
-                <p className="mc-next-panel-kicker">Routing</p>
-                <p>
-                  Primary:{" "}
-                  {[props.selectedTurn.trace.routing.primaryProviderId, props.selectedTurn.trace.routing.primaryModel]
-                    .filter(Boolean)
-                    .join(" / ") || "n/a"}
-                </p>
-                <p>
-                  Effective:{" "}
-                  {[
-                    props.selectedTurn.trace.routing.effectiveProviderId,
-                    props.selectedTurn.trace.routing.effectiveModel,
-                  ]
-                    .filter(Boolean)
-                    .join(" / ") || "n/a"}
-                </p>
-                <p>{props.selectedTurn.trace.routing.fallbackReason ?? "No fallback reason recorded."}</p>
-              </section>
+              <ChatTraceCard
+                trace={props.selectedTurn.trace}
+                workspaceId={props.selectedSession.workspaceId ?? "default"}
+                defaultCollapsed={false}
+              />
             </>
           ) : (
             <section className="mc-next-context-card">

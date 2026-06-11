@@ -3,7 +3,7 @@ import {
   isThreadMutatingStreamChunk,
   updateThreadFromStreamChunk,
   type PendingStreamTurnSeed,
-} from "./chat-thread-reducer";
+} from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 
 const sessionId = "session-1";
 
