@@ -46,5 +46,10 @@ function normalize(p: string): string {
 }
 
 function overlaps(a: string, b: string): boolean {
+  // Paths like "/" or "**" normalize to "" and mean the repo root, which
+  // overlaps every other path.
+  if (a === "" || b === "") {
+    return true;
+  }
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }

@@ -458,7 +458,8 @@ const CHECK_GROUPS = Object.freeze({
         "Do not adopt Python gateway runtime",
       ]),
       fileContains("eval-assets/goatcitadel_prompt_pack_v4_agentic_focused.md", ["Cowork", "Code"]),
-      fileContains("apps/gateway/src/services/prompt-pack-service.ts", [
+      fileContains("apps/gateway/src/services/prompt-pack-service.ts", ["agentic_surface"]),
+      fileContains("apps/gateway/src/services/prompt-pack-execution-profile.ts", [
         "agentic_surface",
         "single_turn_harness",
       ]),

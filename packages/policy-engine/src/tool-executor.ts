@@ -103,7 +103,7 @@ const FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY = new Map<string, string[]>([
 function scrubSensitiveOutput(text: string): string {
   let scrubbed = text;
   for (const pattern of SENSITIVE_PATTERNS) {
-    scrubbed = scrubbed.replace(new RegExp(pattern.source, pattern.flags), "[REDACTED]");
+    scrubbed = scrubbed.replace(pattern, "[REDACTED]");
   }
   return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
 }
@@ -5567,7 +5567,10 @@ async function searchFileContents(input: {
       const entries = await fs.readdir(current, { withFileTypes: true });
       for (const entry of entries) {
         const entryPath = path.join(current, entry.name);
-        if (shouldSkipSearchEntry(entry.name) || shouldSkipSearchEntryAtRoot(fullRoot, entryPath, entry.isDirectory())) {
+        if (
+          shouldSkipSearchEntry(entry.name) ||
+          shouldSkipSearchEntryAtRoot(fullRoot, entryPath, entry.isDirectory())
+        ) {
           if (entry.isDirectory()) {
             skippedDirs += 1;
           }

@@ -383,6 +383,17 @@
   .mc-next-memory-disabled-guide p {
     line-height: 1.4;
   }
+
+  .mc-next-memory-disabled-guide .mc-next-settings-button-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+  }
+
+  .mc-next-memory-disabled-guide .mc-next-button {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 .mc-next-memory-shell .mc-next-runtime-metric-grid {

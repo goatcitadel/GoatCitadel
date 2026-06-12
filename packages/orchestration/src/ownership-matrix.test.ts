@@ -57,6 +57,30 @@ describe("findOwnershipConflicts", () => {
     expect(findOwnershipConflicts(wave)).toEqual([]);
   });
 
+  it("treats root-equivalent paths as overlapping everything", () => {
+    const wave: OrchestrationWave = {
+      waveId: "wave-1",
+      verify: [],
+      budgetUsd: 10,
+      ownership: [
+        { agentId: "a", paths: ["**"] },
+        { agentId: "b", paths: ["packages/api/**"] },
+      ],
+      phases: [],
+    };
+
+    expect(findOwnershipConflicts(wave).length).toBeGreaterThan(0);
+
+    const slashRoot: OrchestrationWave = {
+      ...wave,
+      ownership: [
+        { agentId: "a", paths: ["apps/web/**"] },
+        { agentId: "b", paths: ["/"] },
+      ],
+    };
+    expect(findOwnershipConflicts(slashRoot).length).toBeGreaterThan(0);
+  });
+
   it("allows empty ownership", () => {
     const wave: OrchestrationWave = {
       waveId: "wave-1",
