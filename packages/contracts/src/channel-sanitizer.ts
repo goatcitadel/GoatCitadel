@@ -182,11 +182,14 @@ function isInternalHtmlCommentBody(body: string): boolean {
 function redactOutboundSecrets(message: string): { message: string; count: number } {
   let count = 0;
   const redacted = message
-    .replace(/\b(authorization|api[-_]?key|token|secret|password)\s*[:=]\s*["']?[^"'\s]{8,}/gi, (match, label) => {
-      count += 1;
-      return `${label}=[REDACTED]`;
-    })
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, () => {
+    .replace(
+      /\b(authorization|api[-_]?key|token|secret|password)\b\s*[:=]\s*(?:"[A-Za-z0-9._~+/=-]{8,}"|'[A-Za-z0-9._~+/=-]{8,}'|[A-Za-z0-9._~+/=-]{8,})(?=$|[\s,;)\]}])/gi,
+      (_match, label) => {
+        count += 1;
+        return `${label}=[REDACTED]`;
+      },
+    )
+    .replace(/\bBearer[ \t]+[A-Za-z0-9\-._~+/]+={0,}(?=$|[\s"',;)\]}])/gi, () => {
       count += 1;
       return "Bearer [REDACTED]";
     })
@@ -194,7 +197,7 @@ function redactOutboundSecrets(message: string): { message: string; count: numbe
       count += 1;
       return "[REDACTED]";
     })
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{8,}@/g, () => {
+    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]+@/g, () => {
       count += 1;
       return "[REDACTED]@";
     });

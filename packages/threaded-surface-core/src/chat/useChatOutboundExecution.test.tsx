@@ -186,57 +186,71 @@ function Harness(props: {
   );
 
   const outbound = useChatOutboundExecution({
-    surfaceMode: props.surfaceMode,
-    selectedSessionId: props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId,
-    selectedSession:
-      props.selectedSession === undefined
-        ? ({
-            sessionId: "session-1",
-            projectId: "project-1",
-            pinned: false,
-            lifecycleStatus: "active",
-            scope: "mission",
-          } as any)
-        : props.selectedSession,
-    streamEnabled: props.streamEnabled ?? false,
-    sending,
-    error,
-    queuedOutbound: props.queuedOutbound ?? [],
-    activeStreamRef,
-    prefs:
-      props.prefs === undefined
-        ? ({
-            sessionId: "session-1",
-            mode: "chat",
-            providerId: "openai-codex",
-            model: "gpt-5.5",
-            webMode: "auto",
-            memoryMode: "auto",
-            thinkingLevel: "standard",
-          } as any)
-        : props.prefs,
-    fullWebAccess: props.fullWebAccess,
-    thread,
-    messages: messages as any,
-    setThread,
-    setError,
-    setSending,
-    setDraft,
-    setPendingAttachments,
-    setEditingTurnId: vi.fn(),
-    setCapabilitySuggestions,
-    setSpecialistSuggestions,
-    loadSidebar: props.loadSidebar ?? vi.fn(async () => undefined),
-    loadSessionCoreState: props.loadSessionCoreState ?? vi.fn(async () => undefined),
-    ensureSession: props.ensureSession ?? vi.fn(async () => ({ sessionId: "session-1" }) as any),
-    pushLocalNotice: vi.fn(),
-    handleCommandExecution: props.handleCommandExecution ?? vi.fn(async () => undefined),
-    executeOutboundItemRef,
-    tryBeginOutboundExecutionRef,
-    applyFetchedThreadRef,
-    messageMutationVersionRef,
-    ensureFreshRoutePreflight,
-    isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
+    sessionConfig: {
+      surfaceMode: props.surfaceMode,
+      selectedSessionId: props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId,
+      selectedSession:
+        props.selectedSession === undefined
+          ? ({
+              sessionId: "session-1",
+              projectId: "project-1",
+              pinned: false,
+              lifecycleStatus: "active",
+              scope: "mission",
+            } as any)
+          : props.selectedSession,
+      prefs:
+        props.prefs === undefined
+          ? ({
+              sessionId: "session-1",
+              mode: "chat",
+              providerId: "openai-codex",
+              model: "gpt-5.5",
+              webMode: "auto",
+              memoryMode: "auto",
+              thinkingLevel: "standard",
+            } as any)
+          : props.prefs,
+      fullWebAccess: props.fullWebAccess,
+    },
+    streamConfig: {
+      streamEnabled: props.streamEnabled ?? false,
+      activeStreamRef,
+    },
+    stateConfig: {
+      sending,
+      error,
+      queuedOutbound: props.queuedOutbound ?? [],
+      thread,
+      messages: messages as any,
+    },
+    stateSetters: {
+      setThread,
+      setError,
+      setSending,
+      setDraft,
+      setPendingAttachments,
+      setEditingTurnId: vi.fn(),
+      setCapabilitySuggestions,
+      setSpecialistSuggestions,
+    },
+    operations: {
+      loadSidebar: props.loadSidebar ?? vi.fn(async () => undefined),
+      loadSessionCoreState: props.loadSessionCoreState ?? vi.fn(async () => undefined),
+      ensureSession: props.ensureSession ?? vi.fn(async () => ({ sessionId: "session-1" }) as any),
+      pushLocalNotice: vi.fn(),
+      handleCommandExecution: props.handleCommandExecution ?? vi.fn(async () => undefined),
+    },
+    refs: {
+      executeOutboundItemRef,
+      tryBeginOutboundExecutionRef,
+      applyFetchedThreadRef,
+      messageMutationVersionRef,
+    },
+    routing: {
+      ensureFreshRoutePreflight,
+      isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
+    },
   });
 
   latest = {

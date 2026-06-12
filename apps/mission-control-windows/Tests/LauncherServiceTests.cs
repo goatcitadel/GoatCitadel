@@ -80,8 +80,9 @@ public sealed class LauncherServiceTests
     {
         var root = CreateTempRoot();
         var appDir = Path.Join(root, "custom-app");
-        Touch(Path.Join(root, "app", "runtime", "node", "node.exe"));
-        Touch(Path.Join(root, "app", "bin", "goatcitadel.mjs"));
+        var node = Touch(Path.Join(root, "app", "runtime", "node", "node.exe"));
+        var script = Touch(Path.Join(root, "app", "bin", "goatcitadel.mjs"));
+        Touch(Path.Join(root, "app", "release-manifest.json"));
         var service = new LauncherService(new LauncherEnvironment(
             new Dictionary<string, string?>
             {
@@ -93,6 +94,22 @@ public sealed class LauncherServiceTests
         var invocation = service.ResolveLauncher();
 
         Assert.AreEqual(appDir, invocation.AppDir);
+        Assert.AreEqual(node, invocation.Program);
+        Assert.AreEqual(script, invocation.ArgsPrefix.Single());
+        Assert.IsFalse(invocation.WindowsShell);
+    }
+
+    [TestMethod]
+    public void DoesNotResolvePackagedLauncherFromDesktopExeAncestorsWhenManifestMissing()
+    {
+        var root = CreateTempRoot();
+        Touch(Path.Join(root, "app", "runtime", "node", "node.exe"));
+        Touch(Path.Join(root, "app", "bin", "goatcitadel.mjs"));
+        var currentExe = Touch(Path.Join(root, "app", "desktop", "GoatCitadel-Mission-Control-Windows.exe"));
+        var service = new LauncherService(new LauncherEnvironment(new Dictionary<string, string?>(), currentExe));
+
+        var error = Assert.ThrowsException<InvalidOperationException>(() => service.ResolveLauncher());
+        StringAssert.Contains(error.Message, "Unable to locate GoatCitadel launcher");
     }
 
     [TestMethod]
@@ -100,6 +117,7 @@ public sealed class LauncherServiceTests
     {
         var root = CreateTempRoot();
         var sourceLauncher = Touch(Path.Join(root, "bin", "goatcitadel.mjs"));
+        Touch(Path.Join(root, "package.json"));
         var currentExe = Touch(Path.Join(root, "tools", "desktop", "host.exe"));
         var service = new LauncherService(new LauncherEnvironment(
             new Dictionary<string, string?>(),

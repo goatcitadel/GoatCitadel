@@ -1409,7 +1409,7 @@ describe("MissionThreadedControllerHost", () => {
       session: { sessionId: "session-2" },
     });
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/project Mission");
+      await outboundInput.operations.handleCommandExecution("session-1", "/project Mission");
       await flushEffects();
     });
     expect(sessionData.setPrefs).toHaveBeenCalledWith(expect.objectContaining({ memoryMode: "workspace" }));
@@ -1417,7 +1417,7 @@ describe("MissionThreadedControllerHost", () => {
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/skill" });
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/skill enable skill-1");
+      await outboundInput.operations.handleCommandExecution("session-1", "/skill enable skill-1");
       await flushEffects();
     });
     expect(fetchSkillsMock).toHaveBeenCalled();
@@ -1427,7 +1427,7 @@ describe("MissionThreadedControllerHost", () => {
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/mcp" });
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/mcp connect server-1");
+      await outboundInput.operations.handleCommandExecution("session-1", "/mcp connect server-1");
       await flushEffects();
     });
     expect(fetchMcpServersMock).toHaveBeenCalled();
@@ -1438,20 +1438,20 @@ describe("MissionThreadedControllerHost", () => {
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/goal", message: "Goal paused." });
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/goal pause");
+      await outboundInput.operations.handleCommandExecution("session-1", "/goal pause");
       await flushEffects();
     });
     expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause", { surface: "cowork" });
 
     parseChatCommandMock.mockClear();
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/queue followup run focused tests");
+      await outboundInput.operations.handleCommandExecution("session-1", "/queue followup run focused tests");
       await flushEffects();
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/btw quick aside");
+      await outboundInput.operations.handleCommandExecution("session-1", "/btw quick aside");
       await flushEffects(4);
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
@@ -1824,7 +1824,7 @@ describe("MissionThreadedControllerHost", () => {
       prefs: { ...prefs, planningMode: "advisory" },
     });
     await act(async () => {
-      await outboundInput.handleCommandExecution("session-1", "/plan advisory");
+      await outboundInput.operations.handleCommandExecution("session-1", "/plan advisory");
       await flushEffects();
     });
     expect(sessionData.setPrefs).toHaveBeenCalledWith(expect.objectContaining({ planningMode: "advisory" }));
@@ -2672,12 +2672,12 @@ describe("MissionThreadedControllerHost", () => {
       const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
       sessionControlsInput?.setQueuedOutbound([]);
       surfaceOrchestrationInput?.setPendingApproval(null);
-      await outboundInput?.ensureFreshRoutePreflight({ content: "refresh route" });
-      expect(outboundInput?.isRoutePreflightAcknowledged("route-hash")).toBe(false);
+      await outboundInput?.routing.ensureFreshRoutePreflight({ content: "refresh route" });
+      expect(outboundInput?.routing.isRoutePreflightAcknowledged("route-hash")).toBe(false);
       latestSurfaceInput?.activeSessionSurfaceProps?.onAcknowledgeRouteBoundary();
       await flushEffects(4);
       const acknowledgedOutboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
-      acknowledgedOutboundInput?.isRoutePreflightAcknowledged("route-hash");
+      acknowledgedOutboundInput?.routing.isRoutePreflightAcknowledged("route-hash");
       latestSurfaceInput?.sessionRail.onToggleProjectCreate();
       latestSurfaceInput?.sessionRail.onCreateProject();
       latestSurfaceInput?.activeSessionSurfaceProps?.onToggleArchiveSession();

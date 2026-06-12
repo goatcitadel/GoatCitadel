@@ -1,26 +1,16 @@
-/* eslint-disable max-lines -- Outbound chat execution stays centralized so stream lifecycle, approval context, and retry handoff remain consistent. */
 import type {
-  ChatAttachmentRecord,
-  ChatCapabilityUpgradeSuggestion,
   ChatMessageRecord,
   RoutingPreflightResult,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
-  ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatThreadResponse,
-  ChatUserInputPromptResponse,
 } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
-  answerChatUserInputPrompt,
-  approveChatTool,
-  denyChatTool,
   editChatTurn,
-  fetchChatPendingApprovals,
   resumeChatTurnStream,
   retryChatTurn,
-  selectChatBranchTurn,
   sendAgentChatMessage,
   streamAgentChatMessage,
   streamEditChatTurn,
@@ -31,48 +21,26 @@ import {
   type PendingStreamTurnSeed,
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
-import {
-  ChatStreamingPreviewBuffer,
-  isReducedMotionPreferred,
-  type ChatStreamingPreview,
-  type ChatVisualStreamMode,
-} from "./chat-streaming-preview";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
 import { isAbortError } from "./chat-page-derivations";
-import {
-  shouldApplyFetchedMessagesAfterStream,
-  shouldExecuteLocalChatCommand,
-  type FinalizedStreamMessageState,
-} from "./chat-page-pure-helpers";
-import { deriveThreadPendingApproval, mergePendingApproval, type PendingApprovalRecord } from "./chat-pending-approval";
-import {
-  deriveThreadPendingUserInput,
-  mergePendingUserInput,
-  type PendingUserInputRecord,
-} from "./chat-pending-user-input";
+import { shouldApplyFetchedMessagesAfterStream, shouldExecuteLocalChatCommand } from "./chat-page-pure-helpers";
 import type { ChatErrorSource } from "./chat-error-copy";
-import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
+import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
+import { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+import type { ActiveChatStreamState, UseChatOutboundExecutionInput } from "./useChatOutboundExecution.types";
+export type {
+  ActiveChatStreamState,
+  PendingApprovalState,
+  PendingUserInputState,
+  UseChatOutboundExecutionInput,
+} from "./useChatOutboundExecution.types";
 
-const APPROVAL_RESUMED_REFRESH_DELAYS_MS = [750, 2_000] as const;
-const APPROVAL_FALLBACK_REFRESH_DELAYS_MS = [500, 1_500, 3_000] as const;
 const MAX_STREAM_RESUME_ATTEMPTS = 2;
 const ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE = "Please confirm the route fallback before sending.";
 const STREAMING_REQUEST_FAILED_MESSAGE = "Streaming request failed.";
-
-export type PendingApprovalState = PendingApprovalRecord;
-export type PendingUserInputState = PendingUserInputRecord;
-
-export interface ActiveChatStreamState {
-  sessionId: string;
-  streamToken: string;
-  controller: AbortController;
-  turnId?: string;
-  lastEventId?: string;
-  runId?: string;
-}
 
 export function abortActiveChatStream(stream: ActiveChatStreamState | null): void {
   if (!stream || stream.controller.signal.aborted) {
@@ -93,73 +61,13 @@ export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | nu
   };
 }
 
-export function useChatOutboundExecution(input: {
-  surfaceMode?: ChatSessionPrefsRecord["mode"];
-  selectedSessionId: string | null;
-  selectedSession: ChatSessionRecord | null;
-  streamEnabled: boolean;
-  visualStreamMode?: ChatVisualStreamMode;
-  sending: boolean;
-  error: string | null;
-  queuedOutbound: OutboundQueueItem[];
-  activeStreamRef: MutableRefObject<ActiveChatStreamState | null>;
-  prefs: ChatSessionPrefsRecord | null;
-  fullWebAccess?: boolean;
-  selectedProviderId?: string;
-  selectedModel?: string;
-  thread: ChatThreadResponse | null;
-  messages: ChatMessageRecord[];
-  setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
-  setError: (value: string | null, source?: ChatErrorSource) => void;
-  setSending: (value: boolean) => void;
-  setDraft: React.Dispatch<React.SetStateAction<string>>;
-  setPendingAttachments: React.Dispatch<React.SetStateAction<ChatAttachmentRecord[]>>;
-  setEditingTurnId: (value: string | null) => void;
-  setCapabilitySuggestions: (
-    value:
-      | ChatCapabilityUpgradeSuggestion[]
-      | ((current: ChatCapabilityUpgradeSuggestion[]) => ChatCapabilityUpgradeSuggestion[]),
-  ) => void;
-  setSpecialistSuggestions: (
-    value:
-      | ChatSpecialistCandidateSuggestionRecord[]
-      | ((current: ChatSpecialistCandidateSuggestionRecord[]) => ChatSpecialistCandidateSuggestionRecord[]),
-  ) => void;
-  loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
-  loadSessionCoreState: (
-    sessionId: string,
-    options?: { background?: boolean; includeThread?: boolean },
-  ) => Promise<void>;
-  ensureSession: () => Promise<ChatSessionRecord>;
-  pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
-  handleCommandExecution: (sessionId: string, commandText: string) => Promise<void>;
-  executeOutboundItemRef: MutableRefObject<(item: OutboundQueueItem) => Promise<void>>;
-  tryBeginOutboundExecutionRef: MutableRefObject<() => boolean>;
-  applyFetchedThreadRef: MutableRefObject<(thread: ChatThreadResponse, requestVersion: number | null) => boolean>;
-  messageMutationVersionRef: MutableRefObject<number>;
-  ensureFreshRoutePreflight: (input: {
-    sessionId?: string | null;
-    action: OutboundQueueItem["action"];
-    turnId?: string | null;
-    force?: boolean;
-  }) => Promise<RoutingPreflightResult | null>;
-  isRoutePreflightAcknowledged: (hash: string) => boolean;
-}) {
+export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
+  const { sessionConfig, streamConfig, stateConfig, stateSetters, operations, refs, routing } = input;
+  const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
+    sessionConfig;
+  const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
+  const { sending, error, queuedOutbound, thread, messages } = stateConfig;
   const {
-    surfaceMode,
-    selectedSessionId,
-    selectedSession,
-    streamEnabled,
-    visualStreamMode = "smooth",
-    sending,
-    error,
-    queuedOutbound,
-    activeStreamRef,
-    prefs,
-    selectedProviderId,
-    selectedModel,
-    thread,
-    messages,
     setThread,
     setError,
     setSending,
@@ -168,18 +76,11 @@ export function useChatOutboundExecution(input: {
     setEditingTurnId,
     setCapabilitySuggestions,
     setSpecialistSuggestions,
-    loadSidebar,
-    loadSessionCoreState,
-    ensureSession,
-    pushLocalNotice,
-    handleCommandExecution,
-    executeOutboundItemRef,
-    tryBeginOutboundExecutionRef,
-    applyFetchedThreadRef,
-    messageMutationVersionRef,
-    ensureFreshRoutePreflight,
-    isRoutePreflightAcknowledged,
-  } = input;
+  } = stateSetters;
+  const { loadSidebar, loadSessionCoreState, ensureSession, pushLocalNotice, handleCommandExecution } = operations;
+  const { executeOutboundItemRef, tryBeginOutboundExecutionRef, applyFetchedThreadRef, messageMutationVersionRef } =
+    refs;
+  const { ensureFreshRoutePreflight, isRoutePreflightAcknowledged } = routing;
 
   const getOutboundErrorSource = useCallback((action: OutboundQueueItem["action"]): ChatErrorSource => {
     if (action === "edit") {
@@ -191,118 +92,15 @@ export function useChatOutboundExecution(input: {
     return "other";
   }, []);
 
-  const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
-  const [approvalPending, setApprovalPending] = useState(false);
-  const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputState | null>(null);
-  const [userInputPending, setUserInputPending] = useState(false);
-  const [streamingPreview, setStreamingPreview] = useState<ChatStreamingPreview | null>(null);
   const selectedSessionIdRef = useRef<string | null>(selectedSessionId);
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
-  const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
-  const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
-  const visualStreamModeRef = useRef<ChatVisualStreamMode>(visualStreamMode);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Deferred approval-resolve refresh timers (APPROVAL_*_REFRESH_DELAYS_MS). Tracked
-  // so they can be cleared on unmount and on session switch, preventing refetches /
-  // setState for a session the operator has already left.
-  const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const sendingRef = useRef(false);
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
   const threadRef = useRef<ChatThreadResponse | null>(thread);
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
-
-  const refreshPendingApprovalQueue = useCallback(
-    async (sessionId: string) => {
-      const response = await fetchChatPendingApprovals(sessionId);
-      const activeItems = response.items.filter((item) => !item.stale);
-      const riskCounts = activeItems.reduce<Record<string, number>>((counts, item) => {
-        const key = item.riskLevel ?? "unknown";
-        counts[key] = (counts[key] ?? 0) + 1;
-        return counts;
-      }, {});
-      recordClientDiagnostic({
-        level: "debug",
-        category: "chat",
-        event: "approval.queue_synced",
-        message: "Synced pending approval queue",
-        sessionId,
-        context: {
-          pendingCount: activeItems.length,
-          activeApprovalId: response.activeApprovalId,
-          riskCounts,
-        },
-      });
-      const active =
-        activeItems.find((item) => item.approvalId === response.activeApprovalId) ?? activeItems[0] ?? null;
-      if (!active) {
-        setPendingApproval(null);
-        return;
-      }
-      const nextApproval = {
-        approvalId: active.approvalId,
-        sessionId: active.sessionId ?? sessionId,
-        kind: active.kind,
-        toolName: active.toolName,
-        reason: active.reason,
-        riskLevel: active.riskLevel,
-        expiresAt: active.expiresAt,
-        codeHash: typeof active.details?.codeHash === "string" ? active.details.codeHash : undefined,
-        wrapperManifestHash:
-          typeof active.details?.wrapperManifestHash === "string" ? active.details.wrapperManifestHash : undefined,
-        capabilitySnapshotId:
-          typeof active.details?.capabilitySnapshotId === "string" ? active.details.capabilitySnapshotId : undefined,
-        inspectPath: typeof active.details?.inspectPath === "string" ? active.details.inspectPath : undefined,
-        requestedOutputIntent:
-          typeof active.details?.requestedOutputIntent === "string" ? active.details.requestedOutputIntent : undefined,
-        saveCandidateOnSuccess:
-          typeof active.details?.saveCandidateOnSuccess === "boolean"
-            ? active.details.saveCandidateOnSuccess
-            : undefined,
-        remainingCount: response.remainingCount,
-        affectedResources: Array.isArray(active.details?.affectedResources)
-          ? active.details.affectedResources.filter((value): value is string => typeof value === "string")
-          : undefined,
-        codePreview: typeof active.details?.codePreview === "string" ? active.details.codePreview : undefined,
-      };
-      setPendingApproval((current) => {
-        const changed =
-          !current ||
-          current.approvalId !== nextApproval.approvalId ||
-          current.sessionId !== nextApproval.sessionId ||
-          current.toolName !== nextApproval.toolName ||
-          current.reason !== nextApproval.reason ||
-          current.riskLevel !== nextApproval.riskLevel ||
-          current.remainingCount !== nextApproval.remainingCount;
-        if (changed) {
-          recordChatApprovalPhase({
-            phase: "prompt_arrived",
-            sessionId,
-            approval: {
-              approvalId: nextApproval.approvalId,
-              toolName: nextApproval.toolName,
-              kind: nextApproval.kind,
-              reason: nextApproval.reason,
-              riskLevel: nextApproval.riskLevel,
-              remainingCount: nextApproval.remainingCount,
-              affectedResourceCount: nextApproval.affectedResources?.length,
-              requestedOutputIntent: nextApproval.requestedOutputIntent,
-              expiresAt: nextApproval.expiresAt,
-            },
-            source: "queue",
-            level: "debug",
-            context: {
-              queueDepth: activeItems.length,
-              riskCounts,
-            },
-          });
-        }
-        return nextApproval;
-      });
-    },
-    [setPendingApproval],
-  );
 
   useEffect(() => {
     latestMessagesRef.current = messages;
@@ -315,13 +113,6 @@ export function useChatOutboundExecution(input: {
   useEffect(() => {
     threadRef.current = thread;
   }, [thread]);
-
-  useEffect(() => {
-    visualStreamModeRef.current = visualStreamMode;
-    if (visualStreamMode === "instant") {
-      streamingPreviewBufferRef.current?.flush({ forceVisible: true });
-    }
-  }, [visualStreamMode]);
 
   useEffect(() => {
     sendingRef.current = sending;
@@ -340,67 +131,41 @@ export function useChatOutboundExecution(input: {
     [messageMutationVersionRef, setThread],
   );
 
-  const getStreamingPreviewBuffer = useCallback(() => {
-    if (!streamingPreviewBufferRef.current) {
-      streamingPreviewBufferRef.current = new ChatStreamingPreviewBuffer({
-        onFlush: setStreamingPreview,
-        isReducedMotion: () => visualStreamModeRef.current === "instant" || isReducedMotionPreferred(),
-      });
-    }
-    return streamingPreviewBufferRef.current;
-  }, []);
+  const {
+    streamingPreview,
+    activeStreamingTurnId,
+    finalizedStreamMessageRef,
+    getStreamingPreviewBuffer,
+    clearStreamingPreview,
+    promoteStreamingPreviewToThread,
+    disposeStreamingPreview,
+  } = useChatStreamingPreviewState({
+    selectedSessionId,
+    visualStreamMode,
+    commitThreadUpdate,
+    prefsRef,
+  });
 
-  const clearStreamingPreview = useCallback((options: { allowSettlingFinalText?: boolean } = {}) => {
-    if (options.allowSettlingFinalText && streamingPreviewBufferRef.current?.isSettlingFinalText()) {
-      return;
-    }
-    streamingPreviewBufferRef.current?.clear();
-    setStreamingPreview(null);
-  }, []);
-
-  const promoteStreamingPreviewToThread = useCallback(
-    (sessionId: string, reason: "abort" | "error") => {
-      const snapshot =
-        streamingPreviewBufferRef.current?.getSnapshot({ forceVisible: true }) ??
-        (streamingPreview?.sessionId === sessionId ? streamingPreview : null);
-      if (!snapshot || snapshot.sessionId !== sessionId || snapshot.text.trim().length === 0) {
-        clearStreamingPreview();
-        return;
-      }
-      const partialChunk: ChatStreamChunk = {
-        type: "message_done",
-        sessionId: snapshot.sessionId,
-        eventId: `local-preview-${reason}-${Date.now()}`,
-        sequence: -1,
-        turnId: snapshot.turnId,
-        messageId: snapshot.messageId ?? `local-assistant-${snapshot.turnId}`,
-        content: snapshot.text,
-      };
-      commitThreadUpdate((current) =>
-        updateThreadFromStreamChunk(current, partialChunk, null, snapshot.sessionId, prefsRef.current),
-      );
-      recordClientDiagnostic({
-        level: "warn",
-        category: "chat",
-        event: "stream.preview_promoted_partial",
-        message: "Promoted visible streaming preview after the live stream ended before message_done.",
-        sessionId: snapshot.sessionId,
-        turnId: snapshot.turnId,
-        context: {
-          reason,
-          characterCount: snapshot.text.length,
-        },
-      });
-      clearStreamingPreview();
-    },
-    [clearStreamingPreview, commitThreadUpdate, streamingPreview],
-  );
-
-  useEffect(() => {
-    if (streamingPreview && streamingPreview.sessionId !== selectedSessionId) {
-      clearStreamingPreview();
-    }
-  }, [clearStreamingPreview, selectedSessionId, streamingPreview]);
+  const {
+    pendingApproval,
+    setPendingApproval,
+    pendingUserInput,
+    setPendingUserInput,
+    approvalPending,
+    userInputPending,
+    handleApprovePending,
+    handleDenyPending,
+    handleSubmitUserInput,
+    handleSelectBranchTurn,
+  } = useChatOperatorPrompts({
+    selectedSessionId,
+    selectedSession,
+    thread,
+    loadSessionCoreState,
+    pushLocalNotice,
+    setError,
+    commitThreadUpdate,
+  });
 
   const applyFetchedThread = useCallback(
     (nextThread: ChatThreadResponse, requestVersion: number | null) => {
@@ -533,67 +298,6 @@ export function useChatOutboundExecution(input: {
   // These callback refs are intentionally refreshed during render so sibling
   // orchestration hooks can call the current implementation before effects run.
   applyFetchedThreadRef.current = applyFetchedThread;
-
-  useEffect(() => {
-    const threadApproval = deriveThreadPendingApproval(thread);
-    if (!selectedSessionId) {
-      setPendingApproval(null);
-      setPendingUserInput(null);
-      return;
-    }
-    if (threadApproval) {
-      setPendingApproval((current) => {
-        const merged = mergePendingApproval(current, threadApproval);
-        if (
-          merged &&
-          (!current ||
-            current.approvalId !== merged.approvalId ||
-            current.sessionId !== merged.sessionId ||
-            current.toolName !== merged.toolName ||
-            current.reason !== merged.reason)
-        ) {
-          recordChatApprovalPhase({
-            phase: "prompt_merged",
-            sessionId: selectedSessionId,
-            turnId: thread?.selectedTurnId ?? thread?.activeLeafTurnId,
-            approval: merged,
-            source: "thread",
-            level: "info",
-          });
-        }
-        return merged;
-      });
-    } else {
-      setPendingApproval((current) => {
-        if (!current) {
-          return null;
-        }
-        const selectedTurn = thread
-          ? (thread.turns.find((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId)) ??
-            thread.turns.at(-1) ??
-            null)
-          : null;
-        if (selectedTurn?.trace.status === "waiting_for_approval") {
-          return current;
-        }
-        return null;
-      });
-    }
-
-    const threadUserInput = deriveThreadPendingUserInput(thread);
-    if (threadUserInput) {
-      setPendingUserInput((current) => mergePendingUserInput(current, threadUserInput));
-    } else {
-      setPendingUserInput(null);
-    }
-  }, [selectedSessionId, thread]);
-
-  useEffect(() => {
-    if (!selectedSession?.sessionId) {
-      return;
-    }
-    void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-  }, [refreshPendingApprovalQueue, selectedSession?.sessionId]);
 
   const scheduleStreamMessageReconciliation = useCallback(
     (sessionId: string, options?: { immediate?: boolean }) => {
@@ -934,7 +638,7 @@ export function useChatOutboundExecution(input: {
             );
           };
           let resumeAttempts = 0;
-          for (;;) {
+          while (resumeAttempts <= MAX_STREAM_RESUME_ATTEMPTS) {
             try {
               if (resumeAttempts > 0) {
                 const liveStream = activeStreamRef.current;
@@ -975,7 +679,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel,
                     speedMode: currentPrefs?.speedMode,
                     subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -992,7 +696,7 @@ export function useChatOutboundExecution(input: {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -1008,7 +712,7 @@ export function useChatOutboundExecution(input: {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -1055,7 +759,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel,
                     speedMode: currentPrefs?.speedMode,
                     subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   { originSurface: effectiveMode },
                 )
@@ -1071,7 +775,7 @@ export function useChatOutboundExecution(input: {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   )
@@ -1085,7 +789,7 @@ export function useChatOutboundExecution(input: {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   );
@@ -1184,7 +888,7 @@ export function useChatOutboundExecution(input: {
       finishOutboundExecution,
       getStreamingPreviewBuffer,
       handleCommandExecution,
-      input.fullWebAccess,
+      fullWebAccess,
       isRoutePreflightAcknowledged,
       loadSessionCoreState,
       loadSidebar,
@@ -1207,213 +911,6 @@ export function useChatOutboundExecution(input: {
   // another hook through a ref and must reflect the latest session/prefs.
   executeOutboundItemRef.current = executeOutboundItem;
 
-  const handleSelectBranchTurn = useCallback(
-    async (turnId: string) => {
-      if (!selectedSessionId) {
-        return;
-      }
-      try {
-        recordClientDiagnostic({
-          level: "info",
-          category: "chat",
-          event: "branch.select",
-          message: "Selecting chat branch turn",
-          sessionId: selectedSessionId,
-          turnId,
-        });
-        const nextThread = await selectChatBranchTurn(selectedSessionId, turnId);
-        commitThreadUpdate(nextThread);
-        return nextThread;
-      } catch (err) {
-        setError((err as Error).message, "branch_select");
-        return null;
-      }
-    },
-    [commitThreadUpdate, selectedSessionId, setError],
-  );
-
-  const handleApprovePending = useCallback(
-    async (allowScope: "once" | "session" | "workspace" = "once") => {
-      if (!selectedSession || !pendingApproval) return;
-      const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
-      setApprovalPending(true);
-      try {
-        recordChatApprovalPhase({
-          phase: "resolve_started",
-          sessionId: approvalSessionId,
-          approval: {
-            approvalId: pendingApproval.approvalId,
-            toolName: pendingApproval.toolName,
-            kind: pendingApproval.kind,
-            reason: pendingApproval.reason,
-            riskLevel: pendingApproval.riskLevel,
-            remainingCount: pendingApproval.remainingCount,
-            affectedResourceCount: pendingApproval.affectedResources?.length,
-            requestedOutputIntent: pendingApproval.requestedOutputIntent,
-            expiresAt: pendingApproval.expiresAt,
-          },
-          source: "operator",
-          context: { allowScope, selectedSessionId: selectedSession.sessionId },
-        });
-        const result = await approveChatTool(approvalSessionId, pendingApproval.approvalId, { allowScope });
-        setPendingApproval(null);
-        await refreshPendingApprovalQueue(approvalSessionId);
-        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-          () => undefined,
-        );
-        if (approvalSessionId !== selectedSession.sessionId) {
-          await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-        }
-        const refreshDelaysMs = result.resumed
-          ? APPROVAL_RESUMED_REFRESH_DELAYS_MS
-          : APPROVAL_FALLBACK_REFRESH_DELAYS_MS;
-        for (const delayMs of refreshDelaysMs) {
-          const timer = globalThis.setTimeout(() => {
-            approvalRefreshTimersRef.current.delete(timer);
-            void refreshPendingApprovalQueue(approvalSessionId).catch(() => undefined);
-            void loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-              () => undefined,
-            );
-            if (approvalSessionId !== selectedSession.sessionId) {
-              void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-            }
-          }, delayMs);
-          approvalRefreshTimersRef.current.add(timer);
-        }
-        const scopeLabel =
-          allowScope === "session"
-            ? "Session allow created."
-            : allowScope === "workspace"
-              ? "Workspace allow created."
-              : "Approved once.";
-        pushLocalNotice(
-          `Approved request ${pendingApproval.approvalId}. ${scopeLabel} ${
-            result.resumed
-              ? "The runtime resumed immediately."
-              : "If the run is no longer live, use Approvals & Recovery to continue from the persisted checkpoint."
-          }`,
-          "success",
-        );
-        recordChatApprovalPhase({
-          phase: "resolved",
-          sessionId: approvalSessionId,
-          approval: {
-            approvalId: pendingApproval.approvalId,
-            toolName: pendingApproval.toolName,
-            kind: pendingApproval.kind,
-            reason: pendingApproval.reason,
-            riskLevel: pendingApproval.riskLevel,
-            remainingCount: pendingApproval.remainingCount,
-            affectedResourceCount: pendingApproval.affectedResources?.length,
-            requestedOutputIntent: pendingApproval.requestedOutputIntent,
-            expiresAt: pendingApproval.expiresAt,
-          },
-          source: "operator",
-          context: {
-            allowScope,
-            resumed: result.resumed,
-            resumedRunId: result.resumedRunId,
-            resumedTurnId: result.resumedTurnId,
-            selectedSessionId: selectedSession.sessionId,
-          },
-        });
-      } catch (err) {
-        setError((err as Error).message, "approval");
-      } finally {
-        setApprovalPending(false);
-      }
-    },
-    [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError],
-  );
-
-  const handleDenyPending = useCallback(async () => {
-    if (!selectedSession || !pendingApproval) return;
-    const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
-    setApprovalPending(true);
-    try {
-      recordChatApprovalPhase({
-        phase: "resolve_started",
-        sessionId: approvalSessionId,
-        approval: {
-          approvalId: pendingApproval.approvalId,
-          toolName: pendingApproval.toolName,
-          kind: pendingApproval.kind,
-          reason: pendingApproval.reason,
-          riskLevel: pendingApproval.riskLevel,
-          remainingCount: pendingApproval.remainingCount,
-          affectedResourceCount: pendingApproval.affectedResources?.length,
-          requestedOutputIntent: pendingApproval.requestedOutputIntent,
-          expiresAt: pendingApproval.expiresAt,
-        },
-        source: "operator",
-        context: { selectedSessionId: selectedSession.sessionId },
-      });
-      await denyChatTool(approvalSessionId, pendingApproval.approvalId);
-      await refreshPendingApprovalQueue(approvalSessionId);
-      if (approvalSessionId !== selectedSession.sessionId) {
-        await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-          () => undefined,
-        );
-      }
-      pushLocalNotice(`Denied request ${pendingApproval.approvalId}. No action was taken.`, "warning");
-      recordChatApprovalPhase({
-        phase: "dismissed",
-        sessionId: approvalSessionId,
-        approval: {
-          approvalId: pendingApproval.approvalId,
-          toolName: pendingApproval.toolName,
-          kind: pendingApproval.kind,
-          reason: pendingApproval.reason,
-          riskLevel: pendingApproval.riskLevel,
-          remainingCount: pendingApproval.remainingCount,
-          affectedResourceCount: pendingApproval.affectedResources?.length,
-          requestedOutputIntent: pendingApproval.requestedOutputIntent,
-          expiresAt: pendingApproval.expiresAt,
-        },
-        source: "operator",
-        context: { selectedSessionId: selectedSession.sessionId },
-      });
-    } catch (err) {
-      setError((err as Error).message, "approval");
-    } finally {
-      setApprovalPending(false);
-    }
-  }, [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
-
-  const handleSubmitUserInput = useCallback(
-    async (response: ChatUserInputPromptResponse) => {
-      if (!selectedSession || !pendingUserInput) return;
-      setUserInputPending(true);
-      try {
-        const result = await answerChatUserInputPrompt(
-          selectedSession.sessionId,
-          pendingUserInput.turnId,
-          pendingUserInput.promptId,
-          {
-            response,
-          },
-        );
-        setPendingUserInput(null);
-        pushLocalNotice(
-          result.resumed
-            ? `Submitted response for ${pendingUserInput.promptId}. The turn resumed immediately.`
-            : `Submitted response for ${pendingUserInput.promptId}. Refresh the thread or resume the run when the runtime is ready.`,
-          "success",
-        );
-        await loadSessionCoreState(selectedSession.sessionId, {
-          background: true,
-          includeThread: true,
-        });
-      } catch (err) {
-        setError((err as Error).message, "user_input");
-      } finally {
-        setUserInputPending(false);
-      }
-    },
-    [loadSessionCoreState, pendingUserInput, pushLocalNotice, selectedSession, setError],
-  );
-
   /*
    * Computed per render on purpose: the value depends on activeStreamRef,
    * which a useMemo dependency list cannot observe. Memoizing on
@@ -1432,17 +929,6 @@ export function useChatOutboundExecution(input: {
           ? "queued"
           : "idle";
 
-  // Clear deferred approval-resolve refresh timers when the operator switches
-  // sessions, so the previous session is not re-fetched for up to ~3s afterwards.
-  useEffect(() => {
-    return () => {
-      for (const timer of approvalRefreshTimersRef.current) {
-        clearTimeout(timer);
-      }
-      approvalRefreshTimersRef.current.clear();
-    };
-  }, [selectedSessionId]);
-
   useEffect(
     () => () => {
       abortActiveChatStream(activeStreamRef.current);
@@ -1451,15 +937,9 @@ export function useChatOutboundExecution(input: {
         clearTimeout(streamReconcileTimeoutRef.current);
         streamReconcileTimeoutRef.current = null;
       }
-      for (const timer of approvalRefreshTimersRef.current) {
-        clearTimeout(timer);
-      }
-      approvalRefreshTimersRef.current.clear();
-      streamingPreviewBufferRef.current?.dispose();
-      streamingPreviewBufferRef.current = null;
-      setStreamingPreview(null);
+      disposeStreamingPreview();
     },
-    [],
+    [activeStreamRef, disposeStreamingPreview],
   );
 
   return {
@@ -1476,7 +956,7 @@ export function useChatOutboundExecution(input: {
     handleSelectBranchTurn,
     streamStatus,
     streamingPreview,
-    activeStreamingTurnId: streamingPreview?.turnId ?? null,
+    activeStreamingTurnId,
     prefsRef,
     threadRef,
   };

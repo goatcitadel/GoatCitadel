@@ -25,4 +25,26 @@ describe("sanitizeChannelOutboundMessage", () => {
     expect(result.message).toBe("Visible done");
     expect(result.removedBlockCount).toBe(1);
   });
+
+  it("redacts labeled secrets without swallowing following text", () => {
+    const result = sanitizeChannelOutboundMessage(
+      'Visible api-key="abcDEF123._~+/" token: qwerty1234, password=plainsecret done',
+    );
+
+    expect(result.message).toBe("Visible api-key=[REDACTED] token=[REDACTED], password=[REDACTED] done");
+    expect(result.redactedSecretCount).toBe(3);
+  });
+
+  it("redacts bearer tokens and url credentials with bounded scanning", () => {
+    const noisyAuthorizationPrefix = "Authorization: ".repeat(2_000);
+    const noisyUrlPrefix = "https://".repeat(2_000);
+
+    const bearerResult = sanitizeChannelOutboundMessage(`${noisyAuthorizationPrefix}Bearer abcDEF-._~+/== done`);
+    const credentialResult = sanitizeChannelOutboundMessage(`${noisyUrlPrefix}user:p@example.test/path`);
+
+    expect(bearerResult.message).toContain("Bearer [REDACTED] done");
+    expect(bearerResult.redactedSecretCount).toBe(1);
+    expect(credentialResult.message).toContain("[REDACTED]@example.test/path");
+    expect(credentialResult.redactedSecretCount).toBe(1);
+  });
 });

@@ -229,6 +229,15 @@ test("macOS Tauri overlay can use a Developer ID identity for notarized CI DMGs"
   assert.equal(config.bundle.macOS.signingIdentity, "Developer ID Application: GoatCitadel Test (TEAMID)");
 });
 
+test("macOS native installer reports missing rustup and caches DMG stat lookups", () => {
+  const source = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-macos-native-installer.mjs"), "utf8");
+
+  assert.match(source, /console\.warn\(`\[packaging\] rustup not found; skipping Rust target installation for \$\{triple\}\.`\)/);
+  assert.match(source, /const matchesWithStats = matches\.map/);
+  assert.match(source, /matchesWithStats\.sort\(\(left, right\) => right\.mtimeMs - left\.mtimeMs\)/);
+  assert.doesNotMatch(source, /matches\.sort\(\(left, right\) => fs\.statSync\(right\)\.mtimeMs/);
+});
+
 test("root package exposes native packaging scripts and Windows test hang guard", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assert.equal(packageJson.scripts["package:macos"], "node scripts/packaging/build-macos-native-installer.mjs");

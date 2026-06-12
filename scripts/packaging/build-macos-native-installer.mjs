@@ -243,6 +243,7 @@ function ensureRustTarget(triple) {
     stdio: "inherit",
   });
   if (result.error && result.error.code === "ENOENT") {
+    console.warn(`[packaging] rustup not found; skipping Rust target installation for ${triple}.`);
     return;
   }
   assertSuccessful(result, `rustup target add ${triple}`);
@@ -273,8 +274,12 @@ function findBuiltDmg(triple) {
       }
     }
   }
-  matches.sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs);
-  const match = matches[0];
+  const matchesWithStats = matches.map((filePath) => ({
+    filePath,
+    mtimeMs: fs.statSync(filePath).mtimeMs,
+  }));
+  matchesWithStats.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const match = matchesWithStats[0]?.filePath;
   if (!match) {
     throw new Error(`Unable to locate built macOS DMG under ${roots.join(", ")}`);
   }

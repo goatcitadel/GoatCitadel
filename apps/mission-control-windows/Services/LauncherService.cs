@@ -96,7 +96,7 @@ public sealed class LauncherService
                 }
 
                 var sourceLauncher = Path.Join(directory, "bin", "goatcitadel.mjs");
-                if (File.Exists(sourceLauncher) && !File.Exists(Path.Join(directory, "release-manifest.json")))
+                if (File.Exists(sourceLauncher) && IsSourceCheckoutRoot(directory))
                 {
                     return new LauncherInvocation(
                         "node",
@@ -113,6 +113,10 @@ public sealed class LauncherService
 
         throw new InvalidOperationException("Unable to locate GoatCitadel launcher from the Windows desktop app location.");
     }
+
+    private static bool IsSourceCheckoutRoot(string directory) =>
+        File.Exists(Path.Join(directory, "package.json")) &&
+        !File.Exists(Path.Join(directory, "release-manifest.json"));
 
     public async Task<string> RunAsync(IEnumerable<string> args, CancellationToken cancellationToken = default)
     {
