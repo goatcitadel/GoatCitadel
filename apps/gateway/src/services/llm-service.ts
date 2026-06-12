@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -54,7 +54,6 @@ import {
 } from "./secret-store-service.js";
 
 const log = logger.child("llm-service");
-const MODEL_DISCOVERY_AUTH_CACHE_TOKENS = new Map<string, string>();
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -82,13 +81,7 @@ interface ProviderRequestTarget {
 }
 
 function getModelDiscoveryAuthCacheToken(apiKey: string): string {
-  const existing = MODEL_DISCOVERY_AUTH_CACHE_TOKENS.get(apiKey);
-  if (existing) {
-    return existing;
-  }
-  const token = randomUUID();
-  MODEL_DISCOVERY_AUTH_CACHE_TOKENS.set(apiKey, token);
-  return token;
+  return createHash("sha256").update(apiKey).digest("base64url").slice(0, 24);
 }
 
 interface ModelDiscoveryResult {

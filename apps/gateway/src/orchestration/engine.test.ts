@@ -738,6 +738,95 @@ describe("orchestration engine", () => {
     expect(synthesizerCall).toBeUndefined();
     expect(result.finalOutput).toContain("Synthesis Incomplete");
   });
+
+  it("blocks downstream synthesis until every declared dependency has a usable handoff", async () => {
+    const failureText = "Provider request failed: upstream timeout.";
+    const plan: OrchestrationPlan = {
+      ...createPlan(),
+      workflowTemplate: "cowork.research",
+      summary: "Delegated research with explicit fan-in dependencies.",
+      steps: [
+        {
+          stepId: "step-researcher-good",
+          index: 0,
+          role: "researcher",
+          stage: 1,
+          objective: "Gather usable evidence.",
+          parallelizable: true,
+          delegatedRole: "researcher",
+        },
+        {
+          stepId: "step-researcher-empty",
+          index: 1,
+          role: "researcher",
+          stage: 1,
+          objective: "Gather the second evidence stream.",
+          parallelizable: true,
+          delegatedRole: "researcher",
+        },
+        {
+          stepId: "step-synthesizer",
+          index: 2,
+          role: "synthesizer",
+          stage: 2,
+          objective: "Synthesize only when both upstream handoffs are usable.",
+          parallelizable: false,
+          delegatedRole: "synthesizer",
+          dependsOnStepIds: ["step-researcher-good", "step-researcher-empty"],
+        },
+      ],
+    };
+
+    const executeDelegatedStep = vi.fn(async (input: { step: { stepId: string; role: string } }) => {
+      if (input.step.stepId === "step-researcher-good") {
+        return {
+          stepId: input.step.stepId,
+          role: "researcher",
+          index: 0,
+          startedAt: NOW,
+          finishedAt: NOW,
+          status: "completed" as const,
+          output: "Gathered evidence: the first workstream completed with usable findings.",
+          summary: "Research complete.",
+          childSessionId: "child-researcher-good",
+          childTurnId: "turn-researcher-good",
+          citations: [],
+        };
+      }
+      return {
+        stepId: input.step.stepId,
+        role: input.step.role,
+        index: 1,
+        startedAt: NOW,
+        finishedAt: NOW,
+        status: "failed" as const,
+        output: failureText,
+        summary: "Research failed.",
+        error: failureText,
+        childSessionId: `child-${input.step.stepId}`,
+        childTurnId: `turn-${input.step.stepId}`,
+        citations: [],
+      };
+    });
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan,
+      callbacks: {
+        createChatCompletion: vi.fn(),
+        executeDelegatedStep: executeDelegatedStep as never,
+      },
+    });
+
+    const synthesizerCall = executeDelegatedStep.mock.calls.find(
+      (call) => (call[0] as { step: { role: string } }).step.role === "synthesizer",
+    );
+    const synthesizerStep = result.stepResults.find((step) => step.stepId === "step-synthesizer");
+    expect(synthesizerCall).toBeUndefined();
+    expect(synthesizerStep?.status).toBe("failed");
+    expect(synthesizerStep?.error).toContain("No completed upstream handoffs");
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
+  });
 });
 
 function createWorkstreamPlan(): OrchestrationPlan {

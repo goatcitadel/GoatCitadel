@@ -238,13 +238,13 @@ function getMissingHandoffFailure(
     return undefined;
   }
   const declaredDependencies = step.dependsOnStepIds ?? [];
-  const hasCompletedOutput =
+  const hasRequiredHandoffs =
     declaredDependencies.length === 0
       ? priorSteps.some((priorStep) => isUsableHandoffStep(priorStep))
-      : declaredDependencies.some((dependencyId) =>
+      : declaredDependencies.every((dependencyId) =>
           isUsableHandoffStep(priorSteps.find((priorStep) => priorStep.stepId === dependencyId)),
         );
-  if (hasCompletedOutput) {
+  if (hasRequiredHandoffs) {
     return undefined;
   }
   const roleTitle = toTitleCase(role);
