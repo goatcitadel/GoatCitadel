@@ -43,3 +43,9 @@ jobs:
 
       - name: Run typecheck
         run: pnpm typecheck
+
+      - name: Mission Control Next CSS guards
+        run: |
+          node --test scripts/check-mission-control-next-typography.test.mjs
+          node scripts/check-mission-control-next-typography.mjs
+          node scripts/check-mission-control-next-token-drift.mjs

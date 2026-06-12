@@ -783,15 +783,17 @@ pnpm -r build
 
 #### UI typography floor
 
-Operator-facing UI text must not declare a `font-size` below `var(--text-xs)` (12px). The scale lives in `apps/mission-control-next/src/styles/mission-control-next-tokens.css`:
+Every operator-facing `font-size` must resolve through a `--text-*` token. The two-tier scale lives in `apps/mission-control-next/src/styles/mission-control-next-tokens.css`:
 
-- `--text-xs: 0.75rem` (~12px) — chips, helpers, labels, metadata
+- `--text-2xs: 0.6875rem` (~11px) — dense mono chrome only: status strips, kbd hints, and micro-badges
+- `--text-xs: 0.75rem` (~12px) — content floor: chips, helpers, labels, metadata
 - `--text-sm: 0.8125rem` (~13px) — session row titles, secondary content
 - `--text-md: 0.875rem` (~14px) — default UI text
 - `--text-lg: 1rem` — section heads
 - `--text-xl: 1.125rem` — larger emphasis
+- `--text-2xl: 1.375rem` — page/section titles
 
-Reach for the tokens before introducing new hardcoded sizes; visual-regression baselines will catch unintentional drift, but the floor exists so readability and AGENTS.md's "Cyberpunk, But Legible" principle stay aligned.
+The shell scales the ramp by `--density-type-scale`, so tokens track density controls and user font-size preferences. Use `clamp()` only for large hero-style titles. `scripts/check-mission-control-next-typography.mjs` rejects hardcoded font sizes, and `scripts/check-mission-control-next-token-drift.mjs` rejects deprecated token drift; both run in Code Quality.
 
 ### 12.3 Backup and Recovery
 

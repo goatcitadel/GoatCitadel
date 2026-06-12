@@ -16,6 +16,32 @@ export function toTitleCase(value: string): string {
     .join(" ");
 }
 
+const HUMANIZED_ENUM_LABELS: Record<string, string> = {
+  error_fallback: "auto-failover",
+  template_fallback: "template default",
+  manual_fallback: "manual override",
+  live: "live",
+  waiting_for_approval: "waiting for approval",
+  waiting_for_user_input: "waiting for your answer",
+  waiting_for_tool: "using tools",
+  in_progress: "in progress",
+};
+
+export function humanizeEnum(value?: string | null): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const mapped = HUMANIZED_ENUM_LABELS[trimmed.toLowerCase()];
+  if (mapped) {
+    return mapped;
+  }
+  if (/\s/.test(trimmed)) {
+    return trimmed;
+  }
+  return toTitleCase(trimmed);
+}
+
 export function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
   return Boolean(turn.trace.completion?.repaired);
 }
@@ -96,7 +122,7 @@ export function summarizeTurnRouting(
     parts.push(`requested ${requested}`);
   }
   if (turn.trace.routing.fallbackReason) {
-    parts.push(`fallback: ${turn.trace.routing.fallbackReason}`);
+    parts.push(`fallback: ${humanizeEnum(turn.trace.routing.fallbackReason)}`);
   } else if (turn.trace.routing.fallbackUsed) {
     parts.push("fallback used");
   }

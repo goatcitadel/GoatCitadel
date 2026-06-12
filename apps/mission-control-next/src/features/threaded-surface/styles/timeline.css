@@ -671,7 +671,7 @@
   background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-2));
   color: color-mix(in oklab, var(--foreground) 88%, var(--mc-area-color));
   font-family: var(--mc-font-mono);
-  font-size: 0.92em;
+  font-size: var(--text-md);
 }
 
 .mc-assistant-code-shell {
@@ -1246,7 +1246,7 @@
   border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-area-color) 24%, var(--mc-surface-1));
   color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   flex: 0 0 auto;
 }

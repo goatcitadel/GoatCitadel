@@ -34,7 +34,7 @@
 .mc-next-shell[data-area="settings"] .mc-next-rail-link strong,
 .mc-next-shell[data-area="library"] .mc-next-rail-link strong,
 .mc-next-shell[data-area="ops"] .mc-next-rail-link strong {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.2;
 }
 
@@ -211,13 +211,13 @@
 }
 
 .mc-next-directory-head-metric-value {
-  font: 600 1.25rem/1.22 var(--mc-font-sans);
+  font: 600 var(--text-xl)/1.22 var(--mc-font-sans);
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
 .mc-next-directory-head-metric-delta {
-  font: 500 11px/1.2 var(--mc-font-mono);
+  font: 500 var(--text-2xs)/1.2 var(--mc-font-mono);
   color: var(--text-secondary);
   font-style: normal;
   font-variant-numeric: tabular-nums;
@@ -248,7 +248,7 @@
   border: 1px solid var(--gc-area-chat);
   background: color-mix(in oklab, var(--gc-area-chat) 14%, var(--mc-surface-1));
   color: var(--foreground);
-  font: 600 0.72rem/1.1 var(--mc-font-sans);
+  font: 600 var(--text-xs)/1.1 var(--mc-font-sans);
   cursor: pointer;
   transition:
     transform var(--motion-fast) var(--motion-ease),
@@ -369,7 +369,7 @@
 .mc-next-memory-disabled-guide p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
 }
 
@@ -512,7 +512,7 @@
 }
 
 .mc-next-directory-card-head p {
-  font-size: 0.61rem;
+  font-size: var(--text-2xs);
   line-height: 1.32;
 }
 
@@ -545,7 +545,7 @@
 .mc-next-directory-lane-meta span,
 .mc-next-directory-lane-status span {
   color: var(--text-muted);
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   overflow-wrap: anywhere;
 }
 
@@ -585,7 +585,7 @@
 
 .mc-next-directory-list-head strong {
   min-width: 0;
-  font-size: 0.67rem;
+  font-size: var(--text-2xs);
   line-height: 1.24;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -596,7 +596,7 @@
   min-width: 0;
   max-width: min(14rem, 42vw);
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   line-height: 1.2;
   text-align: right;
   white-space: normal;
@@ -686,7 +686,7 @@
 
 .mc-next-approvals-decision-context-row dt {
   margin: 0;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -748,7 +748,7 @@
 
 .mc-next-approvals-view-button {
   padding: 0.28rem 0.48rem;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   border-radius: var(--r-pill);
   font: inherit;
   line-height: 1.18;
@@ -883,7 +883,7 @@
 }
 
 .mc-next-approvals-kicker {
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -905,7 +905,7 @@
   padding: 0.24rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-sm);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.18;
@@ -956,7 +956,7 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   border-radius: var(--r-sm);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--background) 84%, var(--mc-surface-1));
 }
 
@@ -980,7 +980,7 @@
   > .mc-next-directory-card.mc-next-directory-card-compact
   .mc-next-directory-card-head
   p {
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -1005,7 +1005,7 @@
   padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-sm);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.2;
@@ -1036,7 +1036,7 @@
   padding: 0.5rem 0.56rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-sm);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
 }
@@ -1095,7 +1095,7 @@
 .mc-next-browser-grant-row span,
 .mc-next-browser-grant-row small {
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.32;
   overflow-wrap: anywhere;
 }
@@ -1134,7 +1134,7 @@
 
 .mc-next-runtime-metric span {
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
 }
 
@@ -1167,7 +1167,7 @@
 .mc-next-runtime-handoff-grid span,
 .mc-next-runtime-handoff-command span {
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 750;
   text-transform: uppercase;
 }
@@ -1220,7 +1220,7 @@
   border-radius: var(--r-xs);
   background: color-mix(in oklab, var(--background) 78%, transparent);
   color: var(--foreground);
-  font-size: 0.67rem;
+  font-size: var(--text-2xs);
   line-height: 1.35;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1274,7 +1274,7 @@
 
 .mc-next-release-proof-card span {
   color: var(--text-muted);
-  font-size: 0.56rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.2;
@@ -1292,7 +1292,7 @@
 .mc-next-release-proof-card p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
@@ -1326,7 +1326,7 @@
 .mc-next-cowork-execution-kicker {
   margin: 0 0 0.28rem;
   color: color-mix(in oklab, var(--cowork-execution-accent) 62%, var(--text-muted));
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1384,7 +1384,7 @@
   border-radius: var(--r-pill);
   color: var(--foreground);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 
@@ -1400,7 +1400,7 @@
 .mc-next-cowork-phase-step span:not(.mc-next-cowork-phase-index),
 .mc-next-cowork-checkpoint-card span {
   color: var(--text-muted);
-  font-size: 0.56rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   line-height: 1.2;
   text-transform: uppercase;
@@ -1411,7 +1411,7 @@
 .mc-next-cowork-execution-truth {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   line-height: 1.38;
 }
 
@@ -1591,7 +1591,7 @@
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-pill);
   color: var(--text-secondary);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   padding: 0.12rem 0.32rem;
 }
 
@@ -1620,7 +1620,7 @@
 .mc-next-project-empty-guide p {
   margin: 0.16rem 0 0;
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
 }
 
@@ -1658,7 +1658,7 @@
 .mc-next-project-home-head span,
 .mc-next-project-control-heading {
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1676,7 +1676,7 @@
 .mc-next-project-recent-item p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.42;
 }
 
@@ -1706,7 +1706,7 @@
 
 .mc-next-project-intake-head span {
   color: var(--text-muted);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-project-intake-grid {
@@ -1760,7 +1760,7 @@
 
 .mc-next-project-intake-card span {
   color: var(--text-muted);
-  font-size: 0.54rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1825,7 +1825,7 @@
 
 .mc-next-project-lane-resume span {
   color: var(--text-muted);
-  font-size: 0.56rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1846,7 +1846,7 @@
 
 .mc-next-project-lane-resume p {
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   line-height: 1.36;
 }
 
@@ -1897,7 +1897,7 @@
 
 .mc-next-project-recent-item > span {
   color: color-mix(in oklab, var(--mc-area-color) 65%, var(--text-muted));
-  font-size: 0.56rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2032,7 +2032,7 @@
 .mc-next-settings-action-copy span,
 .mc-next-settings-metric span {
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2048,7 +2048,7 @@
   border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
-  font: 400 13px/1.4 var(--mc-font-sans);
+  font: 400 var(--text-sm)/1.4 var(--mc-font-sans);
   outline: none;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -2071,7 +2071,7 @@
   gap: 0.48rem;
   align-items: flex-start;
   color: var(--text-secondary);
-  font: 400 12px/1.4 var(--mc-font-sans);
+  font: 400 var(--text-xs)/1.4 var(--mc-font-sans);
 }
 
 .mc-next-settings-check input {
@@ -2122,7 +2122,7 @@
   padding: 0.22rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   border-radius: var(--r-sm);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.16;
@@ -2172,7 +2172,7 @@
 .mc-next-settings-metric p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
 }
 
@@ -2215,7 +2215,7 @@
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
   color: var(--foreground);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 
@@ -2237,7 +2237,7 @@
 .mc-next-settings-wizard-step p {
   margin: 0.2rem 0 0;
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
 }
 
@@ -2254,7 +2254,7 @@
 
 .mc-next-settings-oauth-code-card span {
   color: var(--text-secondary);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -2273,7 +2273,7 @@
   max-width: 58rem;
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.5;
 }
 
@@ -2328,7 +2328,7 @@
 .mc-next-library-action-card b {
   min-width: 0;
   color: var(--text-muted);
-  font-size: 0.56rem;
+  font-size: var(--text-2xs);
   font-style: normal;
   font-weight: 800;
   letter-spacing: 0;
@@ -2348,7 +2348,7 @@
 .mc-next-library-action-card p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
@@ -2429,13 +2429,13 @@
 .mc-next-approvals-copy p,
 .mc-next-approvals-summary,
 .mc-next-approvals-compact-list {
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-settings-field-note {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   word-break: break-word;
 }
@@ -2468,7 +2468,7 @@
   min-width: 0;
   max-width: min(12rem, 36vw);
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   line-height: 1.25;
   text-align: right;
   text-overflow: ellipsis;
@@ -2509,7 +2509,7 @@
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   line-height: 1.16;
   white-space: normal;
@@ -2541,7 +2541,7 @@
   width: 100%;
   min-width: 880px;
   border-collapse: collapse;
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.35;
 }
 
@@ -2561,7 +2561,7 @@
   z-index: 1;
   background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
   color: var(--text-muted);
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -2585,7 +2585,7 @@
 .mc-next-trust-policy-table tbody th span {
   margin-top: 0.14rem;
   color: var(--text-muted);
-  font-size: 0.6rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
 }
 
@@ -2598,7 +2598,7 @@
   border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -2636,7 +2636,7 @@
   border-radius: var(--r-pill);
   background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   line-height: 1.15;
 }
@@ -2676,7 +2676,7 @@
 
 .mc-next-provenance-coverage-item span {
   color: color-mix(in oklab, var(--mc-area-color) 62%, var(--text-muted));
-  font-size: 0.58rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2686,7 +2686,7 @@
 .mc-next-provenance-coverage-item p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
   line-height: 1.4;
 }
 
@@ -2697,7 +2697,7 @@
 
 .mc-next-decision-journal-item > span {
   color: var(--text-secondary);
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-decision-journal-facts {
@@ -2719,7 +2719,7 @@
 
 .mc-next-decision-journal-facts dt {
   color: var(--text-muted);
-  font-size: 0.55rem;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2728,7 +2728,7 @@
 .mc-next-decision-journal-facts dd {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
@@ -2745,7 +2745,7 @@
   gap: 0.45rem;
   margin: 0;
   padding-left: 1rem;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
   white-space: normal;
   overflow-wrap: anywhere;
@@ -2790,7 +2790,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--foreground);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.55;
 }
 
@@ -2798,7 +2798,7 @@
   padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   border-radius: var(--r-sm);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
 }
@@ -2857,7 +2857,7 @@
 .mc-next-settings-posture-card-head span {
   display: block;
   margin-top: 0.18rem;
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -2923,7 +2923,7 @@
 .mc-next-activity-feed-source {
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2974,7 +2974,7 @@
 .mc-next-ops-attention-copy p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -3017,7 +3017,7 @@
 .mc-next-shell[data-area="library"] .tune-posture-label,
 .mc-next-shell[data-area="ops"] .tune-posture-label,
 .mc-next-shell[data-area="settings"] .tune-posture-label {
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   letter-spacing: 0.04em;
   text-transform: none;
 }
@@ -3167,7 +3167,7 @@
   line-height: 1.4;
 }
 .mc-next-approvals-shell-chip {
-  font-size: 0.625rem;
+  font-size: var(--text-2xs);
   padding: 0.125rem 0.4375rem;
   border-radius: 0.25rem;
   font-weight: 600;
@@ -3197,7 +3197,7 @@
 }
 .mc-next-approvals-shell-note {
   margin-left: 0.375rem;
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
 .mc-next-approvals-shell-note-danger {
   color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
@@ -3211,7 +3211,7 @@
   padding-top: 0.5rem;
   border-top: 1px dashed var(--mc-border-subtle);
   font-family: ui-monospace, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
   color: var(--muted-foreground);
 }
 
@@ -3450,7 +3450,7 @@
   gap: 0.55rem 0.85rem;
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
 }
 
@@ -3518,7 +3518,7 @@
   border-radius: var(--r-xs);
   font-family: var(--mc-font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   font-weight: 600;
 }
 
@@ -3547,7 +3547,7 @@
 
 .mc-next-runtime-spend-chart-empty p {
   margin: 0;
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
   line-height: 1.45;
 }
@@ -3597,7 +3597,7 @@
 .mc-next-shell .event-card-summary,
 .mc-next-shell .event-card-meta {
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.35;
 }
 
@@ -3822,7 +3822,7 @@
 .mc-next-shell .page-guide-copy,
 .mc-next-shell .page-header-eyebrow {
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.35;
 }
 
@@ -3860,7 +3860,7 @@
 .mc-next-shell .page-header-subtitle {
   max-width: 52rem;
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   line-height: 1.38;
 }
 
@@ -3870,7 +3870,7 @@
 
 .mc-next-shell .stat-card-note {
   color: var(--text-secondary);
-  font-size: 0.66rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-shell .workflow-summary-strip,
@@ -3889,7 +3889,7 @@
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   line-height: 1.16;
   white-space: normal;
   overflow-wrap: anywhere;

@@ -36,15 +36,19 @@
   --r-pill: 999px;
 
   /*
-   * Text-size scale. --text-xs is the floor for operator-facing UI text per
-   * docs/ENGINEERING_HANDBOOK.md - do not introduce smaller hardcodes in new
-   * code. The scale stays in rem so it tracks user font-size preferences.
+   * Text-size scale. --text-xs (0.75rem) is the floor for operator-facing
+   * content text per docs/ENGINEERING_HANDBOOK.md. --text-2xs is a separate,
+   * documented floor reserved for dense mono chrome only (status strips, kbd
+   * hints, micro-badges). The scale stays in rem so it tracks user font-size
+   * preferences; the shell additionally applies --density-type-scale.
    */
+  --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
   --text-md: 0.875rem;
   --text-lg: 1rem;
   --text-xl: 1.125rem;
+  --text-2xl: 1.375rem;
 
   --success: var(--risk-safe);
   --warning: var(--risk-caution);
@@ -88,7 +92,7 @@
   --fg-primary: #f4f1ea;
   --fg-secondary: #c9cdd4;
   --fg-muted: #898f99;
-  --fg-faint: #5a6068;
+  --fg-faint: #80868f;
 
   --border-hairline: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.1);
@@ -107,7 +111,7 @@
   --fg-primary: #161a20;
   --fg-secondary: #3a4049;
   --fg-muted: #5e6470;
-  --fg-faint: #8a8f99;
+  --fg-faint: #6b7280;
 
   --border-hairline: rgba(20, 24, 30, 0.08);
   --border-subtle: rgba(20, 24, 30, 0.14);

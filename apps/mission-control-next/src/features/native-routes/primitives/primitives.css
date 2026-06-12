@@ -74,7 +74,7 @@
 
 .mc-next-stage-head h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: var(--text-2xl);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.12;
@@ -118,13 +118,13 @@
 }
 
 .mc-next-stage-head-metric-value {
-  font: 600 1.35rem/1 var(--font-sans, var(--mc-font-sans));
+  font: 600 var(--text-2xl)/1 var(--font-sans, var(--mc-font-sans));
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
 .mc-next-stage-head-metric-delta {
-  font: 500 11px/1.2 var(--font-mono, var(--mc-font-mono));
+  font: 500 var(--text-2xs)/1.2 var(--font-mono, var(--mc-font-mono));
   color: var(--fg-secondary, var(--text-secondary));
   font-style: normal;
   font-variant-numeric: tabular-nums;
@@ -159,7 +159,7 @@
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
-  font: 600 11px/1 var(--font-sans, var(--mc-font-sans));
+  font: 600 var(--text-2xs)/1 var(--font-sans, var(--mc-font-sans));
   overflow: hidden;
 }
 
@@ -208,7 +208,7 @@
   overflow: hidden;
   padding: 0 0.55rem;
   border-left: 1px solid var(--border-subtle, var(--mc-border-subtle));
-  font: 500 10px/1 var(--font-mono, var(--mc-font-mono));
+  font: 500 var(--text-2xs)/1 var(--font-mono, var(--mc-font-mono));
   font-variant-numeric: tabular-nums;
   color: var(--fg-muted, var(--text-muted));
   text-overflow: ellipsis;
@@ -614,7 +614,7 @@
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));
   background: var(--bg-surface-1, var(--mc-surface-1));
   color: var(--fg-secondary, var(--text-secondary));
-  font: 600 11px/1 var(--font-mono, var(--mc-font-mono));
+  font: 600 var(--text-2xs)/1 var(--font-mono, var(--mc-font-mono));
   white-space: nowrap;
   cursor: pointer;
   -webkit-appearance: none;
@@ -644,7 +644,7 @@
 }
 
 .mc-next-filter-pill-count {
-  font: 500 10px/1 var(--font-mono, var(--mc-font-mono));
+  font: 500 var(--text-2xs)/1 var(--font-mono, var(--mc-font-mono));
   font-variant-numeric: tabular-nums;
   color: var(--fg-muted, var(--text-muted));
 }
@@ -803,7 +803,7 @@
   border: 1px solid var(--border-default, var(--border));
   background: var(--bg-surface-2, var(--mc-surface-2));
   color: var(--fg-primary, var(--foreground));
-  font: 600 0.7rem / 1 var(--font-mono, var(--mc-font-mono));
+  font: 600 var(--text-2xs) / 1 var(--font-mono, var(--mc-font-mono));
   letter-spacing: 0.02em;
 }
 
@@ -815,7 +815,7 @@
 
 .mc-next-kbd-hint-sep {
   color: var(--fg-faint, var(--text-muted));
-  font-size: 0.65rem;
+  font-size: var(--text-2xs);
 }
 
 /* ============================================================
@@ -861,7 +861,7 @@
 
 .command-palette-kicker {
   margin: 0 0 0.15rem;
-  font: 700 0.625rem / 1 var(--font-sans, var(--mc-font-sans));
+  font: 700 var(--text-2xs) / 1 var(--font-sans, var(--mc-font-sans));
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fg-muted, var(--text-muted));
