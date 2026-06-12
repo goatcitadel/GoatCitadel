@@ -52,18 +52,9 @@ function sanitizeMessageSegment(
 ): Omit<ChannelOutboundSanitizeResult, "truncated"> {
   let next = segment;
   let removedBlockCount = 0;
-  for (const tag of [...REASONING_BLOCK_TAGS, ...INTERNAL_BLOCK_TAGS]) {
-    const block = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi");
-    next = next.replace(block, () => {
-      removedBlockCount += 1;
-      return "";
-    });
-    const bracketBlock = new RegExp(`\\[${tag}\\b[^\\]]*\\][\\s\\S]*?\\[\\/${tag}\\]`, "gi");
-    next = next.replace(bracketBlock, () => {
-      removedBlockCount += 1;
-      return "";
-    });
-  }
+  const markupSanitized = stripInternalMarkupBlocks(next);
+  next = markupSanitized.message;
+  removedBlockCount += markupSanitized.count;
 
   const commentSanitized = stripInternalHtmlComments(next);
   next = commentSanitized.message;
@@ -84,6 +75,72 @@ function sanitizeMessageSegment(
     redactedSecretCount: secretSanitized.count,
     neutralizedMentionCount,
   };
+}
+
+function stripInternalMarkupBlocks(message: string): { message: string; count: number } {
+  let next = message;
+  let count = 0;
+  for (const tag of [...REASONING_BLOCK_TAGS, ...INTERNAL_BLOCK_TAGS]) {
+    const angleSanitized = stripDelimitedTagBlocks(next, tag, "angle");
+    next = angleSanitized.message;
+    count += angleSanitized.count;
+
+    const bracketSanitized = stripDelimitedTagBlocks(next, tag, "bracket");
+    next = bracketSanitized.message;
+    count += bracketSanitized.count;
+  }
+  return { message: next, count };
+}
+
+function stripDelimitedTagBlocks(
+  message: string,
+  tag: string,
+  syntax: "angle" | "bracket",
+): { message: string; count: number } {
+  let count = 0;
+  let cursor = 0;
+  let next = "";
+  const lower = message.toLowerCase();
+  const openNeedle = syntax === "angle" ? `<${tag}` : `[${tag}`;
+  const closeNeedle = syntax === "angle" ? `</${tag}>` : `[/${tag}]`;
+  const openEndChar = syntax === "angle" ? ">" : "]";
+
+  while (cursor < message.length) {
+    const start = lower.indexOf(openNeedle, cursor);
+    if (start === -1) {
+      next += message.slice(cursor);
+      break;
+    }
+
+    const afterName = start + openNeedle.length;
+    if (!isTagNameBoundary(lower[afterName], openEndChar)) {
+      next += message.slice(cursor, afterName);
+      cursor = afterName;
+      continue;
+    }
+
+    const openEnd = lower.indexOf(openEndChar, afterName);
+    if (openEnd === -1) {
+      next += message.slice(cursor);
+      break;
+    }
+
+    const closeStart = lower.indexOf(closeNeedle, openEnd + 1);
+    if (closeStart === -1) {
+      next += message.slice(cursor);
+      break;
+    }
+
+    next += message.slice(cursor, start);
+    cursor = closeStart + closeNeedle.length;
+    count += 1;
+  }
+
+  return { message: next, count };
+}
+
+function isTagNameBoundary(value: string | undefined, closingDelimiter: string): boolean {
+  return value === closingDelimiter || value === " " || value === "\t" || value === "\n" || value === "\r";
 }
 
 function stripInternalHtmlComments(message: string): { message: string; count: number } {

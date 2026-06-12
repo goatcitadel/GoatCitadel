@@ -7031,19 +7031,25 @@ function classifyOfficialWildfireSmokeGuidanceHost(url: string): "epa" | "public
   if (!hostname) {
     return undefined;
   }
-  const normalized = hostname.startsWith("www.") ? hostname.slice(4) : hostname;
-  if (normalized === "epa.gov" || normalized.endsWith(".epa.gov")) {
+  const labels = hostname
+    .split(".")
+    .map((label) => label.trim().toLowerCase())
+    .filter((label) => label.length > 0);
+  if (hostLabelsMatchDomain(labels, ["epa", "gov"])) {
     return "epa";
   }
-  if (
-    normalized === "arb.ca.gov" ||
-    normalized.endsWith(".arb.ca.gov") ||
-    normalized === "cdc.gov" ||
-    normalized.endsWith(".cdc.gov")
-  ) {
+  if (hostLabelsMatchDomain(labels, ["arb", "ca", "gov"]) || hostLabelsMatchDomain(labels, ["cdc", "gov"])) {
     return "public_health";
   }
   return undefined;
+}
+
+function hostLabelsMatchDomain(hostLabels: string[], domainLabels: string[]): boolean {
+  if (hostLabels.length < domainLabels.length) {
+    return false;
+  }
+  const offset = hostLabels.length - domainLabels.length;
+  return domainLabels.every((label, index) => hostLabels[offset + index] === label);
 }
 
 function formatOfficialWildfireSmokeGuidanceSource(url: string): string {

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
-import { createHmac, randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -54,7 +54,7 @@ import {
 } from "./secret-store-service.js";
 
 const log = logger.child("llm-service");
-const MODEL_DISCOVERY_AUTH_CACHE_HMAC_KEY = randomBytes(32);
+const MODEL_DISCOVERY_AUTH_CACHE_TOKENS = new Map<string, string>();
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -81,12 +81,14 @@ interface ProviderRequestTarget {
   dispatcher?: Dispatcher;
 }
 
-function fingerprintModelDiscoveryAuth(apiKey: string): string {
-  return createHmac("sha256", MODEL_DISCOVERY_AUTH_CACHE_HMAC_KEY)
-    .update("model-discovery-cache-auth\0")
-    .update(apiKey)
-    .digest("hex")
-    .slice(0, 16);
+function getModelDiscoveryAuthCacheToken(apiKey: string): string {
+  const existing = MODEL_DISCOVERY_AUTH_CACHE_TOKENS.get(apiKey);
+  if (existing) {
+    return existing;
+  }
+  const token = randomUUID();
+  MODEL_DISCOVERY_AUTH_CACHE_TOKENS.set(apiKey, token);
+  return token;
 }
 
 interface ModelDiscoveryResult {
@@ -1356,8 +1358,7 @@ export class LlmService {
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     let key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
     if (resolved.apiKey) {
-      const hash = fingerprintModelDiscoveryAuth(resolved.apiKey);
-      key += `::auth_${hash}`;
+      key += `::auth_${getModelDiscoveryAuthCacheToken(resolved.apiKey)}`;
     }
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(key);
