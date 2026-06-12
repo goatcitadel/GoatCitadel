@@ -75,7 +75,7 @@ public sealed class LauncherService
             var directory = Path.GetDirectoryName(Path.GetFullPath(currentExe));
             while (!string.IsNullOrWhiteSpace(directory))
             {
-                if (File.Exists(Path.Combine(directory, "release-manifest.json")) &&
+                if (File.Exists(Path.Join(directory, "release-manifest.json")) &&
                     Directory.GetParent(directory)?.FullName is { } parentInstallRoot)
                 {
                     var invocation = InvocationUnderInstallRoot(parentInstallRoot);
@@ -85,8 +85,8 @@ public sealed class LauncherService
                     }
                 }
 
-                var packagedAppDir = Path.Combine(directory, "app");
-                if (File.Exists(Path.Combine(packagedAppDir, "release-manifest.json")))
+                var packagedAppDir = Path.Join(directory, "app");
+                if (File.Exists(Path.Join(packagedAppDir, "release-manifest.json")))
                 {
                     var invocation = InvocationUnderInstallRoot(directory);
                     if (invocation is not null)
@@ -95,8 +95,8 @@ public sealed class LauncherService
                     }
                 }
 
-                var sourceLauncher = Path.Combine(directory, "bin", "goatcitadel.mjs");
-                if (File.Exists(sourceLauncher) && !File.Exists(Path.Combine(directory, "release-manifest.json")))
+                var sourceLauncher = Path.Join(directory, "bin", "goatcitadel.mjs");
+                if (File.Exists(sourceLauncher) && !File.Exists(Path.Join(directory, "release-manifest.json")))
                 {
                     return new LauncherInvocation(
                         "node",
@@ -136,20 +136,20 @@ public sealed class LauncherService
 
     private LauncherInvocation? InvocationUnderInstallRoot(string root)
     {
-        var packagedNode = Path.Combine(root, "app", "runtime", "node", "node.exe");
-        var packagedScript = Path.Combine(root, "app", "bin", "goatcitadel.mjs");
+        var packagedNode = Path.Join(root, "app", "runtime", "node", "node.exe");
+        var packagedScript = Path.Join(root, "app", "bin", "goatcitadel.mjs");
         if (File.Exists(packagedNode) && File.Exists(packagedScript))
         {
             return new LauncherInvocation(packagedNode, new[] { packagedScript }, root, root, _environment.Get("GOATCITADEL_APP_DIR"), false);
         }
 
-        var cmd = Path.Combine(root, "bin", "goatcitadel.cmd");
+        var cmd = Path.Join(root, "bin", "goatcitadel.cmd");
         if (File.Exists(cmd))
         {
             return InvocationForLauncher(cmd, root);
         }
 
-        var script = Path.Combine(root, "app", "bin", "goatcitadel.mjs");
+        var script = Path.Join(root, "app", "bin", "goatcitadel.mjs");
         return File.Exists(script) ? InvocationForLauncher(script, root) : null;
     }
 
@@ -158,7 +158,7 @@ public sealed class LauncherService
         var fullLauncher = Path.GetFullPath(launcher);
         var installRoot = !string.IsNullOrWhiteSpace(installRootOverride)
             ? Path.GetFullPath(installRootOverride)
-            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(fullLauncher) ?? ".", ".."));
+            : Path.GetFullPath(Path.Join(Path.GetDirectoryName(fullLauncher) ?? ".", ".."));
         var extension = Path.GetExtension(fullLauncher).ToLowerInvariant();
         if (extension == ".mjs")
         {

@@ -45,14 +45,19 @@ public static class ActivationRouteParser
             return result;
         }
 
-        foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(ParseQueryPair))
         {
-            var parts = pair.Split('=', 2);
-            var key = Uri.UnescapeDataString(parts[0].Replace("+", " "));
-            var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Replace("+", " ")) : "";
-            result[key] = value;
+            result[pair.Key] = pair.Value;
         }
 
         return result;
+    }
+
+    private static KeyValuePair<string, string> ParseQueryPair(string pair)
+    {
+        var parts = pair.Split('=', 2);
+        var key = Uri.UnescapeDataString(parts[0].Replace("+", " "));
+        var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Replace("+", " ")) : "";
+        return new KeyValuePair<string, string>(key, value);
     }
 }

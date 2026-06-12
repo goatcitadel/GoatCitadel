@@ -66,10 +66,29 @@ public sealed class EventStreamService
             {
                 return;
             }
-            catch (Exception error)
+            catch (HttpRequestException error)
             {
-                WatcherError?.Invoke("desktop_sse_stream_failed", error.Message);
-                await DelayOrCancel(TimeSpan.FromSeconds(5), cancellationToken);
+                await HandleStreamFailureAsync(error, cancellationToken);
+            }
+            catch (IOException error)
+            {
+                await HandleStreamFailureAsync(error, cancellationToken);
+            }
+            catch (InvalidOperationException error)
+            {
+                await HandleStreamFailureAsync(error, cancellationToken);
+            }
+            catch (JsonException error)
+            {
+                await HandleStreamFailureAsync(error, cancellationToken);
+            }
+            catch (TaskCanceledException error)
+            {
+                await HandleStreamFailureAsync(error, cancellationToken);
+            }
+            catch (UriFormatException error)
+            {
+                await HandleStreamFailureAsync(error, cancellationToken);
             }
         }
     }
@@ -255,6 +274,12 @@ public sealed class EventStreamService
         signal.Contains("daemon_stopped", StringComparison.Ordinal);
 
     private static string TrimTrailingSlash(string value) => value.TrimEnd('/');
+
+    private async Task HandleStreamFailureAsync(Exception error, CancellationToken cancellationToken)
+    {
+        WatcherError?.Invoke("desktop_sse_stream_failed", error.Message);
+        await DelayOrCancel(TimeSpan.FromSeconds(5), cancellationToken);
+    }
 
     private static async Task DelayOrCancel(TimeSpan duration, CancellationToken cancellationToken)
     {

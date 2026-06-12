@@ -839,7 +839,7 @@ async function runMcpServerModeStdio(argv) {
       continue;
     }
     if (message.id === undefined) {
-      await handleMcpServerNotification(message, state);
+      await handleMcpServerNotification(message);
       continue;
     }
     try {
@@ -918,7 +918,7 @@ server-mode descriptors through Gateway-owned policy, approvals, and audit.
 `);
 }
 
-async function handleMcpServerNotification(message, state) {
+async function handleMcpServerNotification(message) {
   if (message.method === "notifications/initialized" || message.method === "$/cancelRequest") {
     return;
   }

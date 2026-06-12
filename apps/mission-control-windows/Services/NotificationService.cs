@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using GoatCitadel.MissionControl.Windows.Models;
 using Microsoft.Windows.AppNotifications;
 
@@ -30,7 +31,15 @@ public sealed class NotificationService : IDisposable
             manager.Register();
             _registered = true;
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
+        {
+            _fallbackToast($"Windows notification registration failed: {error.Message}");
+        }
+        catch (COMException error)
+        {
+            _fallbackToast($"Windows notification registration failed: {error.Message}");
+        }
+        catch (UnauthorizedAccessException error)
         {
             _fallbackToast($"Windows notification registration failed: {error.Message}");
         }
@@ -59,9 +68,13 @@ public sealed class NotificationService : IDisposable
             manager.NotificationInvoked -= OnNotificationInvoked;
             manager.Unregister();
         }
-        catch
+        catch (InvalidOperationException error)
         {
-            // Notification teardown should never block app shutdown.
+            _fallbackToast($"Notification teardown skipped: {error.Message}");
+        }
+        catch (COMException error)
+        {
+            _fallbackToast($"Notification teardown skipped: {error.Message}");
         }
     }
 
@@ -92,10 +105,22 @@ public sealed class NotificationService : IDisposable
                     </binding>
                   </visual>
                 </toast>
-                """;
+            """;
             AppNotificationManager.Default.Show(new AppNotification(xml));
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
+        {
+            _fallbackToast($"Notification fallback: {title}. {error.Message}");
+        }
+        catch (COMException error)
+        {
+            _fallbackToast($"Notification fallback: {title}. {error.Message}");
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            _fallbackToast($"Notification fallback: {title}. {error.Message}");
+        }
+        catch (ArgumentException error)
         {
             _fallbackToast($"Notification fallback: {title}. {error.Message}");
         }
@@ -113,15 +138,20 @@ public sealed class NotificationService : IDisposable
     private static Dictionary<string, string> ParseLaunchArguments(string raw)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in raw.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var pair in raw.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(ParseLaunchArgumentPair))
         {
-            var parts = pair.Split('=', 2);
-            var key = Uri.UnescapeDataString(parts[0]);
-            var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
-            result[key] = value;
+            result[pair.Key] = pair.Value;
         }
 
         return result;
+    }
+
+    private static KeyValuePair<string, string> ParseLaunchArgumentPair(string pair)
+    {
+        var parts = pair.Split('=', 2);
+        var key = Uri.UnescapeDataString(parts[0]);
+        var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
+        return new KeyValuePair<string, string>(key, value);
     }
 
     private static string EscapeXml(string value) =>

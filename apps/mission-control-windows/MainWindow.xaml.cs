@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using GoatCitadel.MissionControl.Windows.Models;
 using GoatCitadel.MissionControl.Windows.Services;
 using Microsoft.UI;
@@ -152,11 +154,17 @@ public sealed partial class MainWindow : Window
         {
             ConfigureTray();
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
         {
-            _trayAvailable = false;
-            _trayService.Dispose();
-            ShowToast($"Tray controls are unavailable: {error.Message}");
+            RenderTrayFallback(error);
+        }
+        catch (ExternalException error)
+        {
+            RenderTrayFallback(error);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            RenderTrayFallback(error);
         }
     }
 
@@ -164,7 +172,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var userDataFolder = Path.Combine(
+            var userDataFolder = Path.Join(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "GoatCitadel",
                 "WebView2");
@@ -181,11 +189,21 @@ public sealed partial class MainWindow : Window
             };
             _webViewReady = true;
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
         {
-            _webViewReady = false;
-            _webViewInitializationTask = null;
-            RenderRecovery($"WebView2 initialization failed: {error.Message}");
+            RenderWebViewRecovery(error);
+        }
+        catch (COMException error)
+        {
+            RenderWebViewRecovery(error);
+        }
+        catch (IOException error)
+        {
+            RenderWebViewRecovery(error);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            RenderWebViewRecovery(error);
         }
     }
 
@@ -209,9 +227,25 @@ public sealed partial class MainWindow : Window
                 StartRuntimeStatusPolling();
             }
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
         {
-            RenderRecovery(error.Message);
+            RenderRuntimeRecovery(error);
+        }
+        catch (Win32Exception error)
+        {
+            RenderRuntimeRecovery(error);
+        }
+        catch (IOException error)
+        {
+            RenderRuntimeRecovery(error);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            RenderRuntimeRecovery(error);
+        }
+        catch (TaskCanceledException error)
+        {
+            RenderRuntimeRecovery(error);
         }
     }
 
@@ -272,17 +306,25 @@ public sealed partial class MainWindow : Window
                 RenderRecovery(message);
             }
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
         {
-            if (notify)
-            {
-                ShowToast(error.Message);
-            }
-
-            if (syncShell)
-            {
-                RenderRecovery($"Runtime status check failed: {error.Message}");
-            }
+            RenderRuntimeStatusFailure(error, notify, syncShell);
+        }
+        catch (Win32Exception error)
+        {
+            RenderRuntimeStatusFailure(error, notify, syncShell);
+        }
+        catch (IOException error)
+        {
+            RenderRuntimeStatusFailure(error, notify, syncShell);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            RenderRuntimeStatusFailure(error, notify, syncShell);
+        }
+        catch (TaskCanceledException error)
+        {
+            RenderRuntimeStatusFailure(error, notify, syncShell);
         }
     }
 
@@ -300,7 +342,23 @@ public sealed partial class MainWindow : Window
         {
             await _runtimeStatusService.StopAsync();
         }
-        catch (Exception error)
+        catch (InvalidOperationException error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (Win32Exception error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (IOException error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (TaskCanceledException error)
         {
             ShowToast(error.Message);
         }
@@ -449,7 +507,7 @@ public sealed partial class MainWindow : Window
         var root = _launcherService.ResolveLauncher().InstallRoot;
         var logFile = _lastRuntime?.LogFiles.GatewayStderr ?? _lastRuntime?.LogFiles.GatewayStdout;
         var logDir = !string.IsNullOrWhiteSpace(logFile) ? Path.GetDirectoryName(logFile) : null;
-        TryAction(() => OpenTargetService.OpenExistingPath(logDir ?? Path.Combine(root, "runtime", "logs")));
+        TryAction(() => OpenTargetService.OpenExistingPath(logDir ?? Path.Join(root, "runtime", "logs")));
     }
 
     private void OpenInstallFolder()
@@ -485,9 +543,50 @@ public sealed partial class MainWindow : Window
         {
             action();
         }
-        catch (Exception error)
+        catch (ObjectDisposedException error)
         {
             ShowToast(error.Message);
+        }
+        catch (InvalidOperationException error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (Win32Exception error)
+        {
+            ShowToast(error.Message);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            ShowToast(error.Message);
+        }
+    }
+
+    private void RenderTrayFallback(Exception error)
+    {
+        _trayAvailable = false;
+        _trayService.Dispose();
+        ShowToast($"Tray controls are unavailable: {error.Message}");
+    }
+
+    private void RenderWebViewRecovery(Exception error)
+    {
+        _webViewReady = false;
+        _webViewInitializationTask = null;
+        RenderRecovery($"WebView2 initialization failed: {error.Message}");
+    }
+
+    private void RenderRuntimeRecovery(Exception error) => RenderRecovery(error.Message);
+
+    private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell)
+    {
+        if (notify)
+        {
+            ShowToast(error.Message);
+        }
+
+        if (syncShell)
+        {
+            RenderRecovery($"Runtime status check failed: {error.Message}");
         }
     }
 
