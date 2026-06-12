@@ -11,7 +11,7 @@ import type {
   ChatThreadResponse,
   ChatUserInputPromptResponse,
 } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   answerChatUserInputPrompt,
   approveChatTool,

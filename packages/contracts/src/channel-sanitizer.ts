@@ -1,5 +1,6 @@
 const REASONING_BLOCK_TAGS = ["think", "thinking", "reasoning", "internal_reasoning", "analysis"];
 const INTERNAL_BLOCK_TAGS = ["tool_call", "tool_result", "tool_use", "internal_trace"];
+const INTERNAL_HTML_COMMENT_PREFIXES = ["reasoning", "thinking", "internal"];
 export interface ChannelOutboundSanitizeOptions {
   neutralizeMentions?: boolean;
   maxLength?: number;
@@ -64,10 +65,9 @@ function sanitizeMessageSegment(
     });
   }
 
-  next = next.replace(/<!--\s*(?:reasoning|thinking|internal)[\s\S]*?-->/gi, () => {
-    removedBlockCount += 1;
-    return "";
-  });
+  const commentSanitized = stripInternalHtmlComments(next);
+  next = commentSanitized.message;
+  removedBlockCount += commentSanitized.count;
 
   const secretSanitized = redactOutboundSecrets(next);
   next = secretSanitized.message;
@@ -84,6 +84,42 @@ function sanitizeMessageSegment(
     redactedSecretCount: secretSanitized.count,
     neutralizedMentionCount,
   };
+}
+
+function stripInternalHtmlComments(message: string): { message: string; count: number } {
+  let count = 0;
+  let cursor = 0;
+  let next = "";
+
+  while (cursor < message.length) {
+    const start = message.indexOf("<!--", cursor);
+    if (start === -1) {
+      next += message.slice(cursor);
+      break;
+    }
+
+    const end = message.indexOf("-->", start + 4);
+    if (end === -1) {
+      next += message.slice(cursor);
+      break;
+    }
+
+    const body = message.slice(start + 4, end);
+    if (isInternalHtmlCommentBody(body)) {
+      next += message.slice(cursor, start);
+      count += 1;
+    } else {
+      next += message.slice(cursor, end + 3);
+    }
+    cursor = end + 3;
+  }
+
+  return { message: next, count };
+}
+
+function isInternalHtmlCommentBody(body: string): boolean {
+  const normalized = body.trimStart().toLowerCase();
+  return INTERNAL_HTML_COMMENT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 function redactOutboundSecrets(message: string): { message: string; count: number } {

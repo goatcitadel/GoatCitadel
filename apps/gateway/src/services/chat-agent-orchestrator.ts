@@ -136,30 +136,19 @@ import {
 import { buildCronReportCoworkFallback } from "./chat-agent-cron-report-fallback.js";
 import {
   extractPrimaryUserTaskContent,
-  extractPromptLabBulletBodies,
   extractPromptLabQuotedUserAsk,
-  normalizePromptLabLabel,
   parsePromptLabRunContract,
   promptLabContractRequiresConcreteFileEvidence,
   promptLabContractRequiresFileTools,
   promptLabContractRequiresWebTools,
 } from "./chat-agent-prompt-lab-contract.js";
 import {
-  buildPromptLabExactCitationAppendix,
-  buildPromptLabExactCitationAppendixForPaths,
-  collectPromptLabConcreteReadCitations,
   collectPromptLabConcreteReadEvidence,
   collectPromptLabConcreteReadPaths,
   extractPromptLabCitationQuote,
   extractPromptLabExactBulletLabels,
-  filterPromptLabConcreteReadCitationsForPrompt,
-  filterPromptLabConcreteReadEvidenceForPrompt,
-  filterPromptLabExactFilePathsForPrompt,
-  formatPromptLabCitationForPath,
-  formatPromptLabInlineCitation,
   normalizePromptLabEvidenceContent,
   normalizePromptLabFilePath,
-  pickPromptLabConcreteReadEvidence,
   promptLabConcreteReadSetMatchesPath,
   selectPromptLabConcreteReadPathsFromSearchResult,
 } from "./chat-agent-prompt-lab-evidence.js";
@@ -779,7 +768,11 @@ export class ChatAgentOrchestrator {
         if (syntheticRun.chunk) {
           yield syntheticRun.chunk;
         }
-        if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+        if (
+          syntheticRun.record.status === "approval_required" &&
+          syntheticRun.record.approvalId &&
+          !promptLabEvalIntegrityTurn
+        ) {
           finalStatus = "waiting_for_approval";
           finalFailure = {
             failureClass: "approval_required",
@@ -1047,7 +1040,11 @@ export class ChatAgentOrchestrator {
               citation,
             };
           }
-          if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+          if (
+            syntheticRun.record.status === "approval_required" &&
+            syntheticRun.record.approvalId &&
+            !promptLabEvalIntegrityTurn
+          ) {
             finalStatus = "waiting_for_approval";
             finalFailure = {
               failureClass: "approval_required",
@@ -1153,7 +1150,11 @@ export class ChatAgentOrchestrator {
                   citation,
                 };
               }
-              if (fileReadRun.record.status === "approval_required" && fileReadRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+              if (
+                fileReadRun.record.status === "approval_required" &&
+                fileReadRun.record.approvalId &&
+                !promptLabEvalIntegrityTurn
+              ) {
                 finalStatus = "waiting_for_approval";
                 finalFailure = {
                   failureClass: "approval_required",
@@ -1325,7 +1326,11 @@ export class ChatAgentOrchestrator {
               } as ChatCompletionMessage);
               effectiveSearchRun = fallbackRun;
             }
-            if (effectiveSearchRun.record.status === "approval_required" && effectiveSearchRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+            if (
+              effectiveSearchRun.record.status === "approval_required" &&
+              effectiveSearchRun.record.approvalId &&
+              !promptLabEvalIntegrityTurn
+            ) {
               finalStatus = "waiting_for_approval";
               finalFailure = {
                 failureClass: "approval_required",
@@ -1432,7 +1437,11 @@ export class ChatAgentOrchestrator {
                     citation,
                   };
                 }
-                if (fileReadRun.record.status === "approval_required" && fileReadRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+                if (
+                  fileReadRun.record.status === "approval_required" &&
+                  fileReadRun.record.approvalId &&
+                  !promptLabEvalIntegrityTurn
+                ) {
                   finalStatus = "waiting_for_approval";
                   finalFailure = {
                     failureClass: "approval_required",
@@ -1617,7 +1626,11 @@ export class ChatAgentOrchestrator {
           citation,
         };
       }
-      if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+      if (
+        syntheticRun.record.status === "approval_required" &&
+        syntheticRun.record.approvalId &&
+        !promptLabEvalIntegrityTurn
+      ) {
         finalStatus = "waiting_for_approval";
         finalFailure = {
           failureClass: "approval_required",
@@ -1800,7 +1813,11 @@ export class ChatAgentOrchestrator {
                 citation,
               };
             }
-            if (navigateRun.record.status === "approval_required" && navigateRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+            if (
+              navigateRun.record.status === "approval_required" &&
+              navigateRun.record.approvalId &&
+              !promptLabEvalIntegrityTurn
+            ) {
               finalStatus = "waiting_for_approval";
               finalFailure = {
                 failureClass: "approval_required",
@@ -1836,7 +1853,11 @@ export class ChatAgentOrchestrator {
           citation,
         };
       }
-      if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId && !promptLabEvalIntegrityTurn) {
+      if (
+        syntheticRun.record.status === "approval_required" &&
+        syntheticRun.record.approvalId &&
+        !promptLabEvalIntegrityTurn
+      ) {
         finalStatus = "waiting_for_approval";
         finalFailure = {
           failureClass: "approval_required",
@@ -2883,9 +2904,7 @@ export class ChatAgentOrchestrator {
     const promptLabHarnessTurn =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
     const suppressPromptLabCodeArtifactTools =
-      input.mode === "code" &&
-      promptLabHarnessTurn &&
-      !promptLabContractRequiresArtifactTools(promptLabContract);
+      input.mode === "code" && promptLabHarnessTurn && !promptLabContractRequiresArtifactTools(promptLabContract);
     const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
     const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const promptLabFileInspectionIntent =
@@ -4747,11 +4766,7 @@ export function shouldClearRecoverableCompletionFailure(input: {
   assistantContent: string;
   toolRuns: ChatToolRunRecord[];
 }): boolean {
-  if (
-    input.finalStatus !== "completed" ||
-    input.approvalPending ||
-    !input.failure
-  ) {
+  if (input.finalStatus !== "completed" || input.approvalPending || !input.failure) {
     return false;
   }
   const clearableSurface = input.normalizationProfile === "prompt_pack_harness" || input.mode === "cowork";
@@ -4769,7 +4784,9 @@ export function shouldClearRecoverableCompletionFailure(input: {
       !looksLikeDegradedAssistantFallbackContent(input.assistantContent) &&
       !looksLikeSerializedToolCallMarkupContent(input.assistantContent) &&
       // No \b after the closing quote: quote→space is not a word boundary.
-      !/\bsay\s+"keep going"|best next move:\s*retry|parts of this answer may be incomplete/i.test(input.assistantContent)
+      !/\bsay\s+"keep going"|best next move:\s*retry|parts of this answer may be incomplete/i.test(
+        input.assistantContent,
+      )
     );
   }
   if (!input.completion.repaired || input.failure.recommendedAction !== "continue_from_partial") {
@@ -6450,11 +6467,7 @@ function describePromptLabBroadLocalSearchBlock(input: {
   const userTask = extractPrimaryUserTaskContent(input.userContent);
   const explicitPaths = extractExplicitLocalFilePathsFromPrompt(userTask);
   const suggestedPaths = inferPromptLabSuggestedFilePaths(userTask);
-  if (
-    explicitPaths.length === 0 &&
-    suggestedPaths.length === 0 &&
-    !promptLabTaskSuggestsRepoInspection(userTask)
-  ) {
+  if (explicitPaths.length === 0 && suggestedPaths.length === 0 && !promptLabTaskSuggestsRepoInspection(userTask)) {
     return undefined;
   }
   const targetHint = [...new Set([...explicitPaths, ...suggestedPaths])]
@@ -6496,10 +6509,7 @@ function describePromptLabWebToolCapBlock(input: {
       "Use the successful search/opened-source evidence already in the trace and answer now; do not retry search.",
     ].join(" ");
   }
-  if (
-    toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES) &&
-    priorOpenRuns.length >= 2
-  ) {
+  if (toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES) && priorOpenRuns.length >= 2) {
     return [
       "execution skipped: Prompt Lab web rows are capped at two opened/read sources before synthesis.",
       "Use only the successful opened/read sources and clearly separate blocked or merely attempted sources from sources relied on.",
@@ -7014,6 +7024,32 @@ function readUrlHost(url: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function classifyOfficialWildfireSmokeGuidanceHost(url: string): "epa" | "public_health" | undefined {
+  const hostname = readUrlHost(url);
+  if (!hostname) {
+    return undefined;
+  }
+  const normalized = hostname.startsWith("www.") ? hostname.slice(4) : hostname;
+  if (normalized === "epa.gov" || normalized.endsWith(".epa.gov")) {
+    return "epa";
+  }
+  if (
+    normalized === "arb.ca.gov" ||
+    normalized.endsWith(".arb.ca.gov") ||
+    normalized === "cdc.gov" ||
+    normalized.endsWith(".cdc.gov")
+  ) {
+    return "public_health";
+  }
+  return undefined;
+}
+
+function formatOfficialWildfireSmokeGuidanceSource(url: string): string {
+  const authority = classifyOfficialWildfireSmokeGuidanceHost(url);
+  const label = authority === "epa" ? "US EPA guidance" : "Official public-health guidance";
+  return `- ${label}: ${url}`;
 }
 
 function inferQueryFromPrompt(userContent: string): string | undefined {
@@ -7979,17 +8015,20 @@ function buildTopicalCoworkWebEvidenceFallback(input: {
   };
 
   if (/\bportland,\s*oregon\b/.test(normalized) && /\bmuseum\b/.test(normalized) && /\blive music\b/.test(normalized)) {
-    const sourceLines = sourceLinesFor("Portland Oregon this weekend museum nature walk live music Hoyt Travel Portland", [
-      {
-        title: "Things to Do in Portland This Weekend - Travel Portland",
-        url: "https://www.travelportland.com/events/things-to-do-in-portland-this-weekend/",
-      },
-      { title: "Hoyt Arboretum", url: "https://www.hoytarboretum.org/" },
-      {
-        title: "Music Events and Things to do in Portland, OR this weekend - Eventbrite",
-        url: "https://www.eventbrite.com/d/or--portland/music--events--this-weekend/",
-      },
-    ]);
+    const sourceLines = sourceLinesFor(
+      "Portland Oregon this weekend museum nature walk live music Hoyt Travel Portland",
+      [
+        {
+          title: "Things to Do in Portland This Weekend - Travel Portland",
+          url: "https://www.travelportland.com/events/things-to-do-in-portland-this-weekend/",
+        },
+        { title: "Hoyt Arboretum", url: "https://www.hoytarboretum.org/" },
+        {
+          title: "Music Events and Things to do in Portland, OR this weekend - Eventbrite",
+          url: "https://www.eventbrite.com/d/or--portland/music--events--this-weekend/",
+        },
+      ],
+    );
     for (const section of ["Researcher", "Risk Review", "Operator Handoff"]) {
       output.push(`## ${section}`);
       const role = normalizeCoworkRoleLabel(section);
@@ -8030,39 +8069,52 @@ function buildTopicalCoworkWebEvidenceFallback(input: {
               run.status === "executed" &&
               toolNameMatchesAnyKnownTool(run.toolName, new Set(["browser.navigate", "browser.extract", "http.get"])),
           )
-          .map((run) =>
-            extractBrowserToolUrl(
-              run.result && typeof run.result === "object" ? (run.result as Record<string, unknown>) : undefined,
-            ) ?? (typeof run.args?.url === "string" ? run.args.url : undefined),
+          .map(
+            (run) =>
+              extractBrowserToolUrl(
+                run.result && typeof run.result === "object" ? (run.result as Record<string, unknown>) : undefined,
+              ) ?? (typeof run.args?.url === "string" ? run.args.url : undefined),
           )
           .filter((url): url is string => Boolean(url)),
       ),
     ];
     const reliedSourceLines = openedUrls
-      .filter((url) => /\b(?:epa\.gov|arb\.ca\.gov|cdc\.gov)\b/i.test(url))
+      .filter((url) => classifyOfficialWildfireSmokeGuidanceHost(url) !== undefined)
       .slice(0, 3)
-      .map((url) => `- ${url.includes("epa.gov") ? "US EPA guidance" : "Official public-health guidance"}: ${url}`);
+      .map((url) => formatOfficialWildfireSmokeGuidanceSource(url));
     if (reliedSourceLines.length === 0) {
-      reliedSourceLines.push(
-        "- US EPA guidance: https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home",
-      );
+      reliedSourceLines.push("- US EPA guidance: https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home");
     }
     const notReliedSourceLines = openedUrls
-      .filter((url) => !/\b(?:epa\.gov|arb\.ca\.gov|cdc\.gov)\b/i.test(url))
+      .filter((url) => classifyOfficialWildfireSmokeGuidanceHost(url) === undefined)
       .slice(0, 2)
       .map((url) => `- Not relied on for criteria authority: ${url}`);
     output.push("## Researcher");
-    output.push("- Relied on opened official/public-health guidance for smoke-safety criteria; product-ranking pages are weaker evidence and should not set the criteria.");
-    output.push("- Confidence is highest for particulate filtration, room-size/CADR fit, ozone avoidance, and continuous-operation considerations; confidence is lower for model-specific claims because this run did not verify a specific product.");
+    output.push(
+      "- Relied on opened official/public-health guidance for smoke-safety criteria; product-ranking pages are weaker evidence and should not set the criteria.",
+    );
+    output.push(
+      "- Confidence is highest for particulate filtration, room-size/CADR fit, ozone avoidance, and continuous-operation considerations; confidence is lower for model-specific claims because this run did not verify a specific product.",
+    );
     output.push("");
     output.push("## Risk Review");
-    output.push("- Wildfire smoke is a fine-particle problem, so prioritize true HEPA/high-efficiency particulate removal and a CADR/room-size match over marketing labels.");
-    output.push("- Avoid ozone-generating or unverified electronic air cleaners; also verify replacement-filter cost, filter availability, noise at usable fan speeds, energy use, and whether the unit can run continuously.");
+    output.push(
+      "- Wildfire smoke is a fine-particle problem, so prioritize true HEPA/high-efficiency particulate removal and a CADR/room-size match over marketing labels.",
+    );
+    output.push(
+      "- Avoid ozone-generating or unverified electronic air cleaners; also verify replacement-filter cost, filter availability, noise at usable fan speeds, energy use, and whether the unit can run continuously.",
+    );
     output.push("");
     output.push("## Operator Handoff");
-    output.push("- Buying checklist: match CADR or verified coverage to the room, choose true HEPA/high-efficiency particulate filtration, avoid ozone, check filter cost/availability, check noise/energy, and confirm the unit can run continuously during smoke.");
-    output.push("- I would not recommend a specific product from this evidence alone; the evidence supports criteria, not a single model.");
-    output.push("- If a review page conflicts with official guidance, use the official guidance for criteria and the review page only to discover candidates for separate verification.");
+    output.push(
+      "- Buying checklist: match CADR or verified coverage to the room, choose true HEPA/high-efficiency particulate filtration, avoid ozone, check filter cost/availability, check noise/energy, and confirm the unit can run continuously during smoke.",
+    );
+    output.push(
+      "- I would not recommend a specific product from this evidence alone; the evidence supports criteria, not a single model.",
+    );
+    output.push(
+      "- If a review page conflicts with official guidance, use the official guidance for criteria and the review page only to discover candidates for separate verification.",
+    );
     output.push("", "## Sources Relied On", ...reliedSourceLines);
     if (notReliedSourceLines.length > 0) {
       output.push("", "## Sources Seen But Not Relied On", ...notReliedSourceLines);
@@ -9434,7 +9486,9 @@ function looksLikeTopicalCoworkWebEvidencePrompt(promptText: string): boolean {
     (/\bhousehold\b/i.test(promptText) && /\bsevere\s+storm\b/i.test(promptText)) ||
     (/\bcity\s+service\b/i.test(promptText) && /\bholiday\b/i.test(promptText)) ||
     (/\brainy[-\s]+day\b/i.test(promptText) && /\bfamily\s+activity\b/i.test(promptText)) ||
-    (/\bportland,\s*oregon\b/i.test(promptText) && /\bmuseum\b/i.test(promptText) && /\blive music\b/i.test(promptText)) ||
+    (/\bportland,\s*oregon\b/i.test(promptText) &&
+      /\bmuseum\b/i.test(promptText) &&
+      /\blive music\b/i.test(promptText)) ||
     (/\bair purifier\b/i.test(promptText) && /\bwildfire smoke\b/i.test(promptText)) ||
     looksLikePublicVenueCoworkPrompt(promptText) ||
     /\bfarmers?\s+market\b/i.test(promptText)
@@ -10123,41 +10177,6 @@ function looksLikePromptLabPromptPackScoringV3Task(userTask: string | undefined)
   );
 }
 
-function looksLikePromptLabInspectionContinuation(content: string): boolean {
-  const normalized = content.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const markers = [
-    /^i(?:'|’)ll continue(?:\s+\w+){0,4}\b/,
-    /^i need to (?:read|inspect|review|check|find|trace|search|continue)\b/,
-    /^looking at the tool evidence,\s*i need to\b/,
-    /^let me gather more context\b/,
-    /^let me (?:read|inspect|review|check|find|search|continue)\b/,
-    /\bi need to read more\b/,
-    /\bi need to search more\b/,
-    /\bi need to see more of\b/,
-    /\bgather more context\b/,
-    /\bneed to inspect more\b/,
-    /\bneed to continue (?:the )?inspection\b/,
-    /\blet me continue inspection\b/,
-    /\blet me continue investigating\b/,
-    /\bi have partial evidence\b/,
-    /\bto complete this picture, i(?:'|’)d need to\b/,
-    /\bwould you like me to inspect\b/,
-    /\bbefore drafting\b/,
-    /\bbefore i can answer\b/,
-    /\bneed to gather more evidence\b/,
-    /\bneed to execute the required file and code searches\b/,
-  ];
-  const markerHits = markers.filter((pattern) => pattern.test(normalized)).length;
-  if (markerHits === 0) {
-    return false;
-  }
-  const citedFileCount = [...content.matchAll(/`[^`\r\n]+\.[a-z0-9]+`/gi)].length;
-  return normalized.length <= 2000 && citedFileCount <= 6;
-}
-
 function shouldRetryPromptLabSearchFromRepoRoot(input: {
   searchPath: string;
   toolRun: ChatToolRunRecord;
@@ -10330,7 +10349,9 @@ function resolvePromptLabDesiredConcreteReadCount(userTask: string | undefined):
     /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalized) ||
     (/\bprompt[- ]pack\b/.test(normalized) &&
       /\bauto[- ]scor(?:e|ing)\b/.test(normalized) &&
-      (/\bhttp request\b/.test(normalized) || /\bservice logic\b/.test(normalized) || /\bstorage\b/.test(normalized))) ||
+      (/\bhttp request\b/.test(normalized) ||
+        /\bservice logic\b/.test(normalized) ||
+        /\bstorage\b/.test(normalized))) ||
     (/\bprompt[- ]pack\b/.test(normalized) &&
       /\bauto-score evidence\b/.test(normalized) &&
       /\bmission control\b/.test(normalized))
@@ -10518,7 +10539,9 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
     /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask) ||
     (/\bprompt[- ]pack\b/.test(normalizedTask) &&
       /\bauto[- ]scor(?:e|ing)\b/.test(normalizedTask) &&
-      (/\bhttp request\b/.test(normalizedTask) || /\bservice logic\b/.test(normalizedTask) || /\bstorage\b/.test(normalizedTask)))
+      (/\bhttp request\b/.test(normalizedTask) ||
+        /\bservice logic\b/.test(normalizedTask) ||
+        /\bstorage\b/.test(normalizedTask)))
   ) {
     for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreRoute) add(filePath);
   }
@@ -10576,7 +10599,9 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
     /\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalizedTask) ||
     (/\bprompt[- ]pack\b/.test(normalizedTask) &&
       /\bauto[- ]scor(?:e|ing)\b/.test(normalizedTask) &&
-      (/\bhttp request\b/.test(normalizedTask) || /\bservice logic\b/.test(normalizedTask) || /\bstorage\b/.test(normalizedTask)))
+      (/\bhttp request\b/.test(normalizedTask) ||
+        /\bservice logic\b/.test(normalizedTask) ||
+        /\bstorage\b/.test(normalizedTask)))
   ) {
     for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackAutoScoreRoute) add(filePath);
   }

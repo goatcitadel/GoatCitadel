@@ -13,6 +13,7 @@ export default tseslint.config(
       "**/.tmp/**",
       "**/.codex-tmp/**",
       "**/.codex-smoke/**",
+      "**/.claude/**",
       "**/.worktrees/**",
       "**/src-tauri/target/**",
       "**/artifacts/**",
