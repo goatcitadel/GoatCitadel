@@ -289,6 +289,7 @@ public sealed class EventStreamService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            return;
         }
     }
 }
