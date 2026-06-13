@@ -58,3 +58,9 @@ assets/source/office/_downloads/
 
 # Visual companion sessions
 .superpowers/
+
+# Review scratch, external-repo working copies, and local verification output (not product source)
+.scratch/
+workspace/goatcitadel_out/
+reports/external-repo-reviews/
+reports/visual-rebaseline-*/
