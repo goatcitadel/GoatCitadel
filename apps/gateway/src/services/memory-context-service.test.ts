@@ -432,6 +432,91 @@ describe("MemoryContextService", () => {
     );
   });
 
+  it("propagates operator aborts through distiller calls without writing fallback evidence", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "workspace", "memory", "abort.md"), "Abort-sensitive memory fact.", "utf8");
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const storage = createStorage();
+    const llmService = createLlmService({
+      chatCompletions: vi.fn((request) => {
+        providerSignal = (request as { signal?: AbortSignal }).signal;
+        return new Promise<ChatCompletionResponse>((_resolve, reject) => {
+          providerSignal?.addEventListener(
+            "abort",
+            () => reject(providerSignal?.reason ?? new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pending = service.compose({
+      scope: "chat",
+      prompt: "Use abort-sensitive memory fact.",
+      workspace: "memory",
+      forceRefresh: true,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(llmService.chatCompletions).toHaveBeenCalled());
+
+    controller.abort(new Error("operator cancelled memory retrieval"));
+
+    await expect(pending).rejects.toThrow("operator cancelled memory retrieval");
+    expect(providerSignal?.aborted).toBe(true);
+    expect(storage.memoryQmdRuns.records).toEqual([]);
+  });
+
+  it("preserves memory distiller timeout fallback text while aborting the provider request", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "timeout.md"),
+      "Timeout-sensitive memory fact.",
+      "utf8",
+    );
+    let providerSignal: AbortSignal | undefined;
+    const storage = createStorage();
+    const llmService = createLlmService({
+      chatCompletions: vi.fn((request) => {
+        providerSignal = (request as { signal?: AbortSignal }).signal;
+        return new Promise<ChatCompletionResponse>(() => undefined);
+      }),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir, { distillerTimeoutMs: 5 }) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "Use timeout-sensitive memory fact.",
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    expect(pack.quality).toEqual({
+      status: "fallback",
+      reason: "memory distiller timed out",
+    });
+    expect(providerSignal?.aborted).toBe(true);
+    expect(storage.memoryQmdRuns.records[0]).toEqual(
+      expect.objectContaining({
+        status: "fallback",
+        errorText: "memory distiller timed out",
+      }),
+    );
+  });
+
   it("passes through read APIs to the memory context repositories", async () => {
     const storage = createStorage();
     const service = new MemoryContextService(
@@ -562,7 +647,7 @@ async function createWorkspaceRoot(): Promise<string> {
 
 function createConfig(
   rootDir: string,
-  options: { memoryEnabled?: boolean; qmdEnabled?: boolean } = {},
+  options: { memoryEnabled?: boolean; qmdEnabled?: boolean; distillerTimeoutMs?: number } = {},
 ): Record<string, unknown> {
   return {
     rootDir,
@@ -581,7 +666,7 @@ function createConfig(
           allowedExtensions: [".md", ".txt"],
           distiller: {
             fallbackCheapModel: "gpt-cheap",
-            timeoutMs: 1_000,
+            timeoutMs: options.distillerTimeoutMs ?? 1_000,
           },
         },
       },

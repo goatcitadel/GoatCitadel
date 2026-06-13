@@ -278,7 +278,7 @@ export function assertHostAllowedInDangerProfile(hostOrUrl: string, allowlist: s
 }
 
 function parseHost(hostOrUrl: string): { host: string; hostname: string; invalidReason?: string } {
-  const trimmed = hostOrUrl.trim();
+  const trimmed = normalizeUrlAuthorityWhitespace(hostOrUrl.trim());
   if (!trimmed) {
     return { host: "", hostname: "" };
   }
@@ -303,6 +303,10 @@ function parseHost(hostOrUrl: string): { host: string; hostname: string; invalid
     }
   } catch {
     if (trimmed.includes("://")) {
+      const authority = trimmed.slice(trimmed.indexOf("://") + 3).split(/[/?#]/, 1)[0] ?? "";
+      if (/\s/.test(authority)) {
+        return invalidHost(hostOrUrl, "Host contains invalid whitespace.");
+      }
       return invalidHost(hostOrUrl, "Host URL is malformed.");
     }
   }
@@ -353,6 +357,10 @@ function parseHost(hostOrUrl: string): { host: string; hostname: string; invalid
     host: withoutPath,
     hostname: withoutPath,
   };
+}
+
+function normalizeUrlAuthorityWhitespace(input: string): string {
+  return input.replace(/^([a-z][a-z0-9+.-]*:)\s*\/\s*\/\s*/i, "$1//");
 }
 
 function invalidHost(input: string, reason: string): { host: string; hostname: string; invalidReason: string } {

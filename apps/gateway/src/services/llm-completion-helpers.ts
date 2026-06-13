@@ -216,6 +216,14 @@ export function normalizeToolProtocolRetryRequest(
         ...message,
         tool_calls: toolCalls,
       };
+      if (attempt === 2 && "provider_native_content" in next) {
+        const providerNativeContent = stripRetryNativeThinkingContent(next.provider_native_content);
+        if (providerNativeContent === undefined) {
+          delete next.provider_native_content;
+        } else {
+          next.provider_native_content = providerNativeContent;
+        }
+      }
       if (attempt === 2 && typeof next.reasoning_content !== "string") {
         next.reasoning_content = "Using tool outputs to continue the response.";
       }
@@ -229,6 +237,18 @@ export function normalizeToolProtocolRetryRequest(
     tools,
     messages,
   };
+}
+
+function stripRetryNativeThinkingContent(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const filtered = value.filter((block) => {
+    const record = toPlainRecord(block);
+    const type = typeof record?.type === "string" ? record.type : "";
+    return type !== "thinking" && type !== "redacted_thinking";
+  });
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 export function createChatCompletionDeadline(timeoutMs: number | undefined): number | undefined {

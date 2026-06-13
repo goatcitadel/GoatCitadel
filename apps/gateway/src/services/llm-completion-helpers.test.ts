@@ -157,6 +157,43 @@ describe("llm-completion-helpers", () => {
     ]);
   });
 
+  it("strips stale provider-native thinking blocks only on the stricter retry attempt", () => {
+    const request: ChatCompletionRequest = {
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          provider_native_content: [
+            { type: "thinking", thinking: "signed stale chain", signature: "sig-old" },
+            { type: "redacted_thinking", data: "stale-redaction" },
+            { type: "text", text: "visible answer" },
+          ],
+          tool_calls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            },
+          ],
+        } as never,
+      ],
+      tools: [
+        {
+          type: "function",
+          function: { name: "lookup", parameters: { type: "object" } },
+        },
+      ],
+    };
+
+    const firstRetry = normalizeToolProtocolRetryRequest(request, 1);
+    const stricterRetry = normalizeToolProtocolRetryRequest(request, 2);
+
+    expect((firstRetry.messages[0] as Record<string, unknown>).provider_native_content).toHaveLength(3);
+    expect((stricterRetry.messages[0] as Record<string, unknown>).provider_native_content).toEqual([
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
   it("enforces completion deadlines and preserves cancellation errors", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));

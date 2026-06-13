@@ -20,7 +20,9 @@ export function buildReleaseProofSummary(certificate) {
     sourceCertificate: "release-certificate.json",
     releaseWorkflow: certificate?.releaseWorkflow ?? null,
     exactShaStatus: summarizeExactShaStatus(requiredLanes, certificate?.commit),
+    publicRelease: buildPublicReleaseProof(certificate, releaseAssets, acceptedFailures),
     acceptedCaveats: acceptedFailures.map((item) => String(item)),
+    acceptedCaveatClassifications: acceptedFailures.map(classifyAcceptedCaveat),
     artifacts: releaseAssets.map((asset) =>
       buildArtifactProofRow(asset, certificate, requiredLanes, acceptedFailures, releaseAssets),
     ),
@@ -34,10 +36,13 @@ export function renderReleaseProofSummaryMarkdown(summary) {
     `- Source certificate: ${summary.sourceCertificate}`,
     `- Commit: ${summary.commit ?? "unknown"}`,
     `- Exact-SHA status: ${summary.exactShaStatus.status}`,
+    `- Public release: ${summary.publicRelease.publicationStatus}`,
+    `- Release URL: ${summary.publicRelease.releaseUrl ?? "not published"}`,
+    `- Workflow/action URL: ${summary.publicRelease.actionUrl ?? "not captured"}`,
     `- Generated: ${summary.generatedAt}`,
     "",
-    "| Artifact | Platform/arch | Status | SHA-256 | Size | Source workflow | Exact SHA | Certificate | Caveats |",
-    "|---|---|---|---|---:|---|---|---|---|",
+    "| Artifact | Platform/arch | Status | SHA-256 | Checksum ref | Size | Source workflow | Action run | Exact SHA | Certificate | Caveats |",
+    "|---|---|---|---|---|---:|---|---|---|---|---|",
   ];
   for (const artifact of summary.artifacts) {
     lines.push(
@@ -46,11 +51,15 @@ export function renderReleaseProofSummaryMarkdown(summary) {
         artifact.platformArch,
         artifact.signatureStatus,
         artifact.sha256,
+        artifact.checksumRef,
         String(artifact.sizeBytes),
         artifact.sourceWorkflow,
+        artifact.actionUrl,
         artifact.exactShaStatus,
         artifact.certificateInclusion,
-        artifact.acceptedCaveats.length > 0 ? artifact.acceptedCaveats.join("; ") : "none",
+        artifact.acceptedCaveatClassifications.length > 0
+          ? artifact.acceptedCaveatClassifications.map((item) => `${item.classification}: ${item.detail}`).join("; ")
+          : "none",
       ]
         .map(escapeMarkdownCell)
         .join("|")
@@ -63,17 +72,106 @@ export function renderReleaseProofSummaryMarkdown(summary) {
 
 function buildArtifactProofRow(asset, certificate, requiredLanes, acceptedFailures, allAssets) {
   const name = String(asset?.name ?? asset?.fileName ?? asset?.relativePath ?? asset?.path ?? "unknown");
+  const workflowUrl = extractWorkflowUrl(certificate?.releaseWorkflow);
   return {
     name,
     platformArch: inferPlatformArch(name),
     signatureStatus: inferSignatureStatus(asset, allAssets),
     sha256: String(asset?.sha256 ?? asset?.digestSha256 ?? asset?.hash ?? "missing"),
+    publicUrl: extractAssetPublicUrl(asset),
+    checksumRef: extractChecksumRef(asset, name, allAssets),
     sizeBytes: Number.isFinite(asset?.sizeBytes) ? asset.sizeBytes : Number.isFinite(asset?.size) ? asset.size : 0,
     sourceWorkflow: certificate?.releaseWorkflow?.name ?? "unknown",
+    actionUrl: workflowUrl ?? "not captured",
     exactShaStatus: summarizeExactShaStatus(requiredLanes, certificate?.commit).status,
     certificateInclusion: "included",
     acceptedCaveats: acceptedFailures.map((item) => String(item)),
+    acceptedCaveatClassifications: acceptedFailures.map(classifyAcceptedCaveat),
   };
+}
+
+function buildPublicReleaseProof(certificate, releaseAssets, acceptedFailures) {
+  const releaseUrl = extractReleaseUrl(certificate);
+  return {
+    publicationStatus: releaseUrl ? "published_or_draft" : "local_proof_only",
+    releaseUrl,
+    actionUrl: extractWorkflowUrl(certificate?.releaseWorkflow),
+    artifactCount: releaseAssets.length,
+    checksumCount: releaseAssets.filter((asset) => extractChecksumRef(asset, undefined, releaseAssets) !== "missing").length,
+    caveatCount: acceptedFailures.length,
+    caveats: acceptedFailures.map(classifyAcceptedCaveat),
+  };
+}
+
+function extractReleaseUrl(certificate) {
+  return (
+    asOptionalString(certificate?.releaseUrl) ??
+    asOptionalString(certificate?.githubRelease?.htmlUrl) ??
+    asOptionalString(certificate?.githubRelease?.html_url) ??
+    asOptionalString(certificate?.release?.htmlUrl) ??
+    asOptionalString(certificate?.release?.html_url) ??
+    null
+  );
+}
+
+function extractWorkflowUrl(workflow) {
+  return (
+    asOptionalString(workflow?.url) ??
+    asOptionalString(workflow?.htmlUrl) ??
+    asOptionalString(workflow?.html_url) ??
+    asOptionalString(workflow?.runUrl) ??
+    asOptionalString(workflow?.run_url) ??
+    null
+  );
+}
+
+function extractAssetPublicUrl(asset) {
+  return (
+    asOptionalString(asset?.browser_download_url) ??
+    asOptionalString(asset?.downloadUrl) ??
+    asOptionalString(asset?.download_url) ??
+    asOptionalString(asset?.url) ??
+    null
+  );
+}
+
+function extractChecksumRef(asset, name, allAssets) {
+  const direct =
+    asOptionalString(asset?.checksumRef) ??
+    asOptionalString(asset?.checksumPath) ??
+    asOptionalString(asset?.sha256Path) ??
+    asOptionalString(asset?.sha256File);
+  if (direct) {
+    return direct;
+  }
+  const assetName = name ?? String(asset?.name ?? asset?.fileName ?? asset?.relativePath ?? asset?.path ?? "");
+  const sibling = (Array.isArray(allAssets) ? allAssets : []).find((item) => {
+    const siblingName = String(item?.name ?? item?.fileName ?? item?.relativePath ?? item?.path ?? "");
+    return siblingName === `${assetName}.sha256` || siblingName === `${assetName}.sha256sum`;
+  });
+  if (sibling) {
+    return String(sibling?.name ?? sibling?.fileName ?? sibling?.relativePath ?? sibling?.path);
+  }
+  return "missing";
+}
+
+function classifyAcceptedCaveat(item) {
+  const detail = String(item);
+  const lower = detail.toLowerCase();
+  const classification = lower.includes("unsigned") || lower.includes("sign")
+    ? "signing"
+    : lower.includes("publish") || lower.includes("release")
+      ? "publication"
+      : lower.includes("workflow") || lower.includes("ci") || lower.includes("action")
+        ? "automation"
+        : lower.includes("manual")
+          ? "manual_verification"
+          : "general";
+  return { classification, detail };
+}
+
+function asOptionalString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function summarizeExactShaStatus(requiredLanes, commit) {

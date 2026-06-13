@@ -43,6 +43,7 @@ export class MemoryContextService {
   ) {}
 
   public async compose(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
+    throwIfMemoryContextAborted(input.signal);
     const startedAt = Date.now();
     const memoryConfig = this.config.assistant.memory;
     const qmd = memoryConfig.qmd;
@@ -108,6 +109,7 @@ export class MemoryContextService {
     }
 
     const sources = await this.collectSources(input);
+    throwIfMemoryContextAborted(input.signal);
     const candidates = rankMemoryCandidates(
       prompt,
       collectMemoryCandidates(sources, {
@@ -222,6 +224,10 @@ export class MemoryContextService {
     const model =
       qmd.distiller.model ??
       (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
+    const distillerAbortController = new AbortController();
+    const distillerSignal = input.signal
+      ? AbortSignal.any([input.signal, distillerAbortController.signal])
+      : distillerAbortController.signal;
 
     try {
       const response = await withTimeout(
@@ -231,6 +237,7 @@ export class MemoryContextService {
           response_format: { type: "json_object" },
           temperature: 0.1,
           max_tokens: Math.max(300, Math.min(1400, maxContextTokens)),
+          signal: distillerSignal,
           messages: [
             {
               role: "system",
@@ -249,7 +256,12 @@ export class MemoryContextService {
         }),
         qmd.distiller.timeoutMs,
         "memory distiller timed out",
+        input.signal,
+        () => {
+          distillerAbortController.abort(new Error("memory distiller timed out"));
+        },
       );
+      throwIfMemoryContextAborted(input.signal);
 
       const parsed = parseDistillerResponse(response);
       const integrity = validateCitations(parsed.citations, candidates);
@@ -313,6 +325,9 @@ export class MemoryContextService {
       });
       return enrichedGenerated;
     } catch (error) {
+      if (isMemoryContextAbort(error, input.signal)) {
+        throw error instanceof Error ? error : new Error("memory context composition aborted");
+      }
       const fallback = composeFallbackContext(candidates, maxContextTokens);
       const candidateMap = toCandidateMap(candidates);
       const citations = enrichMemoryCitations(fallback.citations, relationScope, candidateMap);
@@ -429,6 +444,7 @@ export class MemoryContextService {
     const sources: MemorySourceInput[] = [];
     const relationScope = resolveMemoryRelationScope(input);
     for (const sessionId of await this.resolveTranscriptSessionIds(input, relationScope)) {
+      throwIfMemoryContextAborted(input.signal);
       const transcript = await readTranscriptOrEmpty(this.storage, sessionId);
       sources.push({
         type: "transcript",
@@ -436,10 +452,12 @@ export class MemoryContextService {
       });
     }
 
+    throwIfMemoryContextAborted(input.signal);
     for (const item of this.collectMemoryItemSources()) {
       sources.push(item);
     }
 
+    throwIfMemoryContextAborted(input.signal);
     const workspaceRelative = input.workspace?.trim() || "memory";
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const basePath = path.resolve(workspaceRoot, workspaceRelative);
@@ -450,6 +468,7 @@ export class MemoryContextService {
         maxBytesPerFile: this.config.assistant.memory.qmd.maxBytesPerFile,
         allowedExtensions: this.config.assistant.memory.qmd.allowedExtensions,
       });
+      throwIfMemoryContextAborted(input.signal);
       for (const file of files) {
         sources.push(file);
       }
@@ -850,19 +869,71 @@ function extractMessageContent(response: ChatCompletionResponse): string {
   return "";
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  signal?: AbortSignal,
+  onTimeout?: () => void,
+): Promise<T> {
   let timeoutHandle: NodeJS.Timeout | undefined;
+  let abortHandler: (() => void) | undefined;
+  throwIfMemoryContextAborted(signal);
   const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timeoutHandle = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+  const abort = new Promise<never>((_, reject) => {
+    if (!signal) {
+      return;
+    }
+    abortHandler = () => reject(toMemoryContextAbortError(signal));
+    signal.addEventListener("abort", abortHandler, { once: true });
   });
 
   try {
-    return await Promise.race([promise, timeout]);
+    return await Promise.race([promise, timeout, abort]);
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    if (signal && abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
+    }
   }
+}
+
+function throwIfMemoryContextAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw toMemoryContextAbortError(signal);
+  }
+}
+
+function toMemoryContextAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) {
+    return signal.reason;
+  }
+  const error = new Error("memory context composition aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function isMemoryContextAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (error === signal.reason) {
+    return true;
+  }
+  const record = error as { name?: unknown; message?: unknown };
+  return (
+    record.name === "AbortError" ||
+    String(record.message ?? "")
+      .toLowerCase()
+      .includes("abort")
+  );
 }
 
 function calculateSavings(originalTokens: number, distilledTokens: number): number {

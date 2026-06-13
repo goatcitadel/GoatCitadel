@@ -138,6 +138,24 @@ describe("isHostAllowed", () => {
     expect(isHostAllowed("https://api.example.com", ["api.**.example.com"])).toBe(false);
   });
 
+  it("normalizes scheme-authority whitespace before allowlist and SSRF checks", () => {
+    expect(evaluateHostEgress("https: // example.com/v1/models", ["example.com"])).toMatchObject({
+      allowed: true,
+      hostname: "example.com",
+      matchedAllowlistPattern: "example.com",
+    });
+    expect(evaluateHostEgress("https://exa mple.com/v1/models", ["*"])).toMatchObject({
+      allowed: false,
+      approvalState: "blocked",
+      reason: expect.stringContaining("invalid whitespace"),
+    });
+    expect(evaluateHostEgress("http:// 169.254.169.254/latest/meta-data", ["*"])).toMatchObject({
+      allowed: false,
+      approvalState: "blocked",
+      reason: expect.stringContaining("Private"),
+    });
+  });
+
   it("blocks every private, malformed, multicast, and unique-local address family", () => {
     for (const host of [
       "10.0.0.5",

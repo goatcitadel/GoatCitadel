@@ -270,9 +270,15 @@ test("Windows native installer script escapes PowerShell script blocks for Inno"
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const iss = fs.readFileSync(path.join(outDir, "GoatCitadel-windows-x64.iss"), "utf8");
+    assert.match(iss, /procedure RunOrFail/);
+    assert.match(iss, /procedure CurStepChanged/);
+    assert.match(iss, /RaiseException\(FileName \+ ' exited with code '/);
+    assert.match(iss, /InstallChromiumRuntime/);
+    assert.match(iss, /InstallVoiceRuntime/);
+    assert.doesNotMatch(iss, /Filename: "\{app\}\\app\\runtime\\node\\node\.exe"; Parameters:/);
     assert.match(iss, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage -ErrorAction SilentlyContinue; \$package = Join-Path/);
-    assert.match(iss, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage -Path \$package -ExternalLocation '\{app\}'/);
-    assert.match(iss, /Add-AppxPackage -Path \$package -ExternalLocation '\{app\}' \}\}"/);
+    assert.match(iss, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}''/);
+    assert.match(iss, /Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}'' \}\}"/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

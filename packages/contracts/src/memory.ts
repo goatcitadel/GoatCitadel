@@ -32,6 +32,7 @@ export interface MemoryRetrievalMatchSignals {
 export interface MemoryContextComposeRequest {
   scope: MemoryContextScope;
   prompt: string;
+  signal?: AbortSignal;
   sessionId?: string;
   taskId?: string;
   runId?: string;

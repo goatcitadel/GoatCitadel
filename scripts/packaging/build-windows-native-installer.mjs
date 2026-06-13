@@ -215,11 +215,75 @@ Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\DefaultIcon"; ValueType: st
 Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\shell\\open\\command"; ValueType: string; ValueName: ""; ValueData: """{app}\\{#MyDesktopExe}"" ""%1"""
 
 [Run]
-Filename: "{sys}\\tar.exe"; Parameters: "-xf ""{tmp}\\bundle.zip"" -C ""{app}"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden
-Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; $package = Join-Path '{app}' '{#MyIdentityPackage}'; if (Test-Path -LiteralPath $package) {{ Add-AppxPackage -Path $package -ExternalLocation '{app}' }}"""; StatusMsg: "Registering GoatCitadel package identity..."; Flags: waituntilterminated runhidden
-Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\node_modules\\playwright\\cli.js"" install chromium"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing Chromium runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: chromium
-Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\dist\\voice-runtime-cli.js"" install --model base.en"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing local voice runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: voice
 Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure RunOrFail(FileName: String; Parameters: String; WorkingDir: String; StatusText: String);
+var
+  ResultCode: Integer;
+begin
+  WizardForm.StatusLabel.Caption := StatusText;
+  if not Exec(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    RaiseException('Failed to start ' + FileName + ' while ' + StatusText);
+  end;
+  if ResultCode <> 0 then
+  begin
+    RaiseException(FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText);
+  end;
+end;
+
+procedure ExpandGoatCitadelBundle();
+begin
+  RunOrFail(ExpandConstant('{sys}\\tar.exe'), ExpandConstant('-xf "{tmp}\\bundle.zip" -C "{app}"'), '', 'Expanding GoatCitadel bundle...');
+end;
+
+procedure RegisterGoatCitadelIdentity();
+begin
+  RunOrFail(
+    'powershell.exe',
+    ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; $package = Join-Path ''{app}'' ''{#MyIdentityPackage}''; if (Test-Path -LiteralPath $package) {{ Add-AppxPackage -Path $package -ExternalLocation ''{app}'' }}"'),
+    '',
+    'Registering GoatCitadel package identity...'
+  );
+end;
+
+procedure InstallChromiumRuntime();
+begin
+  RunOrFail(
+    ExpandConstant('{app}\\app\\runtime\\node\\node.exe'),
+    ExpandConstant('"{app}\\app\\gateway\\node_modules\\playwright\\cli.js" install chromium'),
+    ExpandConstant('{app}\\app\\gateway'),
+    'Installing Chromium runtime...'
+  );
+end;
+
+procedure InstallVoiceRuntime();
+begin
+  RunOrFail(
+    ExpandConstant('{app}\\app\\runtime\\node\\node.exe'),
+    ExpandConstant('"{app}\\app\\gateway\\dist\\voice-runtime-cli.js" install --model base.en'),
+    ExpandConstant('{app}\\app\\gateway'),
+    'Installing local voice runtime...'
+  );
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    ExpandGoatCitadelBundle();
+    RegisterGoatCitadelIdentity();
+    if (not WizardSilent()) and IsComponentSelected('chromium') then
+    begin
+      InstallChromiumRuntime();
+    end;
+    if (not WizardSilent()) and IsComponentSelected('voice') then
+    begin
+      InstallVoiceRuntime();
+    end;
+  end;
+end;
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
