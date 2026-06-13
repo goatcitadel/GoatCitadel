@@ -20,7 +20,7 @@ export function ConfigFormBuilder({ schema, value, onChange }: ConfigFormBuilder
   }, [schema, showAdvanced]);
 
   if (!schema) {
-    return <p className="office-subtitle">{globalCopy.configFormBuilder.noSchema}</p>;
+    return <p className="mc-next-settings-field-note">{globalCopy.configFormBuilder.noSchema}</p>;
   }
 
   const setField = (field: IntegrationFieldSchema, nextValue: unknown) => {
@@ -31,11 +31,11 @@ export function ConfigFormBuilder({ schema, value, onChange }: ConfigFormBuilder
   };
 
   return (
-    <article className="config-form-builder panel panel-muted panel-pad-compact">
-      <header className="config-form-builder-head">
-        <div className="config-form-builder-copy">
+    <article className="mc-next-settings-panel-body">
+      <header className="mc-next-settings-inline-head">
+        <div>
           <h4>{schema.title}</h4>
-          {schema.description ? <p className="office-subtitle">{schema.description}</p> : null}
+          {schema.description ? <p className="mc-next-settings-field-note">{schema.description}</p> : null}
         </div>
         {schema.fields.some((field) => field.advanced) ? (
           <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="gc-button">
@@ -43,24 +43,27 @@ export function ConfigFormBuilder({ schema, value, onChange }: ConfigFormBuilder
           </button>
         ) : null}
       </header>
-      <div className="config-form-builder-grid">
-        {fields.map((field) => (
-          <div key={field.key} className={`config-form-field${field.advanced ? " is-advanced" : ""}`}>
-            <div className="config-form-field-head">
-              <label htmlFor={`integration-field-${field.key}`} className="config-form-field-label">
+      <div className="mc-next-settings-field-grid">
+        {fields.map((field) => {
+          const isWide = field.type === "textarea" || field.type === "json";
+          return (
+            <label key={field.key} className={`mc-next-settings-field${isWide ? " span-2" : ""}`}>
+              <span>
                 {field.label}
-                {field.required ? <span className="config-form-required">*</span> : null}
-              </label>
-              {field.secretRef ? <span className="token-chip">{globalCopy.configFormBuilder.envRefChip}</span> : null}
-            </div>
-            <FieldInput
-              field={field}
-              value={value[field.key] ?? field.defaultValue}
-              onChange={(nextValue) => setField(field, nextValue)}
-            />
-            {field.description ? <p className="config-form-field-help">{field.description}</p> : null}
-          </div>
-        ))}
+                {field.required ? <span aria-hidden="true"> *</span> : null}
+                {field.secretRef ? (
+                  <span className="mc-next-badge">{globalCopy.configFormBuilder.envRefChip}</span>
+                ) : null}
+              </span>
+              <FieldInput
+                field={field}
+                value={value[field.key] ?? field.defaultValue}
+                onChange={(nextValue) => setField(field, nextValue)}
+              />
+              {field.description ? <p className="mc-next-settings-field-note">{field.description}</p> : null}
+            </label>
+          );
+        })}
       </div>
     </article>
   );
@@ -77,15 +80,15 @@ function FieldInput({
 }) {
   if (field.type === "boolean") {
     return (
-      <label>
+      <span className="mc-next-settings-toggle">
         <input
           id={`integration-field-${field.key}`}
           type="checkbox"
           checked={Boolean(value)}
           onChange={(event) => onChange(event.target.checked)}
-        />{" "}
+        />
         {globalCopy.configFormBuilder.enabled}
-      </label>
+      </span>
     );
   }
 
@@ -106,7 +109,7 @@ function FieldInput({
     return (
       <textarea
         id={`integration-field-${field.key}`}
-        className="full-textarea"
+        className="mc-next-settings-textarea"
         rows={field.type === "json" ? 6 : 4}
         value={stringifyValue(value)}
         placeholder={field.placeholder}
@@ -119,6 +122,7 @@ function FieldInput({
   return (
     <input
       id={`integration-field-${field.key}`}
+      className="mc-next-settings-input"
       type={inputType}
       value={stringifyValue(value)}
       placeholder={field.placeholder}

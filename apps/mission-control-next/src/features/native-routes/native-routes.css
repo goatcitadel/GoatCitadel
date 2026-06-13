@@ -2108,6 +2108,54 @@
   accent-color: color-mix(in oklab, var(--mc-area-color) 78%, white);
 }
 
+/* Modernized shared form components (ConfigFormBuilder / LlmTransportFields):
+   a themed disclosure, grouped field sections, an inline head row, and an
+   inline field error - all sourced from the canonical settings-field tokens. */
+.mc-next-disclosure {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-surface-1) 55%, transparent);
+}
+
+.mc-next-disclosure > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mc-next-settings-field-group {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.mc-next-settings-field-group > h4,
+.mc-next-settings-inline-head h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mc-next-settings-inline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-settings-field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .mc-next-settings-button-row,
 .mc-next-settings-filter-bar {
   display: flex;

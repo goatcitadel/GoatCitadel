@@ -595,41 +595,10 @@
   min-width: 3.7rem;
 }
 
-/* LlmTransportFields (settings → providers "Advanced transport") uses unprefixed
-   legacy classes that were ported without theme-aware styling, leaving the panel
-   on a hard-coded white background — invisible light text in dark mode. Re-skin
-   it with theme surface tokens so it reads in both themes. */
-.mc-next-shell .advanced-panel {
-  background: var(--bg-surface-1, var(--mc-surface-1));
-  color: var(--fg-primary, var(--foreground));
-  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
-  border-radius: var(--r-sm);
-}
-
-.mc-next-shell .advanced-panel summary {
-  color: var(--fg-primary, var(--foreground));
-}
-
-/* Inner labels carry their own hard-coded dark colour; re-skin them so they
-   read on the now-dark panel (inputs keep their own background/colour). */
-.mc-next-shell .advanced-panel label,
-.mc-next-shell .advanced-panel .office-subtitle {
-  color: var(--fg-secondary, var(--text-secondary));
-}
-
-/* config-form-builder (settings integrations / MCP "add connection" forms) is
-   another legacy form with light-theme-only text colors, so its labels render
-   dark-on-dark in the default dark shell. Make its text theme-aware. */
-.mc-next-shell .config-form-builder {
-  color: var(--fg-primary, var(--foreground));
-}
-
-.mc-next-shell .config-form-builder label,
-.mc-next-shell .config-form-builder .config-form-field-label,
-.mc-next-shell .config-form-builder .config-form-field-head,
-.mc-next-shell .config-form-builder .office-subtitle {
-  color: var(--fg-secondary, var(--text-secondary));
-}
+/* (Retired: the .advanced-panel / .config-form-builder colour re-skins lived
+   here. Those legacy classes were replaced by the modern mc-next-disclosure /
+   mc-next-settings-* form components in ConfigFormBuilder.tsx and
+   LlmTransportFields.tsx, so the overrides are no longer referenced.) */
 
 .mc-next-badge {
   display: inline-flex;

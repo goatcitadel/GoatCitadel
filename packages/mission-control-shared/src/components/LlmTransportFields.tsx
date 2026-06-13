@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   LlmProviderRequestAuthConfig,
   LlmProviderRequestConfig,
@@ -126,6 +127,15 @@ export function requestConfigFromDraft(draft: LlmTransportDraft): LlmProviderReq
   return request;
 }
 
+function Field({ htmlFor, label, children }: { htmlFor: string; label: string; children: ReactNode }) {
+  return (
+    <label className="mc-next-settings-field" htmlFor={htmlFor}>
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
 export function LlmTransportFields({ draft, idPrefix, onChange, error }: LlmTransportFieldsProps) {
   const patchDraft = (patch: Partial<LlmTransportDraft>) => {
     onChange({
@@ -162,29 +172,30 @@ export function LlmTransportFields({ draft, idPrefix, onChange, error }: LlmTran
   };
 
   return (
-    <details className="advanced-panel">
+    <details className="mc-next-disclosure">
       <summary>Advanced transport</summary>
-      <p className="office-subtitle">
+      <p className="mc-next-settings-field-note">
         Optional overrides for compatibility gateways, reverse proxies, custom auth headers, and mTLS.
       </p>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="mc-next-settings-field-error">{error}</p> : null}
 
-      <div className="advanced-block">
+      <section className="mc-next-settings-field-group">
         <h4>Request overrides</h4>
-        <div className="controls-row">
-          <label htmlFor={`${idPrefix}-request-headers`}>Custom headers (JSON object)</label>
+        <label className="mc-next-settings-field" htmlFor={`${idPrefix}-request-headers`}>
+          <span>Custom headers (JSON object)</span>
           <textarea
             id={`${idPrefix}-request-headers`}
+            className="mc-next-settings-textarea"
             value={draft.headersJson}
             onChange={(event) => patchDraft({ headersJson: event.target.value })}
             rows={4}
             placeholder={`{\n  "X-Trace": "1"\n}`}
           />
-        </div>
-        <div className="controls-row">
-          <label htmlFor={`${idPrefix}-request-auth-mode`}>Request auth mode</label>
+        </label>
+        <Field htmlFor={`${idPrefix}-request-auth-mode`} label="Request auth mode">
           <select
             id={`${idPrefix}-request-auth-mode`}
+            className="mc-next-settings-input"
             value={draft.auth.mode}
             onChange={(event) => patchAuth({ mode: event.target.value as RequestAuthMode })}
           >
@@ -193,140 +204,141 @@ export function LlmTransportFields({ draft, idPrefix, onChange, error }: LlmTran
             <option value="header">header</option>
             <option value="query">query</option>
           </select>
-        </div>
+        </Field>
         {draft.auth.mode === "bearer" ? (
           <>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-bearer-token`}>Bearer token</label>
+            <Field htmlFor={`${idPrefix}-request-bearer-token`} label="Bearer token">
               <input
                 id={`${idPrefix}-request-bearer-token`}
+                className="mc-next-settings-input"
                 type="password"
                 value={draft.auth.token}
                 onChange={(event) => patchAuth({ token: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-bearer-token-env`}>Bearer token env var</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-bearer-token-env`} label="Bearer token env var">
               <input
                 id={`${idPrefix}-request-bearer-token-env`}
+                className="mc-next-settings-input"
                 value={draft.auth.tokenEnv}
                 onChange={(event) => patchAuth({ tokenEnv: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-bearer-header`}>Header name override</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-bearer-header`} label="Header name override">
               <input
                 id={`${idPrefix}-request-bearer-header`}
+                className="mc-next-settings-input"
                 value={draft.auth.headerName}
                 onChange={(event) => patchAuth({ headerName: event.target.value })}
                 placeholder="Authorization"
               />
-            </div>
+            </Field>
           </>
         ) : null}
         {draft.auth.mode === "header" ? (
           <>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-header-name`}>Header name</label>
+            <Field htmlFor={`${idPrefix}-request-header-name`} label="Header name">
               <input
                 id={`${idPrefix}-request-header-name`}
+                className="mc-next-settings-input"
                 value={draft.auth.headerName}
                 onChange={(event) => patchAuth({ headerName: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-header-value`}>Header value</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-header-value`} label="Header value">
               <input
                 id={`${idPrefix}-request-header-value`}
+                className="mc-next-settings-input"
                 type="password"
                 value={draft.auth.value}
                 onChange={(event) => patchAuth({ value: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-header-value-env`}>Header value env var</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-header-value-env`} label="Header value env var">
               <input
                 id={`${idPrefix}-request-header-value-env`}
+                className="mc-next-settings-input"
                 value={draft.auth.valueEnv}
                 onChange={(event) => patchAuth({ valueEnv: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-header-scheme`}>Optional scheme prefix</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-header-scheme`} label="Optional scheme prefix">
               <input
                 id={`${idPrefix}-request-header-scheme`}
+                className="mc-next-settings-input"
                 value={draft.auth.scheme}
                 onChange={(event) => patchAuth({ scheme: event.target.value })}
                 placeholder="Bearer"
               />
-            </div>
+            </Field>
           </>
         ) : null}
         {draft.auth.mode === "query" ? (
           <>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-query-param`}>Query param name</label>
+            <Field htmlFor={`${idPrefix}-request-query-param`} label="Query param name">
               <input
                 id={`${idPrefix}-request-query-param`}
+                className="mc-next-settings-input"
                 value={draft.auth.queryParam}
                 onChange={(event) => patchAuth({ queryParam: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-query-value`}>Query param value</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-query-value`} label="Query param value">
               <input
                 id={`${idPrefix}-request-query-value`}
+                className="mc-next-settings-input"
                 type="password"
                 value={draft.auth.value}
                 onChange={(event) => patchAuth({ value: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-query-value-env`}>Query param value env var</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-query-value-env`} label="Query param value env var">
               <input
                 id={`${idPrefix}-request-query-value-env`}
+                className="mc-next-settings-input"
                 value={draft.auth.valueEnv}
                 onChange={(event) => patchAuth({ valueEnv: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-request-query-prefix`}>Optional value prefix</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-request-query-prefix`} label="Optional value prefix">
               <input
                 id={`${idPrefix}-request-query-prefix`}
+                className="mc-next-settings-input"
                 value={draft.auth.prefix}
                 onChange={(event) => patchAuth({ prefix: event.target.value })}
                 placeholder="Bearer "
               />
-            </div>
+            </Field>
           </>
         ) : null}
-      </div>
+      </section>
 
-      <div className="advanced-block">
+      <section className="mc-next-settings-field-group">
         <h4>Proxy routing</h4>
-        <div className="controls-row">
-          <label htmlFor={`${idPrefix}-proxy-url`}>Proxy URL</label>
+        <Field htmlFor={`${idPrefix}-proxy-url`} label="Proxy URL">
           <input
             id={`${idPrefix}-proxy-url`}
+            className="mc-next-settings-input"
             value={draft.proxyUrl}
             onChange={(event) => patchDraft({ proxyUrl: event.target.value })}
             placeholder="http://proxy.internal:8080"
           />
-        </div>
-        <div className="controls-row">
-          <label htmlFor={`${idPrefix}-proxy-bypass-hosts`}>Bypass hosts</label>
+        </Field>
+        <label className="mc-next-settings-field" htmlFor={`${idPrefix}-proxy-bypass-hosts`}>
+          <span>Bypass hosts</span>
           <textarea
             id={`${idPrefix}-proxy-bypass-hosts`}
+            className="mc-next-settings-textarea"
             value={draft.proxyBypassHostsText}
             onChange={(event) => patchDraft({ proxyBypassHostsText: event.target.value })}
             rows={3}
             placeholder={"localhost\n127.0.0.1\n*.internal"}
           />
-        </div>
-        <div className="controls-row">
-          <label htmlFor={`${idPrefix}-proxy-auth-mode`}>Proxy auth mode</label>
+        </label>
+        <Field htmlFor={`${idPrefix}-proxy-auth-mode`} label="Proxy auth mode">
           <select
             id={`${idPrefix}-proxy-auth-mode`}
+            className="mc-next-settings-input"
             value={draft.proxyAuth.mode}
             onChange={(event) => patchProxyAuth({ mode: event.target.value as ProxyAuthMode })}
           >
@@ -334,76 +346,76 @@ export function LlmTransportFields({ draft, idPrefix, onChange, error }: LlmTran
             <option value="bearer">bearer</option>
             <option value="header">header</option>
           </select>
-        </div>
+        </Field>
         {draft.proxyAuth.mode === "bearer" ? (
           <>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-bearer-token`}>Proxy token</label>
+            <Field htmlFor={`${idPrefix}-proxy-bearer-token`} label="Proxy token">
               <input
                 id={`${idPrefix}-proxy-bearer-token`}
+                className="mc-next-settings-input"
                 type="password"
                 value={draft.proxyAuth.token}
                 onChange={(event) => patchProxyAuth({ token: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-bearer-token-env`}>Proxy token env var</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-proxy-bearer-token-env`} label="Proxy token env var">
               <input
                 id={`${idPrefix}-proxy-bearer-token-env`}
+                className="mc-next-settings-input"
                 value={draft.proxyAuth.tokenEnv}
                 onChange={(event) => patchProxyAuth({ tokenEnv: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-bearer-header`}>Proxy auth header name override</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-proxy-bearer-header`} label="Proxy auth header name override">
               <input
                 id={`${idPrefix}-proxy-bearer-header`}
+                className="mc-next-settings-input"
                 value={draft.proxyAuth.headerName}
                 onChange={(event) => patchProxyAuth({ headerName: event.target.value })}
                 placeholder="Proxy-Authorization"
               />
-            </div>
+            </Field>
           </>
         ) : null}
         {draft.proxyAuth.mode === "header" ? (
           <>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-header-name`}>Proxy header name</label>
+            <Field htmlFor={`${idPrefix}-proxy-header-name`} label="Proxy header name">
               <input
                 id={`${idPrefix}-proxy-header-name`}
+                className="mc-next-settings-input"
                 value={draft.proxyAuth.headerName}
                 onChange={(event) => patchProxyAuth({ headerName: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-header-value`}>Proxy header value</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-proxy-header-value`} label="Proxy header value">
               <input
                 id={`${idPrefix}-proxy-header-value`}
+                className="mc-next-settings-input"
                 type="password"
                 value={draft.proxyAuth.value}
                 onChange={(event) => patchProxyAuth({ value: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-header-value-env`}>Proxy header value env var</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-proxy-header-value-env`} label="Proxy header value env var">
               <input
                 id={`${idPrefix}-proxy-header-value-env`}
+                className="mc-next-settings-input"
                 value={draft.proxyAuth.valueEnv}
                 onChange={(event) => patchProxyAuth({ valueEnv: event.target.value })}
               />
-            </div>
-            <div className="controls-row">
-              <label htmlFor={`${idPrefix}-proxy-header-scheme`}>Optional proxy scheme prefix</label>
+            </Field>
+            <Field htmlFor={`${idPrefix}-proxy-header-scheme`} label="Optional proxy scheme prefix">
               <input
                 id={`${idPrefix}-proxy-header-scheme`}
+                className="mc-next-settings-input"
                 value={draft.proxyAuth.scheme}
                 onChange={(event) => patchProxyAuth({ scheme: event.target.value })}
                 placeholder="Bearer"
               />
-            </div>
+            </Field>
           </>
         ) : null}
-      </div>
+      </section>
 
       <TlsFields
         idPrefix={`${idPrefix}-request-tls`}
@@ -431,55 +443,55 @@ function TlsFields(input: {
   onChange: (patch: Partial<TlsDraft>) => void;
 }) {
   return (
-    <div className="advanced-block">
+    <section className="mc-next-settings-field-group">
       <h4>{input.title}</h4>
-      <p className="office-subtitle">{input.subtitle}</p>
-      <div className="controls-row checkbox-row">
-        <label htmlFor={`${input.idPrefix}-skip-verify`}>Skip certificate verification</label>
+      <p className="mc-next-settings-field-note">{input.subtitle}</p>
+      <label className="mc-next-settings-check" htmlFor={`${input.idPrefix}-skip-verify`}>
         <input
           id={`${input.idPrefix}-skip-verify`}
           type="checkbox"
           checked={input.draft.insecureSkipVerify}
           onChange={(event) => input.onChange({ insecureSkipVerify: event.target.checked })}
         />
-      </div>
-      <div className="controls-row">
-        <label htmlFor={`${input.idPrefix}-ca-cert`}>CA cert path</label>
+        <span>Skip certificate verification</span>
+      </label>
+      <Field htmlFor={`${input.idPrefix}-ca-cert`} label="CA cert path">
         <input
           id={`${input.idPrefix}-ca-cert`}
+          className="mc-next-settings-input"
           value={input.draft.caCertPath}
           onChange={(event) => input.onChange({ caCertPath: event.target.value })}
           placeholder="/path/to/ca.pem"
         />
-      </div>
-      <div className="controls-row">
-        <label htmlFor={`${input.idPrefix}-client-cert`}>Client cert path</label>
+      </Field>
+      <Field htmlFor={`${input.idPrefix}-client-cert`} label="Client cert path">
         <input
           id={`${input.idPrefix}-client-cert`}
+          className="mc-next-settings-input"
           value={input.draft.clientCertPath}
           onChange={(event) => input.onChange({ clientCertPath: event.target.value })}
           placeholder="/path/to/client.crt"
         />
-      </div>
-      <div className="controls-row">
-        <label htmlFor={`${input.idPrefix}-client-key`}>Client key path</label>
+      </Field>
+      <Field htmlFor={`${input.idPrefix}-client-key`} label="Client key path">
         <input
           id={`${input.idPrefix}-client-key`}
+          className="mc-next-settings-input"
           value={input.draft.clientKeyPath}
           onChange={(event) => input.onChange({ clientKeyPath: event.target.value })}
           placeholder="/path/to/client.key"
         />
-      </div>
-      <div className="controls-row">
-        <label htmlFor={`${input.idPrefix}-servername`}>Server name override</label>
+      </Field>
+      <Field htmlFor={`${input.idPrefix}-servername`} label="Server name override">
         <input
           id={`${input.idPrefix}-servername`}
+          className="mc-next-settings-input"
           value={input.draft.serverName}
           onChange={(event) => input.onChange({ serverName: event.target.value })}
           placeholder="api.internal"
         />
-      </div>
-    </div>
+      </Field>
+    </section>
   );
 }
 
