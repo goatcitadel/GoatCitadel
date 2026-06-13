@@ -433,10 +433,11 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
       findButton(renderer, "Light theme").props.onClick();
-      findButton(renderer, "Context inspector").props.onClick();
+      findButton(renderer, "Open Context").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
+    expect(findButton(renderer, "Search commands").props["aria-label"]).toBe("Open command palette");
     expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
 
     await act(async () => {
@@ -726,7 +727,7 @@ describe("MissionControlNextApp", () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
 
     await act(async () => {
-      findButton(renderer, "Context inspector").props.onClick();
+      findButton(renderer, "Open Context").props.onClick();
     });
 
     const rendered = JSON.stringify(renderer.toJSON());

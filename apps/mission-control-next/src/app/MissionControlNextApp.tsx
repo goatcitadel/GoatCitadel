@@ -13,6 +13,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Rocket,
+  Search,
   ShieldCheck,
   SlidersHorizontal,
   SunMedium,
@@ -544,11 +545,13 @@ export function MissionControlNextApp() {
               <button
                 type="button"
                 className="mc-next-command-search"
-                onClick={() => setInspectorOpen(true)}
-                title="Context inspector"
+                onClick={() => setPaletteOpen(true)}
+                title="Search commands"
+                aria-label="Open command palette"
               >
-                <PanelRightOpen size={15} />
-                <span>Context inspector</span>
+                <Search size={15} />
+                <span>Search commands</span>
+                <kbd>Ctrl K</kbd>
               </button>
               <button
                 type="button"
