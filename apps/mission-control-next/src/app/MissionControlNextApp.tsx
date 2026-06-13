@@ -124,7 +124,7 @@ export function MissionControlNextApp() {
   // W4.4: cohesive state moved into dedicated hooks. The shell still composes
   // them (e.g. status reset depends on gateway readiness, event stream feeds
   // notifications) but no longer owns the underlying useState/useRef plumbing.
-  const { gatewayAccess, gatewayBusy, retryGatewayAccess } = useGatewayAccess();
+  const { gatewayAccess, gatewayBusy, autoRetryPending, retryGatewayAccess } = useGatewayAccess();
   const gatewayReady = gatewayAccess.status === "ready";
   const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector();
   const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
@@ -469,6 +469,7 @@ export function MissionControlNextApp() {
         gatewayBaseUrl={getGatewayApiBaseUrl()}
         access={gatewayAccess}
         busy={gatewayBusy}
+        autoRetryPending={autoRetryPending}
         onRetry={retryGatewayAccess}
       />
     );

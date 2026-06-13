@@ -444,8 +444,9 @@
   align-items: center;
   flex: 0 0 auto;
   gap: 0.24rem;
-  min-height: 1.65rem;
-  padding: 0 0.44rem;
+  /* Design pass: taller hit target (~34px, was ~30px) */
+  min-height: 2.1rem;
+  padding: 0 0.55rem;
   border: 0;
   border-radius: var(--r-xs);
   background: transparent;
@@ -486,7 +487,7 @@
   flex: 1 1 18rem;
   min-width: 9rem;
   max-width: 25rem;
-  height: 26px;
+  height: 30px;
   display: flex;
   align-items: center;
   gap: 0.38rem;
@@ -729,7 +730,12 @@
 }
 
 .mc-next-icon-button {
-  min-width: 1.65rem;
+  /* Design pass: larger hit target (~32px square, was ~24px) */
+  min-width: 2rem;
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   padding-inline: 0.35rem;
   white-space: nowrap;
@@ -1963,6 +1969,13 @@
     overflow-y: hidden;
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
+    /*
+     * The strip scrolls horizontally on narrow viewports but its scrollbar is
+     * hidden, so right-side pills (Spend / Serving) sat off-screen with no hint
+     * they were reachable. Fade the trailing edge to signal "swipe for more".
+     */
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.1rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.1rem), transparent);
   }
 
   .mc-next-status-strip::-webkit-scrollbar {

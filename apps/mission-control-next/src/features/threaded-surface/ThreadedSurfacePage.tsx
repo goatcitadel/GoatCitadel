@@ -700,22 +700,48 @@ function ThreadConversationSurface({
 
         <div className="mc-next-threaded-header-meta">
           <div className="mc-next-threaded-chip-row">
-            <StatusChip tone={props.trust.gatewayTone}>{props.trust.gatewayLabel}</StatusChip>
-            <StatusChip tone="muted">{props.trust.approvalsSummary}</StatusChip>
-            <StatusChip tone={props.trust.runtimeTone ?? "muted"}>{props.trust.runtimeSummary}</StatusChip>
+            {/* plain-English hover explanations for the status jargon. */}
+            <StatusChip tone={props.trust.gatewayTone} title="Gateway reachability and Mission Control access status">
+              {props.trust.gatewayLabel}
+            </StatusChip>
+            <StatusChip tone="muted" title="Pending tool and risk approvals waiting on you">
+              {props.trust.approvalsSummary}
+            </StatusChip>
+            <StatusChip
+              tone={props.trust.runtimeTone ?? "muted"}
+              title="Active runtime and serving posture for this session"
+            >
+              {props.trust.runtimeSummary}
+            </StatusChip>
             {props.trust.fallbackSummary ? (
-              <StatusChip tone={props.trust.fallbackTone ?? "warning"}>{props.trust.fallbackSummary}</StatusChip>
+              <StatusChip
+                tone={props.trust.fallbackTone ?? "warning"}
+                title="Whether the model is running on a fallback provider"
+              >
+                {props.trust.fallbackSummary}
+              </StatusChip>
             ) : null}
           </div>
           <div className="mc-next-threaded-chip-row">
-            <StatusChip tone="muted">{props.trust.providerModelSummary}</StatusChip>
-            <StatusChip tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}>
+            <StatusChip tone="muted" title="Active provider and model for this session">
+              {props.trust.providerModelSummary}
+            </StatusChip>
+            <StatusChip
+              tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}
+              title="Trust policy in effect, including any local operator override (e.g. Trusted Local Power skips normal prompts while safety boundaries stay enforced)"
+            >
               {formatThreadedPermissionSummary(permissionState)}
             </StatusChip>
             {props.trust.selectionSourceSummary ? (
-              <StatusChip tone="muted">{props.trust.selectionSourceSummary}</StatusChip>
+              <StatusChip tone="muted" title="What this session's context selection is scoped to">
+                {props.trust.selectionSourceSummary}
+              </StatusChip>
             ) : null}
-            {props.trust.runStateSummary ? <StatusChip tone="muted">{props.trust.runStateSummary}</StatusChip> : null}
+            {props.trust.runStateSummary ? (
+              <StatusChip tone="muted" title="Current run state for this session">
+                {props.trust.runStateSummary}
+              </StatusChip>
+            ) : null}
           </div>
         </div>
 

@@ -396,20 +396,15 @@
   gap: 0.45rem;
 }
 
+/*
+ * The group label (<h3> "Mission" / "External") is intentionally hidden to keep
+ * the rail chrome minimal (matches .mc-next-threaded-rail-head above). The head's
+ * only other child is the session-count <span>; with the label hidden, a lone
+ * justify-between flex child collapsed to the far-left edge and rendered as an
+ * orphaned digit ("6" / "0") over ~42px of dead space. Hide the whole head so no
+ * stray count leaks; group separation is handled by the session-group grid gap.
+ */
 .mc-next-threaded-group-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.mc-next-threaded-group-head span {
-  font-size: var(--text-xs);
-  letter-spacing: 0.14em;
-  color: var(--text-muted);
-}
-
-.mc-next-threaded-group-head h3 {
   display: none;
 }
 

@@ -2360,6 +2360,11 @@
 
 .mc-next-settings-selectable {
   display: grid;
+  /* Single full-width column so the row head fills the button (name left,
+     status right) instead of being centered by the inherited base-button
+     `justify-content: center`. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
   align-items: start;
   gap: 0.2rem;
   width: 100%;

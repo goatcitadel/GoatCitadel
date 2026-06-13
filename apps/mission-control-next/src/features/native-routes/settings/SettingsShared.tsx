@@ -221,7 +221,9 @@ export function SettingsPosturePanel({
   }));
 
   const integrationRows: SettingsPostureCardRow[] = integrations.slice(0, 4).map((connection) => ({
-    name: connection.pluginId ?? connection.connectionId ?? "integration",
+    name:
+      connection.pluginId ??
+      (connection.connectionId ? `Integration ${connection.connectionId.slice(0, 8)}` : "Integration"),
     state: connection.enabled === false ? "disabled" : "configured",
     tone: connection.enabled === false ? "muted" : "safe",
   }));

@@ -60,7 +60,8 @@
   letter-spacing: 0.16em;
   text-transform: uppercase;
   font-weight: 700;
-  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, var(--fg-muted, var(--text-muted)));
+  /* Design pass: stronger area-accent wayfinding (was 60% accent) */
+  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 82%, var(--fg-muted, var(--text-muted)));
 }
 
 .mc-next-stage-head-eyebrow-dot {
@@ -204,7 +205,10 @@
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  max-width: 5.75rem;
+  /* Hold a full timestamp ("6/12 8:00 PM") without the flex row squeezing it
+     and clipping the meridiem. */
+  flex-shrink: 0;
+  max-width: 6.5rem;
   overflow: hidden;
   padding: 0 0.55rem;
   border-left: 1px solid var(--border-subtle, var(--mc-border-subtle));
@@ -224,7 +228,7 @@
   }
 
   .mc-next-chip-3-age {
-    max-width: 4.85rem;
+    max-width: 6rem;
   }
 }
 
@@ -922,7 +926,10 @@
   margin-top: 2px;
 }
 
-.command-palette-action {
+/* `.gc-button` (specificity 0,1,0) sets `justify-content: center`; this action
+   carries both classes, so it needs equal-or-higher specificity to keep its
+   intended left alignment. Scope to `.gc-button.command-palette-action`. */
+.gc-button.command-palette-action {
   display: flex;
   width: 100%;
   text-align: left;

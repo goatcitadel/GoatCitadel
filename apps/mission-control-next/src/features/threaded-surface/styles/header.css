@@ -132,8 +132,16 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-header-meta {
   grid-column: 1 / -1;
   display: grid;
-  gap: 0.24rem;
+  gap: 0.16rem;
   padding-top: 0.08rem;
+}
+
+/* keep the status-chip rows compact at the lifted type scale so the header
+   meta block stays tight (it drives more of the header height than the
+   actions). */
+.mc-next-threaded-surface.unified .mc-next-threaded-header-meta .mc-next-status-chip {
+  font-size: var(--text-2xs);
+  padding-block: 0.04rem;
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
@@ -143,7 +151,7 @@
   justify-content: flex-end;
   grid-column: 2;
   grid-row: 1 / span 2;
-  gap: 0.32rem;
+  gap: 0.26rem;
   max-width: min(38rem, 100%);
 }
 
@@ -164,7 +172,20 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-action-row {
   flex: 1 1 100%;
   justify-content: flex-end;
-  gap: 0.28rem;
+  gap: 0.22rem;
+}
+
+/* compact the secondary action buttons so the header toolbar takes less
+   vertical space at the lifted type scale. The buttons stay inline (rather than
+   moving into an overflow menu, which would pull them out of the DOM and break
+   the react-test-renderer header tests) but render tighter. */
+.mc-next-threaded-surface.unified .mc-next-threaded-action-row .mc-next-threaded-secondary,
+.mc-next-threaded-surface.unified .mc-next-threaded-action-row .mc-next-threaded-archive,
+.mc-next-threaded-surface.unified .mc-next-threaded-action-row .mc-next-threaded-approval-review {
+  min-height: 1.7rem;
+  padding-block: 0.1rem;
+  padding-inline: 0.42rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-threaded-chip-row {

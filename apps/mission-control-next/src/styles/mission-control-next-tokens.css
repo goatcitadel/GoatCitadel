@@ -42,18 +42,21 @@
    * hints, micro-badges). The scale stays in rem so it tracks user font-size
    * preferences; the shell additionally applies --density-type-scale.
    */
-  --text-2xs: 0.6875rem;
-  --text-xs: 0.75rem;
-  --text-sm: 0.8125rem;
-  --text-md: 0.875rem;
-  --text-lg: 1rem;
-  --text-xl: 1.125rem;
-  --text-2xl: 1.375rem;
+  /* Design pass: lifted type scale for body readability and a
+     stronger heading→body step. Body floor 11→12, content 12→13, headings step
+     up (18→20, 22→26). Revert this block to restore the original dense scale. */
+  --text-2xs: 0.75rem;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.625rem;
 
   --success: var(--risk-safe);
   --warning: var(--risk-caution);
   --danger: var(--risk-danger);
-  --text-tertiary: var(--fg-faint, #5a6068);
+  --text-tertiary: var(--fg-faint, #898f99); /* Design pass: was #5a6068 (2.81:1, failed AA) */
 
   --motion-fast: 120ms;
   --motion-base: 160ms;
@@ -92,7 +95,7 @@
   --fg-primary: #f4f1ea;
   --fg-secondary: #c9cdd4;
   --fg-muted: #898f99;
-  --fg-faint: #80868f;
+  --fg-faint: #898f99; /* Design pass: merged into the --fg-muted tier (was #80868f) to calm the gray spread */
 
   --border-hairline: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.1);
