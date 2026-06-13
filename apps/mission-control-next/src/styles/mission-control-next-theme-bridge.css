@@ -1,44 +1,37 @@
 /* Mission Control Next - theme bridge (portal-reachable).
 
    WHY THIS FILE EXISTS
-   The shadcn-style "bridge" aliases (--background, --foreground, --card,
-   --muted, --border, --primary, the --surface / --panel / --text families,
-   etc.) were only declared on .mc-next-shell.theme-[data-area]. Radix and
-   native disclosure surfaces (the composer "+" menu, Select/Popover panels,
-   CommandPalette) and the gateway access gate render through a portal to
-   `document.body` — OUTSIDE `.mc-next-shell` — so they never inherited those
-   aliases and fell back to the foundation `:root` dark palette. In dark theme
-   that coincidentally matched; in light theme those panels rendered dark/wrong.
+   The shadcn-style bridge aliases (--background, --foreground, --card, --muted,
+   --border, --primary, the --surface / --panel / --text families) were only
+   declared on .mc-next-shell.theme-[data-area]. Radix and native disclosure
+   surfaces (the composer "+" menu, Select/Popover panels, CommandPalette) and
+   the gateway access gate render through a portal to document.body - OUTSIDE the
+   shell - so they never inherited the theme and fell back to the foundation dark
+   palette. In dark theme that coincidentally matched; in light theme those
+   panels rendered dark/wrong.
 
    THE FIX
-   The theme class (`theme-signal-noir` / `theme-citadel-light`) lives on
-   <html> and <body>, so anything portaled to body is a descendant of it.
-   Re-declaring the bridge aliases on the *bare* `.theme-*` class (this file)
-   makes body-portaled content inherit the active theme. This generalizes the
-   pattern already shipped for `.theme-* .mc-gc-combobox-content/-modal-content`
-   in mission-control-next.css.
+   The theme class (theme-signal-noir / theme-citadel-light) lives on <html> and
+   <body>, so anything portaled to body is a descendant of it. Re-declaring the
+   bridge aliases on the bare .theme-* class (this file) makes body-portaled
+   content inherit the active theme. This generalizes the pattern already shipped
+   for .theme-* .mc-gc-combobox-content / -modal-content in mission-control-next.css.
 
    RELATIONSHIP TO THE SHELL BLOCKS
-   The `.mc-next-shell.theme-*[data-area]` blocks in mission-control-next.css
-   are intentionally LEFT UNTOUCHED. They carry higher specificity (0,3,0) and
-   set --mc-area-color per area, so in-shell content keeps its per-area accent
-   exactly as before — this file changes nothing for the (clean) in-shell case.
-   Body-portaled content has no [data-area], so it uses the neutral
-   --mc-area-color default below. Canonical values still live once in
-   mission-control-next-tokens.css; everything here is an alias over var(--bg-*)
-   / var(--fg-*) / var(--border-*), so there is no value duplication.
+   The .mc-next-shell.theme-[data-area] blocks in mission-control-next.css are
+   left untouched - their higher specificity keeps per-area in-shell tinting
+   byte-identical. Body-portaled content has no [data-area], so it uses the
+   neutral --mc-area-color default below.
 
-   IMPORT ORDER (main.tsx): tokens -> foundation -> THIS -> mission-control-next.
-   Loaded after foundation so equal-specificity .theme-* / :root resolve in
-   favour of the theme; before mission-control-next.css so the shell [data-area]
-   blocks (higher specificity) still win in-shell.
+   TOKEN SOURCING
+   Every value is sourced from the canonical --bg-* / --fg-* / --border-* /
+   --area-* / --r-* tokens, so there is no value duplication. The only deprecated
+   token re-declared here is --mc-area-color, which body-portaled content (e.g.
+   the composer "+" popover) reads directly for its area accent; it is
+   grandfathered in check-mission-control-next-token-drift.mjs and retires with
+   the rest of the --mc-* namespace in Phase B.
 
-   NOTE: the shell blocks include `--border-subtle: var(--mc-border-subtle)`,
-   which is a no-op self-reference in-shell (tokens.css supplies the real value
-   at lower specificity). At this bare scope tokens.css and this file share
-   specificity, so replicating that line would form a --border-subtle /
-   --mc-border-subtle cycle and invalidate the token for portals. It is
-   deliberately omitted here so --border-subtle keeps its canonical value. */
+   IMPORT ORDER (main.tsx): tokens -> foundation -> THIS -> mission-control-next. */
 
 .theme-signal-noir {
   /* Neutral default tint for body-portaled content (the shell overrides per area). */
@@ -53,44 +46,29 @@
   --input: rgba(244, 241, 234, 0.18);
   --primary: var(--brand);
   --primary-foreground: var(--brand-ink);
-  --mc-shell-bg: var(--bg-app);
-  --mc-surface-1: var(--bg-surface-1);
-  --mc-surface-2: var(--bg-surface-2);
-  --mc-surface-3: var(--bg-surface-3);
-  --mc-border-subtle: var(--border-subtle);
-  --mc-border-strong: color-mix(in oklab, var(--mc-area-color) 18%, var(--border-strong));
-  --mc-shadow-soft: none;
-  --mc-shadow-strong: 0 18px 48px rgba(0, 0, 0, 0.36);
-  --mc-scrollbar-track: rgba(28, 35, 48, 0.58);
-  --mc-scrollbar-thumb: rgba(164, 177, 201, 0.44);
-  --mc-scrollbar-thumb-hover: rgba(189, 202, 225, 0.62);
-  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
-  --focus-ring-offset: 2px;
-  --surface-app: var(--background);
-  --surface-shell: var(--mc-surface-1);
-  --surface-sidebar: var(--mc-surface-2);
-  --surface-1: var(--mc-surface-1);
-  --surface-2: var(--mc-surface-2);
-  --surface-elevated: var(--mc-surface-3);
-  --surface-inset: color-mix(in oklab, var(--mc-surface-1) 92%, black);
-  --text-primary: var(--foreground);
-  --text-secondary: color-mix(in oklab, var(--foreground) 82%, var(--muted-foreground));
-  --text-muted: var(--muted-foreground);
-  --border-default: var(--border);
-  --border-emphasis: var(--mc-border-strong);
-  --accent-primary: var(--primary);
+  --accent: var(--brand);
+  --accent-primary: var(--brand);
   --accent-strong: #f4ead6;
   --accent-soft: rgba(244, 234, 214, 0.1);
-  --accent: var(--primary);
-  --line: var(--border);
-  --panel: var(--mc-surface-2);
-  --panel-alt: var(--mc-surface-3);
-  --panel-border: var(--border);
-  --panel-elevated: var(--mc-surface-3);
-  --font-body: var(--mc-font-sans);
-  --font-reading: var(--mc-font-sans);
-  --font-mono: var(--mc-font-mono);
-  --radius-pill: var(--mc-radius-pill);
+  --surface-app: var(--bg-app);
+  --surface-shell: var(--bg-surface-1);
+  --surface-sidebar: var(--bg-surface-2);
+  --surface-1: var(--bg-surface-1);
+  --surface-2: var(--bg-surface-2);
+  --surface-elevated: var(--bg-surface-3);
+  --surface-inset: color-mix(in oklab, var(--bg-surface-1) 92%, black);
+  --text-primary: var(--fg-primary);
+  --text-secondary: color-mix(in oklab, var(--fg-primary) 82%, var(--fg-muted));
+  --text-muted: var(--fg-muted);
+  --border-emphasis: color-mix(in oklab, var(--mc-area-color) 18%, var(--border-strong));
+  --line: var(--border-subtle);
+  --panel: var(--bg-surface-2);
+  --panel-alt: var(--bg-surface-3);
+  --panel-border: var(--border-subtle);
+  --panel-elevated: var(--bg-surface-3);
+  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  --focus-ring-offset: 2px;
+  --radius-pill: var(--r-pill);
 }
 
 .theme-citadel-light {
@@ -103,46 +81,29 @@
   --muted-foreground: var(--fg-muted);
   --border: var(--border-default);
   --input: rgba(30, 26, 18, 0.18);
-  --primary: color-mix(in oklab, var(--mc-area-color) 78%, white 22%);
+  --primary: color-mix(in oklab, var(--mc-area-color) 85%, black 15%);
   --primary-foreground: white;
-  --mc-shell-bg:
-    radial-gradient(circle at top left, color-mix(in oklab, var(--mc-area-color) 6%, transparent), transparent 32%),
-    linear-gradient(180deg, var(--bg-surface-1) 0%, var(--bg-app) 52%, var(--bg-surface-2) 100%);
-  --mc-surface-1: var(--bg-surface-1);
-  --mc-surface-2: var(--bg-surface-2);
-  --mc-surface-3: var(--bg-surface-3);
-  --mc-border-subtle: var(--border-subtle);
-  --mc-border-strong: color-mix(in oklab, var(--mc-area-color) 14%, var(--border-strong));
-  --mc-shadow-soft: 0 14px 30px rgba(48, 36, 16, 0.06);
-  --mc-shadow-strong: 0 20px 40px rgba(48, 36, 16, 0.12);
-  --mc-scrollbar-track: rgba(150, 138, 110, 0.32);
-  --mc-scrollbar-thumb: rgba(74, 66, 50, 0.34);
-  --mc-scrollbar-thumb-hover: rgba(74, 66, 50, 0.5);
-  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
-  --focus-ring-offset: 2px;
-  --surface-app: var(--background);
-  --surface-shell: var(--mc-surface-1);
-  --surface-sidebar: var(--mc-surface-2);
-  --surface-1: var(--mc-surface-1);
-  --surface-2: var(--mc-surface-2);
-  --surface-elevated: var(--mc-surface-3);
-  --surface-inset: color-mix(in oklab, var(--mc-surface-3) 92%, transparent);
-  --text-primary: var(--foreground);
-  --text-secondary: color-mix(in oklab, var(--foreground) 84%, var(--muted-foreground));
-  --text-muted: var(--muted-foreground);
-  --border-default: var(--border);
-  --border-emphasis: var(--mc-border-strong);
+  --accent: var(--primary);
   --accent-primary: var(--primary);
   --accent-strong: color-mix(in oklab, var(--mc-area-color) 62%, oklch(0.4 0.02 255));
   --accent-soft: color-mix(in oklab, var(--mc-area-color) 10%, white);
-  --accent: var(--primary);
-  --line: var(--border);
-  --panel: var(--mc-surface-1);
-  --panel-alt: var(--mc-surface-3);
-  --panel-border: var(--border);
-  --panel-elevated: var(--mc-surface-1);
-  --font-body: var(--mc-font-sans);
-  --font-reading: var(--mc-font-sans);
-  --font-mono: var(--mc-font-mono);
-  --radius-pill: var(--mc-radius-pill);
+  --surface-app: var(--bg-app);
+  --surface-shell: var(--bg-surface-1);
+  --surface-sidebar: var(--bg-surface-2);
+  --surface-1: var(--bg-surface-1);
+  --surface-2: var(--bg-surface-2);
+  --surface-elevated: var(--bg-surface-3);
+  --surface-inset: color-mix(in oklab, var(--bg-surface-3) 92%, transparent);
+  --text-primary: var(--fg-primary);
+  --text-secondary: color-mix(in oklab, var(--fg-primary) 84%, var(--fg-muted));
+  --text-muted: var(--fg-muted);
+  --border-emphasis: color-mix(in oklab, var(--mc-area-color) 14%, var(--border-strong));
+  --line: var(--border-default);
+  --panel: var(--bg-surface-1);
+  --panel-alt: var(--bg-surface-3);
+  --panel-border: var(--border-default);
+  --panel-elevated: var(--bg-surface-1);
+  --focus-ring: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  --focus-ring-offset: 2px;
+  --radius-pill: var(--r-pill);
 }

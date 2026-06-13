@@ -1545,6 +1545,10 @@
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
   border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--card) 94%, transparent);
+  /* Theme-aware text: the lane item sits on a light --card surface in light
+     theme, so it must not inherit a white title (was invisible white-on-white
+     on the cowork board/tasks lanes). */
+  color: var(--text-primary);
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -2610,19 +2614,22 @@
 
 .mc-next-trust-policy-status[data-status="ready"] {
   border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
-  color: color-mix(in oklab, var(--gc-risk-safe) 84%, white);
+  /* Mix toward --fg-primary (theme-adaptive) not white: in light the white
+     lighten dropped the status label to 3.98:1; --fg-primary is near-white in
+     dark so the dark appearance is unchanged. Matches the chip-3 tone pattern. */
+  color: color-mix(in oklab, var(--gc-risk-safe) 76%, var(--fg-primary));
 }
 
 .mc-next-trust-policy-status[data-status="blocked"],
 .mc-next-trust-policy-status[data-status="quarantined"] {
   border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
-  color: color-mix(in oklab, var(--gc-risk-danger) 84%, white);
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--fg-primary));
 }
 
 .mc-next-trust-policy-status[data-status="approval_required"],
 .mc-next-trust-policy-status[data-status="experimental"] {
   border-color: color-mix(in oklab, var(--gc-risk-caution) 42%, var(--border));
-  color: color-mix(in oklab, var(--gc-risk-caution) 84%, white);
+  color: color-mix(in oklab, var(--gc-risk-caution) 76%, var(--fg-primary));
 }
 
 .mc-next-settings-source-legend {

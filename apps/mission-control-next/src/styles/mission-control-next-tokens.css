@@ -116,8 +116,10 @@
 
   --fg-primary: #161a20;
   --fg-secondary: #3a4049;
-  --fg-muted: #5e6470;
-  --fg-faint: #6b7280;
+  /* Muted/faint darkened so operator text clears AA (4.5:1) on the warm-cream
+     surfaces; was #5e6470 (4.39:1) / #6b7280 (4.35:1) — both just under. */
+  --fg-muted: #4f5562;
+  --fg-faint: #565c69;
 
   --border-hairline: rgba(20, 24, 30, 0.08);
   --border-subtle: rgba(20, 24, 30, 0.14);

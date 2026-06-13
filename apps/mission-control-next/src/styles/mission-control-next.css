@@ -139,7 +139,7 @@
   --font-body: var(--mc-font-sans);
   --font-reading: var(--mc-font-sans);
   --font-mono: var(--mc-font-mono);
-  --radius-pill: var(--mc-radius-pill);
+  --radius-pill: var(--r-pill);
 }
 
 .mc-next-shell.theme-citadel-light[data-area] {
@@ -152,7 +152,10 @@
   --muted-foreground: var(--fg-muted);
   --border: var(--border-default);
   --input: rgba(30, 26, 18, 0.18);
-  --primary: color-mix(in oklab, var(--mc-area-color) 78%, white 22%);
+  /* Mix the area accent toward black (not white) in light so white button text
+     clears AA across every area hue, including the bright gold settings accent
+     (white-on-accent was 3.71:1). */
+  --primary: color-mix(in oklab, var(--mc-area-color) 85%, black 15%);
   --primary-foreground: white;
   /* warm-cream shell gradient: area-tinted radial over canonical surface stops. */
   --mc-shell-bg:
@@ -195,7 +198,7 @@
   --font-body: var(--mc-font-sans);
   --font-reading: var(--mc-font-sans);
   --font-mono: var(--mc-font-mono);
-  --radius-pill: var(--mc-radius-pill);
+  --radius-pill: var(--r-pill);
 }
 
 .mc-next-shell::before {

@@ -83,6 +83,11 @@ function buildGrandfatheredDeclarationMap(root) {
         ],
       ],
       ["apps/mission-control-next/src/features/native-routes/native-routes.css", ["--mc-area-color"]],
+      // The theme bridge re-declares --mc-area-color on the bare .theme-* class
+      // so body-portaled content (e.g. the composer "+" popover) keeps its area
+      // accent; every other bridge token is sourced canonically. Phase B retires
+      // --mc-area-color across all sites together.
+      ["apps/mission-control-next/src/styles/mission-control-next-theme-bridge.css", ["--mc-area-color"]],
       [
         "apps/mission-control-next/src/features/threaded-surface/styles/rail.css",
         [
