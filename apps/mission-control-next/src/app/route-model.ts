@@ -1035,6 +1035,16 @@ export function getRouteReleaseScope(route: AppRoute): RouteReleaseScope {
   );
 }
 
+/**
+ * True when a route is flagged `experimental` in ROUTE_RELEASE_SCOPE. Used to
+ * keep experimental surfaces out of the primary navigation rails while leaving
+ * them fully reachable via direct URL, the command palette, and their
+ * "Experimental" stage badge.
+ */
+export function isExperimentalRoute(route: { area: PrimaryArea; section?: AppRoute["section"] }): boolean {
+  return ROUTE_RELEASE_SCOPE_BY_KEY.get(getRouteReleaseKey(route))?.status === "experimental";
+}
+
 export function describeReleaseSurfaceStatus(status: ReleaseSurfaceStatus): string {
   if (status === "ship") {
     return "Release-ready";

@@ -556,6 +556,20 @@
   flex-wrap: wrap;
 }
 
+/* TOP-01: a quiet vertical rule separating the primary action controls
+   (search / Start Here / mode / workspace) from the utility cluster
+   (notifications, audio, context, theme). */
+.mc-next-topbar-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 1.5rem;
+  margin-inline: 0.1rem;
+  /* --border-strong is canonical in-shell (not re-aliased by the [data-area]
+     block, unlike --border/--border-default which cycle to transparent there). */
+  background: var(--border-strong);
+}
+
 .mc-next-topbar-right > button:not(.mc-next-command-search) {
   display: inline-flex;
   align-items: center;
@@ -1969,7 +1983,7 @@
     font-size: 0;
   }
 
-  .mc-next-topbar-right > button.mc-next-button-ghost {
+  .mc-next-topbar-right > button.mc-next-theme-toggle {
     display: none;
   }
 

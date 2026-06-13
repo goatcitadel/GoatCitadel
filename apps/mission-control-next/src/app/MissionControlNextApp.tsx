@@ -65,6 +65,7 @@ import {
   getRouteDescription,
   getRouteLabel,
   getRouteReleaseScope,
+  isExperimentalRoute,
   isRailItemActive,
   normalizeAppRoute,
   type AppRoute,
@@ -230,7 +231,13 @@ export function MissionControlNextApp() {
   const currentAreaMeta = AREA_META[route.area];
   const currentRailItems = RAIL_ITEMS[route.area];
   const groupedRailItems = useMemo(
-    () => buildRailSections(route.area, currentRailItems),
+    () =>
+      buildRailSections(
+        route.area,
+        // NAV-02: keep experimental surfaces out of the primary rails. They stay
+        // reachable via direct URL, the command palette, and their stage badge.
+        currentRailItems.filter((item) => !isExperimentalRoute(item)),
+      ),
     [route.area, currentRailItems],
   );
   const currentRouteLabel = getRouteLabel(route);
@@ -587,6 +594,7 @@ export function MissionControlNextApp() {
                     ))}
                 </select>
               </label>
+              <span className="mc-next-topbar-divider" aria-hidden="true" />
               <div className="mc-next-topbar-status">
                 <span
                   className="mc-next-badge mc-next-release-badge"
@@ -652,11 +660,12 @@ export function MissionControlNextApp() {
               </button>
               <button
                 type="button"
-                className="mc-next-button mc-next-button-ghost"
+                className="mc-next-icon-button mc-next-theme-toggle"
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               >
                 {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
-                {theme === "dark" ? "Light theme" : "Dark theme"}
               </button>
             </div>
           </header>

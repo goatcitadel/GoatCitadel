@@ -461,7 +461,7 @@ describe("MissionControlNextApp", () => {
 
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
-      findButton(renderer, "Light theme").props.onClick();
+      renderer.root.findByProps({ "aria-label": "Switch to light theme" }).props.onClick();
       findButton(renderer, "Open Context").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
