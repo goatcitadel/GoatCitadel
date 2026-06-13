@@ -965,7 +965,7 @@ export function buildAppHref(route: AppRoute): string {
     writeParam(params, "projectId", next.projectId);
   }
   writeParam(params, "view", next.view);
-  writeParam(params, "theme", next.theme);
+  // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
 
   const path =
     next.area === "chat" || next.area === "code"
