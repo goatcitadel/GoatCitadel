@@ -25,6 +25,8 @@ const requiredFiles = [
   "docs/DURABLE_RUNS_REPLAY_FOUNDATION.md",
   "docs/ENGINEERING_HANDBOOK.md",
   "docs/security/findings-triage.md",
+  "docs/PACKAGING.md",
+  "docs/CAPABILITY_SYSTEM_V1.md",
 ];
 
 const requiredHeadings = {
@@ -446,6 +448,37 @@ for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
     );
   }
 }
+// Generalized archived-shell citation guard: the retired `apps/mission-control/src` shell must not be
+// cited as current implementation in ANY governance doc (not just release evidence). A citation is allowed
+// only when the same line also carries a current-shell path or an explicit archived/legacy/compatibility label.
+const archivedShellScanDocs = [
+  "README.md",
+  "AGENTS.md",
+  "docs/PACKAGING.md",
+  "docs/CAPABILITY_SYSTEM_V1.md",
+  "docs/1_0_CONTRACT.md",
+  "docs/CANONICAL_RUNTIME_STATE_MODEL.md",
+];
+for (const relDoc of archivedShellScanDocs) {
+  let docSource;
+  try {
+    docSource = await readFile(path.join(root, relDoc), "utf8");
+  } catch {
+    continue;
+  }
+  for (const [index, line] of docSource.split(/\r?\n/).entries()) {
+    if (
+      /apps\/mission-control\/src/i.test(line) &&
+      !currentShellEvidencePatterns.some((pattern) => pattern.test(line)) &&
+      !/(archived|legacy|retired|compatibility-only|rollback|parity)/i.test(line)
+    ) {
+      errors.push(
+        `${relDoc}:${index + 1} cites archived apps/mission-control/src without a current-shell path or an archived/legacy label.`,
+      );
+    }
+  }
+}
+
 await validateRelativeMarkdownLinks("docs/1_0_RELEASE_EVIDENCE.md", releaseEvidence, "proof anchor");
 
 const adminRouteSource = await readFile(path.join(root, "apps", "gateway", "src", "routes", "admin.ts"), "utf8");
@@ -500,6 +533,7 @@ const releaseScopeDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_SURF
 const releaseEvidenceDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md"), "utf8");
 validateReleaseSurfaceScopeDoc(releaseScopeDoc, canonicalNextReleaseRoutes);
 validateReleaseEvidenceCounts(releaseEvidenceDoc, canonicalNextReleaseRoutes);
+validateReadmeRouteCounts(readme, canonicalNextReleaseRoutes);
 if (NEXT_RELEASE_SURFACE_MANIFEST.length !== canonicalNextReleaseRoutes.length) {
   errors.push(
     `scripts/verification/lib/release-surface-manifest.mjs must cover the ${canonicalNextReleaseRoutes.length} canonical Mission Control Next release-surface routes.`,
@@ -765,6 +799,34 @@ function validateReleaseEvidenceCounts(source, canonicalRoutes) {
   for (const key of Object.keys(expected)) {
     if (actual[key] !== expected[key]) {
       errors.push(`docs/1_0_RELEASE_EVIDENCE.md route count ${key} must be ${expected[key]}, not ${actual[key]}.`);
+    }
+  }
+}
+
+function validateReadmeRouteCounts(source, canonicalRoutes) {
+  const expectedCounts = countReleaseStatuses(canonicalRoutes);
+  const match = source.match(
+    /current visible route surface is (\d+) routes: (\d+) `ship`, (\d+) `needs_release_polish`, and (\d+) `experimental`/i,
+  );
+  if (!match) {
+    errors.push("README.md must declare the current visible route status counts in the Current Release Truth table.");
+    return;
+  }
+  const actual = {
+    total: Number(match[1]),
+    ship: Number(match[2]),
+    needs_release_polish: Number(match[3]),
+    experimental: Number(match[4]),
+  };
+  const expected = {
+    total: canonicalRoutes.length,
+    ship: expectedCounts.ship,
+    needs_release_polish: expectedCounts.needs_release_polish,
+    experimental: expectedCounts.experimental,
+  };
+  for (const key of Object.keys(expected)) {
+    if (actual[key] !== expected[key]) {
+      errors.push(`README.md route count ${key} must be ${expected[key]}, not ${actual[key]}.`);
     }
   }
 }

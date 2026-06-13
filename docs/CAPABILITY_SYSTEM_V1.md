@@ -65,13 +65,13 @@ The gateway capability runtime is centered in:
 
 ### Mission Control
 
-Mission Control consumes the new APIs in:
+Mission Control consumes the new APIs through the canonical Next shell and shared packages:
 
-- `apps/mission-control/src/api/capabilities.ts`
-- `apps/mission-control/src/api/chat.ts`
-- `apps/mission-control/src/pages/SkillsPage.tsx`
-- `apps/mission-control/src/pages/chat/useChatOutboundExecution.ts`
-- `apps/mission-control/src/components/InlineApprovalPrompt.tsx`
+- `packages/mission-control-shared/src/api/capabilities.ts` (capabilities API client)
+- `packages/mission-control-shared/src/api/client.ts` (shell API client)
+- `apps/mission-control-next/src/features/native-routes/library/` (Skills / Capabilities surfaces)
+- `packages/threaded-surface-core/src/chat/` (Chat / Cowork / Code outbound execution)
+- `packages/mission-control-shared/src/components/InlineApprovalPrompt.tsx` (inline approval UI)
 
 The chat approval UI now renders in a composer-adjacent footer instead of the old status lane.
 
