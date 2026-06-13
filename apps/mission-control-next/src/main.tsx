@@ -11,6 +11,7 @@ import { MissionControlNextApp } from "@next/app/MissionControlNextApp";
 import { retireMissionControlServiceWorkers } from "./service-worker-cleanup";
 import "@next/styles/mission-control-next-tokens.css";
 import "@next/styles/mission-control-next-foundation.css";
+import "@next/styles/mission-control-next-theme-bridge.css";
 import "@next/styles/mission-control-next.css";
 import "@next/features/native-routes/primitives/primitives.css";
 

@@ -84,7 +84,10 @@
   --bg-scrim: rgba(15, 23, 42, 0.32);
 }
 
-.mc-next-shell.theme-signal-noir {
+/* Scoped to the bare .theme-* class (on <html>/<body>), not .mc-next-shell, so
+   content portaled to document.body inherits the canonical surface palette too.
+   See mission-control-next-theme-bridge.css for the rationale. */
+.theme-signal-noir {
   --bg-app: #14181d;
   --bg-surface-1: #181d24;
   --bg-surface-2: #10141a;
@@ -103,7 +106,7 @@
   --border-strong: rgba(244, 234, 214, 0.22);
 }
 
-.mc-next-shell.theme-citadel-light {
+.theme-citadel-light {
   --bg-app: #f5f3ec;
   --bg-surface-1: #ffffff;
   --bg-surface-2: #eeeae0;
