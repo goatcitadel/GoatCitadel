@@ -965,10 +965,7 @@ export function buildAppHref(route: AppRoute): string {
     writeParam(params, "projectId", next.projectId);
   }
   writeParam(params, "view", next.view);
-  // Theme is owned by the persisted UI preference (default dark), not the URL.
-  // Serializing it leaked a redundant `?theme=` param across navigation (e.g.
-  // `?theme=dark` lingering after visiting Cowork), so it is intentionally not
-  // written. An explicit `?theme=` typed by the user is still honored on read.
+  writeParam(params, "theme", next.theme);
 
   const path =
     next.area === "chat" || next.area === "code"

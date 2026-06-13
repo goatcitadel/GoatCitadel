@@ -383,6 +383,14 @@ describe("ThreadedSurfacePage", () => {
     expect(rail.props["aria-hidden"]).toBe(false);
     expect(rail.props.inert).toBe(false);
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim" }).props.tabIndex).toBe(-1);
+    const group = renderer!.root
+      .findAllByProps({ className: "mc-next-threaded-session-group" })
+      .find((node) => node.props["aria-label"] === "Mission");
+    expect(group).toBeDefined();
+    expect(group!.props["aria-label"]).toBe("Mission");
+    const groupHead = group!.findByProps({ className: "mc-next-threaded-group-head" });
+    expect(groupHead.findByType("h3").children).toEqual(["Mission"]);
+    expect(groupHead.findByType("span").props["aria-hidden"]).toBe("true");
 
     await act(async () => {
       findButton(renderer!.root, "New session").props.onClick();

@@ -149,6 +149,16 @@ export function MissionControlNextApp() {
     (target: AppRoute) => buildAppHref(normalizeAppRoute(target)) === buildAppHref(normalizeAppRoute(route)),
     [route],
   );
+  const buildPrimaryAreaRoute = useCallback(
+    (area: PrimaryArea): AppRoute => ({
+      area,
+      theme: route.theme,
+      sessionId: area === "chat" || area === "cowork" || area === "code" ? route.sessionId : undefined,
+      turnId: area === "chat" || area === "cowork" || area === "code" ? route.turnId : undefined,
+      artifactId: area === "chat" || area === "cowork" || area === "code" ? route.artifactId : undefined,
+    }),
+    [route.artifactId, route.sessionId, route.theme, route.turnId],
+  );
   const {
     navigate,
     pending: pendingDirtyNavigation,
@@ -177,7 +187,7 @@ export function MissionControlNextApp() {
         id: `go-${area}`,
         label: `Go to ${meta.label}`,
         keywords: [area, meta.kicker, meta.label, ...(letter ? [`g ${letter}`, `g${letter}`] : [])],
-        run: () => navigate({ area }),
+        run: () => navigate(buildPrimaryAreaRoute(area)),
       };
     });
     const settingsItems = RAIL_ITEMS.settings.map((railItem) => {
@@ -187,11 +197,11 @@ export function MissionControlNextApp() {
         id: `settings-${section}`,
         label: `Settings → ${railItem.label}`,
         keywords: ["settings", ...(section ? [section] : []), railItem.label.toLowerCase(), descriptionWords],
-        run: () => navigate({ area: "settings", section }),
+        run: () => navigate({ area: "settings", section, theme: route.theme }),
       };
     });
     return [...areaItems, ...settingsItems];
-  }, [navigate]);
+  }, [buildPrimaryAreaRoute, navigate, route.theme]);
 
   // H-7: dismiss the topmost UI layer when Escape fires (palette handled
   // separately because it's already a controlled dialog). Order matters:
@@ -213,7 +223,7 @@ export function MissionControlNextApp() {
     onClosePalette: () => setPaletteOpen(false),
     isPaletteOpen: paletteOpen,
     onDismissTopmost: dismissTopmost,
-    onJumpToArea: (area) => navigate({ area }),
+    onJumpToArea: (area) => navigate(buildPrimaryAreaRoute(area)),
   });
 
   const shellThemeClass = resolveShellThemeClass(route.theme === "light" ? "light" : theme);
@@ -524,17 +534,7 @@ export function MissionControlNextApp() {
                     key={area}
                     type="button"
                     className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
-                    onClick={() =>
-                      navigate({
-                        area,
-                        theme: route.theme ?? theme,
-                        sessionId:
-                          area === "chat" || area === "cowork" || area === "code" ? route.sessionId : undefined,
-                        turnId: area === "chat" || area === "cowork" || area === "code" ? route.turnId : undefined,
-                        artifactId:
-                          area === "chat" || area === "cowork" || area === "code" ? route.artifactId : undefined,
-                      })
-                    }
+                    onClick={() => navigate(buildPrimaryAreaRoute(area))}
                   >
                     <Icon size={16} />
                     <span>{AREA_META[area].label}</span>
@@ -557,7 +557,7 @@ export function MissionControlNextApp() {
               <button
                 type="button"
                 className="mc-next-button-secondary mc-next-start-button"
-                onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme ?? theme })}
+                onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}
                 title="Open Start Here"
               >
                 <Rocket size={15} />
@@ -600,7 +600,7 @@ export function MissionControlNextApp() {
                 <button
                   type="button"
                   className="mc-next-badge mc-next-badge-button"
-                  onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme ?? theme })}
+                  onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
                   aria-label="Open approvals"
                   title="Open approvals"
                 >
@@ -610,7 +610,7 @@ export function MissionControlNextApp() {
               <button
                 type="button"
                 className="mc-next-icon-button"
-                onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme ?? theme })}
+                onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme })}
                 aria-label="Open notifications"
                 title="Notifications"
               >
@@ -773,7 +773,7 @@ export function MissionControlNextApp() {
               <PageErrorBoundary
                 resetKey={pageErrorResetKey}
                 pageLabel={currentRouteLabel}
-                onReturnToChat={() => navigate({ area: "chat", theme: route.theme ?? theme })}
+                onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
               >
                 <Suspense
                   fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
@@ -830,7 +830,7 @@ export function MissionControlNextApp() {
               icon={<Workflow size={15} />}
               label="Approvals"
               value={status.dashboard ? `${pendingApprovals} pending` : "—"}
-              onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme ?? theme })}
+              onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
             />
             <StatusPill
               icon={<BookOpenText size={15} />}

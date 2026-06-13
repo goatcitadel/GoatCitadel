@@ -55,15 +55,22 @@ vi.mock("@goatcitadel/mission-control-shared/components/GatewayAccessGate", () =
   GatewayAccessGate: ({
     access,
     busy,
+    autoRetryPending,
     onRetry,
   }: {
     access: { status: string; message: string };
     busy: boolean;
+    autoRetryPending?: boolean;
     onRetry: () => void;
   }) =>
     createElement(
       "section",
-      { className: "mock-gateway-access", "data-status": access.status, "data-busy": String(busy) },
+      {
+        className: "mock-gateway-access",
+        "data-status": access.status,
+        "data-busy": String(busy),
+        "data-auto-retry": String(Boolean(autoRetryPending)),
+      },
       createElement("span", null, access.message),
       createElement("button", { type: "button", onClick: onRetry }, "Retry"),
     ),
@@ -268,7 +275,9 @@ function installBrowser(href: string): void {
     title: "",
     documentElement: { classList: classSet() },
     body: { classList: classSet() },
+    activeElement: null,
   });
+  vi.stubGlobal("HTMLElement", class HTMLElement {});
   vi.stubGlobal("navigator", {
     clipboard: {
       writeText: vi.fn().mockResolvedValue(undefined),
@@ -404,6 +413,26 @@ describe("MissionControlNextApp", () => {
     const gate = renderer.root.findByProps({ className: "mock-gateway-access" });
     expect(gate.props["data-status"]).toBe("needs-auth");
     expect(readNodeText(gate)).toContain("Auth required");
+  });
+
+  it("auto-retries transient unreachable gateway preflight failures", async () => {
+    vi.useFakeTimers();
+    appMocks.preflightGatewayAccess
+      .mockRejectedValueOnce(new Error("gateway restarting"))
+      .mockResolvedValueOnce({ status: "ready", message: "Gateway ready", healthDetail: "ok" });
+
+    const renderer = await renderApp();
+    const gate = renderer.root.findByProps({ className: "mock-gateway-access" });
+    expect(gate.props["data-status"]).toBe("unreachable");
+    expect(gate.props["data-auto-retry"]).toBe("true");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await flush();
+
+    expect(appMocks.preflightGatewayAccess).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
   });
 
   it("renders the ready shell, handles navigation, realtime updates, and trust-report export", async () => {
@@ -665,6 +694,23 @@ describe("MissionControlNextApp", () => {
 
     expect(window.location.pathname).toBe("/ops/approvals");
     expect(window.location.search).toContain("approvalId=approval-focused-1");
+  });
+
+  it("keeps command-palette area jumps session-scoped without leaking preference theme", async () => {
+    const renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1&turnId=turn-1");
+
+    await act(async () => {
+      findButton(renderer, "Search commands").props.onClick();
+    });
+
+    await act(async () => {
+      findButton(renderer, "Go to Cowork").props.onClick();
+    });
+
+    expect(window.location.pathname).toBe("/cowork");
+    expect(window.location.search).toContain("sessionId=session-1");
+    expect(window.location.search).toContain("turnId=turn-1");
+    expect(window.location.search).not.toContain("theme=dark");
   });
 
   it("surfaces replay-gap events as an operator-visible recovery signal", async () => {

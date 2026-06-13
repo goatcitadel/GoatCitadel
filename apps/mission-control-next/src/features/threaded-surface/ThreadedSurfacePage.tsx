@@ -1540,10 +1540,10 @@ function SessionGroup({
   const hasVisibleItems = items.length > 0 || orphanDelegatedItems.length > 0;
 
   return (
-    <section className="mc-next-threaded-session-group">
+    <section className="mc-next-threaded-session-group" aria-label={title}>
       <div className="mc-next-threaded-group-head">
         <h3>{title}</h3>
-        <span>{count ?? items.length}</span>
+        <span aria-hidden="true">{count ?? items.length}</span>
       </div>
       {hasVisibleItems ? (
         <div className="mc-next-threaded-session-list">
