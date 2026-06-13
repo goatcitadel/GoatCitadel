@@ -43,6 +43,16 @@ body {
   font-family: var(--mc-font-sans);
 }
 
+/* The base --background/--foreground are a dark palette set at :root and are not
+   theme-scoped, so html/body stayed dark in the light theme — a dark backdrop
+   bled through on overscroll and behind any unpainted gaps. The theme class is
+   applied to both html and body, so re-point the root surface for light. */
+html.theme-citadel-light,
+body.theme-citadel-light {
+  --background: #f5f3ec;
+  --foreground: #161a20;
+}
+
 body {
   min-height: 100vh;
   line-height: 1.5;
