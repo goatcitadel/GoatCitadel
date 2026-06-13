@@ -757,6 +757,101 @@
 }
 
 /* ============================================================
+   ErrorState (.mc-next-error-state)
+   Canonical error primitive (sibling to EmptyState). `inline` is a
+   compact banner that replaces the ad-hoc .mc-next-directory-alert;
+   `default` is a full centred panel. primaryAction carries Retry.
+   ============================================================ */
+.mc-next-error-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  text-align: center;
+  gap: 0.7rem;
+  padding: 2rem 1.5rem;
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in oklab, var(--risk-danger) 30%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--risk-danger) 6%, var(--bg-surface-1, var(--mc-surface-1)));
+  color: var(--fg-secondary, var(--text-secondary));
+}
+
+.mc-next-error-state[data-tone="caution"] {
+  border-color: color-mix(in oklab, var(--risk-caution) 30%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--risk-caution) 7%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.mc-next-error-state[data-size="inline"] {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  justify-items: stretch;
+  align-items: center;
+  text-align: left;
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.mc-next-error-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--risk-danger);
+}
+
+.mc-next-error-state[data-tone="caution"] .mc-next-error-state-icon {
+  color: var(--risk-caution);
+}
+
+.mc-next-error-state[data-size="default"] .mc-next-error-state-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--risk-danger) 12%, var(--bg-surface-2, var(--mc-surface-2)));
+}
+
+.mc-next-error-state[data-size="default"][data-tone="caution"] .mc-next-error-state-icon {
+  background: color-mix(in oklab, var(--risk-caution) 12%, var(--bg-surface-2, var(--mc-surface-2)));
+}
+
+.mc-next-error-state-copy {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 48ch;
+}
+
+.mc-next-error-state-title {
+  margin: 0;
+  font: 600 var(--text-md) / 1.3 var(--font-sans, var(--mc-font-sans));
+  color: var(--fg-primary, var(--foreground));
+}
+
+.mc-next-error-state-description {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--fg-secondary, var(--text-secondary));
+  overflow-wrap: anywhere;
+}
+
+.mc-next-error-state[data-size="inline"] .mc-next-error-state-description {
+  font-size: var(--text-xs);
+}
+
+.mc-next-error-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.mc-next-error-state-primary,
+.mc-next-error-state-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ============================================================
    KbdHint (.mc-next-kbd-hint) — H-7 (ship punchlist)
    Display-only shortcut affordance. Use to label palette
    triggers, menu items, onboarding copy. Pairs with the

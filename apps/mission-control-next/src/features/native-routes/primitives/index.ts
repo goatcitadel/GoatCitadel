@@ -24,3 +24,6 @@ export type { KbdHintProps } from "./KbdHint";
 
 export { EmptyState } from "./EmptyState";
 export type { EmptyStateProps, EmptyStateSize, EmptyStateTone } from "./EmptyState";
+
+export { ErrorState } from "./ErrorState";
+export type { ErrorStateProps, ErrorStateSize, ErrorStateTone } from "./ErrorState";

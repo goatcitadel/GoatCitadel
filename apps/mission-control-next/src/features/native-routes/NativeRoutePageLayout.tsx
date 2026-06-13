@@ -1,9 +1,9 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { AlertTriangle, ArrowRight } from "lucide-react";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
-import { EmptyState, type AreaSlug } from "./primitives";
+import { EmptyState, ErrorState, type AreaSlug } from "./primitives";
 
 export type NativePageMetric = {
   label: string;
@@ -19,6 +19,7 @@ export function NativePageFrame({
   description,
   loading,
   error,
+  onRetry,
   children,
   area,
   metrics,
@@ -30,6 +31,7 @@ export function NativePageFrame({
   description: string;
   loading: boolean;
   error: string | null;
+  onRetry?: () => void;
   children: ReactNode;
   area?: AreaSlug;
   metrics?: NativePageMetric[];
@@ -118,10 +120,18 @@ export function NativePageFrame({
         ) : null}
       </header>
       {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
+        <ErrorState
+          size="inline"
+          description={error}
+          primaryAction={
+            onRetry ? (
+              <button type="button" className="gc-button" onClick={onRetry}>
+                <RefreshCw className="h-4 w-4" />
+                Retry
+              </button>
+            ) : undefined
+          }
+        />
       ) : null}
       {loading ? <BlocksShuffleLoader compact label="Loading current route data…" /> : children}
     </section>
