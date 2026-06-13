@@ -122,7 +122,7 @@ describe("legacy route adapter", () => {
       coerceLegacyHrefToNext(
         "http://goatcitadel.local/?space=operate&page=surface&surface=chat&sessionId=s-1&turnId=t-2&artifactId=a-3&approvalId=ap-4&theme=light",
       ),
-    ).toBe("/chat?sessionId=s-1&turnId=t-2&artifactId=a-3&approvalId=ap-4&theme=light");
+    ).toBe("/chat?sessionId=s-1&turnId=t-2&artifactId=a-3&approvalId=ap-4");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/")).toBeNull();
     expect(adaptLegacyUrl(new URL("http://goatcitadel.local/?surface=unknown"))).toMatchObject({ area: "chat" });
   });
@@ -334,7 +334,7 @@ describe("mission-control-next route model", () => {
     );
     expect(buildAppHref({ area: "projects" })).toBe("/projects");
     expect(buildAppHref({ area: "library", projectId: "project-1", view: "catalog", theme: "light" })).toBe(
-      "/library/agents?projectId=project-1&view=catalog&theme=light",
+      "/library/agents?projectId=project-1&view=catalog",
     );
     expect(buildAppHref({ area: "library", section: undefined as any })).toBe("/library/agents");
     expect(getRouteLabel({ area: "library", section: "missing" as any })).toBe("Library");

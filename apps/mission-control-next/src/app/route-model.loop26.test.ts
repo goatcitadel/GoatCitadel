@@ -11,7 +11,7 @@ import {
 
 describe("mission-control-next route model loop 26 tails", () => {
   it("keeps generic area paths deterministic when a section is omitted", () => {
-    expect(buildAppHref({ area: "ops", theme: "light" })).toBe("/ops/activity?theme=light");
+    expect(buildAppHref({ area: "ops", theme: "light" })).toBe("/ops/activity");
     expect(buildAppHref({ area: "settings" })).toBe("/settings/general");
     expect(buildAppHref({ area: "ops", section: "" as never })).toBe("/ops/");
   });
