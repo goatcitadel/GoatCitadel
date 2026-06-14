@@ -194,6 +194,48 @@ jobs:
             $identityManifest = (Get-AppxPackageManifest -Package $identity.PackageFullName).OuterXml
             if ($identityManifest -notmatch 'goatcitadel') { throw "Registered package identity manifest does not include goatcitadel protocol." }
           }
+          # Launch smoke: prove the installed host actually starts and presents its window.
+          # The assertions above only proved files exist and identity (un)registers. A WinUI 3
+          # unpackaged publish that drops the app resources.pri / compiled XAML crashes at
+          # startup with 0xC000027B (STATUS_STOWED_EXCEPTION) while loading App.xaml — it
+          # shipped dead-on-arrival in v1.0.0 and a file-only smoke could never catch it.
+          $launchDir = Split-Path -Parent $desktop
+          $hostProc = Start-Process -FilePath $desktop -WorkingDirectory $launchDir -PassThru
+          if (-not $hostProc) { throw "Failed to start the desktop host at $desktop" }
+          $windowTitle = $null
+          $deadline = (Get-Date).AddSeconds(40)
+          while ((Get-Date) -lt $deadline) {
+            $hostProc.Refresh()
+            if ($hostProc.HasExited) {
+              $hex = "0x{0:X8}" -f $hostProc.ExitCode
+              throw "Desktop host exited during launch smoke with code $hex before presenting a window (0xC000027B indicates the WinUI startup resource crash: missing resources.pri or compiled XAML)."
+            }
+            if ($hostProc.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($hostProc.MainWindowTitle)) {
+              $windowTitle = $hostProc.MainWindowTitle
+              break
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          # Tear down the host and its runtime / WebView2 child processes before uninstall so no
+          # file handle under the install dir is held when the uninstall-cleanup asserts run.
+          if (-not $hostProc.HasExited) {
+            & taskkill.exe /PID $hostProc.Id /T /F | Out-Null
+          }
+          # Backstop: kill any process still running from inside the install dir (e.g. a
+          # detached runtime/gateway that escaped the host process tree) so nothing holds a
+          # file lock when the uninstall-cleanup assertions run. Path-scoped so it never
+          # touches the runner's own node/pwsh.
+          Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
+          Start-Sleep -Seconds 2
+          if (-not $windowTitle) {
+            throw "Desktop host did not present a top-level window within 40s; it started but never reached its UI."
+          }
+          if ($windowTitle -ne "GoatCitadel Mission Control") {
+            throw "Desktop host window title was '$windowTitle'; expected 'GoatCitadel Mission Control'."
+          }
+          Write-Host "Launch smoke passed: host presented window '$windowTitle'."
           $uninstaller = Join-Path $installDir "unins000.exe"
           if (Test-Path $uninstaller) {
             $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
