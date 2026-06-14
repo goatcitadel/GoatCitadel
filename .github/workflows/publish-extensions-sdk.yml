@@ -32,6 +32,14 @@ jobs:
 
       - run: pnpm build
 
+      - name: Typecheck (publish gate)
+        run: pnpm typecheck
+        working-directory: .
+
+      - name: Verify extensions-sdk package (publish gate)
+        run: pnpm verify:extensions:package
+        working-directory: .
+
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

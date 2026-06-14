@@ -131,6 +131,16 @@ if (args.requireSuccess) {
   if (blocking.length > 0) {
     throw new Error(formatRequiredLaneFailure(blocking, commit));
   }
+  // Exact-SHA backstop: a required lane that is green only on a stale SHA (its proof is not
+  // bound to this release commit) must NOT satisfy --require-success. The certificate is
+  // valid only when every required lane's proof is anchored to the exact release-candidate SHA.
+  if (certificate.exactShaStatus.status !== "matched") {
+    throw new Error(
+      `Release certificate exact-SHA proof is "${certificate.exactShaStatus.status}" for ${commit}: `
+        + "one or more required lane proofs are not bound to the release SHA. Re-run the affected lane(s) "
+        + "(or the umbrella release-proof workflow) on the exact commit, then regenerate the certificate.",
+    );
+  }
 }
 
 function parseArgs(argv) {

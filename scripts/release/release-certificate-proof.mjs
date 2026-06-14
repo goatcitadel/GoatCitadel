@@ -15,11 +15,16 @@ export function summarizeWorkflowRun(run, workflowFile) {
 
 export function resolveLaneProof({ spec, directRun, releaseProofRun, releaseProofWorkflowFile, targetCommit }) {
   const releaseProofMatchesCommit = !targetCommit || releaseProofRun.head_sha === targetCommit;
+  const directRunMatchesCommit = !targetCommit || directRun.head_sha === targetCommit;
+  // A direct lane run only counts when it is bound to THIS commit. If the lane's own
+  // workflow is missing/unavailable OR last concluded on a different (stale) SHA — common
+  // for path-filtered lanes that did not run on the release commit — defer to the exact-SHA
+  // release-proof umbrella run so a green-but-stale lane cannot silently satisfy the gate.
   const useReleaseProof =
     spec.releaseProofCovered === true &&
-    isUnavailableOrMissingWorkflowStatus(directRun.status) &&
     releaseProofRun.status === "success" &&
-    releaseProofMatchesCommit;
+    releaseProofMatchesCommit &&
+    (isUnavailableOrMissingWorkflowStatus(directRun.status) || !directRunMatchesCommit);
   const effectiveRun = useReleaseProof ? releaseProofRun : directRun;
   return {
     ...spec,

@@ -32,6 +32,18 @@ jobs:
 
       - run: pnpm build
 
+      - name: Typecheck (publish gate)
+        run: pnpm typecheck
+        working-directory: .
+
+      - name: Test contracts (publish gate)
+        run: pnpm --filter @goatcitadel/contracts test
+        working-directory: .
+
+      - name: API compatibility (publish gate)
+        run: pnpm verify:api:compat
+        working-directory: .
+
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
