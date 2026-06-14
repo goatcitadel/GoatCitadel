@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
 
 const listQuerySchema = z.object({
@@ -56,8 +57,12 @@ const deadLetterRecoverBodySchema = z.object({
 });
 
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
-  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
-    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+  const resolveActorId = (request: {
+    authActorId?: string;
+    authDeviceId?: string;
+    authCompanionSessionId?: string;
+    ip?: string;
+  }) => resolveApprovalActorId(request);
   const operatorOnly = withRouteAccess(fastify, "operator");
   const durable = fastify.services.durable;
 

@@ -55,30 +55,57 @@ const ToolLoopDetectionConfigSchema = z
     }
   });
 
+// The fields a tool-policy block may carry. The top-level `tools` block applies
+// defaults (allow/deny arrays, loop detection); per-agent overrides reuse the
+// same field *shapes* but every field is optional (a partial override that is
+// merged onto the base policy in `resolveEffectivePolicy`). Sharing the shape
+// keeps the two in lock-step so a per-agent `tools.deny` is validated with the
+// same rules as the base — instead of being accepted as `z.unknown()` and
+// silently dropping a malformed `deny` (running broader than intended) or
+// throwing a TypeError mid-evaluation.
+const ToolPolicyToolsShape = {
+  approvalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
+  profile: z.string().optional(),
+  allow: z.array(z.string()).default([]),
+  deny: z.array(z.string()).default([]),
+  loopDetection: ToolLoopDetectionConfigSchema.default({
+    enabled: true,
+    historySize: 8,
+    warningThreshold: 3,
+    criticalThreshold: 4,
+    globalThreshold: 6,
+    detectors: {
+      repeated_same_call: true,
+      no_progress_polling: true,
+      ping_pong: true,
+    },
+  }),
+} as const;
+
+// Per-agent override: same field shapes as the base tools block but fully
+// optional (no defaults injected) and `allow`/`deny` accept only string arrays.
+// `.passthrough()` preserves any forward-compatible keys without dropping them.
+const PerAgentToolPolicyToolsSchema = z
+  .object({
+    approvalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
+    profile: z.string().optional(),
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+    loopDetection: ToolLoopDetectionConfigSchema.optional(),
+  })
+  .passthrough();
+
+const PerAgentToolPolicySchema = z
+  .object({
+    tools: PerAgentToolPolicyToolsSchema.optional(),
+  })
+  .passthrough();
+
 export const ToolPolicyConfigSchema = z
   .object({
     profiles: z.record(z.string(), z.array(z.string())).default({}),
-    tools: z
-      .object({
-        approvalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
-        profile: z.string().optional(),
-        allow: z.array(z.string()).default([]),
-        deny: z.array(z.string()).default([]),
-        loopDetection: ToolLoopDetectionConfigSchema.default({
-          enabled: true,
-          historySize: 8,
-          warningThreshold: 3,
-          criticalThreshold: 4,
-          globalThreshold: 6,
-          detectors: {
-            repeated_same_call: true,
-            no_progress_polling: true,
-            ping_pong: true,
-          },
-        }),
-      })
-      .passthrough(),
-    agents: z.record(z.string(), z.unknown()).default({}),
+    tools: z.object(ToolPolicyToolsShape).passthrough(),
+    agents: z.record(z.string(), PerAgentToolPolicySchema).default({}),
     sandbox: z
       .object({
         writeJailRoots: z.array(SandboxJailRootSchema),

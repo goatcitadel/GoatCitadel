@@ -1072,9 +1072,13 @@ export class ToolPolicyEngine {
 
       if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
         const target = String(request.args?.url ?? request.args?.host ?? "");
-        if (target) {
-          assertHostAllowedForRequest(target, request, this.config);
+        if (!target) {
+          // Fail closed: a network tool with no resolvable target must not slip
+          // past the host allowlist by simply omitting `url`/`host`. Every
+          // http.*/webhook.send tool requires an explicit destination.
+          return `${request.toolName} requires a url or host target.`;
         }
+        assertHostAllowedForRequest(target, request, this.config);
       }
 
       const docsIngestSourceType = readDocsIngestSourceType(request);

@@ -33,10 +33,22 @@ export class IdempotencyRepository {
       ) VALUES (@endpoint, @idempotencyKey, @eventId, @sessionKey, @payloadHash, @receivedAt, @status)
       ON CONFLICT DO NOTHING
     `);
+    // Guard the status transition so a duplicate delivery cannot corrupt the
+    // audit record of the original event (F-M3). `accepted` is the success
+    // terminal: once a row reaches it (with `processed_at` stamped), a later
+    // `deduped` mark must NOT downgrade its status or move `processed_at`. We
+    // only allow advancing a not-yet-finalised row (no `processed_at` yet), or
+    // transitioning into the terminal `accepted` state. A repeated `deduped`
+    // over an already-finalised row is a no-op.
     this.markProcessedStmt = db.prepare(`
       UPDATE inbound_events
       SET processed_at = @processedAt, status = @status
       WHERE endpoint = @endpoint AND idempotency_key = @idempotencyKey
+        AND (
+          @status = 'accepted'
+          OR processed_at IS NULL
+        )
+        AND NOT (status = 'accepted' AND @status = 'deduped')
     `);
   }
 

@@ -52,7 +52,31 @@ describe("resolveSessionRoute", () => {
     );
 
     expect(resolveSessionRoute({ channel: "slack:prod", account: " me ", peer: "alice:bob" }).sessionKey).toBe(
-      "slack_prod:me:alice_bob",
+      "slack%3Aprod:me:alice%3Abob",
     );
+  });
+
+  it("keeps peers whose ids differ only by the separator in distinct sessions", () => {
+    // F-M4: collapsing every `:` to `_` made `a:b` and `a_b` share a session key,
+    // cross-wiring two peers' transcripts. The reversible encoding must keep them
+    // distinct at both the session-key and derived session-id level.
+    const colon = resolveSessionRoute({ channel: "xmpp", account: "me", peer: "a:b" });
+    const underscore = resolveSessionRoute({ channel: "xmpp", account: "me", peer: "a_b" });
+
+    expect(colon.sessionKey).not.toBe(underscore.sessionKey);
+    expect(colon.sessionKey).toBe("xmpp:me:a%3Ab");
+    expect(underscore.sessionKey).toBe("xmpp:me:a_b");
+    expect(colon.sessionId).not.toBe(underscore.sessionId);
+  });
+
+  it("reversibly encodes percent and colon so no two segment values collide", () => {
+    // The literal segment `a%3Ab` (a peer that contains a percent sign) must not
+    // collapse onto the encoding of `a:b`; encoding `%` first guarantees this.
+    const literalPercent = resolveSessionRoute({ channel: "xmpp", account: "me", peer: "a%3Ab" });
+    const encodedColon = resolveSessionRoute({ channel: "xmpp", account: "me", peer: "a:b" });
+
+    expect(literalPercent.sessionKey).toBe("xmpp:me:a%253Ab");
+    expect(literalPercent.sessionKey).not.toBe(encodedColon.sessionKey);
+    expect(literalPercent.sessionId).not.toBe(encodedColon.sessionId);
   });
 });

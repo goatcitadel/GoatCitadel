@@ -62,5 +62,10 @@ function normalizeSegment(value: string): string {
   if (!trimmed) {
     throw new Error("session key segments cannot be empty");
   }
-  return trimmed.replaceAll(":", "_");
+  // `:` is the session-key field separator, so it must not appear raw inside a
+  // segment. The previous collapse `":" -> "_"` was lossy: distinct peers/rooms
+  // such as `a:b` and `a_b` mapped to the same segment, colliding into one
+  // session and cross-wiring transcripts. Percent-encode instead — encoding `%`
+  // first keeps the transform reversible (no two inputs share an output).
+  return trimmed.replaceAll("%", "%25").replaceAll(":", "%3A");
 }

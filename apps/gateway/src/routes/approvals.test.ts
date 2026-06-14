@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { approvalsRoutes } from "./approvals.js";
+import { approvalsRoutes, resolveApprovalActorId } from "./approvals.js";
 
 function buildApp(approvals: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
   const app = Fastify();
@@ -468,5 +468,41 @@ describe("approvals routes", () => {
       durableRunId: "durable-run-42",
     });
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveApprovalActorId", () => {
+  it("prefers the companion session id over a generic auth:none actor", () => {
+    expect(
+      resolveApprovalActorId({
+        authActorId: "auth:none",
+        authCompanionSessionId: "comp-sess-1",
+        authDeviceId: "dev-1",
+        ip: "127.0.0.1",
+      }),
+    ).toBe("companion:comp-sess-1");
+  });
+
+  it("prefers the device id when no companion session is present", () => {
+    expect(
+      resolveApprovalActorId({
+        authActorId: "auth:none",
+        authDeviceId: "dev-1",
+        ip: "127.0.0.1",
+      }),
+    ).toBe("device:dev-1");
+  });
+
+  it("keeps a specific authActorId untouched", () => {
+    expect(resolveApprovalActorId({ authActorId: "token:abc123", ip: "127.0.0.1" })).toBe("token:abc123");
+  });
+
+  it("falls back to auth:none before the IP when that is all that is present", () => {
+    expect(resolveApprovalActorId({ authActorId: "auth:none", ip: "127.0.0.1" })).toBe("auth:none");
+  });
+
+  it("falls back to the request IP only when no actor identity exists", () => {
+    expect(resolveApprovalActorId({ ip: "127.0.0.1" })).toBe("ip:127.0.0.1");
+    expect(resolveApprovalActorId({})).toBe("ip:unknown");
   });
 });

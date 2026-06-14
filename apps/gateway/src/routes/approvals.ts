@@ -79,8 +79,7 @@ const MAX_REMOTE_APPROVAL_TOKEN_LENGTH = 4096;
 const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token";
 
 export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
-  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
-    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+  const resolveActorId = (request: ApprovalActorRequest) => resolveApprovalActorId(request);
   const operatorOnly = withRouteAccess(fastify, "operator");
   const approvals = fastify.services.approvals;
 
@@ -329,4 +328,37 @@ function readHeader(value: unknown): string | undefined {
     return undefined;
   }
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+interface ApprovalActorRequest {
+  authActorId?: string;
+  authDeviceId?: string;
+  authCompanionSessionId?: string;
+  ip?: string;
+}
+
+// Server-stamp the resolving actor for audit fidelity. In the default
+// `auth.mode === "none"` deployment the auth plugin collapses `authActorId`
+// to the generic literal `auth:none`, which erases who acted. Prefer a more
+// specific, attributable identity when the request carries one — a companion
+// session id or a paired device id — before falling back to the generic actor
+// or the request IP. This is purely additive precision; it never widens
+// authorization (the route guards already ran) and never trusts a
+// client-supplied `resolvedBy`.
+export function resolveApprovalActorId(request: ApprovalActorRequest): string {
+  const companionSessionId = request.authCompanionSessionId?.trim();
+  if (companionSessionId) {
+    return `companion:${companionSessionId}`;
+  }
+  const deviceId = request.authDeviceId?.trim();
+  if (deviceId) {
+    return `device:${deviceId}`;
+  }
+  // `authActorId` (including the generic `auth:none`) is the next-best
+  // attribution; only when it is entirely absent do we fall back to the IP.
+  const actorId = request.authActorId?.trim();
+  if (actorId) {
+    return actorId;
+  }
+  return `ip:${request.ip ?? "unknown"}`;
 }

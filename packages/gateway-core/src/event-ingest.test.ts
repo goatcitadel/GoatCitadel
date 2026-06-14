@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -20,6 +21,13 @@ function buildPayload(): GatewayEventInput {
       content: "hello",
     },
   };
+}
+
+// Mirror the private hashPayload() in event-ingest.ts so dedup tests can stage a
+// stored row whose payloadHash matches (genuine retry) or differs (key reused
+// with different content).
+function hashOf(payload: GatewayEventInput): string {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 describe("EventIngestService", () => {
@@ -336,7 +344,7 @@ describe("EventIngestService", () => {
           idempotencyKey: "idem-1",
           eventId: "evt-1",
           sessionKey: session.sessionKey,
-          payloadHash: "hash",
+          payloadHash: hashOf(buildPayload()),
           receivedAt: "2026-03-22T00:00:00.000Z",
           status: "accepted",
         })),
@@ -359,12 +367,63 @@ describe("EventIngestService", () => {
 
     expect(result).toMatchObject({ accepted: true, deduped: true, session });
     expect(storage.runImmediateTransaction).not.toHaveBeenCalled();
-    expect(storage.idempotency.markProcessed).toHaveBeenCalledWith(
-      "/api/v1/gateway/events",
-      "idem-1",
-      "deduped",
-      expect.any(String),
-    );
+    // F-M3: a matching-payload retry must not rewrite the original accepted row.
+    expect(storage.idempotency.markProcessed).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reused idempotency key whose payload differs instead of dropping it", async () => {
+    // F-M2: same (endpoint, key) but different content previously returned
+    // accepted+deduped and the new content was silently lost. It must now report
+    // accepted: false (replay/conflict) and not corrupt the stored row.
+    const session: SessionMeta = {
+      sessionId: "sess_existing",
+      sessionKey: "chat:local:operator",
+      kind: "dm",
+      channel: "chat",
+      account: "local",
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
+      costUsdTotal: 0,
+      budgetState: "ok",
+    };
+    const storage = {
+      runImmediateTransaction: vi.fn(),
+      idempotency: {
+        find: vi.fn(() => ({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-1",
+          eventId: "evt-original",
+          sessionKey: session.sessionKey,
+          payloadHash: hashOf({ ...buildPayload(), eventId: "evt-original" }),
+          receivedAt: "2026-03-22T00:00:00.000Z",
+          status: "accepted",
+        })),
+        markProcessed: vi.fn(),
+      },
+      sessions: {
+        getBySessionKey: vi.fn(() => session),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    const result = await service.ingest({
+      endpoint: "/api/v1/gateway/events",
+      idempotencyKey: "idem-1",
+      // Different content under the same key.
+      payload: { ...buildPayload(), message: { role: "user", content: "DIFFERENT content" } },
+    });
+
+    expect(result).toMatchObject({ accepted: false, deduped: true, session });
+    expect(storage.runImmediateTransaction).not.toHaveBeenCalled();
+    expect(storage.idempotency.markProcessed).not.toHaveBeenCalled();
   });
 
   it("dedupes when a concurrent transaction wins the idempotency insert", async () => {
@@ -392,7 +451,7 @@ describe("EventIngestService", () => {
           idempotencyKey: "idem-1",
           eventId: "evt-1",
           sessionKey: session.sessionKey,
-          payloadHash: "hash",
+          payloadHash: hashOf(buildPayload()),
           receivedAt: "2026-03-22T00:00:00.000Z",
           status: "accepted",
         }),

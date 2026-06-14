@@ -74,6 +74,7 @@ export class MeshRepository {
   private readonly appendReplicationStmt;
   private readonly listReplicationStmt;
   private readonly listReplicationSinceStmt;
+  private readonly getReplicationByIdStmt;
   private readonly getReplicationBySourceAndIdempotencyStmt;
   private readonly setOffsetStmt;
   private readonly listOffsetsStmt;
@@ -143,12 +144,18 @@ export class MeshRepository {
         @sessionId, @ownerNodeId, @epoch, @claimedAt, @updatedAt
       )
     `);
+    // Compare-and-swap on the epoch observed at read time so two concurrent
+    // claims at the same epoch cannot both win (split-brain owner). The caller
+    // passes the epoch it read; if a racing claim already bumped it between the
+    // read and this write, `changes === 0` and the loser throws ConflictError.
+    // Mirrors the lease fencing-token CAS in `acquireLease`/`renewLease`.
     this.updateSessionOwnerStmt = db.prepare(`
       UPDATE mesh_session_owners
       SET owner_node_id = @ownerNodeId,
           epoch = @epoch,
           updated_at = @updatedAt
       WHERE session_id = @sessionId
+        AND epoch = @expectedEpoch
     `);
     this.listSessionOwnersStmt = db.prepare(`
       SELECT * FROM mesh_session_owners
@@ -184,6 +191,9 @@ export class MeshRepository {
         )
       ORDER BY mesh_replication_log.created_at ASC, mesh_replication_log.replication_id ASC
       LIMIT @limit
+    `);
+    this.getReplicationByIdStmt = db.prepare(`
+      SELECT replication_id FROM mesh_replication_log WHERE replication_id = @cursor
     `);
     this.getReplicationBySourceAndIdempotencyStmt = db.prepare(`
       SELECT * FROM mesh_replication_log
@@ -412,12 +422,21 @@ export class MeshRepository {
       });
     }
 
-    this.updateSessionOwnerStmt.run({
+    const changes = this.updateSessionOwnerStmt.run({
       sessionId,
       ownerNodeId: input.ownerNodeId,
       epoch: current.epoch + 1,
+      expectedEpoch: current.epoch,
       updatedAt: now,
-    });
+    }).changes;
+    if (changes === 0) {
+      // A concurrent claim won the CAS (bumped the epoch) between our read and
+      // write — fail closed so only one owner can win at a given epoch.
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Session ${sessionId} ownership was concurrently claimed`,
+      });
+    }
     return this.getSessionOwner(sessionId);
   }
 
@@ -460,8 +479,19 @@ export class MeshRepository {
   }
 
   public listReplicationEvents(limit = 200, cursor?: string): MeshReplicationRecord[] {
+    if (cursor !== undefined) {
+      // The cursor row anchors the `created_at`/`replication_id` keyset scan. If
+      // it was pruned (retention/compaction), the keyset join yields zero rows —
+      // indistinguishable from "caught up" — and the consumer silently stalls,
+      // never resuming. Detect the missing cursor and raise a typed error so the
+      // caller resynchronises from the beginning instead of stalling forever.
+      const cursorRow = this.getReplicationByIdStmt.get({ cursor }) as { replication_id: string } | undefined;
+      if (!cursorRow) {
+        throw new NotFoundError({ entity: "Replication cursor", id: cursor });
+      }
+    }
     const rows = toMeshReplicationRows(
-      cursor
+      cursor !== undefined
         ? this.listReplicationSinceStmt.all({
             limit,
             cursor,

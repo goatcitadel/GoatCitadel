@@ -1033,16 +1033,24 @@ describe("ToolPolicyEngine policy edge coverage", () => {
           profile: "minimal",
           approvalMode: "bypass",
         },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: [EXAMPLE_HOST],
+        },
       },
       storage,
     );
 
     expect(
+      // A real target on the grant's allowed host: structural safety passes and
+      // the grant (allowedHosts + referenceRoots) resolves to allow. (An empty
+      // http.get now fails structural safety for lacking a target.)
       grantEngine.evaluateAccess({
         toolName: "http.get",
+        args: { url: `http://${EXAMPLE_HOST}/data` },
         agentId: "agent",
         sessionId: "session",
-      } as never).allowed,
+      }).allowed,
     ).toBe(true);
   });
 
@@ -1359,19 +1367,50 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
       {
         ...hostGrant,
+        toolPattern: "fs.read",
         constraints: {
           allowedPaths: [null as unknown as string],
         },
       },
     ]);
     expect(
+      // fs.read is a genuine path-bearing tool: structural safety passes (the
+      // path is within jail), so the malformed allowedPaths:[null] grant
+      // constraint is what blocks. (http.get would now fail structural safety
+      // first for lacking a url/host target — see the dedicated test below.)
       hostEngine.evaluateAccess({
-        toolName: "http.get",
+        toolName: "fs.read",
         args: { path: "./workspace/note.txt" },
         agentId: "agent",
         sessionId: "session",
       }).reasonCodes,
     ).toEqual(["grant_constraints_block"]);
+  });
+
+  it("denies a network tool that omits a url/host target instead of skipping the host check", () => {
+    // Policy-engine Low: validateStructuralSafety used to skip the host
+    // allowlist when args.url/args.host were both empty, letting an http.* /
+    // webhook.send call slip past with no resolvable destination. It must now
+    // fail closed.
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["*"] },
+      },
+      createStorageStub(),
+    );
+
+    for (const toolName of ["http.get", "http.post", "webhook.send"]) {
+      const decision = engine.evaluateAccess({
+        toolName,
+        args: {},
+        agentId: "agent",
+        sessionId: "session",
+      });
+      expect(decision.allowed, toolName).toBe(false);
+      expect(decision.reasonCodes, toolName).toEqual(["structural_safety_block"]);
+    }
   });
 
   it("covers unknown in-profile grants and approved action payload parsing", async () => {

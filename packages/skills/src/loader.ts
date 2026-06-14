@@ -11,13 +11,37 @@ export interface SkillSource {
   dir: string;
 }
 
+// Minimal logging seam so the loader can surface skill discovery/parse problems
+// instead of swallowing them, without coupling this low-level package to a
+// concrete logger. Defaults to `console`; tests inject a spy.
+export interface SkillsLogger {
+  warn: (message: string, context?: Record<string, unknown>) => void;
+  error: (message: string, context?: Record<string, unknown>) => void;
+}
+
+const defaultLogger: SkillsLogger = {
+  // eslint-disable-next-line no-console -- skill discovery/parse problems must surface in local runtime logs; callers can inject a structured logger.
+  warn: (message, context) => console.warn(`[goatcitadel] ${message}`, context ?? {}),
+  // eslint-disable-next-line no-console -- unexpected skill source-read failures must surface in local runtime logs; callers can inject a structured logger.
+  error: (message, context) => console.error(`[goatcitadel] ${message}`, context ?? {}),
+};
+
+function isErrnoException(error: unknown, code: string): boolean {
+  return Boolean(error) && typeof error === "object" && (error as NodeJS.ErrnoException).code === code;
+}
+
 export class SkillsService {
   private loaded: LoadedSkill[] = [];
 
-  public constructor(private readonly sources: SkillSource[]) {}
+  public constructor(
+    private readonly sources: SkillSource[],
+    private readonly logger: SkillsLogger = defaultLogger,
+  ) {}
 
   public async reload(): Promise<LoadedSkill[]> {
-    const sourceSkills = await Promise.all(this.sources.map((source) => loadSourceSkills(source)));
+    const sourceSkills = await Promise.all(
+      this.sources.map((source) => loadSourceSkills(source, this.logger)),
+    );
 
     this.loaded = resolveSkillPrecedence(sourceSkills.flat());
     return this.loaded;
@@ -32,26 +56,59 @@ export class SkillsService {
   }
 }
 
-async function loadSourceSkills(source: SkillSource): Promise<LoadedSkill[]> {
+async function loadSourceSkills(source: SkillSource, logger: SkillsLogger): Promise<LoadedSkill[]> {
+  let entries;
   try {
-    const entries = await fs.readdir(source.dir, { withFileTypes: true });
-    const loaded = await Promise.all([
-      loadSkillFromDir(source, source.dir),
-      ...entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => loadSkillFromDir(source, path.join(source.dir, entry.name))),
-    ]);
-
-    return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
-  } catch {
+    entries = await fs.readdir(source.dir, { withFileTypes: true });
+  } catch (error) {
+    // A missing source directory is an expected, benign state (e.g. no
+    // workspace/managed skills installed yet) — return empty silently. Any
+    // other readdir failure (permissions, I/O) is unexpected and must be
+    // surfaced rather than masquerading as "no skills".
+    if (isErrnoException(error, "ENOENT")) {
+      return [];
+    }
+    logger.error(`Failed to read skill source directory ${source.dir}`, {
+      source: source.source,
+      error: (error as Error).message,
+    });
     return [];
   }
+
+  const loaded = await Promise.all([
+    loadSkillFromDir(source, source.dir, logger),
+    ...entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => loadSkillFromDir(source, path.join(source.dir, entry.name), logger)),
+  ]);
+
+  return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
 }
 
-async function loadSkillFromDir(source: SkillSource, skillDir: string): Promise<LoadedSkill | undefined> {
+async function loadSkillFromDir(
+  source: SkillSource,
+  skillDir: string,
+  logger: SkillsLogger,
+): Promise<LoadedSkill | undefined> {
   const skillFile = path.join(skillDir, "SKILL.md");
+  let raw: string;
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    const [raw, stat] = await Promise.all([fs.readFile(skillFile, "utf8"), fs.stat(skillFile)]);
+    [raw, stat] = await Promise.all([fs.readFile(skillFile, "utf8"), fs.stat(skillFile)]);
+  } catch (error) {
+    // Directories without a SKILL.md (ENOENT) are simply not skills — skip
+    // them quietly. Other read errors are logged so a genuinely unreadable
+    // skill file is not silently dropped.
+    if (!isErrnoException(error, "ENOENT")) {
+      logger.warn(`Failed to read SKILL.md at ${skillFile}`, {
+        source: source.source,
+        error: (error as Error).message,
+      });
+    }
+    return undefined;
+  }
+
+  try {
     const parsed = parseSkillMarkdown(raw);
     return {
       skillId: `${source.source}:${parsed.frontmatter.name}`,
@@ -66,7 +123,14 @@ async function loadSkillFromDir(source: SkillSource, skillDir: string): Promise<
       instructionBody: parsed.body,
       mtime: stat.mtime.toISOString(),
     };
-  } catch {
+  } catch (error) {
+    // A malformed SKILL.md (bad frontmatter shape, invalid YAML) is reported so
+    // operators can see *which* skill failed and why, rather than the file
+    // vanishing from the catalog with no signal.
+    logger.warn(`Failed to parse SKILL.md at ${skillFile}`, {
+      source: source.source,
+      error: (error as Error).message,
+    });
     return undefined;
   }
 }

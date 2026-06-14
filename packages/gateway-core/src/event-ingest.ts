@@ -59,14 +59,7 @@ export class EventIngestService {
 
     const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
     if (existing) {
-      const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
-      this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "deduped", now);
-      return {
-        accepted: true,
-        deduped: true,
-        session,
-        transcriptOffset: 0,
-      };
+      return this.buildDedupResult(existing, payloadHash);
     }
 
     const ingestResult = this.storage.runImmediateTransaction(() => {
@@ -74,14 +67,7 @@ export class EventIngestService {
       if (!inserted) {
         const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
         if (concurrent) {
-          const session = this.storage.sessions.getBySessionKey(concurrent.sessionKey);
-          this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "deduped", now);
-          return {
-            accepted: true,
-            deduped: true,
-            session,
-            transcriptOffset: 0,
-          } satisfies GatewayEventResult;
+          return this.buildDedupResult(concurrent, payloadHash);
         }
       }
 
@@ -142,6 +128,30 @@ export class EventIngestService {
       deduped: false,
       session: ingestResult.session,
       transcriptOffset,
+    };
+  }
+
+  /**
+   * Resolve a duplicate `(endpoint, idempotencyKey)` delivery against the stored
+   * row.
+   *
+   * - Matching payload hash → a genuine retry of the same event: report
+   *   `deduped` and return the original session, WITHOUT re-stamping the stored
+   *   row (F-M3: a duplicate must not corrupt the original event's audit
+   *   status/`processed_at`).
+   * - Differing payload hash → the same key was reused with *different* content.
+   *   Returning `accepted: true` here silently dropped the new content (F-M2);
+   *   instead report `accepted: false` so the caller can surface a replay/
+   *   conflict instead of losing the message.
+   */
+  private buildDedupResult(existing: InboundEventIndexRow, incomingPayloadHash: string): GatewayEventResult {
+    const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
+    const payloadMatches = existing.payloadHash === incomingPayloadHash;
+    return {
+      accepted: payloadMatches,
+      deduped: true,
+      session,
+      transcriptOffset: 0,
     };
   }
 

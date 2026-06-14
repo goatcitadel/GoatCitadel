@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.3",
+    "zod": "^3.24.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

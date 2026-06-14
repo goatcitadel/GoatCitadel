@@ -195,7 +195,31 @@ Write-Output "ok"
   }
 
   private setMacCredential(account: string, secret: string): void {
-    runCommand("security", ["add-generic-password", "-a", account, "-s", SECRET_SERVICE, "-w", secret, "-U"]);
+    // SECURITY (low-severity hardening): `security add-generic-password` only
+    // accepts the password as the `-w <secret>` argv value. macOS `security(1)`
+    // has no documented way to read the password for *add-generic-password*
+    // from stdin in a non-interactive (non-TTY) child process — `-w` with no
+    // value prompts only on an interactive terminal, which `spawnSync` never
+    // provides. (The Linux `secret-tool` and Windows PasswordVault paths above
+    // do keep the secret off argv via stdin/env respectively.)
+    //
+    // Because of that platform limitation we keep the secret on argv, which is
+    // briefly visible to a same-user `ps` on this host during the call. We
+    // accept that narrow, local-only window here and instead guarantee the
+    // *error* path can never widen the exposure: a non-zero exit must not echo
+    // argv (and therefore the secret). `runCommand` already builds its message
+    // from stderr/stdout only, but we sanitize defensively so any future change
+    // to its error shape cannot leak the value.
+    try {
+      runCommand("security", ["add-generic-password", "-a", account, "-s", SECRET_SERVICE, "-w", secret, "-U"]);
+    } catch (error) {
+      // `security` only fails with diagnostics built from its stderr/stdout, which
+      // never contains the `-w` argv value — but redact defensively so the surfaced
+      // message (the value that reaches logs/serialization) can never carry the
+      // secret. The caught error is preserved unmodified as `cause`; `runCommand`
+      // builds it from stderr/stdout only, so it cannot leak the secret either.
+      throw new Error(redactSecretFromMessage((error as Error).message, secret), { cause: error });
+    }
   }
 
   private getMacCredential(account: string): string | undefined {
@@ -304,4 +328,15 @@ function runCommand(
 function isSecretStoreExplicitlyDisabled(): boolean {
   const raw = process.env[DISABLE_SECRET_STORE_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+// Defensive guard for the macOS keychain-write error path: if a secret value
+// (which is unavoidably passed on argv to `security add-generic-password`) ever
+// appears in an error message, replace it so the secret never reaches logs or
+// callers. Returns the message unchanged when the secret is absent.
+function redactSecretFromMessage(message: string, secret: string): string {
+  if (!secret || !message.includes(secret)) {
+    return message;
+  }
+  return message.split(secret).join("[redacted]");
 }

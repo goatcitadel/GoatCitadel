@@ -211,6 +211,54 @@ describe("MeshRepository", () => {
     assert.equal(failover.epoch, 2);
   });
 
+  it("lets only one of two concurrent same-epoch claims win the owner CAS", () => {
+    // F-H2: two nodes both read epoch=1 and both pass the takeover check, then
+    // race the UPDATE. The epoch CAS must let exactly one win; the loser throws
+    // ConflictError instead of silently overwriting (split-brain owner).
+    const { db, repo } = createStore();
+    repo.claimSessionOwner("session-1", { ownerNodeId: "node-a" }, "2026-02-28T10:00:00.000Z");
+
+    // Freeze the owner SELECT so both claimers observe the same epoch-1 snapshot,
+    // emulating two processes that read before either has written. Every other
+    // statement — including the epoch-guarded UPDATE — still hits the real table.
+    const frozenOwnerRow = db.prepare("SELECT * FROM mesh_session_owners WHERE session_id = ?").get("session-1");
+    const realPrepare = db.prepare.bind(db);
+    const frozenGet = (() => frozenOwnerRow) as DbStatement["get"];
+    db.prepare = (sql: string): DbStatement => {
+      const statement = realPrepare(sql);
+      if (sql.includes("SELECT * FROM mesh_session_owners WHERE session_id")) {
+        return { ...statement, get: frozenGet };
+      }
+      return statement;
+    };
+    const racingRepo = new MeshRepository(db);
+
+    // First claimer wins the CAS (UPDATE … WHERE epoch = 1 affects one row). Its
+    // returned record reads through the frozen SELECT, so correctness is asserted
+    // below against the real `repo` rather than this return value.
+    racingRepo.claimSessionOwner(
+      "session-1",
+      { ownerNodeId: "node-b", expectedEpoch: 1 },
+      "2026-02-28T10:00:10.000Z",
+    );
+
+    // Second claimer reads the same stale epoch-1 snapshot but its UPDATE finds
+    // no epoch-1 row (already bumped to 2) → changes === 0 → ConflictError.
+    assert.throws(
+      () =>
+        racingRepo.claimSessionOwner(
+          "session-1",
+          { ownerNodeId: "node-c", expectedEpoch: 1 },
+          "2026-02-28T10:00:11.000Z",
+        ),
+      /concurrently claimed/,
+    );
+
+    // The real table reflects exactly one winner at the incremented epoch.
+    assert.equal(repo.getSessionOwner("session-1").ownerNodeId, "node-b");
+    assert.equal(repo.getSessionOwner("session-1").epoch, 2);
+  });
+
   it("supports owner self-renewal, forced takeover, listing, and missing owners", () => {
     const repo = createRepo();
     const first = repo.claimSessionOwner("session-1", { ownerNodeId: "node-a" }, "2026-02-28T10:00:00.000Z");
@@ -300,6 +348,27 @@ describe("MeshRepository", () => {
       ["consumer-a"],
     );
     assert.throws(() => repo.getReplicationOffset("consumer-b", "node-a"), /Replication offset not found/);
+  });
+
+  it("throws a typed error when the replication cursor was pruned instead of stalling", () => {
+    // F-M5: a keyset scan from a pruned cursor returns [] — indistinguishable
+    // from "caught up" — so the consumer silently stops replicating. Surface a
+    // typed NotFoundError so the caller can resync from the beginning.
+    const repo = createRepo();
+    const event = repo.appendReplicationEvent({
+      sourceNodeId: "node-a",
+      eventType: "session_event",
+      payload: { sessionId: "s1" },
+      idempotencyKey: "evt-1",
+    });
+
+    // A live cursor still scans normally (here: nothing newer than itself).
+    assert.deepEqual(repo.listReplicationEvents(10, event.replicationId), []);
+
+    assert.throws(
+      () => repo.listReplicationEvents(10, "pruned-cursor-id"),
+      /Replication cursor pruned-cursor-id not found/,
+    );
   });
 
   it("fails clearly when a replication append cannot be reloaded", () => {

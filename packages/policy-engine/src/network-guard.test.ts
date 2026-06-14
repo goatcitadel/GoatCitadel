@@ -264,6 +264,25 @@ describe("isHostAllowed", () => {
     }
   });
 
+  it("blocks the uncompressed IPv4-mapped IPv6 metadata host on the bare-host path", () => {
+    // F-M6: full URLs are canonicalised by new URL() (so `[::ffff:…]` is caught),
+    // but a *bare* host is not — the uncompressed `0:0:0:0:0:ffff:169.254.169.254`
+    // is valid IPv6 (isIP family 6) yet previously slipped the SSRF guard because
+    // the extractor only matched the compressed `::ffff:` prefix.
+    const bareMappedForms = [
+      "0:0:0:0:0:ffff:169.254.169.254", // uncompressed dotted (AWS metadata)
+      "0:0:0:0:0:ffff:a9fe:a9fe", // uncompressed hex (same address)
+      "0000:0000:0000:0000:0000:ffff:169.254.169.254", // fully zero-padded
+    ];
+    for (const target of bareMappedForms) {
+      expect(isHostAllowed(target, ["*"]), target).toBe(false);
+      expect(evaluateHostEgress(target, ["*"]), target).toMatchObject({
+        allowed: false,
+        approvalState: "blocked",
+      });
+    }
+  });
+
   it("still allows public IPv6 hosts via the bracketed-URL form", () => {
     // After the bracketed-IPv6 SSRF fix, public IPv6 (e.g. Google DNS)
     // must still flow through the allowlist unchanged.

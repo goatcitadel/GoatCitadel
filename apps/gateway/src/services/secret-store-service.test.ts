@@ -158,6 +158,25 @@ describe("SecretStoreService", () => {
 
     expect(() => service.setSecret("provider:anthropic", "sk-test")).toThrow("security failed: security denied");
   });
+
+  it("redacts the secret from a macOS keychain-write error that echoes it", () => {
+    setPlatform("darwin");
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "add-generic-password failed for -w sk-leak-me" } as never);
+    const service = new SecretStoreService();
+
+    let thrown: Error | undefined;
+    try {
+      service.setSecret("provider:anthropic", "sk-leak-me");
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).toBeDefined();
+    expect(thrown?.message).not.toContain("sk-leak-me");
+    expect(thrown?.message).toContain("[redacted]");
+  });
 });
 
 function setPlatform(platform: NodeJS.Platform): void {

@@ -691,14 +691,23 @@ function isBlockedIpv6(host: string): boolean {
 }
 
 function extractIpv4MappedAddress(ipv6Lower: string): string | undefined {
+  // SECURITY (F-M6): a bare-host input is NOT canonicalised by `new URL()`, so
+  // the IPv4-mapped prefix can arrive uncompressed (`0:0:0:0:0:ffff:…`) or
+  // partially compressed in addition to the compressed `::ffff:…` form Node
+  // emits. `isIP()` classifies all of them as family 6, so the bare-host SSRF
+  // path would otherwise let `0:0:0:0:0:ffff:169.254.169.254` reach the cloud
+  // metadata endpoint. Fold any leading run of all-zero groups before `ffff:`
+  // down to the canonical `::ffff:` prefix before matching.
+  const canonical = ipv6Lower.replace(/^(?:0{1,4}:){2,5}ffff:/, "::ffff:").replace(/^0{1,4}:ffff:/, "::ffff:");
+
   // Dotted-quad mapped form: `::ffff:169.254.169.254`
-  const dottedMatch = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ipv6Lower);
+  const dottedMatch = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(canonical);
   if (dottedMatch) {
     return dottedMatch[1];
   }
   // Hex-quad mapped form: `::ffff:a9fe:a9fe` (Node's canonical normalisation
   // of the dotted form, returned via `new URL().hostname`).
-  const hexMatch = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ipv6Lower);
+  const hexMatch = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(canonical);
   if (hexMatch) {
     const high = Number.parseInt(hexMatch[1] ?? "", 16);
     const low = Number.parseInt(hexMatch[2] ?? "", 16);

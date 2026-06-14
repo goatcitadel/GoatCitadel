@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalOperatorOverrideRecord, PermissionProfileRecord, ToolPolicyConfig } from "@goatcitadel/contracts";
+import { ToolPolicyConfigSchema } from "@goatcitadel/contracts";
 import { isToolAllowed, resolveEffectivePolicy } from "./policy-resolver.js";
 
 const config: ToolPolicyConfig = {
@@ -159,6 +160,49 @@ describe("resolveEffectivePolicy", () => {
     expect(revokedPolicy.approvalMode).toBe("approve_all");
     expect(revokedPolicy.localOperatorOverrideId).toBeUndefined();
     expect(isToolAllowed(revokedPolicy, "fs.read")).toBe(false);
+  });
+
+  it("rejects a malformed per-agent tools.deny at parse instead of silently dropping it", () => {
+    // F-H1: per-agent overrides used to be validated as z.unknown(), so a
+    // malformed `deny` (here a string instead of string[]) parsed through and
+    // then either ran broader-than-intended or threw mid tool-evaluation.
+    const malformed = {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {
+        agentA: {
+          tools: {
+            deny: "shell.exec",
+          },
+        },
+      },
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    };
+
+    expect(() => ToolPolicyConfigSchema.parse(malformed)).toThrow();
+  });
+
+  it("honors a valid per-agent deny parsed through the schema", () => {
+    const parsed = ToolPolicyConfigSchema.parse({
+      profiles: {},
+      tools: { profile: "danger", allow: ["shell.exec", "http.get"], deny: [] },
+      agents: {
+        restricted: {
+          tools: {
+            deny: ["shell.exec"],
+          },
+        },
+      },
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    }) as unknown as ToolPolicyConfig;
+
+    const restrictedPolicy = resolveEffectivePolicy(parsed, "restricted");
+    expect(isToolAllowed(restrictedPolicy, "shell.exec")).toBe(false);
+    expect(isToolAllowed(restrictedPolicy, "http.get")).toBe(true);
+
+    // An agent without the override keeps the base allow set untouched.
+    const basePolicy = resolveEffectivePolicy(parsed, "other-agent");
+    expect(isToolAllowed(basePolicy, "shell.exec")).toBe(true);
   });
 
   it("uses the stricter read access mode from global config and permission profile", () => {

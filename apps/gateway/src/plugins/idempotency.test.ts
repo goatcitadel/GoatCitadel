@@ -255,6 +255,37 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("releases a non-side-effecting 4xx so a same-key retry can re-run", async () => {
+    // F-M1: a handler-emitted 4xx that performed no mutation (here a transient
+    // precondition rejection) used to burn the key as `completed`, so a later
+    // retry of the same request was blocked with 409. The key must instead be
+    // revivable — mirrors the 500-retry path above.
+    let attempts = 0;
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/tasks/run", async (_request, reply) => {
+        attempts += 1;
+        if (attempts === 1) {
+          // No side effect: reject up front (e.g. a not-yet-ready precondition).
+          return reply.code(422).send({ error: "resource not ready, retry" });
+        }
+        return { ok: true };
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-task-4xx-1" };
+      const payload = { taskId: "task-1" };
+      const first = await app.inject({ method: "POST", url: "/api/v1/tasks/run", headers, payload });
+      const second = await app.inject({ method: "POST", url: "/api/v1/tasks/run", headers, payload });
+
+      expect(first.statusCode).toBe(422);
+      expect(second.statusCode).toBe(200);
+      expect(attempts).toBe(2);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("requires idempotency keys for normal channel setup mutations", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const { app } = await buildApp((fastify) => {

@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { parseSkillMarkdown } from "./frontmatter.js";
-import { SkillsService } from "./loader.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseSkillMarkdown, SkillFrontmatterSchema } from "./frontmatter.js";
+import { SkillsService, type SkillsLogger } from "./loader.js";
+
+function makeLoggerSpy(): SkillsLogger {
+  return { warn: vi.fn(), error: vi.fn() };
+}
 
 const tempRoots: string[] = [];
 
@@ -87,6 +91,55 @@ body`);
     expect(parsed.frontmatter.name).toBe("BOM Skill");
     expect(parsed.body).toBe("body");
   });
+
+  it("rejects a non-array tools metadata value through the Zod schema", () => {
+    expect(() =>
+      parseSkillMarkdown(`---
+name: Bad Tools
+description: tools must be a list
+metadata:
+  tools: read
+---
+body`),
+    ).toThrow(/Invalid SKILL.md frontmatter.*tools/s);
+  });
+
+  it("accepts well-formed metadata list shapes", () => {
+    const parsed = parseSkillMarkdown(`---
+name: Good Lists
+description: All metadata lists are arrays of strings
+metadata:
+  tags: [a, b]
+  tools: [fs.read]
+  requires: [Other]
+  keywords: [alpha]
+---
+body`);
+
+    expect(parsed.frontmatter.metadata).toEqual({
+      tags: ["a", "b"],
+      tools: ["fs.read"],
+      requires: ["Other"],
+      keywords: ["alpha"],
+    });
+  });
+
+  it("exposes a reusable SkillFrontmatterSchema that validates list shapes", () => {
+    expect(
+      SkillFrontmatterSchema.safeParse({
+        name: "X",
+        description: "Y",
+        metadata: { tools: ["read"] },
+      }).success,
+    ).toBe(true);
+
+    const rejected = SkillFrontmatterSchema.safeParse({
+      name: "X",
+      description: "Y",
+      metadata: { tools: "read" },
+    });
+    expect(rejected.success).toBe(false);
+  });
 });
 
 describe("SkillsService loader edge cases", () => {
@@ -122,7 +175,8 @@ Broken body`,
     );
     await fs.writeFile(path.join(root, "README.md"), "not a skill directory", "utf8");
 
-    const service = new SkillsService([{ source: "workspace", dir: root }]);
+    const logger = makeLoggerSpy();
+    const service = new SkillsService([{ source: "workspace", dir: root }], logger);
     const loaded = await service.reload();
 
     expect(loaded.map((skill) => skill.name)).toEqual(["Child", "Direct"]);
@@ -135,6 +189,61 @@ Broken body`,
       keywords: ["direct keyword"],
       instructionBody: "Direct body",
     });
+  });
+
+  it("reports a malformed SKILL.md instead of silently dropping it", async () => {
+    const root = await makeTempDir();
+    await writeSkill(
+      path.join(root, "ok"),
+      `---
+name: Healthy
+description: A valid skill
+---
+Body`,
+    );
+    await writeSkill(
+      path.join(root, "broken"),
+      `---
+name: Broken
+description: Missing closing fence and bad yaml
+tools: [unterminated
+`,
+    );
+
+    const logger = makeLoggerSpy();
+    const service = new SkillsService([{ source: "managed", dir: root }], logger);
+    const loaded = await service.reload();
+
+    // The malformed skill is excluded from the catalog but surfaced via the logger.
+    expect(loaded.map((skill) => skill.name)).toEqual(["Healthy"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("broken"),
+      expect.objectContaining({ source: "managed" }),
+    );
+  });
+
+  it("reports a non-array tools metadata shape", async () => {
+    const root = await makeTempDir();
+    await writeSkill(
+      root,
+      `---
+name: BadTools
+description: tools is a string, not a list
+metadata:
+  tools: read
+---
+Body`,
+    );
+
+    const logger = makeLoggerSpy();
+    const service = new SkillsService([{ source: "extra", dir: root }], logger);
+    const loaded = await service.reload();
+
+    expect(loaded).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to parse SKILL.md"),
+      expect.objectContaining({ source: "extra" }),
+    );
   });
 
   it("returns an empty set for unreadable or missing source directories", async () => {

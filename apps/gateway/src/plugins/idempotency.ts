@@ -85,7 +85,13 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     if (!state || !options.mutationStore) {
       return;
     }
-    if (reply.statusCode >= 500) {
+    // F-M1: any non-2xx/3xx response means the handler rejected the request —
+    // a 4xx (validation/permission failure) just like a 5xx typically performs
+    // NO durable side effect. Burning the key as `completed` on a 4xx blocked a
+    // legitimate corrected retry with a 409. Treat every error status (>= 400)
+    // as a failed claim so it is revivable; only a 2xx/3xx outcome finalises the
+    // key as completed.
+    if (reply.statusCode >= 400) {
       await options.mutationStore.markFailed(state);
       return;
     }
