@@ -1583,6 +1583,8 @@ export class PromptPackService {
       testCount: preview.testCount,
       promptCount: preview.promptCount,
       providerCount: preview.providerCount,
+      reviewAssetCount: preview.reviewAssets.reduce((sum, asset) => sum + asset.count, 0),
+      reviewAssets: preview.reviewAssets,
       warnings: preview.warnings,
       errors: preview.errors,
       posture: {
@@ -3088,9 +3090,7 @@ function safeJsonParseDefined<T>(raw: string | null | undefined, fallback: T): T
   }
 }
 
-export function resolvePromptPackScoreFacingResponseText(
-  run: Pick<PromptPackRunRecord, "responseText">,
-): string {
+export function resolvePromptPackScoreFacingResponseText(run: Pick<PromptPackRunRecord, "responseText">): string {
   // Scoring must always see the model's real output. finalResponseText is a
   // historical fabrication artifact (prompt_lab_score_facing_normalization)
   // retained on old run records for audit only.
@@ -3182,6 +3182,7 @@ interface PromptfooLikeConfigPreview {
   promptCount: number;
   providerCount: number;
   testCount: number;
+  reviewAssets: NonNullable<PromptPackPromptfooImportPreviewResponse["reviewAssets"]>;
   warnings: string[];
   errors: string[];
 }
@@ -3276,9 +3277,14 @@ function parsePromptfooLikeConfig(content: string): PromptfooLikeConfigPreview {
       promptCount: 0,
       providerCount: 0,
       testCount: 0,
+      reviewAssets: [],
       warnings: [],
       errors: ["Promptfoo import preview requires non-empty content."],
     };
+  }
+  const probeCorpusPreview = parseGarakProbeCorpusPreview(trimmed);
+  if (probeCorpusPreview) {
+    return probeCorpusPreview;
   }
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     return parsePromptfooJsonPreview(trimmed);
@@ -3294,6 +3300,7 @@ function parsePromptfooJsonPreview(content: string): PromptfooLikeConfigPreview 
         promptCount: 0,
         providerCount: 0,
         testCount: 0,
+        reviewAssets: [],
         warnings: [],
         errors: ["Promptfoo preview expected a JSON object."],
       };
@@ -3301,6 +3308,7 @@ function parsePromptfooJsonPreview(content: string): PromptfooLikeConfigPreview 
     const promptCount = countPromptfooCollection(parsed.prompts);
     const providerCount = countPromptfooCollection(parsed.providers);
     const testCount = countPromptfooCollection(parsed.tests);
+    const redTeamAssetCount = countPromptfooRedTeamAssets(parsed);
     const errors = [];
     if (promptCount === 0) {
       errors.push("Promptfoo preview could not find prompts.");
@@ -3312,6 +3320,19 @@ function parsePromptfooJsonPreview(content: string): PromptfooLikeConfigPreview 
       promptCount,
       providerCount,
       testCount,
+      reviewAssets:
+        redTeamAssetCount > 0
+          ? [
+              {
+                source: "promptfoo_redteam",
+                assetKind: "red_team_case",
+                count: redTeamAssetCount,
+                callable: false,
+                activationRequired: true,
+                note: "Promptfoo red-team material is previewed as review-only eval assets until an operator imports and activates it.",
+              },
+            ]
+          : [],
       warnings:
         providerCount === 0
           ? [
@@ -3325,6 +3346,7 @@ function parsePromptfooJsonPreview(content: string): PromptfooLikeConfigPreview 
       promptCount: 0,
       providerCount: 0,
       testCount: 0,
+      reviewAssets: [],
       warnings: [],
       errors: [`Invalid JSON Promptfoo preview: ${(error as Error).message}`],
     };
@@ -3346,6 +3368,18 @@ function parsePromptfooYamlPreview(content: string): PromptfooLikeConfigPreview 
     promptCount: promptSection,
     providerCount: providerSection,
     testCount: testSection,
+    reviewAssets: content.toLowerCase().includes("redteam")
+      ? [
+          {
+            source: "promptfoo_redteam",
+            assetKind: "red_team_case",
+            count: Math.max(1, testSection),
+            callable: false,
+            activationRequired: true,
+            note: "Promptfoo red-team YAML markers are previewed as review-only eval assets.",
+          },
+        ]
+      : [],
     warnings: [
       "YAML preview uses a dependency-free structural scan. Import before execution should be reviewed by the operator.",
       ...(providerSection === 0 ? ["No providers were declared."] : []),
@@ -3362,6 +3396,66 @@ function countPromptfooCollection(value: unknown): number {
     return Object.keys(value).length;
   }
   return typeof value === "string" && value.trim() ? 1 : 0;
+}
+
+function parseGarakProbeCorpusPreview(content: string): PromptfooLikeConfigPreview | undefined {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const parsedRows: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (!isRecord(parsed)) {
+        return undefined;
+      }
+      parsedRows.push(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+  const probeRows = parsedRows.filter((row) =>
+    ["probe", "detector", "goal", "prompt", "payload"].some((key) => typeof row[key] === "string"),
+  );
+  if (probeRows.length === 0) {
+    return undefined;
+  }
+  return {
+    promptCount: probeRows.filter((row) => typeof row.prompt === "string" || typeof row.payload === "string").length,
+    providerCount: 0,
+    testCount: probeRows.length,
+    reviewAssets: [
+      {
+        source: "garak_probe_corpus",
+        assetKind: "probe_payload",
+        count: probeRows.length,
+        callable: false,
+        activationRequired: true,
+        note: "Garak-shaped probe rows are previewed as non-callable payload assets; GoatCitadel does not run garak during preview.",
+      },
+    ],
+    warnings: [
+      "Garak-style JSONL preview treats rows as probe payload candidates only; import and activation remain explicit operator steps.",
+      "No providers were declared.",
+    ],
+    errors: [],
+  };
+}
+
+function countPromptfooRedTeamAssets(parsed: Record<string, unknown>): number {
+  const redteam = isRecord(parsed.redteam) ? parsed.redteam : isRecord(parsed.redTeam) ? parsed.redTeam : undefined;
+  if (!redteam) {
+    return 0;
+  }
+  const total =
+    countPromptfooCollection(redteam.plugins) +
+    countPromptfooCollection(redteam.strategies) +
+    countPromptfooCollection(redteam.tests);
+  return total > 0 ? total : 1;
 }
 
 function readSimpleYamlCollectionCount(content: string, key: string): number {
@@ -3897,7 +3991,10 @@ export function collectPromptPackPlatformSignals(
   // and code-mode repo tasks legitimately use 8-12 tool calls.
   const runFailureText = [run?.error, run?.trace?.failure?.message].filter(Boolean).join(" ");
   const toolBudgetThreshold = (run?.mode ?? test.mode) === "code" ? 16 : 8;
-  if (/\b(?:tool run budget|turn budget|tool budget)\b/i.test(runFailureText) || toolRuns.length >= toolBudgetThreshold) {
+  if (
+    /\b(?:tool run budget|turn budget|tool budget)\b/i.test(runFailureText) ||
+    toolRuns.length >= toolBudgetThreshold
+  ) {
     signals.push("tool-budget overrun");
   }
   if (/\b(?:no tool output found|function call|responses api|tool output)\b/i.test(modelAndFailureText)) {
@@ -3943,7 +4040,10 @@ function derivePromptPackPlatformSignalAttributionV3(
   const actualFamilies = collectPromptPackObservedToolFamilies(run);
   const platformSignals = collectPromptPackPlatformSignals(test, run, expectedFamilies, actualFamilies);
   const toEvidence = (signal: string): string =>
-    `platform_signal_${signal.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}`;
+    `platform_signal_${signal
+      .replace(/[^a-z0-9]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+      .toLowerCase()}`;
   const runtimeSignals = platformSignals.filter(
     (signal) => signal === "provider/tool protocol failure" || signal === "trace failure",
   );
@@ -6774,9 +6874,7 @@ export function evaluatePromptPackRuleScoresV3(input: {
   // off_target_meta_analysis belongs here because v2 caps usability for it;
   // flooring formatAdherence at 3 would erase that cap.
   const hasFormatViolationSignal =
-    hasReason("missing_required_json") ||
-    hasReason("missing_required_table") ||
-    hasReason("off_target_meta_analysis");
+    hasReason("missing_required_json") || hasReason("missing_required_table") || hasReason("off_target_meta_analysis");
 
   const ruleScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {
     taskSuccess: v2.ruleScores.taskSuccess,

@@ -1075,6 +1075,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "final_response_signals_json", "TEXT");
     },
   },
+  {
+    version: 109,
+    name: "knowledge_chunk_embedding_metadata",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "knowledge_chunks", "embedding_metadata_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2294,6 +2301,7 @@ function createNativeToolsExpansionSchema(db: DatabaseSync): void {
       seq INTEGER NOT NULL,
       content TEXT NOT NULL,
       embedding_json TEXT,
+      embedding_metadata_json TEXT,
       token_estimate INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       FOREIGN KEY(doc_id) REFERENCES knowledge_documents(doc_id) ON DELETE CASCADE

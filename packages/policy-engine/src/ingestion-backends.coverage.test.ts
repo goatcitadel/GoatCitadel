@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { Document, Packer, Paragraph } from "docx";
+import * as XLSX from "xlsx";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
 import { ToolPolicyEngine } from "./engine.js";
@@ -52,6 +54,89 @@ describe("ingestion backend coverage", () => {
     });
     expect(result.chunksSaved).toBe(3);
     expect(result.chunks).toHaveLength(3);
+  });
+
+  it("parses native PDF, DOCX, XLSX, and CSV file sources before chunking", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-ingest-docs-"));
+    tempDirs.push(root);
+    const pdfPath = path.join(root, "brief.pdf");
+    const docxPath = path.join(root, "brief.docx");
+    const xlsxPath = path.join(root, "brief.xlsx");
+    const csvPath = path.join(root, "brief.csv");
+    await fs.writeFile(pdfPath, createPdfBuffer("PDF parser happy path"));
+    await fs.writeFile(
+      docxPath,
+      await Packer.toBuffer(
+        new Document({
+          sections: [{ children: [new Paragraph("DOCX parser happy path")] }],
+        }),
+      ),
+    );
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([
+        ["name", "status"],
+        ["xlsx parser", "happy path"],
+      ]),
+      "Evidence",
+    );
+    XLSX.writeFile(workbook, xlsxPath);
+    await fs.writeFile(csvPath, "name,status\ncsv parser,happy path\n", "utf8");
+    const storage = createKnowledgeStorage();
+
+    const inputs = [
+      { path: pdfPath, format: "pdf", expected: "PDF parser happy path", parserId: "unpdf-pdfjs-v1" },
+      { path: docxPath, format: "docx", expected: "DOCX parser happy path", parserId: "mammoth-docx-v1" },
+      { path: xlsxPath, format: "xlsx", expected: "xlsx parser", parserId: "sheetjs-xlsx-v1" },
+      { path: csvPath, format: "csv", expected: "csv parser", parserId: "native-csv-text-v1" },
+    ];
+
+    for (const input of inputs) {
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "file",
+          source: input.path,
+          namespace: "files",
+          title: path.basename(input.path),
+        }),
+        storage,
+        fetchUrl: vi.fn(),
+      });
+
+      expect(result.document.text).toContain(input.expected);
+      expect(result.document.metadata).toMatchObject({
+        ingestion: {
+          parser: {
+            parserId: input.parserId,
+            format: input.format,
+          },
+          rawContentStored: false,
+        },
+      });
+      expect(result.chunksSaved).toBeGreaterThan(0);
+      expect(result.chunks[0]?.content).toContain(input.expected);
+    }
+  });
+
+  it("fails unsupported binary native file formats clearly", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-ingest-binary-"));
+    tempDirs.push(root);
+    const filePath = path.join(root, "image.png");
+    await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]));
+
+    await expect(
+      ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "file",
+          source: filePath,
+          namespace: "files",
+          title: "Binary",
+        }),
+        storage: createKnowledgeStorage(),
+        fetchUrl: vi.fn(),
+      }),
+    ).rejects.toThrow(/cannot parse binary file format '.png'/i);
   });
 
   it("skips stale or mismatched cache entries and normalizes native HTML URL responses", async () => {
@@ -802,6 +887,10 @@ describe("ingestion backend coverage", () => {
         metadata: {
           ingestion: {
             fetchedAt: "2026-03-22T12:00:00.000Z",
+            parser: {
+              parserId: "native-text-v1",
+              format: "text",
+            },
           },
         },
       },
@@ -821,6 +910,10 @@ describe("ingestion backend coverage", () => {
 
     expect(result.cached).toBe(true);
     expect(result.document.text).toBe("cached text");
+    expect(result.fetchResult.parser).toEqual({
+      parserId: "native-text-v1",
+      format: "text",
+    });
   });
 
   it("preserves untrusted ingestion source trust through cache, search, and privileged policy checks", async () => {
@@ -1190,6 +1283,7 @@ function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = 
           seq: index,
           content: entry.content,
           embedding: entry.embedding,
+          embeddingMetadata: entry.embeddingMetadata,
           tokenEstimate: 1,
           createdAt: new Date().toISOString(),
         }));
@@ -1208,6 +1302,30 @@ function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = 
       }),
     },
   } as unknown as Storage;
+}
+
+function createPdfBuffer(text: string): Buffer {
+  const escaped = text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    `4 0 obj\n<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream\nendobj\n`,
+    "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(body, "utf8"));
+    body += object;
+  }
+  const xrefOffset = Buffer.byteLength(body, "utf8");
+  body += `xref\n0 ${objects.length + 1}\n`;
+  body += "0000000000 65535 f \n";
+  body += offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(body, "utf8");
 }
 
 function createPolicyConfig() {

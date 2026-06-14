@@ -58,11 +58,25 @@ describe("KnowledgeRepository", () => {
 
     const chunks = repo.appendChunks(
       doc.docId,
-      [{ content: "", embedding: [0.1, 0.2] }, { content: "123456789" }],
+      [
+        {
+          content: "",
+          embedding: [0.1, 0.2],
+          embeddingMetadata: {
+            provider: "transformers-js",
+            modelId: "test-model",
+            dimensions: 2,
+            generatedAt: "2026-04-20T00:02:00.000Z",
+            version: "test",
+          },
+        },
+        { content: "123456789" },
+      ],
       "2026-04-20T00:02:00.000Z",
     );
 
     assert.equal(chunks[0]?.tokenEstimate, 0);
+    assert.equal(chunks[0]?.embeddingMetadata?.modelId, "test-model");
     assert.equal(chunks[1]?.tokenEstimate, 3);
     assert.deepEqual(repo.getDocument(doc.docId)?.metadata, { owner: "ops", priority: 2 });
     assert.equal(repo.getDocument("missing-doc"), undefined);
@@ -83,8 +97,15 @@ describe("KnowledgeRepository", () => {
       [chunks[0]!.chunkId, chunks[1]!.chunkId],
     );
 
-    repo.updateChunkEmbedding(chunks[1]!.chunkId, [0.4, 0.5]);
+    repo.updateChunkEmbedding(chunks[1]!.chunkId, [0.4, 0.5], {
+      provider: "pseudo",
+      modelId: "pseudo-hash-v1",
+      dimensions: 2,
+      generatedAt: "2026-04-20T00:03:00.000Z",
+      version: "test",
+    });
     assert.deepEqual(repo.listChunksByDocument(doc.docId)[1]?.embedding, [0.4, 0.5]);
+    assert.equal(repo.listChunksByDocument(doc.docId)[1]?.embeddingMetadata?.provider, "pseudo");
     assert.equal(repo.deleteDocument("missing-doc"), false);
     assert.equal(repo.deleteDocument(other.docId), true);
     repo.deleteNamespace("workspace:a");
@@ -108,6 +129,7 @@ describe("KnowledgeRepository", () => {
       seq: 0,
       content: "chunk",
       embedding_json: JSON.stringify([1, "bad"]),
+      embedding_metadata_json: "{not-json",
       token_estimate: 4,
       created_at: "2026-04-20T00:01:00.000Z",
     };

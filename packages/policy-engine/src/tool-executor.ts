@@ -44,6 +44,7 @@ import {
   type DocumentArtifactFormat,
   type DocumentArtifactSection,
 } from "./document-artifacts.js";
+import { generateEmbedding, isEmbeddingCompatible, isEmbeddingCurrent } from "./local-embeddings.js";
 const execFileAsync = promisify(execFile);
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -798,13 +799,17 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     },
   });
   const chunks = chunkText(content, 1200, 180, 400);
-  storage.knowledge.appendChunks(
-    doc.docId,
-    chunks.map((chunk) => ({
-      content: chunk,
-      embedding: pseudoEmbedding(chunk),
-    })),
+  const embeddedChunks = await Promise.all(
+    chunks.map(async (chunk) => {
+      const generated = await generateEmbedding(chunk);
+      return {
+        content: chunk,
+        embedding: generated.embedding,
+        embeddingMetadata: generated.metadata,
+      };
+    }),
   );
+  storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   const attribution = knowledgeDocumentAttribution(doc);
   return {
     mode: upsert ? "upsert" : "write",
@@ -1037,40 +1042,68 @@ async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) 
     ? storage.knowledge.listChunksByDocument(documentId, 2000)
     : storage.knowledge.listChunksByNamespace(namespace, 2000);
   let indexed = 0;
+  let skipped = 0;
+  const methods = new Set<string>();
   for (const chunk of chunks) {
-    if (!chunk.embedding || force) {
-      storage.knowledge.updateChunkEmbedding(chunk.chunkId, pseudoEmbedding(chunk.content));
-      indexed += 1;
+    if (!force && isEmbeddingCurrent(chunk.embedding, chunk.embeddingMetadata)) {
+      skipped += 1;
+      continue;
     }
+    const generated = await generateEmbedding(chunk.content);
+    storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, generated.metadata);
+    methods.add(generated.method);
+    indexed += 1;
   }
-  return { namespace: namespace ?? "all", documentId, indexed };
+  return { namespace: namespace ?? "all", documentId, indexed, skipped, methods: [...methods] };
 }
 
 async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) {
   const namespace = asString(args.namespace);
   const query = required(args.query, "query");
   const limit = clampInt(args.limit, 10, 1, 100);
-  const q = pseudoEmbedding(query);
+  const generatedQuery = await generateEmbedding(query);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
   const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
-  const items = chunks
-    .map((chunk) => {
+  const scoredItems = await Promise.all(
+    chunks.map(async (chunk) => {
       const doc = docById.get(chunk.docId);
       if (!doc) {
         return undefined;
       }
+      const compatibleEmbedding = isEmbeddingCompatible(
+        chunk.embedding,
+        chunk.embeddingMetadata,
+        generatedQuery.metadata,
+      )
+        ? chunk.embedding
+        : (await generateEmbedding(chunk.content)).embedding;
       return {
         chunkId: chunk.chunkId,
         docId: chunk.docId,
-        score: cosine(q, chunk.embedding ?? pseudoEmbedding(chunk.content)),
+        score: cosine(generatedQuery.embedding, compatibleEmbedding),
         snippet: chunk.content.slice(0, 320),
         attribution: knowledgeDocumentAttribution(doc),
+        embeddingMetadata: chunk.embeddingMetadata,
       };
-    })
+    }),
+  );
+  const items = scoredItems
     .filter((item): item is NonNullable<typeof item> => item !== undefined)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  return { namespace: namespace ?? "all", query, items, method: "pseudo-embedding" };
+  return {
+    namespace: namespace ?? "all",
+    query,
+    items,
+    method: generatedQuery.method,
+    embedding: {
+      provider: generatedQuery.metadata.provider,
+      modelId: generatedQuery.metadata.modelId,
+      dimensions: generatedQuery.metadata.dimensions,
+      version: generatedQuery.metadata.version,
+      ...(generatedQuery.metadata.fallbackReason ? { fallbackReason: generatedQuery.metadata.fallbackReason } : {}),
+    },
+  };
 }
 
 async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
@@ -5397,17 +5430,6 @@ function chunkText(text: string, targetChars: number, overlap: number, maxChunks
     cursor = Math.max(end - overlap, cursor + 1);
   }
   return out;
-}
-
-function pseudoEmbedding(text: string, dimensions = 64): number[] {
-  const vec = new Array<number>(dimensions).fill(0);
-  const lower = text.toLowerCase();
-  for (let i = 0; i < lower.length; i += 1) {
-    const index = lower.charCodeAt(i) % dimensions;
-    vec[index] = (vec[index] ?? 0) + 1;
-  }
-  const mag = Math.sqrt(vec.reduce((acc, value) => acc + value * value, 0)) || 1;
-  return vec.map((value) => value / mag);
 }
 
 function cosine(a: number[], b: number[]): number {

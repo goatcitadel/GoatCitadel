@@ -611,6 +611,15 @@ export interface PromptPackPromptfooImportPreviewResponse {
   testCount: number;
   promptCount: number;
   providerCount: number;
+  reviewAssetCount?: number;
+  reviewAssets?: Array<{
+    source: "promptfoo_redteam" | "garak_probe_corpus";
+    assetKind: "red_team_case" | "probe_payload";
+    count: number;
+    callable: false;
+    activationRequired: true;
+    note: string;
+  }>;
   warnings: string[];
   errors: string[];
   posture: {

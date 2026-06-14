@@ -20,6 +20,8 @@ import {
   redactUrlForError,
 } from "./sandbox/network-guard.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+import { generateEmbedding } from "./local-embeddings.js";
+import { parseNativeFileDocument } from "./native-document-parser.js";
 
 // SECURITY (codex finding #12): `sourceType` is the discriminator that
 // decides whether a URL or a local file is fetched. Previously the field was
@@ -94,6 +96,7 @@ export async function ingestDocumentViaBackend(input: {
         fetchedAt: now.toISOString(),
         fromCache: true,
         cacheExpiresAt: cachedDocument.cacheExpiresAt,
+        parser: cachedDocument.parser,
       },
       document: {
         sourceType,
@@ -137,6 +140,7 @@ export async function ingestDocumentViaBackend(input: {
       cacheExpiresAt: cacheTtlSeconds > 0 ? new Date(now.getTime() + cacheTtlSeconds * 1000).toISOString() : undefined,
       fetchedAt: fetched.fetchedAt,
       contentType: fetched.contentType,
+      parser: fetched.parser,
       statusCode: fetched.statusCode,
       finalSourceUrl,
       trustLevel: attribution.trustLevel,
@@ -165,13 +169,17 @@ export async function ingestDocumentViaBackend(input: {
     title,
     metadata,
   });
-  const savedChunks = input.storage.knowledge.appendChunks(
-    doc.docId,
-    chunks.map((content) => ({
-      content,
-      embedding: pseudoEmbedding(content),
-    })),
+  const embeddedChunks = await Promise.all(
+    chunks.map(async (content) => {
+      const generated = await generateEmbedding(content);
+      return {
+        content,
+        embedding: generated.embedding,
+        embeddingMetadata: generated.metadata,
+      };
+    }),
   );
+  const savedChunks = input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   return {
     backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
     fetchResult: fetched,
@@ -244,14 +252,16 @@ async function fetchDocument(input: {
   const sourceType = parseIngestionSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   if (sourceType === "file") {
-    const rawText = await fs.readFile(path.resolve(source), "utf8");
+    const parsed = await parseNativeFileDocument(source, await fs.readFile(path.resolve(source)));
     return {
       backend: input.backend,
       sourceType,
       sourceRef: source,
       title: optionalString(args.title),
-      rawText,
-      normalizedText: normalizeText(rawText),
+      rawText: parsed.rawText,
+      normalizedText: normalizeText(parsed.normalizedText, parsed.contentType),
+      contentType: parsed.contentType,
+      parser: parsed.parser,
       fetchedAt: new Date().toISOString(),
       fromCache: false,
     };
@@ -422,6 +432,7 @@ function readCachedDocument(input: {
       metadata: Record<string, unknown>;
       attribution: ContextSourceAttribution;
       cacheExpiresAt?: string;
+      parser?: FetchResult["parser"];
       chunks: RetrievedContextChunk[];
     }
   | undefined {
@@ -493,6 +504,7 @@ function readCachedDocument(input: {
         trustLevel,
       },
       cacheExpiresAt,
+      parser: normalizeFetchParser(ingestion.parser),
       chunks: chunks.map((chunk) => ({
         ...chunk,
         attribution: {
@@ -503,6 +515,31 @@ function readCachedDocument(input: {
     };
   }
   return undefined;
+}
+
+function normalizeFetchParser(value: unknown): FetchResult["parser"] | undefined {
+  const parser = record(value);
+  const parserId = optionalString(parser.parserId);
+  const format = optionalString(parser.format);
+  if (!parserId || !format || !["text", "html", "pdf", "docx", "xlsx", "csv"].includes(format)) {
+    return undefined;
+  }
+  const pageCount = positiveInt(parser.pageCount);
+  const rawSheetNames = Array.isArray(parser.sheetNames) ? parser.sheetNames : undefined;
+  const rawWarnings = Array.isArray(parser.warnings) ? parser.warnings : undefined;
+  return {
+    parserId,
+    format: format as NonNullable<FetchResult["parser"]>["format"],
+    ...(pageCount ? { pageCount } : {}),
+    ...(rawSheetNames
+      ? {
+          sheetNames: rawSheetNames.map((item) => optionalString(item)).filter((item): item is string => Boolean(item)),
+        }
+      : {}),
+    ...(rawWarnings
+      ? { warnings: rawWarnings.map((item) => optionalString(item)).filter((item): item is string => Boolean(item)) }
+      : {}),
+  };
 }
 
 export function resolveIngestionTrustLevel(
@@ -567,15 +604,6 @@ function lexicalScore(query: string, text: string): number {
   }
   const tokens = query.split(/\s+/).filter(Boolean);
   return tokens.reduce((score, token) => score + (text.includes(token) ? 1 : 0), 0);
-}
-
-function pseudoEmbedding(text: string): number[] {
-  const buckets = new Array<number>(8).fill(0);
-  for (let index = 0; index < text.length; index += 1) {
-    const bucketIndex = index % buckets.length;
-    buckets[bucketIndex] = (buckets[bucketIndex] ?? 0) + text.charCodeAt(index) / 255;
-  }
-  return buckets.map((value) => Number(value.toFixed(4)));
 }
 
 function stableHash(value: string): string {

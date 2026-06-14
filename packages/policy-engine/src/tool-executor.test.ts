@@ -5594,6 +5594,7 @@ function createExecutorKnowledgeHarness(): { storage: Storage } {
           seq: index,
           content: String(entry.content ?? ""),
           embedding: entry.embedding as number[] | undefined,
+          embeddingMetadata: entry.embeddingMetadata as Record<string, unknown> | undefined,
           tokenEstimate: 1,
           createdAt: new Date().toISOString(),
         }));
@@ -5607,16 +5608,19 @@ function createExecutorKnowledgeHarness(): { storage: Storage } {
           .map((doc) => String(doc.docId));
         return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
       }),
-      updateChunkEmbedding: vi.fn((chunkId: string, embedding: number[]) => {
-        for (const chunks of chunksByDocId.values()) {
-          const chunk = chunks.find((entry) => entry.chunkId === chunkId);
-          if (chunk) {
-            chunk.embedding = embedding;
-            return chunk;
+      updateChunkEmbedding: vi.fn(
+        (chunkId: string, embedding: number[], embeddingMetadata?: Record<string, unknown>) => {
+          for (const chunks of chunksByDocId.values()) {
+            const chunk = chunks.find((entry) => entry.chunkId === chunkId);
+            if (chunk) {
+              chunk.embedding = embedding;
+              chunk.embeddingMetadata = embeddingMetadata;
+              return chunk;
+            }
           }
-        }
-        return undefined;
-      }),
+          return undefined;
+        },
+      ),
     },
   } as unknown as Storage;
 

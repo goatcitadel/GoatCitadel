@@ -95,7 +95,19 @@ function createKnowledgeStorage(): Storage {
           .filter((doc) => !namespace || doc.namespace === namespace)
           .flatMap((doc) => chunks.get(doc.docId) ?? []),
       ),
-      updateChunkEmbedding: vi.fn((chunkId: string, embedding: number[]) => ({ chunkId, embedding })),
+      updateChunkEmbedding: vi.fn(
+        (chunkId: string, embedding: number[], embeddingMetadata?: Record<string, unknown>) => {
+          for (const entries of chunks.values()) {
+            const match = entries.find((entry) => entry.chunkId === chunkId);
+            if (match) {
+              match.embedding = embedding;
+              match.embeddingMetadata = embeddingMetadata;
+              return match;
+            }
+          }
+          return { chunkId, embedding, embeddingMetadata };
+        },
+      ),
     },
   } as unknown as Storage;
 }
@@ -194,10 +206,23 @@ describe("tool executor tail coverage", () => {
     expect(search).toMatchObject({ namespace: "all", query: "coverage" });
 
     const indexed = await executeTool(request("embeddings.index", {}), config, storage);
-    expect(indexed).toMatchObject({ namespace: "all", documentId: undefined, indexed: 1 });
+    expect(indexed).toMatchObject({
+      namespace: "all",
+      documentId: undefined,
+      indexed: 1,
+      skipped: 0,
+      methods: ["pseudo-embedding"],
+    });
 
     const queried = await executeTool(request("embeddings.query", { query: "coverage" }), config, storage);
-    expect(queried).toMatchObject({ namespace: "all", method: "pseudo-embedding" });
+    expect(queried).toMatchObject({
+      namespace: "all",
+      method: "pseudo-embedding",
+      embedding: {
+        provider: "pseudo",
+        modelId: "pseudo-hash-v1",
+      },
+    });
   });
 
   it("uses artifact title, template, and body defaults", async () => {

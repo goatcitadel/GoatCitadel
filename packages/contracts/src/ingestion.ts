@@ -19,6 +19,13 @@ export interface FetchResult {
   fetchedAt: string;
   fromCache: boolean;
   cacheExpiresAt?: string;
+  parser?: {
+    parserId: string;
+    format: "text" | "html" | "pdf" | "docx" | "xlsx" | "csv";
+    pageCount?: number;
+    sheetNames?: string[];
+    warnings?: string[];
+  };
 }
 
 export interface ContextSourceAttribution {
