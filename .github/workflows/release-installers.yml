@@ -218,6 +218,7 @@ jobs:
           }
 
       - name: Write SHA-256 checksum
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $installer = "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
@@ -225,7 +226,7 @@ jobs:
           Set-Content -Path "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
 
       - name: Upload unsigned Windows package smoke assets
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-unsigned-package-smoke-assets
