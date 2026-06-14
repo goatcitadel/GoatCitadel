@@ -195,8 +195,8 @@ FALLBACK_BASE_URL = os.environ.get("GOATCITADEL_NPU_FALLBACK_URL", "").strip().r
 FALLBACK_API_KEY = os.environ.get("GOATCITADEL_NPU_FALLBACK_API_KEY", "").strip()
 TIMEOUT_SECONDS = float(os.environ.get("GOATCITADEL_NPU_REQUEST_TIMEOUT_SECONDS", "60"))
 
-# Shared-secret bearer token guarding the inference + proxy surface. When unset the sidecar only
-# binds loopback (see resolve_listen_host) so the open default stays local-only.
+# Shared-secret bearer token guarding the inference + proxy surface. When unset, protected routes
+# still require a loopback caller so alternate ASGI launchers cannot accidentally expose them.
 AUTH_TOKEN = os.environ.get("GOATCITADEL_NPU_AUTH_TOKEN", "").strip()
 # Explicit opt-in required before the sidecar will bind a non-loopback host.
 ALLOW_REMOTE = os.environ.get("GOATCITADEL_NPU_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -237,8 +237,8 @@ def resolve_listen_host(host: str) -> str:
 
 def is_authorized(request: Request) -> bool:
     if not AUTH_TOKEN:
-        # No token configured: only reachable on loopback, so treat the local caller as trusted.
-        return True
+        client_host = request.client.host if request.client else ""
+        return is_loopback_host(client_host)
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:

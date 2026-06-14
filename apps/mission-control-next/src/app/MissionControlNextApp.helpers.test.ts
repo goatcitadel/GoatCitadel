@@ -8,6 +8,7 @@ import {
   formatUsd,
   isImmersiveRoute,
   renderRouteContent,
+  resolveEffectiveShellTheme,
   resolveShellThemeClass,
   usesEmbeddedRouteHeader,
 } from "./MissionControlNextApp";
@@ -92,6 +93,10 @@ describe("MissionControlNextApp shell helpers", () => {
   it("describes theme, realtime, and embedded route chrome decisions", () => {
     expect(resolveShellThemeClass("dark")).toBe("theme-signal-noir");
     expect(resolveShellThemeClass("light")).toBe("theme-citadel-light");
+    expect(resolveEffectiveShellTheme("dark", "light")).toBe("dark");
+    expect(resolveEffectiveShellTheme("light", "dark")).toBe("light");
+    expect(resolveEffectiveShellTheme("library", "dark")).toBe("dark");
+    expect(resolveEffectiveShellTheme(undefined, "light")).toBe("light");
     expect(describeRealtimeTruthUi("closed" as any, "authoritative").degraded).toBe(true);
     expect(describeRealtimeTruthUi("open" as any, "replay-gap").strip).toContain("replay recovery");
     expect(describeRealtimeTruthUi("open" as any, "compatibility").strip).toContain("compatibility");

@@ -21,7 +21,9 @@ python server.py
 
 By default the sidecar listens on `http://127.0.0.1:11440`.
 
-By default the sidecar binds loopback only and serves the local caller without auth. To expose it
+By default the sidecar binds loopback only and serves loopback callers without auth. Protected
+endpoints still reject non-loopback callers when no token is configured, so alternate ASGI launchers
+cannot silently turn the local-only default into a remote unauthenticated service. To expose it
 beyond loopback you must opt in **and** set a shared secret, otherwise startup refuses to bind:
 
 ```bash

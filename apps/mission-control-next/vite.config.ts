@@ -22,6 +22,7 @@ const RESTORED_TEST_EXCLUDE = [
 ];
 
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
+export const DEV_OPTIMIZE_DEPS_ESBUILD_TARGET = "esnext";
 const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
 const CONTENT_TYPES = new Map<string, string>([
   [".css", "text/css; charset=utf-8"],
@@ -170,6 +171,11 @@ export default defineConfig(({ mode }) => {
       allowedHosts: resolveViteAllowedHosts(env),
       hmr: {
         overlay: false,
+      },
+    },
+    optimizeDeps: {
+      esbuildOptions: {
+        target: DEV_OPTIMIZE_DEPS_ESBUILD_TARGET,
       },
     },
     build: {

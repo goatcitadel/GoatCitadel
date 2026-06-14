@@ -63,14 +63,25 @@ def test_resolve_listen_host_allows_remote_with_optin_and_token(monkeypatch):
     assert server.resolve_listen_host("0.0.0.0") == "0.0.0.0"
 
 
-def test_inference_open_when_no_token_configured(monkeypatch):
+def test_inference_open_for_loopback_when_no_token_configured(monkeypatch):
     from fastapi.testclient import TestClient
 
     server = load_server(monkeypatch, {})
-    with TestClient(server.app) as client:
+    with TestClient(server.app, client=("127.0.0.1", 50000)) as client:
         assert client.get("/health").status_code == 200
-        # No token configured (loopback-only deployment): models endpoint is reachable.
+        # No token configured: loopback callers can reach the local-only model endpoint.
         assert client.get("/v1/models").status_code == 200
+
+
+def test_inference_rejects_remote_client_when_no_token_configured(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    server = load_server(monkeypatch, {})
+    with TestClient(server.app, client=("203.0.113.10", 50000)) as client:
+        # /health stays public for liveness probes.
+        assert client.get("/health").status_code == 200
+        # Protected routes stay closed even if an alternate ASGI launcher exposes the app remotely.
+        assert client.get("/v1/models").status_code == 401
 
 
 def test_inference_requires_bearer_when_token_configured(monkeypatch):

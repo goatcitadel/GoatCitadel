@@ -254,7 +254,7 @@ export function MissionControlNextApp() {
     onJumpToArea: (area) => navigate(buildPrimaryAreaRoute(area)),
   });
 
-  const shellThemeClass = resolveShellThemeClass(route.theme === "light" ? "light" : theme);
+  const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
   const currentAreaMeta = AREA_META[route.area];
   const currentRailItems = RAIL_ITEMS[route.area];
   const groupedRailItems = useMemo(
@@ -1241,6 +1241,13 @@ function StatusPill({
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
+}
+
+export function resolveEffectiveShellTheme(
+  routeTheme: string | undefined,
+  preferredTheme: "dark" | "light",
+): "dark" | "light" {
+  return routeTheme === "dark" || routeTheme === "light" ? routeTheme : preferredTheme;
 }
 
 export function describeRealtimeTruthUi(
