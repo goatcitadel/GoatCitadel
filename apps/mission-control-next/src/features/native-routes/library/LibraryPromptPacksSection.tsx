@@ -115,7 +115,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
   }, [notes, reload, scoreDraft, selectedComparison, selectedTestId, winnerCandidateId]);
 
   return (
-    <LibrarySectionShell loading={loading} error={error}>
+    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {notice ? <LibraryNotice notice={notice} /> : null}
       <div className="mc-next-settings-grid">

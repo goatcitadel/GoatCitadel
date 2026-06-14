@@ -4,18 +4,20 @@
   "goatcitadelOwner": "mission-control",
   "type": "module",
   "scripts": {
+    "build:deps": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build",
+    "predev": "pnpm run build:deps",
     "dev": "vite",
-    "build": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json && vite build",
+    "build": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json && vite build",
     "legacy:check": "node ../../scripts/check-mission-control-next-legacy-usage.mjs",
     "tokens:check": "node ../../scripts/check-mission-control-next-token-drift.mjs",
     "typography:check": "node ../../scripts/check-mission-control-next-typography.mjs",
     "contrast:check": "node ../../scripts/check-mission-control-next-contrast.mjs",
     "perf:check": "node ../../scripts/check-mission-control-next-legacy-usage.mjs && node ../../scripts/check-mission-control-next-token-drift.mjs && node ../../scripts/check-mission-control-next-typography.mjs && node ../../scripts/check-mission-control-next-contrast.mjs && node ../../scripts/check-mission-control-next-budgets.mjs",
     "preview": "vite preview",
-    "typecheck": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json",
+    "typecheck": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
-    "lint": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json"
+    "lint": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.12.25",

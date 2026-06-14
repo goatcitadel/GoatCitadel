@@ -99,7 +99,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
   const summary = useMemo(() => summarizeTrustPolicyRows(rows), [rows]);
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid variant="detail-wide">
         <SettingsPanel

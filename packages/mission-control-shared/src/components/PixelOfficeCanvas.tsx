@@ -196,6 +196,18 @@ export function PixelOfficeCanvas({
       }
       officeState.removeAgent(character.id);
     }
+
+    // F-M14: prune the agentId → numericId map for agents that are no longer
+    // present. Without this the map (and the reverse map above) grow
+    // monotonically as agent IDs churn, since `removeAgent` only clears the
+    // office-state character, never the id mapping. Deleting stale entries
+    // bounds both maps to the live agent set.
+    for (const knownAgentId of agentIdMapRef.current.keys()) {
+      const numericId = agentIdMapRef.current.get(knownAgentId);
+      if (numericId == null || !activeNumericIds.has(numericId)) {
+        agentIdMapRef.current.delete(knownAgentId);
+      }
+    }
   }, [agents, isReady]);
 
   useEffect(() => {

@@ -1,17 +1,20 @@
 import type React from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, ErrorState } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
   loading,
   error,
+  onRetry,
   children,
 }: {
   loading: boolean;
   error: string | null;
+  /** F-M12: wired to the section's reload() so the error path offers retry. */
+  onRetry?: () => void;
   children: React.ReactNode;
 }) {
   if (loading) {
@@ -19,10 +22,18 @@ export function LibrarySectionShell({
   }
   if (error) {
     return (
-      <div className="mc-next-directory-alert">
-        <AlertTriangle className="h-4 w-4" />
-        <span>{error}</span>
-      </div>
+      <ErrorState
+        size="inline"
+        description={error}
+        primaryAction={
+          onRetry ? (
+            <button type="button" className="gc-button" onClick={() => onRetry()}>
+              <RefreshCw className="h-4 w-4" />
+              Retry
+            </button>
+          ) : undefined
+        }
+      />
     );
   }
   return <>{children}</>;

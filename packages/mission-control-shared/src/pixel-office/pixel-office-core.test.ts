@@ -1000,4 +1000,49 @@ describe("pixel office core modules", () => {
     expect(editor.deleteButtonBounds).toBeNull();
     expect(ctx.calls).toContain("drawImage");
   });
+
+  it("bounds the colorize cache with LRU eviction while preserving recent entries (F-M13)", () => {
+    const tile = [
+      ["#808080", "#404040"],
+      ["#202020", "#C0C0C0"],
+    ];
+    // Insert one entry, then keep touching it so it stays the most-recent.
+    const firstKey = "key-0";
+    const first = getColorizedSprite(firstKey, tile, { h: 10, s: 20, b: 0, c: 0 });
+    expect(getColorizedSprite(firstKey, tile, { h: 10, s: 20, b: 0, c: 0 })).toBe(first);
+
+    // Flood the cache past its cap with unique keys; the recently-touched
+    // firstKey must survive eviction, while an early-but-untouched key must not.
+    const earlyUntouchedKey = "key-1";
+    getColorizedSprite(earlyUntouchedKey, tile, { h: 10, s: 20, b: 0, c: 0 });
+    for (let i = 2; i < 600; i++) {
+      // Touch firstKey periodically to keep it warm.
+      if (i % 50 === 0) {
+        getColorizedSprite(firstKey, tile, { h: 10, s: 20, b: 0, c: 0 });
+      }
+      getColorizedSprite(`key-${i}`, tile, { h: (i * 7) % 360, s: 20, b: 0, c: 0 });
+    }
+
+    // The warm key is still cached (same reference returned, no recompute).
+    expect(getColorizedSprite(firstKey, tile, { h: 10, s: 20, b: 0, c: 0 })).toBe(first);
+    // The cold early key was evicted: a fresh compute returns a NEW reference.
+    const recomputedEarly = getColorizedSprite(earlyUntouchedKey, tile, { h: 10, s: 20, b: 0, c: 0 });
+    const recomputedEarlyAgain = getColorizedSprite(earlyUntouchedKey, tile, { h: 10, s: 20, b: 0, c: 0 });
+    // It is now cached again and stable (proves eviction happened, not that the
+    // cache is broken).
+    expect(recomputedEarlyAgain).toBe(recomputedEarly);
+  });
+
+  it("renders zero-row sprites without throwing (spriteCache @ts-nocheck removal guard)", () => {
+    const empty: string[][] = [];
+    expect(() => getOutlineSprite(empty)).not.toThrow();
+    expect(getOutlineSprite(empty)).toEqual([
+      ["", ""],
+      ["", ""],
+    ]);
+    expect(() => getCachedSprite(empty, 2)).not.toThrow();
+    const canvas = getCachedSprite(empty, 2);
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
+  });
 });

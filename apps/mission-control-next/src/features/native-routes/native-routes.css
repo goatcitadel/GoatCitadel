@@ -166,6 +166,54 @@
   max-width: 64ch;
 }
 
+/* F-M11: route-header title row hosting the title and the on-surface
+   "Experimental" badge for experimental release-scoped routes. */
+.mc-next-directory-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mc-next-experimental-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 40%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, var(--card));
+  color: color-mix(in oklab, var(--gc-risk-caution) 82%, var(--foreground));
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-next-experimental-badge[data-release-status="needs_release_polish"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 40%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 14%, var(--card));
+  color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 82%, var(--foreground));
+}
+
+/* F-M11: inline experimental note for the Personalities settings section. */
+.mc-next-settings-experimental-note {
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 30%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--card));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-settings-experimental-note strong {
+  color: color-mix(in oklab, var(--gc-risk-caution) 82%, var(--foreground));
+}
+
 .mc-next-directory-alert {
   display: inline-flex;
   align-items: flex-start;
@@ -2067,6 +2115,21 @@
 .mc-next-settings-textarea:focus {
   border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+}
+
+/* NAV-05 (D-Low): keyboard focus ring for the generic interactive primitives
+   that previously had no visible :focus-visible state — generic buttons, the
+   settings filter chips, directory actions, and the form inputs/selects/
+   textareas. Mirrors the .gc-button ring so keyboard navigation is visible on
+   every interactive control, not just the design-system button. */
+.mc-next-button:focus-visible,
+.mc-next-button-secondary:focus-visible,
+.mc-next-settings-filter:focus-visible,
+.mc-next-directory-action:focus-visible,
+.mc-next-settings-input:focus-visible,
+.mc-next-settings-textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .mc-next-settings-check {

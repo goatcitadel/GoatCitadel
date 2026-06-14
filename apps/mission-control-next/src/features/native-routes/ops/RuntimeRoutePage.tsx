@@ -14,10 +14,18 @@ import {
   exportN8nWorkflowTemplate,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
-import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
-import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
+import { EmptyState, ErrorState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
+import {
+  useOpsRuntimeSnapshot,
+  type RuntimeSnapshotSourceStatus,
+} from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { DaemonControlHandoff } from "@goatcitadel/mission-control-shared/api/types";
-import { ROUTE_RELEASE_SCOPE, type AppRoute, type RouteReleaseScope } from "@next/app/route-model";
+import {
+  getRouteReleaseScope,
+  ROUTE_RELEASE_SCOPE,
+  type AppRoute,
+  type RouteReleaseScope,
+} from "@next/app/route-model";
 import {
   NativeCard,
   NativeGrid,
@@ -1322,6 +1330,14 @@ export function RuntimeRoutePage({
     return buildOpsHeadMetrics(section, data, pendingApprovals);
   }, [data, pendingApprovals, section]);
 
+  // F-H3: relied-upon sources that failed for this section. Rendered as a
+  // degraded strip above the section content so costs/improvement/runtime (and
+  // every other section) cannot present a gateway-down state as healthy zeros.
+  const degradedSources = useMemo<OpsDegradedSource[]>(
+    () => (data ? buildSectionDegradedSources(data, section) : []),
+    [data, section],
+  );
+
   return (
     <NativePageFrame
       area="ops"
@@ -1331,7 +1347,13 @@ export function RuntimeRoutePage({
       loading={runtime.loading}
       error={runtime.error}
       metrics={headMetrics}
+      releaseStatus={getRouteReleaseScope(route).status}
     >
+      <OpsDegradedSourcesStrip
+        degraded={degradedSources}
+        onRetry={() => void runtime.reload()}
+        retrying={runtime.loading}
+      />
       {content}
     </NativePageFrame>
   );
@@ -2118,6 +2140,82 @@ export function sourceFailed(
   source: string,
 ): boolean {
   return data.sourceStatus[source]?.status === "error";
+}
+
+/**
+ * The runtime sources each Ops section actually relies on for its headline
+ * numbers. `useOpsRuntimeSnapshot().load()` never rejects (it captures each
+ * source independently), so a gateway-down state otherwise renders a calm
+ * "$0.00 healthy" view (F-H3). We surface a degraded strip on every section
+ * when any relied-upon source failed so failure is visible, not zeroed-healthy.
+ */
+const SECTION_RELIED_SOURCES: Record<string, readonly string[]> = {
+  activity: ["dashboard", "timeline"],
+  sessions: ["dashboard", "sessions"],
+  schedules: ["timeline"],
+  improvement: ["timeline"],
+  notifications: ["timeline", "health"],
+  costs: ["cost", "dashboard", "health"],
+  runtime: ["daemon", "health", "mcpServers", "backups"],
+  diagnostics: ["health"],
+};
+
+export type OpsDegradedSource = { source: string; message: string };
+
+/**
+ * Failed relied-upon sources for the given section, with their error messages.
+ * Empty when every relied-upon source loaded.
+ */
+export function buildSectionDegradedSources(
+  data: { sourceStatus: Record<string, RuntimeSnapshotSourceStatus> },
+  section: string,
+): OpsDegradedSource[] {
+  const relied = SECTION_RELIED_SOURCES[section] ?? ["dashboard"];
+  const degraded: OpsDegradedSource[] = [];
+  for (const source of relied) {
+    const status = data.sourceStatus[source];
+    if (status && status.status === "error") {
+      degraded.push({ source, message: status.message });
+    }
+  }
+  return degraded;
+}
+
+export function describeOpsDegradedSources(degraded: OpsDegradedSource[]): string {
+  if (degraded.length === 0) {
+    return "";
+  }
+  const names = degraded.map((item) => capitalize(item.source));
+  const list = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!}`;
+  return `${list} ${degraded.length === 1 ? "source is" : "sources are"} unavailable. The figures below may be incomplete or stale — they are not a healthy zero.`;
+}
+
+function OpsDegradedSourcesStrip({
+  degraded,
+  onRetry,
+  retrying,
+}: {
+  degraded: OpsDegradedSource[];
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  if (degraded.length === 0) {
+    return null;
+  }
+  return (
+    <ErrorState
+      size="inline"
+      tone="danger"
+      title="Live runtime data is degraded"
+      description={describeOpsDegradedSources(degraded)}
+      primaryAction={
+        <button type="button" className="gc-button" onClick={onRetry} disabled={retrying}>
+          <RefreshCw className="h-4 w-4" />
+          {retrying ? "Retrying..." : "Retry"}
+        </button>
+      }
+    />
+  );
 }
 
 function readDaemonControlHandoff(data: OpsRuntimeData): DaemonControlHandoff | null {

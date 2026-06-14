@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   RouteSurfaceFallback,
   buildRailSections,
+  describeDashboardFooterPill,
   describeRealtimeTruthUi,
   formatUsd,
   isImmersiveRoute,
@@ -10,7 +11,7 @@ import {
   resolveShellThemeClass,
   usesEmbeddedRouteHeader,
 } from "./MissionControlNextApp";
-import { RAIL_ITEMS } from "./route-model";
+import { RAIL_ITEMS, getRouteReleaseScope, isExperimentalRoute } from "./route-model";
 
 const item = (section: string) => ({ section }) as any;
 
@@ -104,6 +105,25 @@ describe("MissionControlNextApp shell helpers", () => {
     expect(formatUsd(Number.POSITIVE_INFINITY)).toBe("$0.00");
     expect(formatUsd(0)).toBe("$0.00");
     expect(formatUsd(2.34567)).toBe("$2.3457");
+  });
+
+  it("marks dashboard footer pills unavailable when the dashboard refresh fails (F-H4)", () => {
+    const dashboard = { sessions: [{}, {}], pendingApprovals: 3, dailyCostUsd: 1.5 } as any;
+    // Healthy: the formatted value passes through, not degraded.
+    expect(describeDashboardFooterPill(dashboard, null, "3 pending")).toEqual({
+      value: "3 pending",
+      degraded: false,
+    });
+    // Dashboard never loaded: em dash, not degraded.
+    expect(describeDashboardFooterPill(null, null, "—")).toEqual({ value: "—", degraded: false });
+    // Refresh failed while a stale dashboard is retained: do NOT show the stale
+    // "3 pending"; mark it unavailable + degraded so the strip cannot lie.
+    expect(describeDashboardFooterPill(dashboard, "boom", "3 pending")).toEqual({
+      value: "Unavailable",
+      degraded: true,
+    });
+    // Failure takes precedence even when no dashboard object exists.
+    expect(describeDashboardFooterPill(null, "boom", "—")).toEqual({ value: "Unavailable", degraded: true });
   });
 
   it("dispatches route content helpers and preserves threaded route callbacks", () => {
@@ -202,5 +222,31 @@ describe("MissionControlNextApp shell helpers", () => {
     expect(
       renderToStaticMarkup(RouteSurfaceFallback({ label: "Runtime", description: "Loading runtime route." }) as any),
     ).toContain("Loading Runtime");
+  });
+
+  it("keeps the rail-hidden experimental routes scoped and reachable (F-M11)", () => {
+    // The three surfaces that have no rail entry and previously no palette entry.
+    const experimentalRoutes = [
+      { area: "library", section: "curator" },
+      { area: "ops", section: "improvement" },
+      { area: "ops", section: "kanban" },
+    ] as const;
+
+    for (const route of experimentalRoutes) {
+      // Still flagged experimental in ROUTE_RELEASE_SCOPE (drives the on-surface badge).
+      expect(isExperimentalRoute(route as any)).toBe(true);
+      expect(getRouteReleaseScope(route as any).status).toBe("experimental");
+      // Still reachable: the route dispatcher renders the surface, never a "hidden" no-op.
+      const element = renderRouteContent({
+        route: route as any,
+        activeWorkspaceId: "workspace-1",
+        activeWorkspaceName: "Workspace One",
+        pendingApprovals: 0,
+        navigate: vi.fn(),
+        setActiveWorkspaceId: vi.fn(),
+      }) as any;
+      expect(element).toBeTruthy();
+      expect(element.props.route.area).toBe(route.area);
+    }
   });
 });

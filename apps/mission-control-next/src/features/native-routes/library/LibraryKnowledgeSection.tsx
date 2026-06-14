@@ -92,7 +92,7 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
   }, [selectedFilePath]);
 
   return (
-    <LibrarySectionShell loading={loading} error={error}>
+    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard

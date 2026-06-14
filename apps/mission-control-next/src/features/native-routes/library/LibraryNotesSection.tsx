@@ -71,7 +71,7 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
   };
 
   return (
-    <LibrarySectionShell loading={loading} error={error}>
+    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">

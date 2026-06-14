@@ -195,7 +195,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import type { AppRoute } from "@next/app/route-model";
+import { getRouteReleaseScope, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { StatusChip } from "./primitives";
 import {
@@ -331,6 +331,7 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
       kicker={`Settings · ${labelForSettingsSection(section)}`}
       title={labelForSettingsSection(section)}
       description={descriptionForSettingsSection(section)}
+      releaseStatus={getRouteReleaseScope(props.route).status}
     >
       {renderSettingsSection({ ...guardedProps, section })}
       <ConfirmModal
@@ -436,7 +437,7 @@ function LocalAiSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid>
@@ -547,7 +548,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
@@ -873,7 +874,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="detail-wide">
@@ -1510,8 +1511,13 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
+      {/* F-M11: personalities is an experimental surface. Beyond the page-frame
+          badge, state it inline since this section's labeling was the weakest. */}
+      <p className="mc-next-settings-experimental-note" role="note">
+        <strong>Experimental.</strong> Chat personalities are an experimental surface and may change before 1.0.
+      </p>
       {data ? (
         <SettingsGrid variant="detail-wide">
           <SettingsPanel
@@ -2748,7 +2754,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid variant="detail-wide">
         <SettingsPanel
@@ -3548,7 +3554,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="detail-wide">
@@ -3897,7 +3903,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsStack>
@@ -4394,7 +4400,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsNotice
         notice={{
@@ -4811,7 +4817,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="three-column">
@@ -5819,7 +5825,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="detail-wide">
@@ -6148,7 +6154,7 @@ function McpSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="detail-wide">
@@ -6886,7 +6892,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="three-column">
@@ -7447,7 +7453,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="three-column">
@@ -8021,7 +8027,7 @@ function AddonsSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error}>
+    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="three-column">

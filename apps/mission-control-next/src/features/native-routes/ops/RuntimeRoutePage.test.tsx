@@ -3,8 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildNeedsAttentionItems,
+  buildSectionDegradedSources,
   capitalize,
   createScheduleJobId,
+  describeOpsDegradedSources,
   describeQmdImpact,
   descriptionForOpsSection,
   formatBytes,
@@ -460,6 +462,30 @@ describe("RuntimeRoutePage", () => {
     expect(sourceFailed({ sourceStatus: { daemon: { status: "error" } } }, "daemon")).toBe(true);
     expect(sourceFailed({ sourceStatus: { daemon: { status: "ok" } } }, "daemon")).toBe(false);
     expect(sourceFailed({ sourceStatus: {} }, "daemon")).toBe(false);
+    // F-H3: relied-upon source failures are reported per section, not hidden.
+    expect(
+      buildSectionDegradedSources({ sourceStatus: { cost: { status: "error", message: "gateway down" } } }, "costs"),
+    ).toEqual([{ source: "cost", message: "gateway down" }]);
+    // A failure of a source the section does not rely on is not surfaced here.
+    expect(
+      buildSectionDegradedSources({ sourceStatus: { localEngines: { status: "error", message: "x" } } }, "costs"),
+    ).toEqual([]);
+    expect(buildSectionDegradedSources({ sourceStatus: { cost: { status: "ok" } } }, "costs")).toEqual([]);
+    expect(
+      buildSectionDegradedSources(
+        { sourceStatus: { timeline: { status: "error", message: "timeline failed" } } },
+        "improvement",
+      ),
+    ).toEqual([{ source: "timeline", message: "timeline failed" }]);
+    expect(describeOpsDegradedSources([])).toBe("");
+    expect(describeOpsDegradedSources([{ source: "cost", message: "x" }])).toContain("Cost source is unavailable");
+    expect(
+      describeOpsDegradedSources([
+        { source: "daemon", message: "x" },
+        { source: "health", message: "y" },
+      ]),
+    ).toContain("Daemon and Health sources are unavailable");
+    expect(describeOpsDegradedSources([{ source: "cost", message: "x" }])).toContain("not a healthy zero");
     const attentionItems = buildNeedsAttentionItems(
       {
         dashboard: { pendingApprovals: 1, activeSubagents: 0, dailyCostUsd: 0 },
@@ -1197,6 +1223,46 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("unavailable");
     expect(markup).toContain("<strong>unavailable</strong>");
     expect(markup).not.toContain("<strong>0 B</strong>");
+  });
+
+  it("surfaces a degraded strip on the Costs section when the cost source fails (F-H3)", () => {
+    runtimeSnapshotOverrides.sourceStatus = {
+      cost: { status: "error", error: "cost route failed" },
+      dashboard: { status: "error", error: "dashboard route failed" },
+    };
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "costs", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    // The degraded strip renders with role=alert and explains the figures are
+    // not a healthy zero, instead of a calm "$0.00 healthy" view.
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Live runtime data is degraded");
+    expect(markup).toContain("not a healthy zero");
+    expect(markup).toContain("unavailable");
+  });
+
+  it("renders no degraded strip on Costs when relied-upon sources are healthy (F-H3)", () => {
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "costs", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).not.toContain("Live runtime data is degraded");
   });
 
   it("uses health daemon status when daemon controls are unavailable", () => {

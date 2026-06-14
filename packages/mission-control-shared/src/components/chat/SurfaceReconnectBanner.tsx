@@ -26,8 +26,19 @@ export function SurfaceReconnectBanner(props: { mode?: ChatMode; status: EventSt
     if (reconnectedAt === null) {
       return undefined;
     }
+    // The "restored" banner is only visible for RECONNECTED_BANNER_MS. Tear the
+    // 1s ticker down once that window elapses instead of leaving it running for
+    // the lifetime of the surface (D-Low: SurfaceReconnectBanner interval leak).
+    const elapsed = Date.now() - reconnectedAt;
+    if (elapsed >= RECONNECTED_BANNER_MS) {
+      return undefined;
+    }
     const interval = globalThis.setInterval(() => {
+      const sinceReconnect = Date.now() - reconnectedAt;
       setNow(Date.now());
+      if (sinceReconnect >= RECONNECTED_BANNER_MS) {
+        globalThis.clearInterval(interval);
+      }
     }, 1000);
     return () => globalThis.clearInterval(interval);
   }, [reconnectedAt]);

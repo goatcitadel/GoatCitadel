@@ -614,17 +614,26 @@ describe("MissionControlNextApp", () => {
     expect(rendered).not.toContain("Needs intervention");
   });
 
-  it("does not report daemon unavailable when only dashboard refresh fails", async () => {
+  it("keeps the daemon Serving but marks dashboard-derived pills unavailable when only dashboard refresh fails (F-H4)", async () => {
     appMocks.fetchDashboardState.mockRejectedValueOnce(new Error("dashboard offline"));
     appMocks.fetchHealthSummary.mockResolvedValueOnce({
       daemonStatus: { running: true },
     });
 
     const renderer = await renderApp("http://localhost:5173/settings/providers");
-    const rendered = JSON.stringify(renderer.toJSON());
+    const tree = renderer.toJSON();
+    const rendered = JSON.stringify(tree);
 
+    // Daemon health is independent of the dashboard, so the daemon pill stays
+    // "Serving" (it is not affected by the dashboard failure).
     expect(rendered).toContain("Serving");
-    expect(rendered).not.toContain("Unavailable");
+
+    // F-H4: the dashboard-derived footer pills (approvals/sessions/spend) must
+    // not keep presenting retained last-good numbers as current — they read
+    // "Unavailable" and carry the degraded marker. The status strip is the only
+    // always-visible signal on settings (the stage-header chip is hidden here).
+    expect(rendered).toContain("Unavailable");
+    expect(rendered).toContain('"data-status":"degraded"');
   });
 
   it("does not keep stale serving daemon health after a later refresh failure", async () => {

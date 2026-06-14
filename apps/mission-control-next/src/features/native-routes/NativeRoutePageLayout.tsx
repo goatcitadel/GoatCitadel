@@ -1,9 +1,28 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { ArrowRight, FlaskConical, RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
-import type { AppRoute } from "@next/app/route-model";
+import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
 import { EmptyState, ErrorState, type AreaSlug } from "./primitives";
+
+/**
+ * F-M11: on-surface "Experimental" badge for routes scoped `experimental` in
+ * ROUTE_RELEASE_SCOPE. Embedded route headers previously carried no scope
+ * signal (only the always-visible footer pill), so an experimental surface read
+ * as release-complete once you were on it.
+ */
+export function ReleaseScopeBadge({ status }: { status?: ReleaseSurfaceStatus }) {
+  if (status !== "experimental" && status !== "needs_release_polish") {
+    return null;
+  }
+  const label = status === "experimental" ? "Experimental" : "Needs release polish";
+  return (
+    <span className="mc-next-experimental-badge" data-release-status={status} role="note" aria-label={label}>
+      <FlaskConical className="h-3 w-3" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
 
 export type NativePageMetric = {
   label: string;
@@ -24,6 +43,7 @@ export function NativePageFrame({
   area,
   metrics,
   actions,
+  releaseStatus,
 }: {
   icon?: React.ComponentType<{ className?: string }>;
   kicker: string;
@@ -36,6 +56,8 @@ export function NativePageFrame({
   area?: AreaSlug;
   metrics?: NativePageMetric[];
   actions?: ReactNode;
+  /** F-M11: renders an on-surface "Experimental" badge for experimental routes. */
+  releaseStatus?: ReleaseSurfaceStatus;
 }) {
   const pageRef = useRef<HTMLElement | null>(null);
 
@@ -91,7 +113,10 @@ export function NativePageFrame({
         ) : null}
         <div className="mc-next-directory-copy">
           <p>{kicker}</p>
-          <h1>{title}</h1>
+          <div className="mc-next-directory-title-row">
+            <h1>{title}</h1>
+            <ReleaseScopeBadge status={releaseStatus} />
+          </div>
           <span>{description}</span>
         </div>
         {hasHeadRow ? (

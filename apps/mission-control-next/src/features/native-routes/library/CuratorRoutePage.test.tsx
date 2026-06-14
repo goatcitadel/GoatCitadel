@@ -162,6 +162,8 @@ describe("CuratorRoutePage", () => {
     expect(text).toContain("Immune: bundled");
     expect(text).not.toContain("Dry run");
     expect(text).not.toContain("Run now");
+    // F-M11: curator is experimental and must carry an on-surface badge.
+    expect(text).toContain("Experimental");
   });
 
   it("generates curator reports with dryRun: true", async () => {

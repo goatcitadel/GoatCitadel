@@ -5,7 +5,6 @@
 // stay in `../SettingsNativePage.tsx` until their dedicated section files land.
 import { type ComponentType, type ReactNode } from "react";
 import {
-  AlertTriangle,
   Cable,
   CheckCircle2,
   Gauge,
@@ -22,9 +21,10 @@ import {
 } from "lucide-react";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
-import type { AppRoute } from "@next/app/route-model";
+import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
-import { ThreePartChip, EmptyState, type ChipTone } from "../primitives";
+import { ReleaseScopeBadge } from "../NativeRoutePageLayout";
+import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -113,12 +113,15 @@ export function SettingsPageFrame({
   title,
   description,
   children,
+  releaseStatus,
 }: {
   icon: ComponentType<{ className?: string }>;
   kicker: string;
   title: string;
   description: string;
   children: ReactNode;
+  /** F-M11: renders an on-surface "Experimental" badge for experimental sections. */
+  releaseStatus?: ReleaseSurfaceStatus;
 }) {
   return (
     <section className="mc-next-directory-page">
@@ -128,7 +131,10 @@ export function SettingsPageFrame({
         </div>
         <div className="mc-next-directory-copy">
           <p>{kicker}</p>
-          <h1>{title}</h1>
+          <div className="mc-next-directory-title-row">
+            <h1>{title}</h1>
+            <ReleaseScopeBadge status={releaseStatus} />
+          </div>
           <span>{description}</span>
         </div>
       </header>
@@ -140,10 +146,13 @@ export function SettingsPageFrame({
 export function SettingsSectionShell({
   loading,
   error,
+  onRetry,
   children,
 }: {
   loading: boolean;
   error: string | null;
+  /** F-M12: wired to the section's reload() so the error path offers retry. */
+  onRetry?: () => void;
   children: ReactNode;
 }) {
   if (loading) {
@@ -155,10 +164,18 @@ export function SettingsSectionShell({
   }
   if (error) {
     return (
-      <div className="mc-next-directory-alert">
-        <AlertTriangle className="h-4 w-4" />
-        <span>{error}</span>
-      </div>
+      <ErrorState
+        size="inline"
+        description={error}
+        primaryAction={
+          onRetry ? (
+            <button type="button" className="gc-button" onClick={() => onRetry()}>
+              <RefreshCw className="h-4 w-4" />
+              Retry
+            </button>
+          ) : undefined
+        }
+      />
     );
   }
   return <>{children}</>;

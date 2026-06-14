@@ -3,12 +3,13 @@ import { Archive, RefreshCw, ShieldCheck } from "lucide-react";
 import type { CuratorSkillStatusItem, CuratorStatusResponse } from "@goatcitadel/contracts";
 import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { getRouteReleaseScope } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
-export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWorkspaceId }: NativeRoutePagesProps) {
+export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId }: NativeRoutePagesProps) {
   const [data, setData] = useState<CuratorStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,6 +101,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
       description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
       loading={loading}
       error={error}
+      releaseStatus={getRouteReleaseScope(route).status}
     >
       <NativeGrid>
         <NativeCard

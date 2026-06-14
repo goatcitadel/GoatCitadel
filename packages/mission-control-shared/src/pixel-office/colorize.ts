@@ -8,7 +8,16 @@
 
 import type { FloorColor, SpriteData } from "./types";
 
-/** Generic colorized sprite cache: arbitrary string key → SpriteData */
+/**
+ * Upper bound on distinct cached colorized sprites. The shipped layout only
+ * feeds a small fixed set of keys, but any path that varies h/s/b/c would
+ * otherwise grow this module-level cache without limit (F-M13). The Map
+ * preserves insertion order, so we evict the least-recently-used entry once
+ * the cap is exceeded and refresh recency on every hit.
+ */
+const COLORIZE_CACHE_MAX_ENTRIES = 256;
+
+/** Generic colorized sprite cache: arbitrary string key → SpriteData (bounded LRU). */
 const colorizeCache = new Map<string, SpriteData>();
 
 /**
@@ -18,9 +27,21 @@ const colorizeCache = new Map<string, SpriteData>();
  */
 export function getColorizedSprite(cacheKey: string, sprite: SpriteData, color: FloorColor): SpriteData {
   const cached = colorizeCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh recency: re-insert so this key becomes the most recent.
+    colorizeCache.delete(cacheKey);
+    colorizeCache.set(cacheKey, cached);
+    return cached;
+  }
   const result = color.colorize ? colorizeSprite(sprite, color) : adjustSprite(sprite, color);
   colorizeCache.set(cacheKey, result);
+  if (colorizeCache.size > COLORIZE_CACHE_MAX_ENTRIES) {
+    // Evict the least-recently-used entry (first key in insertion order).
+    const oldestKey = colorizeCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      colorizeCache.delete(oldestKey);
+    }
+  }
   return result;
 }
 

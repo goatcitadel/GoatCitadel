@@ -75,7 +75,7 @@ import {
 import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
 import { useGatewayAccess } from "./use-gateway-access";
-import { useShellStatus } from "./use-shell-status";
+import { useShellStatus, type ShellStatusState } from "./use-shell-status";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
@@ -94,6 +94,22 @@ const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
   { area: "library", icon: LibraryBig },
   { area: "ops", icon: Activity },
   { area: "settings", icon: SlidersHorizontal },
+];
+
+/**
+ * F-M11: experimental library/ops surfaces that are filtered out of the rails
+ * and need an explicit command-palette entry to stay reachable. (Settings
+ * experimental sections — personalities, addons — already surface via the
+ * settings rail-item palette mapping.)
+ */
+const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{
+  area: PrimaryArea;
+  section: NonNullable<AppRoute["section"]>;
+  label: string;
+}> = [
+  { area: "library", section: "curator", label: "Library → Skill Curator" },
+  { area: "ops", section: "improvement", label: "Ops → Improvement" },
+  { area: "ops", section: "kanban", label: "Ops → Kanban" },
 ];
 
 export function MissionControlNextApp() {
@@ -201,7 +217,18 @@ export function MissionControlNextApp() {
         run: () => navigate({ area: "settings", section, theme: route.theme }),
       };
     });
-    return [...areaItems, ...settingsItems];
+    // F-M11: the experimental library/ops surfaces are filtered out of the rails
+    // (NAV-02) and were unreachable from the palette. Settings experimental
+    // sections already appear via `settingsItems`, but curator/improvement/kanban
+    // had no palette entry at all. Add them explicitly, labelled "Experimental"
+    // so they stay discoverable and honestly scoped.
+    const experimentalItems = EXPERIMENTAL_COMMAND_ROUTES.map((entry) => ({
+      id: `experimental-${entry.area}-${entry.section}`,
+      label: `${entry.label} (Experimental)`,
+      keywords: [entry.area, entry.section, entry.label.toLowerCase(), "experimental"],
+      run: () => navigate({ area: entry.area, section: entry.section, theme: route.theme }),
+    }));
+    return [...areaItems, ...settingsItems, ...experimentalItems];
   }, [buildPrimaryAreaRoute, navigate, route.theme]);
 
   // H-7: dismiss the topmost UI layer when Escape fires (palette handled
@@ -375,6 +402,24 @@ export function MissionControlNextApp() {
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
   const shellStatusError = status.dashboardError ?? status.healthError;
   const daemonStatusUnavailable = Boolean(status.healthError);
+  // F-H4: the dashboard-derived footer pills (approvals/sessions/spend) must
+  // read stale/unavailable on a dashboard refresh failure instead of confidently
+  // re-presenting the retained last-good numbers.
+  const approvalsPill = describeDashboardFooterPill(
+    status.dashboard,
+    status.dashboardError,
+    `${pendingApprovals} pending`,
+  );
+  const sessionsPill = describeDashboardFooterPill(
+    status.dashboard,
+    status.dashboardError,
+    status.dashboard ? `${status.dashboard.sessions.length} visible` : "—",
+  );
+  const spendPill = describeDashboardFooterPill(
+    status.dashboard,
+    status.dashboardError,
+    status.dashboard ? formatUsd(status.dashboard.dailyCostUsd ?? 0) : "—",
+  );
   const daemonHealthKnown =
     !daemonStatusUnavailable && status.health?.daemonStatus !== undefined && status.health?.daemonStatus !== null;
   const daemonNeedsIntervention = daemonHealthKnown && status.health?.daemonStatus?.running === false;
@@ -838,18 +883,21 @@ export function MissionControlNextApp() {
             <StatusPill
               icon={<Workflow size={15} />}
               label="Approvals"
-              value={status.dashboard ? `${pendingApprovals} pending` : "—"}
+              value={approvalsPill.value}
+              degraded={approvalsPill.degraded}
               onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
             />
             <StatusPill
               icon={<BookOpenText size={15} />}
               label="Sessions"
-              value={status.dashboard ? `${status.dashboard.sessions.length} visible` : "—"}
+              value={sessionsPill.value}
+              degraded={sessionsPill.degraded}
             />
             <StatusPill
               icon={<Wrench size={15} />}
               label="Spend"
-              value={status.dashboard ? formatUsd(status.dashboard.dailyCostUsd ?? 0) : "—"}
+              value={spendPill.value}
+              degraded={spendPill.degraded}
             />
             <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} />
           </footer>
@@ -1148,12 +1196,15 @@ function StatusPill({
   value,
   onClick,
   releaseStatus,
+  degraded = false,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   onClick?: () => void;
   releaseStatus?: string;
+  /** F-H4: marks dashboard-derived pills as stale/unavailable on refresh failure. */
+  degraded?: boolean;
 }) {
   const content = (
     <>
@@ -1164,22 +1215,25 @@ function StatusPill({
       </div>
     </>
   );
-  const releaseStatusProps = releaseStatus ? { "data-release-status": releaseStatus } : {};
+  const markerProps = {
+    ...(releaseStatus ? { "data-release-status": releaseStatus } : {}),
+    ...(degraded ? { "data-status": "degraded" } : {}),
+  };
   if (onClick) {
     return (
       <button
         type="button"
         className="mc-next-status-pill mc-next-status-pill-action"
         onClick={onClick}
-        title={label}
-        {...releaseStatusProps}
+        title={degraded ? `${label} (unavailable)` : label}
+        {...markerProps}
       >
         {content}
       </button>
     );
   }
   return (
-    <div className="mc-next-status-pill" {...releaseStatusProps}>
+    <div className="mc-next-status-pill" {...markerProps}>
       {content}
     </div>
   );
@@ -1264,4 +1318,28 @@ export function formatUsd(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(Number.isFinite(value) ? value : 0);
+}
+
+/**
+ * F-H4: the always-visible status strip shows dashboard-derived truth (pending
+ * approvals, sessions, spend). On a refresh failure `use-shell-status` keeps the
+ * prior `dashboard` object, so without this the footer would keep presenting the
+ * last-good numbers as if current. Mirror the honest `healthError`→"Unavailable"
+ * daemon path: when `dashboardError` is set we mark the pill stale and show
+ * "Unavailable" rather than a confidently stale value. The `shellStatusError`
+ * chip is gated to the stage header (hidden on ops/library/settings/projects),
+ * so this strip is the only always-visible signal.
+ */
+export function describeDashboardFooterPill(
+  dashboard: ShellStatusState["dashboard"],
+  dashboardError: string | null,
+  formatted: string,
+): { value: string; degraded: boolean } {
+  if (dashboardError) {
+    return { value: "Unavailable", degraded: true };
+  }
+  if (!dashboard) {
+    return { value: "—", degraded: false };
+  }
+  return { value: formatted, degraded: false };
 }

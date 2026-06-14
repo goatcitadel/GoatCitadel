@@ -1302,6 +1302,17 @@
   color: color-mix(in oklab, var(--gc-risk-caution) 78%, var(--foreground));
 }
 
+/* F-H4: dashboard-derived footer pills read "Unavailable" and pick up a danger
+   tone when the dashboard refresh fails, so retained last-good numbers can never
+   masquerade as current. */
+.mc-next-status-pill[data-status="degraded"] strong {
+  color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 80%, var(--foreground));
+}
+
+.mc-next-status-pill[data-status="degraded"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 32%, var(--border));
+}
+
 .mc-next-status-icon {
   display: inline-flex;
   align-items: center;

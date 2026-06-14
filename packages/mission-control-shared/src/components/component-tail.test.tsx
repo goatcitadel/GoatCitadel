@@ -592,10 +592,21 @@ describe("shared component tail coverage", () => {
       <SurfaceReconnectBanner mode="cowork" status={{ state: "open", reconnectAttempts: 0 }} onRefresh={onRefresh} />,
     );
     expect(findText(banner.toJSON() as never, "Run events restored")).toBe(true);
+    // D-Low: the 1s ticker must tear itself down once the 4s restored-banner
+    // window elapses, not keep firing for the surface lifetime.
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     act(() => {
       vi.advanceTimersByTime(5000);
     });
     expect(banner.toJSON()).toBeNull();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockClear();
+    // Further ticks do nothing: the interval is gone, so no pending timers fire.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
     banner.update(<SurfaceReconnectBanner status={{ state: "error", reconnectAttempts: 1 }} onRefresh={onRefresh} />);
     banner.update(<SurfaceReconnectBanner status={{ state: "open", reconnectAttempts: 0 }} onRefresh={onRefresh} />);
     expect(findText(banner.toJSON() as never, "Live updates restored")).toBe(true);

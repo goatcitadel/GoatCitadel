@@ -5,7 +5,13 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Server } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NativeCard, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
+import {
+  NativeCard,
+  NativeList,
+  NativePageFrame,
+  QuickJumpCard,
+  ReleaseScopeBadge,
+} from "./NativeRoutePageLayout";
 
 const diagnosticMocks = vi.hoisted(() => ({
   recordClientDiagnostic: vi.fn(),
@@ -124,5 +130,49 @@ describe("NativeRoutePageLayout", () => {
     });
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "runtime" });
+  });
+
+  it("renders an on-surface Experimental badge for experimental routes (F-M11)", () => {
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status="experimental" />)).toContain("Experimental");
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status="experimental" />)).toContain("mc-next-experimental-badge");
+    // Ship routes get no badge.
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status="ship" />)).toBe("");
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status={undefined} />)).toBe("");
+    // needs_release_polish carries its own label.
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status="needs_release_polish" />)).toContain(
+      "Needs release polish",
+    );
+
+    // The frame threads the status through to the header.
+    const experimentalFrame = renderToStaticMarkup(
+      <NativePageFrame
+        icon={Server}
+        kicker="Library"
+        title="Skill Curator"
+        description="Experimental surface."
+        loading={false}
+        error={null}
+        releaseStatus="experimental"
+      >
+        <div>body</div>
+      </NativePageFrame>,
+    );
+    expect(experimentalFrame).toContain("Experimental");
+    expect(experimentalFrame).toContain("mc-next-directory-title-row");
+
+    const shipFrame = renderToStaticMarkup(
+      <NativePageFrame
+        icon={Server}
+        kicker="Ops"
+        title="Runtime"
+        description="Ship surface."
+        loading={false}
+        error={null}
+        releaseStatus="ship"
+      >
+        <div>body</div>
+      </NativePageFrame>,
+    );
+    expect(shipFrame).not.toContain("mc-next-experimental-badge");
   });
 });

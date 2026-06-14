@@ -442,6 +442,67 @@ describe("PixelOfficeCanvas", () => {
     expect(state.removed).toContain(2);
   });
 
+  it("prunes the agent-id map when an agent is removed and reuses fresh ids on return", async () => {
+    assetMocks.supported = true;
+    const onSelectAgent = vi.fn();
+    const onSelectZone = vi.fn();
+
+    await act(async () => {
+      renderer = createWithNodeMocks(
+        <PixelOfficeCanvas
+          zones={zones}
+          selectedAgentId={null}
+          selectedZoneId="command"
+          onSelectAgent={onSelectAgent}
+          onSelectZone={onSelectZone}
+        />,
+      );
+    });
+    await flush();
+
+    const state = officeMocks.instances[0];
+    // The fake office-state pre-seeds character id 1, so agent-a (id 1) is not
+    // re-added; agent-b takes the next id (2) and IS added.
+    expect(state.commands.filter((command: string) => command.startsWith("add:"))).toEqual(["add:2"]);
+
+    // Drop agent-b: its character is removed AND (with the F-M14 fix) its
+    // agentId → numericId entry is pruned from the map.
+    await act(async () => {
+      renderer!.update(
+        <PixelOfficeCanvas
+          zones={[zones[0]]}
+          selectedAgentId={null}
+          selectedZoneId="command"
+          onSelectAgent={onSelectAgent}
+          onSelectZone={onSelectZone}
+        />,
+      );
+    });
+    await flush();
+    expect(state.removed).toContain(2);
+
+    // agent-b returns. Because the stale mapping was pruned, it must get a
+    // fresh numeric id (3) rather than silently reusing the leaked id 2.
+    await act(async () => {
+      renderer!.update(
+        <PixelOfficeCanvas
+          zones={zones}
+          selectedAgentId="agent-b"
+          selectedZoneId="research"
+          onSelectAgent={onSelectAgent}
+          onSelectZone={onSelectZone}
+        />,
+      );
+    });
+    await flush();
+
+    // The returning agent is re-added under a fresh id (3), proving the leaked
+    // id (2) was not silently reused.
+    expect(state.commands.filter((command: string) => command.startsWith("add:"))).toEqual(["add:2", "add:3"]);
+    // The reverse mapping resolves the fresh id back to agent-b for selection.
+    expect(state.selectedAgentId).toBe(3);
+  });
+
   it("tolerates a ready runtime before the canvas ref is available", async () => {
     assetMocks.supported = true;
 
