@@ -236,6 +236,24 @@ begin
   end;
 end;
 
+// Like RunOrFail, but best-effort: a launch failure or non-zero exit is written to the install
+// log and tolerated instead of aborting the install. Use only for optional post-install steps.
+procedure RunBestEffort(FileName: String; Parameters: String; WorkingDir: String; StatusText: String);
+var
+  ResultCode: Integer;
+begin
+  WizardForm.StatusLabel.Caption := StatusText;
+  if not Exec(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('GoatCitadel: failed to start ' + FileName + ' while ' + StatusText + ' (optional step, continuing)');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Log('GoatCitadel: ' + FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText + ' (optional step, continuing)');
+  end;
+end;
+
 function GoatCitadelInstallMarkerPath(): String;
 begin
   Result := ExpandConstant('{app}\\{#MyInstallMarker}');
@@ -274,7 +292,10 @@ end;
 
 procedure RegisterGoatCitadelIdentity();
 begin
-  RunOrFail(
+  // Best-effort: an unsigned/untrusted identity package, a sideloading policy, or a publisher
+  // mismatch must not abort an otherwise-good install. The app runs without package identity
+  // (the shortcut launches the executable directly), so a failure here is logged and ignored.
+  RunBestEffort(
     'powershell.exe',
     ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue; $package = Join-Path ''{app}'' ''{#MyIdentityPackage}''; if (Test-Path -LiteralPath $package) {{ Add-AppxPackage -Path $package -ExternalLocation ''{app}'' }}"'),
     '',

@@ -23,4 +23,29 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.1.3" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
   </ItemGroup>
+
+  <!--
+    WinUI 3 unpackaged publish fix.
+    `dotnet build` generates the app resource index ($(AssemblyName).pri) and compiled XAML
+    (*.xbf) into $(OutDir), but `dotnet publish` (self-contained, WindowsPackageType=None) does
+    not reliably copy the app PRI into the publish output. Without it the shipped app cannot
+    load App.xaml's resources and crashes at startup with 0xC000027B (STATUS_STOWED_EXCEPTION)
+    inside Microsoft.UI.Xaml.dll. Copy the app PRI into the publish output under the
+    runtime-expected name `resources.pri`, plus the compiled XAML. Implemented as a post-publish
+    file copy so it stays correct across SDK versions (some already publish the .xbf, some drop
+    them) without tripping NETSDK1152 duplicate-path errors.
+  -->
+  <Target Name="_CopyWinUiAppResourcesToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_WinUiAppXbf Include="$(OutDir)*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).pri"
+          DestinationFiles="$([System.IO.Path]::Combine('$(PublishDir)', 'resources.pri'))"
+          Condition="Exists('$(OutDir)$(AssemblyName).pri')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_WinUiAppXbf)"
+          DestinationFolder="$(PublishDir)"
+          Condition="'@(_WinUiAppXbf)' != ''"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>
