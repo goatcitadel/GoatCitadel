@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -80,10 +80,6 @@ interface ProviderRequestTarget {
   dispatcher?: Dispatcher;
 }
 
-function getModelDiscoveryAuthCacheToken(apiKey: string): string {
-  return createHash("sha256").update(apiKey).digest("base64url").slice(0, 24);
-}
-
 interface ModelDiscoveryResult {
   items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
@@ -157,6 +153,12 @@ export class LlmService {
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly modelDiscoveryCache = new Map<string, { cachedAt: number; result: ModelDiscoveryResult }>();
+  // Per-process opaque tokens that key the in-memory model-discovery cache by credential WITHOUT
+  // deriving anything from the API key. A fast unsalted digest of a credential is exactly what CodeQL
+  // js/insufficient-password-hash flags, and a slow KDF would be wrong on this hot, in-memory path;
+  // this token is random, stable per key for cache hits, reveals nothing about the key, and is cleared
+  // with the cache on config change.
+  private readonly modelDiscoveryAuthTokens = new Map<string, string>();
   private readonly modelDiscoveryInFlight = new Map<string, Promise<ModelDiscoveryResult>>();
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
@@ -293,6 +295,7 @@ export class LlmService {
   public updateRuntimeConfig(input: LlmRuntimeUpdateInput): LlmRuntimeConfig {
     this.modelDiscoveryCache.clear();
     this.modelDiscoveryInFlight.clear();
+    this.modelDiscoveryAuthTokens.clear();
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
       const isCodexOAuthProvider = input.upsertProvider.providerId.trim().toLowerCase() === "openai-codex";
@@ -1348,10 +1351,19 @@ export class LlmService {
     });
   }
 
+  private getModelDiscoveryAuthCacheToken(apiKey: string): string {
+    let token = this.modelDiscoveryAuthTokens.get(apiKey);
+    if (token === undefined) {
+      token = randomUUID();
+      this.modelDiscoveryAuthTokens.set(apiKey, token);
+    }
+    return token;
+  }
+
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     let key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
     if (resolved.apiKey) {
-      key += `::auth_${getModelDiscoveryAuthCacheToken(resolved.apiKey)}`;
+      key += `::auth_${this.getModelDiscoveryAuthCacheToken(resolved.apiKey)}`;
     }
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(key);
