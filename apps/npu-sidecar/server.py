@@ -1,7 +1,10 @@
+import hmac
+import ipaddress
 import json
 import hashlib
 import os
 import platform
+import socket
 import time
 import uuid
 from pathlib import Path
@@ -191,6 +194,67 @@ STATE = RuntimeState()
 FALLBACK_BASE_URL = os.environ.get("GOATCITADEL_NPU_FALLBACK_URL", "").strip().rstrip("/")
 FALLBACK_API_KEY = os.environ.get("GOATCITADEL_NPU_FALLBACK_API_KEY", "").strip()
 TIMEOUT_SECONDS = float(os.environ.get("GOATCITADEL_NPU_REQUEST_TIMEOUT_SECONDS", "60"))
+
+# Shared-secret bearer token guarding the inference + proxy surface. When unset the sidecar only
+# binds loopback (see resolve_listen_host) so the open default stays local-only.
+AUTH_TOKEN = os.environ.get("GOATCITADEL_NPU_AUTH_TOKEN", "").strip()
+# Explicit opt-in required before the sidecar will bind a non-loopback host.
+ALLOW_REMOTE = os.environ.get("GOATCITADEL_NPU_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on"}
+# Endpoints exempt from bearer auth (liveness only; exposes no inference or upstream proxy).
+PUBLIC_PATHS = frozenset({"/health"})
+
+
+def is_loopback_host(host: str) -> bool:
+    candidate = host.strip().strip("[]")
+    if candidate == "" or candidate.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(candidate, None)
+        except socket.gaierror:
+            return False
+        return bool(infos) and all(ipaddress.ip_address(info[4][0]).is_loopback for info in infos)
+
+
+def resolve_listen_host(host: str) -> str:
+    """Validate the requested bind host against the loopback/auth policy or raise RuntimeError."""
+    if is_loopback_host(host):
+        return host
+    if not ALLOW_REMOTE:
+        raise RuntimeError(
+            f"Refusing to bind GOATCITADEL_NPU_HOST={host!r}: non-loopback binds require "
+            "GOATCITADEL_NPU_ALLOW_REMOTE=1 (and a GOATCITADEL_NPU_AUTH_TOKEN)."
+        )
+    if not AUTH_TOKEN:
+        raise RuntimeError(
+            f"Refusing to bind non-loopback GOATCITADEL_NPU_HOST={host!r} without "
+            "GOATCITADEL_NPU_AUTH_TOKEN: inference endpoints would be unauthenticated."
+        )
+    return host
+
+
+def is_authorized(request: Request) -> bool:
+    if not AUTH_TOKEN:
+        # No token configured: only reachable on loopback, so treat the local caller as trusted.
+        return True
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    return hmac.compare_digest(token.strip(), AUTH_TOKEN)
+
+
+@app.middleware("http")
+async def enforce_bearer_auth(request: Request, call_next):
+    if request.url.path not in PUBLIC_PATHS and not is_authorized(request):
+        return JSONResponse(
+            status_code=401,
+            content={"error": {"message": "Missing or invalid bearer token.", "type": "unauthorized"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -390,6 +454,6 @@ async def chat_completions(request: Request) -> JSONResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.environ.get("GOATCITADEL_NPU_HOST", "127.0.0.1")
+    host = resolve_listen_host(os.environ.get("GOATCITADEL_NPU_HOST", "127.0.0.1"))
     port = int(os.environ.get("GOATCITADEL_NPU_PORT", "11440"))
     uvicorn.run(app, host=host, port=port)

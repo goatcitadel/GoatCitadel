@@ -2,6 +2,33 @@ namespace GoatCitadel.MissionControl.Windows.Services;
 
 public static class ActivationRouteParser
 {
+    /// <summary>
+    /// Resolves a <c>goatcitadel://</c> deep link from a raw command-line tail. This is the
+    /// non-MSIX activation path: the HKCU <c>shell\open\command</c> registration launches the exe
+    /// with the protocol URL as an argument, which surfaces as a <c>Launch</c>-kind activation
+    /// rather than a <c>Protocol</c>-kind one.
+    /// </summary>
+    public static bool TryGetRouteFromCommandLineArguments(string? commandLine, out string route)
+    {
+        route = "";
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return false;
+        }
+
+        foreach (var token in Tokenize(commandLine))
+        {
+            if (Uri.TryCreate(token, UriKind.Absolute, out var uri) &&
+                TryGetRouteFromProtocolUri(uri, out route))
+            {
+                return true;
+            }
+        }
+
+        route = "";
+        return false;
+    }
+
     public static bool TryGetRouteFromProtocolUri(Uri? uri, out string route)
     {
         route = "";
@@ -59,5 +86,13 @@ public static class ActivationRouteParser
         var key = Uri.UnescapeDataString(parts[0].Replace("+", " "));
         var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Replace("+", " ")) : "";
         return new KeyValuePair<string, string>(key, value);
+    }
+
+    private static IEnumerable<string> Tokenize(string commandLine)
+    {
+        foreach (var token in commandLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            yield return token.Trim('"');
+        }
     }
 }

@@ -46,4 +46,28 @@ public sealed class ActivationServiceTests
     {
         Assert.IsFalse(ActivationRouteParser.TryGetRouteFromProtocolUri(new Uri(raw), out _));
     }
+
+    [DataTestMethod]
+    [DataRow("\"C:\\Program Files\\GoatCitadel\\app.exe\" \"goatcitadel://open?route=/ops/approvals&approvalId=ap-9\"")]
+    [DataRow("app.exe goatcitadel://open?route=/ops/approvals&approvalId=ap-9")]
+    public void ParsesGoatcitadelRouteFromRawLaunchArguments(string commandLine)
+    {
+        var parsed = ActivationRouteParser.TryGetRouteFromCommandLineArguments(commandLine, out var route);
+
+        Assert.IsTrue(parsed);
+        Assert.AreEqual("/ops/approvals?approvalId=ap-9", route);
+    }
+
+    [DataTestMethod]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("\"C:\\app.exe\"")]
+    [DataRow("app.exe --some-flag")]
+    [DataRow("app.exe https://example.com")]
+    [DataRow("app.exe goatcitadel://open?route=ops/activity")]
+    public void RejectsLaunchArgumentsWithoutValidDeepLink(string? commandLine)
+    {
+        Assert.IsFalse(ActivationRouteParser.TryGetRouteFromCommandLineArguments(commandLine, out var route));
+        Assert.AreEqual("", route);
+    }
 }

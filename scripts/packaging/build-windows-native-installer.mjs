@@ -2,70 +2,76 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
-const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
 const supportedTargets = {
   "windows-x64": "x64compatible",
   "windows-arm64": "arm64",
 };
 
-const args = parseArgs(process.argv.slice(2));
-const target = args.target;
-if (!target || !supportedTargets[target]) {
-  printUsage();
-  process.exit(1);
+function main() {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const args = parseArgs(process.argv.slice(2));
+  const target = args.target;
+  if (!target || !supportedTargets[target]) {
+    printUsage();
+    process.exit(1);
+  }
+
+  const version = args.version || packageJson.version;
+  const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "windows"));
+  const bundleDir = path.resolve(
+    args.bundleDir ||
+    path.join(repoRoot, "artifacts", "installers", "bundles", `GoatCitadel-${version}-${target}`),
+  );
+  const issPath = path.join(outDir, `GoatCitadel-${target}.iss`);
+  const bundleZipPath = path.join(outDir, `GoatCitadel-${target}.zip`);
+
+  if (!fs.existsSync(bundleDir)) {
+    throw new Error(`Bundle directory does not exist: ${bundleDir}`);
+  }
+
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(issPath, renderIss({
+    target,
+    architecture: supportedTargets[target],
+    version,
+    bundleZipPath,
+    outDir,
+  }), "utf8");
+
+  if (args.emitOnly) {
+    console.log(`Wrote Inno Setup script: ${issPath}`);
+    process.exit(0);
+  }
+
+  createBundleArchive(bundleDir, bundleZipPath);
+
+  const iscc = resolveIscc();
+  if (!iscc) {
+    throw new Error("Inno Setup compiler (ISCC.exe) was not found.");
+  }
+
+  const result = spawnSync(iscc, [issPath], {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`ISCC.exe exited with code ${result.status}`);
+  }
+
+  console.log(`Built Windows installer: ${path.join(outDir, `GoatCitadel-Setup-${target}.exe`)}`);
 }
 
-const version = args.version || packageJson.version;
-const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "windows"));
-const bundleDir = path.resolve(
-  args.bundleDir ||
-  path.join(repoRoot, "artifacts", "installers", "bundles", `GoatCitadel-${version}-${target}`),
-);
-const issPath = path.join(outDir, `GoatCitadel-${target}.iss`);
-const bundleZipPath = path.join(outDir, `GoatCitadel-${target}.zip`);
-
-if (!fs.existsSync(bundleDir)) {
-  throw new Error(`Bundle directory does not exist: ${bundleDir}`);
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
 }
-
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(issPath, renderIss({
-  target,
-  architecture: supportedTargets[target],
-  version,
-  bundleZipPath,
-  outDir,
-}), "utf8");
-
-if (args.emitOnly) {
-  console.log(`Wrote Inno Setup script: ${issPath}`);
-  process.exit(0);
-}
-
-createBundleArchive(bundleDir, bundleZipPath);
-
-const iscc = resolveIscc();
-if (!iscc) {
-  throw new Error("Inno Setup compiler (ISCC.exe) was not found.");
-}
-
-const result = spawnSync(iscc, [issPath], {
-  cwd: repoRoot,
-  stdio: "inherit",
-});
-if (result.error) {
-  throw result.error;
-}
-if (result.status !== 0) {
-  throw new Error(`ISCC.exe exited with code ${result.status}`);
-}
-
-console.log(`Built Windows installer: ${path.join(outDir, `GoatCitadel-Setup-${target}.exe`)}`);
 
 function parseArgs(argv) {
   const parsed = { emitOnly: false };
@@ -148,7 +154,7 @@ function createBundleArchive(sourceDir, destinationZip) {
   }
 }
 
-function renderIss({ target: bundleTarget, architecture, version: bundleVersion, bundleZipPath: currentBundleZipPath, outDir: currentOutDir }) {
+export function renderIss({ target: bundleTarget, architecture, version: bundleVersion, bundleZipPath: currentBundleZipPath, outDir: currentOutDir }) {
   return `
 #define MyAppName "GoatCitadel"
 #define MyAppVersion "${bundleVersion}"
@@ -159,6 +165,7 @@ function renderIss({ target: bundleTarget, architecture, version: bundleVersion,
 #define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Windows.exe"
 #define MyIdentityPackage "app\\identity\\GoatCitadel-Mission-Control-Windows-Identity.msix"
 #define MyIdentityPackageName "GoatCitadel.MissionControl.Windows"
+#define MyInstallMarker ".goatcitadel-install"
 
 [Setup]
 AppId=com.goatcitadel.installer.${bundleTarget}
@@ -200,10 +207,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "S
 [Files]
 Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: deleteafterinstall
 
-[InstallDelete]
-Type: filesandordirs; Name: "{app}\\app"
-Type: filesandordirs; Name: "{app}\\bin"
-
 [Icons]
 Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"
 Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; Tasks: desktopicon
@@ -231,6 +234,37 @@ begin
   begin
     RaiseException(FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText);
   end;
+end;
+
+function GoatCitadelInstallMarkerPath(): String;
+begin
+  Result := ExpandConstant('{app}\\{#MyInstallMarker}');
+end;
+
+// True only when this directory was provisioned by a prior GoatCitadel install. Guards the
+// app\\ and bin\\ deletes so a custom {app} (e.g. a shared folder reused via /DIR) that happens
+// to contain unrelated app\\ or bin\\ trees is never wiped by install/uninstall cleanup.
+function GoatCitadelInstallMarkerExists(): Boolean;
+begin
+  Result := FileExists(GoatCitadelInstallMarkerPath());
+end;
+
+procedure WriteGoatCitadelInstallMarker();
+begin
+  SaveStringToFile(
+    GoatCitadelInstallMarkerPath(),
+    'GoatCitadel install marker. Created by the installer; do not remove.' + #13#10,
+    False);
+end;
+
+procedure RemoveGoatCitadelPayload();
+begin
+  if not GoatCitadelInstallMarkerExists() then
+  begin
+    Exit;
+  end;
+  DelTree(ExpandConstant('{app}\\app'), True, True, True);
+  DelTree(ExpandConstant('{app}\\bin'), True, True, True);
 end;
 
 procedure ExpandGoatCitadelBundle();
@@ -270,9 +304,15 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+  begin
+    // Clear a prior GoatCitadel payload (marker-guarded) before extracting the new bundle.
+    RemoveGoatCitadelPayload();
+  end;
   if CurStep = ssPostInstall then
   begin
     ExpandGoatCitadelBundle();
+    WriteGoatCitadelInstallMarker();
     RegisterGoatCitadelIdentity();
     if (not WizardSilent()) and IsComponentSelected('chromium') then
     begin
@@ -285,13 +325,25 @@ begin
   end;
 end;
 
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Only delete the payload trees if this directory carries our install marker.
+    RemoveGoatCitadelPayload();
+  end;
+  if CurUninstallStep = usPostUninstall then
+  begin
+    // Remove the marker last, after the [UninstallRun] long-path safety net has run.
+    DeleteFile(GoatCitadelInstallMarkerPath());
+  end;
+end;
+
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden; Check: GoatCitadelInstallMarkerExists
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\\app"
-Type: filesandordirs; Name: "{app}\\bin"
 Type: dirifempty; Name: "{app}\\app"
 Type: dirifempty; Name: "{app}\\bin"
 Type: dirifempty; Name: "{app}"

@@ -187,6 +187,19 @@ public sealed partial class MainWindow : Window
                     ShowToast(error);
                 }
             };
+            MissionWebView.CoreWebView2.NewWindowRequested += (_, args) =>
+            {
+                // Never let window.open / target=_blank spawn an off-allowlist popup WebView.
+                args.Handled = true;
+                if (NavigationPolicy.ClassifyNewWindowTarget(args.Uri, out var uri, out var error) == NewWindowDisposition.OpenInBrowser)
+                {
+                    TryAction(() => OpenTargetService.OpenBrowser(uri.ToString()));
+                }
+                else
+                {
+                    ShowToast(error);
+                }
+            };
             _webViewReady = true;
         }
         catch (InvalidOperationException error)

@@ -74,7 +74,7 @@ public static class ActivationService
         route = "";
         if (args.Kind != ExtendedActivationKind.Protocol)
         {
-            return false;
+            return TryGetRouteFromLaunchArguments(args, out route);
         }
 
         if (args.Data is IProtocolActivatedEventArgs protocolArgs)
@@ -84,6 +84,34 @@ public static class ActivationService
 
         var uriProperty = args.Data?.GetType().GetProperty("Uri");
         return uriProperty?.GetValue(args.Data) is Uri uri && TryGetRouteFromProtocolUri(uri, out route);
+    }
+
+    // Non-MSIX installs route goatcitadel:// deep links through the HKCU shell\open\command
+    // registration, which arrives as a raw Launch-kind activation rather than Protocol-kind.
+    private static bool TryGetRouteFromLaunchArguments(AppActivationArguments args, out string route)
+    {
+        route = "";
+        if (args.Kind != ExtendedActivationKind.Launch)
+        {
+            return false;
+        }
+
+        if (args.Data is ILaunchActivatedEventArgs launchArgs &&
+            ActivationRouteParser.TryGetRouteFromCommandLineArguments(launchArgs.Arguments, out route))
+        {
+            return true;
+        }
+
+        var argumentsProperty = args.Data?.GetType().GetProperty("Arguments");
+        if (argumentsProperty?.GetValue(args.Data) is string rawArguments &&
+            ActivationRouteParser.TryGetRouteFromCommandLineArguments(rawArguments, out route))
+        {
+            return true;
+        }
+
+        return ActivationRouteParser.TryGetRouteFromCommandLineArguments(
+            Environment.CommandLine,
+            out route);
     }
 
 }

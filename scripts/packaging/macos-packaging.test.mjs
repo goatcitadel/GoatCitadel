@@ -124,16 +124,21 @@ test("Windows host manifests declare matching external-location package identity
   assert.match(releaseWorkflow, /vars\.WINDOWS_MSIX_PUBLISHER/);
 });
 
-test("Windows native installer replaces payload without deleting packaged runtime state", () => {
+test("Windows native installer replaces payload via a marker-guarded delete only", () => {
   const installerBuilder = fs.readFileSync(
     path.join(repoRoot, "scripts", "packaging", "build-windows-native-installer.mjs"),
     "utf8",
   );
 
-  assert.match(installerBuilder, /\[InstallDelete\]/);
-  assert.match(installerBuilder, /Type: filesandordirs; Name: "\{app\}\\\\app"/);
-  assert.match(installerBuilder, /Type: filesandordirs; Name: "\{app\}\\\\bin"/);
-  assert.doesNotMatch(installerBuilder, /InstallDelete\][\s\S]*runtime-root/);
+  // Re-install still clears the app/bin payload, but only through the marker-guarded code path
+  // so a custom {app} (via /DIR) carrying unrelated app/bin trees is never wiped.
+  assert.doesNotMatch(installerBuilder, /\[InstallDelete\]/);
+  assert.match(installerBuilder, /procedure RemoveGoatCitadelPayload\(\);/);
+  assert.match(installerBuilder, /if not GoatCitadelInstallMarkerExists\(\) then/);
+  assert.match(installerBuilder, /DelTree\(ExpandConstant\('\{app\}\\\\app'\)/);
+  assert.match(installerBuilder, /DelTree\(ExpandConstant\('\{app\}\\\\bin'\)/);
+  // The destructive long-path uninstall delete must be gated on the marker.
+  assert.match(installerBuilder, /Remove-Item -LiteralPath[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
   assert.match(installerBuilder, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage/);
   assert.match(installerBuilder, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage/);
 });
