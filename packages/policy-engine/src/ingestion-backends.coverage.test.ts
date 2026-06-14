@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as XLSX from "@e965/xlsx";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { Document, Packer, Paragraph } from "docx";
-import * as XLSX from "xlsx";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
 import { ToolPolicyEngine } from "./engine.js";
@@ -81,7 +81,8 @@ describe("ingestion backend coverage", () => {
       ]),
       "Evidence",
     );
-    XLSX.writeFile(workbook, xlsxPath);
+    const workbookBytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    await fs.writeFile(xlsxPath, workbookBytes);
     await fs.writeFile(csvPath, "name,status\ncsv parser,happy path\n", "utf8");
     const storage = createKnowledgeStorage();
 

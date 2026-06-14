@@ -158,7 +158,7 @@ async function parseDocx(bytes: Buffer): Promise<NativeDocumentParseResult> {
 }
 
 async function parseXlsx(bytes: Buffer): Promise<NativeDocumentParseResult> {
-  const XLSX = (await importRuntimeModule("xlsx")) as {
+  const XLSX = (await importRuntimeModule("@e965/xlsx")) as {
     read: (
       data: Buffer,
       options: { type: "buffer" },

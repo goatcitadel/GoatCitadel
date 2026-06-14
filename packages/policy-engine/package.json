@@ -12,6 +12,7 @@
     }
   },
   "dependencies": {
+    "@e965/xlsx": "0.20.3",
     "@goatcitadel/contracts": "workspace:*",
     "@goatcitadel/storage": "workspace:*",
     "@huggingface/transformers": "^4.2.0",
@@ -21,8 +22,7 @@
     "pptxgenjs": "4.0.1",
     "sharp": "0.34.5",
     "undici": "^6.24.1",
-    "unpdf": "^1.6.2",
-    "xlsx": "^0.18.5"
+    "unpdf": "^1.6.2"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

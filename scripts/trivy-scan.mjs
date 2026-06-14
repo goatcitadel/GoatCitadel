@@ -8,7 +8,9 @@ const severity = process.env.TRIVY_SEVERITY ?? "HIGH,CRITICAL";
 const trivyBinary = resolveTrivyBinary();
 const skipDirs = [
   ".git",
+  ".claude/worktrees",
   ".codex-tmp",
+  ".scratch",
   ".turbo",
   ".worktrees",
   "node_modules",
@@ -24,6 +26,8 @@ const skipDirs = [
   "apps/mission-control-next/dist",
   "data/audit",
   "data/transcripts",
+  "logs",
+  "runtime",
 ];
 const version = spawnSync(trivyBinary, ["--version"], { stdio: "pipe", encoding: "utf8" });
 if (version.status !== 0) {

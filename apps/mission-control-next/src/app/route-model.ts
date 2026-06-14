@@ -860,9 +860,9 @@ export const ROUTE_RELEASE_SCOPE = [
     section: "mcp",
     status: "ship",
     releaseAction:
-      "Configure local stdio MCP and Approval Inbox paths while remote transports stay blocked/experimental.",
+      "Configure local stdio, Approval Inbox, and governed remote http/sse MCP paths with supported auth readiness.",
     verification: "verify:surface:regression, mcp visibility tests",
-    note: "MCP is release-bearing for local stdio and Approval Inbox truth while remote transports stay blocked/experimental.",
+    note: "MCP is release-bearing for local stdio, Approval Inbox, and governed remote http/sse truth; OAuth records fail closed as needs_auth when token refs are missing or expired.",
   },
   {
     area: "settings",
