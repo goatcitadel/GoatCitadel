@@ -180,6 +180,7 @@ jobs:
 
       - name: Smoke install Windows installer
         shell: pwsh
+        timeout-minutes: 20
         run: |
           $installer = Resolve-Path "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
           $installDir = Join-Path $env:RUNNER_TEMP "GoatCitadel-${{ matrix.target }}"
@@ -236,6 +237,97 @@ jobs:
             throw "Desktop host window title was '$windowTitle'; expected 'GoatCitadel Mission Control'."
           }
           Write-Host "Launch smoke passed: host presented window '$windowTitle'."
+          # ---------------------------------------------------------------------------
+          # Runtime readiness smoke: prove the local runtime actually reaches "ready",
+          # not just that the host window paints. v1.0.0 shipped two DOA packaging bugs
+          # where the host opened but hung forever on "Starting the local runtime…":
+          #   1. pnpm deploy produced a symlinked gateway node_modules that the installer's
+          #      tar + lowest-privilege extract dereferenced, stranding policy-engine deps
+          #      (docx, playwright, …) -> the gateway crashed with ERR_MODULE_NOT_FOUND.
+          #   2. apps/gateway statically imports `typescript` at startup but did not declare
+          #      it as a prod dependency, so the --prod deploy excluded it -> second crash.
+          # Both were invisible because the smoke only proved the WinUI window rendered,
+          # never that the gateway became healthy. Drive the SAME launcher the desktop host
+          # uses against the installed gateway binary + bundled Node + installed node_modules;
+          # `launch` starts the gateway + UI, polls each /health, and exits non-zero if either
+          # never passes. We then independently re-poll via `status --json` and assert the
+          # runtime status is "ready". Pids/logs/runtime-root are redirected to a throwaway
+          # base via GOATCITADEL_HOME so the install dir stays pristine for the
+          # uninstall-cleanup assertions below, while GOATCITADEL_APP_DIR keeps the gateway
+          # and UI resolving from the installed files.
+          $bundledNode = Join-Path $installDir "app/runtime/node/node.exe"
+          $launcher = Join-Path $installDir "app/bin/goatcitadel.mjs"
+          if (!(Test-Path $bundledNode)) { throw "Bundled Node runtime was not installed at $bundledNode" }
+          if (!(Test-Path $launcher)) { throw "Launcher was not installed at $launcher" }
+          $appHome = Join-Path $installDir "app"
+          $runtimeBase = Join-Path $env:RUNNER_TEMP "GoatCitadel-runtime-${{ matrix.target }}"
+          $runtimeLogDir = Join-Path $runtimeBase "runtime/logs"
+          $launchStdout = Join-Path $env:RUNNER_TEMP "goatcitadel-launch-${{ matrix.target }}.out.json"
+          $launchStderr = Join-Path $env:RUNNER_TEMP "goatcitadel-launch-${{ matrix.target }}.err.txt"
+          $statusStdout = Join-Path $env:RUNNER_TEMP "goatcitadel-status-${{ matrix.target }}.out.json"
+          $statusStderr = Join-Path $env:RUNNER_TEMP "goatcitadel-status-${{ matrix.target }}.err.txt"
+          $env:GOATCITADEL_HOME = $runtimeBase
+          $env:GOATCITADEL_APP_DIR = $appHome
+          function Show-RuntimeLogs {
+            Write-Host "::group::GoatCitadel runtime logs"
+            foreach ($capture in @($launchStderr, $statusStderr)) {
+              if (Test-Path $capture) {
+                Write-Host "----- $(Split-Path $capture -Leaf) -----"
+                Get-Content -LiteralPath $capture -ErrorAction SilentlyContinue | Write-Host
+              }
+            }
+            foreach ($name in @("gateway.stderr.log", "gateway.stdout.log", "mission-control.stderr.log", "mission-control.stdout.log")) {
+              $logPath = Join-Path $runtimeLogDir $name
+              if (Test-Path $logPath) {
+                Write-Host "----- $name (tail) -----"
+                Get-Content -LiteralPath $logPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
+              }
+            }
+            Write-Host "::endgroup::"
+          }
+          Write-Host "Runtime readiness smoke: launching packaged gateway + UI via $launcher"
+          $launch = Start-Process -FilePath $bundledNode `
+            -ArgumentList @($launcher, "launch", "--no-open", "--wait", "--json") `
+            -WorkingDirectory $appHome `
+            -RedirectStandardOutput $launchStdout `
+            -RedirectStandardError $launchStderr `
+            -NoNewWindow -Wait -PassThru
+          if ($launch.ExitCode -ne 0) {
+            Show-RuntimeLogs
+            throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $($launch.ExitCode) before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (e.g. ERR_MODULE_NOT_FOUND from stranded policy-engine deps, or a missing prod dependency such as typescript) surfaces here."
+          }
+          # Independently re-poll both /health endpoints. `launch` reports an assumed-ready
+          # status, so this real `status` poll is what actually proves the gateway and
+          # Mission Control answer their /health checks.
+          $status = Start-Process -FilePath $bundledNode `
+            -ArgumentList @($launcher, "status", "--json") `
+            -WorkingDirectory $appHome `
+            -RedirectStandardOutput $statusStdout `
+            -RedirectStandardError $statusStderr `
+            -NoNewWindow -Wait -PassThru
+          $statusLine = $null
+          if (Test-Path $statusStdout) {
+            $statusLine = Get-Content -LiteralPath $statusStdout -ErrorAction SilentlyContinue |
+              Where-Object { $_.TrimStart().StartsWith("{") } |
+              Select-Object -Last 1
+          }
+          if ($status.ExitCode -ne 0 -or -not $statusLine) {
+            Show-RuntimeLogs
+            throw "Runtime readiness smoke failed: 'goatcitadel status --json' exited $($status.ExitCode) without a JSON status line."
+          }
+          $runtimeStatus = $statusLine | ConvertFrom-Json
+          if ($runtimeStatus.status -ne "ready" -or -not ($runtimeStatus.readiness.gateway -and $runtimeStatus.readiness.ui)) {
+            Show-RuntimeLogs
+            throw "Runtime readiness smoke failed: runtime status is '$($runtimeStatus.status)' (gateway healthy=$($runtimeStatus.readiness.gateway), ui healthy=$($runtimeStatus.readiness.ui)); expected 'ready' with both the gateway and Mission Control answering /health."
+          }
+          Write-Host "Runtime readiness smoke passed: gateway + Mission Control reached status=ready (gateway $($runtimeStatus.gatewayUrl)/health, ui $($runtimeStatus.uiUrl)/health)."
+          # Stop the runtime we started and kill anything still running from the install dir
+          # so no file handle is held when the uninstall-cleanup assertions run.
+          & $bundledNode $launcher stop --json 1>$null 2>$null
+          Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
+          Start-Sleep -Seconds 2
           $uninstaller = Join-Path $installDir "unins000.exe"
           if (Test-Path $uninstaller) {
             $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
