@@ -162,8 +162,8 @@ if (!/MemoryLifecycleService/.test(handbook)) {
 if (!/mesh-core/i.test(handbook) || !/verify:mesh:readiness/i.test(handbook) || !/Gateway diagnostics/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must gate mesh-core readiness on verify:mesh:readiness evidence.");
 }
-if (!/npu-sidecar/i.test(handbook) || !/not part of the current `1\.0` bar/i.test(handbook)) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope the NPU sidecar from the current 1.0 bar.");
+if (!/NPU sidecar path is retired/i.test(handbook) || !/real hardware proof/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe the NPU sidecar path as retired from shipped 1.0.");
 }
 if (!/docs\/1_0_CONTRACT\.md/.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must point readers to docs/1_0_CONTRACT.md for 1.0 scope and release-gate truth.");
@@ -242,8 +242,11 @@ const readme = await readFile(path.join(root, "README.md"), "utf8");
 if (!/mesh-core/i.test(readme) || !/verify:mesh:readiness/i.test(readme) || !/evidence-gated/i.test(readme)) {
   errors.push("README.md must describe mesh-core readiness as evidence-gated by verify:mesh:readiness.");
 }
-if (!/NPU sidecar maturity or local-inference completeness as a `1\.0` signal/i.test(readme)) {
-  errors.push("README.md must keep the NPU sidecar de-scoped from the 1.0 readiness bar.");
+if (
+  !/NPU sidecar maturity or local-inference completeness as a `1\.0` signal/i.test(readme) ||
+  !/retired from the shipped 1\.0 source and installer/i.test(readme)
+) {
+  errors.push("README.md must keep the NPU sidecar retired from the shipped 1.0 path.");
 }
 if (!/docs\/1_0_CONTRACT\.md/.test(readme)) {
   errors.push("README.md must point readers to docs/1_0_CONTRACT.md for the current 1.0 contract.");
@@ -299,8 +302,8 @@ if (!/verify:api:compat` snapshots REST route\/status compatibility and realtime
 }
 
 const installDoc = await readFile(path.join(root, "docs", "INSTALL_SETUP_TESTING.md"), "utf8");
-if (!/optional experimental infrastructure/i.test(installDoc) || !/not part of the current `1\.0` readiness bar/i.test(installDoc)) {
-  errors.push("docs/INSTALL_SETUP_TESTING.md must describe the NPU sidecar as optional experimental infrastructure outside the current 1.0 bar.");
+if (!/Retired: NPU Sidecar/i.test(installDoc) || !/retired from the shipped `1\.0` source and installer/i.test(installDoc)) {
+  errors.push("docs/INSTALL_SETUP_TESTING.md must describe the NPU sidecar as retired from the shipped 1.0 path.");
 }
 if (!/docs\/1_0_CONTRACT\.md/.test(installDoc)) {
   errors.push("docs/INSTALL_SETUP_TESTING.md must point readers to docs/1_0_CONTRACT.md for the current 1.0 scope and release gates.");
@@ -410,8 +413,8 @@ if (
 if (!/mesh-core/i.test(contract) || !/verify:mesh:readiness/i.test(contract) || !/join-token lifecycle/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must gate mesh-core readiness on verify:mesh:readiness.");
 }
-if (!/npu-sidecar/i.test(contract) || !/optional experimental infrastructure/i.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar outside the readiness-bearing 1.0 story while it remains experimental.");
+if (!/NPU sidecar maturity/i.test(contract) || !/retired from the shipped source and installer/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar retired from the readiness-bearing 1.0 story.");
 }
 
 const changelog = await readFile(path.join(root, "CHANGELOG.md"), "utf8");

@@ -112,13 +112,6 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     apiStyle: "openai-chat-completions",
   },
   {
-    providerId: "npu-local",
-    label: "NPU Local Sidecar",
-    baseUrl: "http://127.0.0.1:11440/v1",
-    defaultModel: "phi-3.5-mini-instruct",
-    apiStyle: "openai-chat-completions",
-  },
-  {
     providerId: "genie-ir20",
     label: "Genie IR20 (Tailnet)",
     baseUrl: "http://100.64.0.4:8910/v1",
@@ -217,7 +210,6 @@ const FOREIGN_MODEL_PROVIDER_IDS = new Set([
   "ollama",
   "llamacpp",
   "localai",
-  "npu-local",
   "genie-ir20",
 ]);
 

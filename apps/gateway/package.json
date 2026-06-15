@@ -16,7 +16,6 @@
     "@goatcitadel/gateway-core": "workspace:*",
     "@goatcitadel/memory-core": "workspace:*",
     "@goatcitadel/mesh-core": "workspace:*",
-    "@goatcitadel/mission-control-shared": "workspace:*",
     "@goatcitadel/orchestration": "workspace:*",
     "@goatcitadel/policy-engine": "workspace:*",
     "@goatcitadel/skills": "workspace:*",
@@ -31,11 +30,13 @@
     "fastify-plugin": "^5.0.1",
     "ora": "^9.0.0",
     "pg": "^8.20.0",
+    "shell-quote": "1.8.4",
     "undici": "^6.24.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/adm-zip": "0.5.7"
+    "@types/adm-zip": "0.5.7",
+    "@types/shell-quote": "^1.7.5"
   },
   "scripts": {
     "dev": "tsx src/dev-supervisor.ts",

@@ -59,7 +59,6 @@ Required:
 
 Optional:
 
-- Python 3.10+ for the local NPU sidecar
 - .NET 10 SDK for Windows App SDK host development or `pnpm verify:desktop`
 - Playwright Chromium if you plan to use browser automation or refresh screenshots from a raw source clone
 - Docker Engine with Compose if you want the containerized deployment path
@@ -515,31 +514,9 @@ If you are running from a raw source clone, install Chromium once with:
 pnpm --filter @goatcitadel/policy-engine exec playwright install chromium
 ```
 
-## Optional: NPU Sidecar
+## Retired: NPU Sidecar
 
-The NPU sidecar is optional experimental infrastructure. It is useful for local runtime experiments, but it is not part of the current `1.0` readiness bar and should not be treated as maturity proof for local inference.
-
-Direct run:
-
-```bash
-cd apps/npu-sidecar
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python server.py
-```
-
-Windows activate:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-CLI wrapper path:
-
-```bash
-goatcitadel npu
-```
+The NPU sidecar path is retired from the shipped `1.0` source and installer. Do not treat ONNX/NPU acceleration as local-inference maturity proof for 1.0. Use llama.cpp, Ollama, LM Studio, LocalAI, or external providers for local model work until real NPU hardware proof justifies a new implementation.
 
 ## Optional: Screenshot Refresh
 

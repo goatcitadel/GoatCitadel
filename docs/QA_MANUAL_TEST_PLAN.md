@@ -136,7 +136,7 @@ Use only when touching these areas:
 
 - local AI / llama.cpp
 - voice runtime
-- NPU sidecar
+- retired local acceleration surfaces
 - macOS experimental DMG
 - Linux experimental tarball
 - add-ons
@@ -156,7 +156,7 @@ Run the plan in this order to avoid spending hours debugging follow-on failures 
 7. Memory, knowledge, files, artifacts, and prompt packs
 8. Integrations, channels, MCP, A2A, and external effects
 9. Auth, security posture, backup/restore, and deployment boundaries
-10. Desktop/native packaging and optional sidecars
+10. Desktop/native packaging and optional local runtimes
 
 ## Preflight Checklist
 
@@ -2209,22 +2209,22 @@ Expected:
 
 Result:
 
-### NPU-01 NPU Sidecar Experimental
+### NPU-01 Retired NPU Sidecar
 
-Run only if touching NPU sidecar.
+Run only if touching the retired NPU compatibility surface.
 
 Steps:
 
-1. Start Python sidecar.
-2. Open `/settings/local-ai` and `/ops/runtime`.
-3. Hit NPU diagnostics.
-4. Stop sidecar.
+1. Open `/settings/local-ai` and `/ops/runtime`.
+2. Hit NPU diagnostics / refresh.
+3. Attempt to enable or start NPU through shipped operator surfaces.
 
 Expected:
 
-- NPU is labeled optional/experimental.
+- NPU sidecar support is labeled retired from the shipped 1.0 runtime.
+- No shipped surface offers a real enable/start sidecar flow.
 - Sidecar absence is not treated as product failure.
-- Local inference maturity is not overclaimed.
+- Local inference maturity and ONNX/NPU acceleration are not overclaimed.
 
 Result:
 

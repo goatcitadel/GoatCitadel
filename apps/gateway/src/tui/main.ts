@@ -2055,74 +2055,11 @@ async function viewNpu(client: TuiApiClient): Promise<void> {
     message: "NPU action",
     choices: [
       { name: "Back", value: "back" },
-      { name: "Configure runtime", value: "configure" },
-      { name: "Start runtime", value: "start" },
-      { name: "Stop runtime", value: "stop" },
       { name: "Refresh status", value: "refresh" },
     ],
   });
 
   if (action === "back") {
-    return;
-  }
-
-  if (action === "start") {
-    const confirmed = await confirm({ message: "Start NPU sidecar runtime?", default: true });
-    if (!confirmed) {
-      return;
-    }
-    const result = await client.npuStart();
-    console.log(JSON.stringify(result, null, 2));
-    await pause();
-    return;
-  }
-
-  if (action === "stop") {
-    const confirmed = await confirm({ message: "Stop NPU sidecar runtime?", default: false });
-    if (!confirmed) {
-      return;
-    }
-    const result = await client.npuStop();
-    console.log(JSON.stringify(result, null, 2));
-    await pause();
-    return;
-  }
-
-  if (action === "configure") {
-    const settings = await client.runtimeSettings();
-    const npu = (settings.npu ?? {}) as {
-      enabled?: boolean;
-      autoStart?: boolean;
-      sidecarUrl?: string;
-    };
-    const enabled = await confirm({
-      message: "Enable NPU runtime?",
-      default: npu.enabled ?? false,
-    });
-    const autoStart = await confirm({
-      message: "Auto-start NPU sidecar on gateway boot?",
-      default: npu.autoStart ?? false,
-    });
-    const sidecarUrl = await input({
-      message: "NPU sidecar URL",
-      default: npu.sidecarUrl ?? "http://127.0.0.1:11440",
-    });
-    const confirmed = await confirm({
-      message: "Apply NPU config update?",
-      default: false,
-    });
-    if (!confirmed) {
-      return;
-    }
-    const updated = await client.patchRuntimeSettings({
-      npu: {
-        enabled,
-        autoStart,
-        sidecarUrl,
-      },
-    });
-    console.log(JSON.stringify(updated.npu ?? {}, null, 2));
-    await pause();
     return;
   }
 

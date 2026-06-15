@@ -14,7 +14,7 @@ interface EstimateUsageCostInput {
   usage?: Record<string, unknown>;
 }
 
-const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "lmstudio", "localai", "npu-local", "ollama"]);
+const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "lmstudio", "localai", "ollama"]);
 
 // Pricing snapshot as of 2026-03-29.
 // Sources:

@@ -151,7 +151,7 @@ export const appCopy = {
     integrations: "Use guided setup first, then advanced JSON only if needed.",
     mcp: "Connect MCP servers, set trust level, then test safely.",
     mesh: "Check multi-node health before running distributed work.",
-    npu: "Verify local runtime readiness before selecting npu-local models.",
+    npu: "NPU acceleration is retired from the shipped 1.0 runtime.",
   } as Record<TabId, string>,
 };
 
@@ -665,20 +665,14 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   npu: {
-    title: "NPU Runtime",
-    subtitle: "Manage local sidecar inference and acceleration readiness.",
+    title: "Local Acceleration",
+    subtitle: "Retired from the 1.0 runtime surface.",
     guide: {
-      what: "Controls local NPU sidecar runtime and model availability.",
-      when: "Use this when enabling local accelerated inference.",
-      mostCommonAction: "Refresh status, then start runtime and verify active model readiness.",
-      actions: [
-        "Check sidecar health and capabilities.",
-        "Start/stop/refresh runtime.",
-        "Verify available models before selecting npu-local.",
-      ],
-      terms: [
-        { term: "Sidecar", meaning: "Local service exposing OpenAI-compatible endpoints for NPU-backed inference." },
-      ],
+      what: "Records that the former NPU sidecar path is not shipped in 1.0.",
+      when: "Use llama.cpp, Ollama, LM Studio, or external providers for local model work.",
+      mostCommonAction: "Leave this retired path disabled.",
+      actions: ["Confirm no NPU sidecar is required for 1.0 readiness."],
+      terms: [{ term: "Retired", meaning: "Removed from the shipped runtime until real hardware proof justifies it." }],
     },
   },
   onboarding: {

@@ -494,12 +494,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
   }
 
   if (input.npu) {
-    if (input.npu.enabled !== undefined) {
-      deps.config.assistant.npu.enabled = input.npu.enabled;
-    }
-    if (input.npu.autoStart !== undefined) {
-      deps.config.assistant.npu.autoStart = input.npu.autoStart;
-    }
     if (input.npu.sidecarUrl !== undefined) {
       const trimmed = input.npu.sidecarUrl.trim();
       if (!trimmed) {
@@ -508,18 +502,14 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
       deps.config.assistant.npu.sidecar.baseUrl = trimmed;
     }
 
+    deps.config.assistant.npu.enabled = false;
+    deps.config.assistant.npu.autoStart = false;
     deps.npuSidecar.updateConfig(deps.config.assistant.npu);
-    if (!deps.config.assistant.npu.enabled) {
-      void deps.npuSidecar.stop("disabled").catch((error) => {
-        settingsLog.warn("npu sidecar stop failed after settings update", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+    void deps.npuSidecar.stop("disabled").catch((error) => {
+      settingsLog.warn("retired npu sidecar stop failed after settings update", {
+        error: error instanceof Error ? error.message : String(error),
       });
-    } else if (deps.config.assistant.npu.autoStart) {
-      void deps.npuSidecar.start("config_autostart").catch((error) => {
-        settingsLog.error("npu sidecar autostart failed after settings update", error);
-      });
-    }
+    });
     persistAssistant = true;
   }
 

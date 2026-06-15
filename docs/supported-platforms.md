@@ -18,4 +18,4 @@ This table is the current `1.0` installer support matrix for GoatCitadel.
 - Linux x64 bundle packaging is experimental. The release workflow can publish a checksummed tarball after extracting it and verifying the POSIX launcher plus experimental manifest, but it does not include a native desktop host.
 - macOS and Linux stay experimental until a signed/notarized artifact where applicable plus checksum and smoke evidence exists for the exact release SHA and the support matrix is deliberately promoted.
 - Installer-managed optional components, such as Chromium and the local voice runtime, are still platform-dependent.
-- `apps/npu-sidecar` remains optional experimental infrastructure and is not part of the support matrix above.
+- NPU sidecar support is retired from the shipped 1.0 source and installer path; local model work should use llama.cpp, Ollama, LM Studio, LocalAI, or external providers.

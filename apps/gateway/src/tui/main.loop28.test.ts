@@ -793,7 +793,7 @@ describe("tui main loop28 entry coverage", () => {
       "mesh",
       "acquire",
       "npu",
-      "configure",
+      "refresh",
       "onboarding",
       "bootstrap",
       "approve_risky",
@@ -803,20 +803,7 @@ describe("tui main loop28 entry coverage", () => {
       "power",
       "exit",
     ];
-    state.inputQueue = [
-      "",
-      "discord",
-      "Discord Ops",
-      "",
-      "lease-1",
-      "node-1",
-      "45",
-      "",
-      "http://127.0.0.1:11440",
-      "",
-      "",
-      "",
-    ];
+    state.inputQueue = ["", "discord", "Discord Ops", "", "lease-1", "node-1", "45", "", "", "", ""];
     state.loadResolvedProfile.mockResolvedValue({
       profileName: "ops",
       filePath: "profile.json",
@@ -845,13 +832,7 @@ describe("tui main loop28 entry coverage", () => {
       holderNodeId: "node-1",
       ttlSeconds: 45,
     });
-    expect(state.client.patchRuntimeSettings).toHaveBeenCalledWith({
-      npu: {
-        enabled: true,
-        autoStart: true,
-        sidecarUrl: "http://127.0.0.1:11440",
-      },
-    });
+    expect(state.client.npuRefresh).toHaveBeenCalledTimes(1);
     expect(state.client.onboardingBootstrap).toHaveBeenCalledWith({
       toolApprovalMode: "approve_risky",
       budgetMode: "power",
@@ -955,7 +936,7 @@ describe("tui main loop28 entry coverage", () => {
       "mesh",
       "renew",
       "npu",
-      "start",
+      "refresh",
       "onboarding",
       "complete",
       "settings",
@@ -1034,7 +1015,8 @@ describe("tui main loop28 entry coverage", () => {
       fencingToken: 7,
       ttlSeconds: 60,
     });
-    expect(state.client.npuStart).toHaveBeenCalledTimes(1);
+    expect(state.client.npuStart).not.toHaveBeenCalled();
+    expect(state.client.npuRefresh).toHaveBeenCalledTimes(1);
     expect(state.client.onboardingComplete).toHaveBeenCalledWith("tui-operator");
     expect(state.client.patchRuntimeSettings).toHaveBeenCalledWith({ toolApprovalMode: "bypass" });
     expect(process.exitCode).toBeUndefined();
@@ -1163,7 +1145,7 @@ describe("tui main loop28 entry coverage", () => {
       "mesh",
       "claim",
       "npu",
-      "stop",
+      "refresh",
       "npu",
       "refresh",
       "exit",
@@ -1236,8 +1218,8 @@ describe("tui main loop28 entry coverage", () => {
       ownerNodeId: "node-2",
       minEpoch: 2,
     });
-    expect(state.client.npuStop).toHaveBeenCalledTimes(1);
-    expect(state.client.npuRefresh).toHaveBeenCalledTimes(1);
+    expect(state.client.npuStop).not.toHaveBeenCalled();
+    expect(state.client.npuRefresh).toHaveBeenCalledTimes(2);
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -1764,12 +1746,12 @@ function createMockTuiClient() {
     npuModels: vi.fn(async () => ({
       items: [
         {
-          modelId: "npu-local",
-          family: "local",
-          source: "qnn",
-          default: true,
-          enabled: true,
-          requiresQnn: true,
+          modelId: "retired-npu-sidecar",
+          family: "other",
+          source: "custom",
+          default: false,
+          enabled: false,
+          requiresQnn: false,
         },
       ],
     })),

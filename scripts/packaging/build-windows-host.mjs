@@ -18,6 +18,7 @@ const windowsProject = path.join(
 const PACKAGE_NAME = "GoatCitadel.MissionControl.Windows";
 const APPLICATION_ID = "App";
 const DEFAULT_MSIX_PUBLISHER = "CN=GoatCitadel";
+const RETIRED_WINDOWS_AI_PAYLOAD_FILES = ["Microsoft.ML.OnnxRuntime.dll", "onnxruntime.dll", "DirectML.dll"];
 
 const args = parseArgs(process.argv.slice(2));
 const target = args.target;
@@ -80,6 +81,7 @@ async function main() {
   if (!fs.existsSync(outArtifactPath)) {
     throw new Error(`WinUI host executable was not produced: ${outArtifactPath}`);
   }
+  pruneRetiredWindowsAiPayload();
   writeDesktopManifest();
   console.log(`Built GoatCitadel Windows host: ${outArtifactPath}`);
 }
@@ -179,6 +181,15 @@ function writeDesktopManifest() {
     files,
   };
   fs.writeFileSync(path.join(outDir, "desktop-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function pruneRetiredWindowsAiPayload() {
+  for (const fileName of RETIRED_WINDOWS_AI_PAYLOAD_FILES) {
+    const filePath = path.join(outDir, fileName);
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
 }
 
 function renderAppManifest({ publisher }) {

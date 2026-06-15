@@ -1,14 +1,129 @@
-import type { ApprovalRequest, ShellCommandExplanation } from "@goatcitadel/contracts";
-import { explainShellCommand } from "@goatcitadel/mission-control-shared/content/shell-command-explainer";
+import type {
+  ApprovalRequest,
+  ShellCommandExplanation,
+  ShellRiskFinding,
+  ShellRiskLevel,
+} from "@goatcitadel/contracts";
+import { parse as shellParse } from "shell-quote";
 import type { ShellExplainerPolicyConfig } from "../config.js";
+import { handleCommand } from "./shell-command-handlers.js";
+import { t } from "./shell-command-explainer-i18n.js";
+import { prescreenShellRisks } from "./shell-command-prescreen.js";
 
 export {
-  explainShellCommand,
   type ShellCommandExplanation,
   type ShellExplanationDetail,
   type ShellRiskFinding,
   type ShellRiskLevel,
-} from "@goatcitadel/mission-control-shared/content/shell-command-explainer";
+} from "@goatcitadel/contracts";
+
+const RISK_ORDER: ShellRiskLevel[] = ["info", "caution", "danger"];
+
+function highest(risks: readonly ShellRiskFinding[]): ShellRiskLevel {
+  let best: ShellRiskLevel = "info";
+  for (const risk of risks) {
+    if (RISK_ORDER.indexOf(risk.level) > RISK_ORDER.indexOf(best)) {
+      best = risk.level;
+    }
+  }
+  return best;
+}
+
+function dedupeRisks(risks: readonly ShellRiskFinding[]): ShellRiskFinding[] {
+  const seen = new Set<string>();
+  const out: ShellRiskFinding[] = [];
+  for (const risk of risks) {
+    const key = `${risk.level}:${risk.label}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(risk);
+    }
+  }
+  return out;
+}
+
+function hasUnmatchedQuote(command: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const character of command) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && !inSingle) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (character === '"' && !inSingle) {
+      inDouble = !inDouble;
+    }
+  }
+  return inSingle || inDouble;
+}
+
+function tokenize(command: string): readonly string[] | undefined {
+  if (hasUnmatchedQuote(command)) {
+    return undefined;
+  }
+  try {
+    const parsed = shellParse(command);
+    const tokens: string[] = [];
+    for (const item of parsed) {
+      if (typeof item === "string") {
+        tokens.push(item);
+      } else {
+        break;
+      }
+    }
+    return tokens;
+  } catch {
+    return undefined;
+  }
+}
+
+export function explainShellCommand(command: string): ShellCommandExplanation {
+  const preRisks = prescreenShellRisks(command);
+
+  if (command.trim().length === 0) {
+    return {
+      command,
+      parsed: false,
+      summary: t("shell.summary.empty"),
+      details: [],
+      risks: [],
+      highestRisk: "info",
+    };
+  }
+
+  const tokens = tokenize(command);
+  if (!tokens || tokens.length === 0) {
+    const risks = dedupeRisks(preRisks);
+    return {
+      command,
+      parsed: false,
+      summary: t("shell.summary.unparsed"),
+      details: [],
+      risks,
+      highestRisk: highest(risks),
+    };
+  }
+
+  const handled = handleCommand(tokens);
+  const allRisks = dedupeRisks([...handled.risks, ...preRisks]);
+
+  return {
+    command,
+    parsed: true,
+    program: handled.program,
+    summary: handled.summary,
+    details: handled.details,
+    risks: allRisks,
+    highestRisk: highest(allRisks),
+  };
+}
 
 export function explainCommandsForApproval(commands: readonly string[]): readonly ShellCommandExplanation[] {
   return commands.map((cmd) => explainShellCommand(cmd));

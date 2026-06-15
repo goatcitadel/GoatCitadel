@@ -1,4 +1,4 @@
-export type EmbeddingProviderId = "transformers-js" | "pseudo";
+export type EmbeddingProviderId = "pseudo";
 
 export interface EmbeddingMetadata extends Record<string, unknown> {
   provider: EmbeddingProviderId;
@@ -12,56 +12,22 @@ export interface EmbeddingMetadata extends Record<string, unknown> {
 export interface GeneratedEmbedding {
   embedding: number[];
   metadata: EmbeddingMetadata;
-  method: "transformers-js" | "pseudo-embedding";
+  method: "pseudo-embedding";
 }
 
 interface EmbeddingProfile {
   provider: EmbeddingProviderId;
   modelId: string;
-  dimensions?: number;
+  dimensions: number;
   version: string;
 }
 
-type FeatureExtractionPipeline = (
-  text: string,
-  options: { pooling: "mean"; normalize: true },
-) => Promise<{
-  data: ArrayLike<number>;
-  dims: number[];
-  tolist?: () => unknown[];
-}>;
-
-const DEFAULT_TRANSFORMERS_MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
 const PSEUDO_MODEL_ID = "pseudo-hash-v1";
 const PSEUDO_DIMENSIONS = 64;
 const EMBEDDING_VERSION = "goatcitadel-embedding-v1";
 
-let featureExtractionPipelinePromise: Promise<FeatureExtractionPipeline> | undefined;
-
 export async function generateEmbedding(text: string, now = new Date()): Promise<GeneratedEmbedding> {
-  const profile = resolveEmbeddingProfile();
-  if (profile.provider === "pseudo") {
-    return createPseudoEmbedding(text, now, testFallbackReason());
-  }
-
-  try {
-    const extractor = await getFeatureExtractionPipeline(profile.modelId);
-    const output = await extractor(text, { pooling: "mean", normalize: true });
-    const values = Array.from(output.data, (value) => Number(Number(value).toFixed(8)));
-    return {
-      embedding: values,
-      method: "transformers-js",
-      metadata: {
-        provider: "transformers-js",
-        modelId: profile.modelId,
-        dimensions: values.length,
-        generatedAt: now.toISOString(),
-        version: profile.version,
-      },
-    };
-  } catch (error) {
-    return createPseudoEmbedding(text, now, fallbackReason(error));
-  }
+  return createPseudoEmbedding(text, now, embeddingFallbackReason());
 }
 
 export function currentEmbeddingProfile(): EmbeddingProfile {
@@ -88,7 +54,7 @@ export function isEmbeddingCurrent(
     modelId === profile.modelId &&
     version === profile.version &&
     dimensions === embedding.length &&
-    (profile.dimensions === undefined || profile.dimensions === embedding.length)
+    profile.dimensions === embedding.length
   );
 }
 
@@ -136,36 +102,11 @@ function createPseudoEmbedding(text: string, now: Date, fallbackReason?: string)
   };
 }
 
-async function getFeatureExtractionPipeline(modelId: string): Promise<FeatureExtractionPipeline> {
-  featureExtractionPipelinePromise ??= importRuntimeModule("@huggingface/transformers").then(async (module) => {
-    const { pipeline } = module as {
-      pipeline: (task: "feature-extraction", model: string, options: { local_files_only: boolean }) => Promise<unknown>;
-    };
-    const extractor = await pipeline("feature-extraction", modelId, {
-      local_files_only: process.env.GOATCITADEL_EMBEDDINGS_LOCAL_FILES_ONLY === "1",
-    });
-    return extractor as FeatureExtractionPipeline;
-  });
-  return featureExtractionPipelinePromise;
-}
-
-async function importRuntimeModule(specifier: string): Promise<unknown> {
-  return import(specifier);
-}
-
 function resolveEmbeddingProfile(): EmbeddingProfile {
-  const requested = optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER);
-  if (requested === "pseudo" || (!requested && process.env.NODE_ENV === "test")) {
-    return {
-      provider: "pseudo",
-      modelId: PSEUDO_MODEL_ID,
-      dimensions: PSEUDO_DIMENSIONS,
-      version: EMBEDDING_VERSION,
-    };
-  }
   return {
-    provider: "transformers-js",
-    modelId: optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ?? DEFAULT_TRANSFORMERS_MODEL_ID,
+    provider: "pseudo",
+    modelId: PSEUDO_MODEL_ID,
+    dimensions: PSEUDO_DIMENSIONS,
     version: EMBEDDING_VERSION,
   };
 }
@@ -178,17 +119,12 @@ function normalizeVector(values: number[]): number[] {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
-function fallbackReason(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return `transformers-js-unavailable: ${error.message.slice(0, 180)}`;
+function embeddingFallbackReason(): string | undefined {
+  const requested = optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER);
+  if (requested && requested !== "pseudo") {
+    return `embedding-provider-retired: ${requested}`;
   }
-  return "transformers-js-unavailable";
-}
-
-function testFallbackReason(): string | undefined {
-  return process.env.NODE_ENV === "test" && !optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER)
-    ? "test-environment-default"
-    : undefined;
+  return process.env.NODE_ENV === "test" ? "test-environment-default" : undefined;
 }
 
 function optionalString(value: unknown): string | undefined {

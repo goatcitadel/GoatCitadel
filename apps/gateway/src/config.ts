@@ -1079,8 +1079,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       autoStart: npuInput.autoStart ?? false,
       sidecar: {
         baseUrl: npuSidecar.baseUrl ?? "http://127.0.0.1:11440",
-        command: npuSidecar.command ?? "python",
-        args: npuSidecar.args ?? ["apps/npu-sidecar/server.py"],
+        command: npuSidecar.command ?? "disabled",
+        args: npuSidecar.args ?? [],
         healthPath: npuSidecar.healthPath ?? "/health",
         modelsPath: npuSidecar.modelsPath ?? "/v1/models",
         startTimeoutMs: npuSidecar.startTimeoutMs ?? 20_000,
@@ -1333,13 +1333,6 @@ function defaultLlmConfig(): string {
         baseUrl: "http://127.0.0.1:11434/v1",
         apiStyle: "openai-chat-completions",
         defaultModel: "llama3.2",
-      },
-      {
-        providerId: "npu-local",
-        label: "NPU Local Sidecar",
-        baseUrl: "http://127.0.0.1:11440/v1",
-        apiStyle: "openai-chat-completions",
-        defaultModel: "phi-3.5-mini-instruct",
       },
     ],
   });

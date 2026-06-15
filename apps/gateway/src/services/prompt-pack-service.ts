@@ -8190,7 +8190,6 @@ function shouldPreferPromptPackJudgeDefaults(providerId?: string, model?: string
     normalizedProviderId.includes("llamacpp") ||
     normalizedProviderId.includes("lmstudio") ||
     normalizedProviderId.includes("localai") ||
-    normalizedProviderId.includes("npu-local") ||
     normalizedModel.includes("qwen")
   );
 }

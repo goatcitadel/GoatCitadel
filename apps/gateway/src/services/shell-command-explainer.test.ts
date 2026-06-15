@@ -6,7 +6,7 @@ import {
 } from "./shell-command-explainer.js";
 
 describe("explainCommandsForApproval", () => {
-  it("returns explanations matching the shared parser", () => {
+  it("returns command explanations", () => {
     const out = explainCommandsForApproval(["git push --force origin main", "pnpm install"]);
     expect(out).toHaveLength(2);
     expect(out[0].highestRisk).toBe("danger");

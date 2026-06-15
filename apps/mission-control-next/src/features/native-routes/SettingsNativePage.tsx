@@ -161,11 +161,9 @@ import {
   startSlackOAuth,
   startOpenAICodexOAuthDeviceFlow,
   startLlamaCppRuntime,
-  startNpuRuntime,
   stopAddon,
   stopDaemon,
   stopLlamaCppRuntime,
-  stopNpuRuntime,
   testChannelSetupDraft,
   uninstallAddon,
   updateAddon,
@@ -473,7 +471,10 @@ function LocalAiSection(_props: SettingsSectionProps) {
           />
         </SettingsPanel>
         <SettingsStack>
-          <SettingsPanel title="Model fit" subtitle="Conservative recommendations; no download starts without approval.">
+          <SettingsPanel
+            title="Model fit"
+            subtitle="Conservative recommendations; no download starts without approval."
+          >
             <SettingsActionList
               items={(data?.readiness?.recommendations ?? []).slice(0, 6).map((item) => ({
                 id: `${item.modelId}-${item.backend}`,
@@ -3886,8 +3887,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
       alias: data.settings.llamaCpp.alias,
     });
     setNpuForm({
-      enabled: data.settings.npu.enabled,
-      autoStart: data.settings.npu.autoStart,
+      enabled: false,
+      autoStart: false,
       sidecarUrl: data.settings.npu.sidecarUrl,
     });
   }, [data]);
@@ -4126,36 +4127,10 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 ]}
               />
             </SettingsPanel>
-            <SettingsPanel title="NPU runtime" subtitle="Manage the Windows NPU sidecar and its serving posture.">
-              <SettingsFieldGrid>
-                <SettingsField label="Sidecar URL">
-                  <input
-                    className="mc-next-settings-input"
-                    value={npuForm.sidecarUrl}
-                    onChange={(event) => setNpuForm((current) => ({ ...current, sidecarUrl: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Enabled">
-                  <label className="mc-next-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={npuForm.enabled}
-                      onChange={(event) => setNpuForm((current) => ({ ...current, enabled: event.target.checked }))}
-                    />
-                    <span>Enable NPU runtime</span>
-                  </label>
-                </SettingsField>
-                <SettingsField label="Auto start">
-                  <label className="mc-next-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={npuForm.autoStart}
-                      onChange={(event) => setNpuForm((current) => ({ ...current, autoStart: event.target.checked }))}
-                    />
-                    <span>Auto-start with the gateway</span>
-                  </label>
-                </SettingsField>
-              </SettingsFieldGrid>
+            <SettingsPanel
+              title="Local acceleration"
+              subtitle="NPU sidecar support is retired from the shipped 1.0 runtime."
+            >
               <SettingsButtonRow>
                 <button
                   type="button"
@@ -4165,33 +4140,17 @@ function RuntimeSection(_props: SettingsSectionProps) {
                       () =>
                         patchSettings({
                           npu: {
-                            enabled: npuForm.enabled,
-                            autoStart: npuForm.autoStart,
+                            enabled: false,
+                            autoStart: false,
                             sidecarUrl: npuForm.sidecarUrl,
                           },
                         }),
-                      "NPU settings saved.",
+                      "Retired NPU settings normalized.",
                     )
                   }
                 >
                   <Save size={16} />
-                  Save
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
-                  onClick={() => void runAndReload(startNpuRuntime, "NPU start requested.")}
-                >
-                  <Play size={16} />
-                  Start
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
-                  onClick={() => void runAndReload(stopNpuRuntime, "NPU stop requested.")}
-                >
-                  <Square size={16} />
-                  Stop
+                  Normalize
                 </button>
                 <button
                   type="button"
@@ -4212,7 +4171,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   {
                     label: "Backend",
                     value: data.settings.npu.status.backend,
-                    meta: data.settings.npu.status.activeModelId ?? "No active model",
+                    meta: data.settings.npu.status.lastError ?? data.settings.npu.sidecarUrl,
                   },
                 ]}
               />

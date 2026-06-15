@@ -1053,16 +1053,6 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     ["local"],
     ["chat-completions"],
   ),
-  entry(
-    "model_provider",
-    "npu-local",
-    "NPU Local Sidecar",
-    "Local ONNX Runtime GenAI sidecar for Windows ARM64 Snapdragon NPU acceleration.",
-    "beta",
-    ["local"],
-    ["chat-completions", "npu"],
-  ),
-
   // Productivity
   entry(
     "productivity",

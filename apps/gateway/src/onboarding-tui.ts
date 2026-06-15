@@ -74,10 +74,6 @@ const PROVIDER_TEMPLATE_META: Record<string, { envVar: string; note: string }> =
     envVar: "LOCALAI_API_KEY",
     note: "Local or self-hosted OpenAI-compatible endpoint.",
   },
-  "npu-local": {
-    envVar: "",
-    note: "Local NPU sidecar for supported on-device inference setups.",
-  },
   "genie-ir20": {
     envVar: "",
     note: "Tailnet-accessible shared runtime. Use only if you intentionally connect to that remote node.",

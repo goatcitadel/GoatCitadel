@@ -359,7 +359,7 @@ Apps:
 - [apps/mission-control-windows](./apps/mission-control-windows): canonical Windows desktop host using C#/.NET, WinUI 3, Windows App SDK, and WebView2
 - [apps/mission-control-desktop](./apps/mission-control-desktop): Tauri rollback host for Windows during migration and experimental macOS packaging work
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
-- [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
+- NPU sidecar support was retired from the `1.0` source and installer path; local model work should use llama.cpp, Ollama, LM Studio, LocalAI, or external providers until real NPU hardware proof justifies a new implementation.
 
 Shared packages:
 
@@ -409,7 +409,7 @@ Do not claim without fresh proof:
 
 - cross-platform or general hostile-code sandboxing for Code Mode beyond the named Windows-native proof slice
 - ungoverned autonomous high-risk tool activation
-- NPU sidecar maturity or local-inference completeness as a `1.0` signal
+- NPU sidecar maturity or local-inference completeness as a `1.0` signal; that path is retired from the shipped 1.0 source and installer.
 - `packages/mesh-core` readiness without a green `verify:mesh:readiness` evidence lane
 - compatibility shell parity as canonical product readiness
 - remote MCP invocation that bypasses Gateway policy, approvals, network allowlists, audit, or supported auth

@@ -555,7 +555,7 @@ describe("settings-auth-service durable settings", () => {
     expect(host.config.assistant.web.firecrawl.apiKeyEnv).toBeUndefined();
   });
 
-  it("applies mesh, NPU, and llama.cpp runtime updates with persistence and autostart hooks", () => {
+  it("applies mesh and llama.cpp updates while normalizing retired NPU settings", () => {
     const host = buildHost();
     process.env.GOATCITADEL_MESH_JOIN_TOKEN = "join-token-test";
 
@@ -614,14 +614,20 @@ describe("settings-auth-service durable settings", () => {
       );
       expect(host.npuSidecar.updateConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabled: true,
-          autoStart: true,
+          enabled: false,
+          autoStart: false,
           sidecar: {
             baseUrl: "http://127.0.0.1:11441",
           },
         }),
       );
-      expect(host.npuSidecar.start).toHaveBeenCalledWith("config_autostart");
+      expect(settings.npu).toMatchObject({
+        enabled: false,
+        autoStart: false,
+        sidecarUrl: "http://127.0.0.1:11441",
+      });
+      expect(host.npuSidecar.stop).toHaveBeenCalledWith("disabled");
+      expect(host.npuSidecar.start).not.toHaveBeenCalled();
       expect(host.llamaCppRuntime.updateConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           enabled: true,
@@ -713,7 +719,7 @@ describe("settings-auth-service durable settings", () => {
         llamaCpp: { enabled: true, autoStart: true },
       }),
     ).toMatchObject({
-      npu: { enabled: true, autoStart: true },
+      npu: { enabled: false, autoStart: false },
       llamaCpp: { enabled: true, autoStart: true },
     });
 
@@ -721,7 +727,7 @@ describe("settings-auth-service durable settings", () => {
     await Promise.resolve();
     expect(host.npuSidecar.stop).toHaveBeenCalledWith("disabled");
     expect(host.llamaCppRuntime.stop).toHaveBeenCalledWith("disabled");
-    expect(host.npuSidecar.start).toHaveBeenCalledWith("config_autostart");
+    expect(host.npuSidecar.start).not.toHaveBeenCalled();
     expect(host.llamaCppRuntime.start).toHaveBeenCalledWith("config_autostart");
   });
 

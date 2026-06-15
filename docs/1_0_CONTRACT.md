@@ -69,7 +69,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 - silent or ungoverned autonomous high-risk tool activation
 - `packages/mesh-core` readiness unless `verify:mesh:readiness` is green for join-token lifecycle, mTLS/tailnet posture, lease lifecycle, owner failover, replication offsets, Settings visibility, and Gateway diagnostics
 - A2A public discovery by default or A2A mesh readiness claims; A2A gRPC remains an external Gateway transport and does not replace mesh readiness, leases, ownership, replication, failover, or LAN/WAN/tailnet runtime state
-- `apps/npu-sidecar` as a maturity signal for local inference completeness while it remains optional experimental infrastructure
+- NPU sidecar maturity, local-inference completeness, or ONNX/NPU acceleration as a `1.0` signal; the former sidecar path is retired from the shipped source and installer until real hardware proof justifies a new implementation
 - `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` or `no_agent` cron execution as a `1.0` guarantee; that path is experimental, local-only, disabled by default, and outside the 1.0 merge promise unless separately proven and promoted here
 
 ## Upgrade and Backup Guarantees
