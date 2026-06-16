@@ -3,9 +3,11 @@ import type { Citadel, CitadelChamber, CitadelCharter } from "./citadels.js";
 import { CITADEL_BLUEPRINT_SCHEMA_VERSION, exportCitadelBlueprint, validateCitadelBlueprint } from "./citadel-blueprints.js";
 import {
   MASON_SETUP_QUESTIONS,
+  buildMasonInterpretPrompt,
   draftBlueprintFromAnswers,
   generateBlueprintReviewSummary,
   masonSessionCanDraft,
+  parseMasonInterpretResponse,
 } from "./citadel-mason.js";
 
 function sampleCitadel(): Citadel {
@@ -89,5 +91,31 @@ describe("masonSessionCanDraft", () => {
     expect(masonSessionCanDraft({ ...base, answers: { kind: "company" } })).toBe(false);
     expect(masonSessionCanDraft({ ...base, answers: { kind: "company", purpose: "   " } })).toBe(false);
     expect(masonSessionCanDraft({ ...base, answers: { kind: "company", purpose: "Run it" } })).toBe(true);
+  });
+});
+
+describe("buildMasonInterpretPrompt", () => {
+  it("includes the user message, current answers, and a JSON-only instruction", () => {
+    const prompt = buildMasonInterpretPrompt("I run a startup", { kind: "company" });
+    expect(prompt).toMatch(/I run a startup/);
+    expect(prompt).toMatch(/company/);
+    expect(prompt).toMatch(/json only/i);
+  });
+});
+
+describe("parseMasonInterpretResponse", () => {
+  it("extracts only valid fields and ignores invalid/unknown ones", () => {
+    const patch = parseMasonInterpretResponse(
+      'Sure: {"kind":"company","purpose":"Run it","goals":["ship",2],"riskPosture":"bogus","junk":"x","preferLocalForSensitive":true}',
+    );
+    expect(patch).toEqual({ kind: "company", purpose: "Run it", goals: ["ship"], preferLocalForSensitive: true });
+  });
+
+  it("returns an empty patch for non-JSON output", () => {
+    expect(parseMasonInterpretResponse("I'm not sure what you mean.")).toEqual({});
+  });
+
+  it("drops an invalid kind but keeps valid fields (safety against hallucination/injection)", () => {
+    expect(parseMasonInterpretResponse('{"kind":"wizard","purpose":"x"}')).toEqual({ purpose: "x" });
   });
 });

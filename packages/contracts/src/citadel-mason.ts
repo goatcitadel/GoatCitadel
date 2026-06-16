@@ -144,3 +144,88 @@ export function draftBlueprintFromAnswers(answers: MasonAnswers): CitadelBluepri
     riskNotes: ["This Blueprint contains structure only — no credentials, secrets, tokens, or private data."],
   };
 }
+
+// --- The LLM step's deterministic parts: prompt construction + strict output parsing ---
+
+const MASON_KINDS: readonly CitadelKind[] = [
+  "personal",
+  "company",
+  "project",
+  "household",
+  "client",
+  "creator",
+  "learning",
+  "team",
+  "custom",
+];
+
+const MASON_RISK_POSTURES: readonly CitadelRiskPosture[] = [
+  "conservative",
+  "balanced",
+  "collaborative",
+  "automation_forward",
+];
+
+/** Build the prompt that asks a model to extract setup fields from a freeform message. */
+export function buildMasonInterpretPrompt(message: string, currentAnswers: Partial<MasonAnswers>): string {
+  return [
+    "You are the Mason, helping set up a protected AI Citadel.",
+    "Extract any of these setup fields from the user's message. Respond ONLY with a JSON object containing the fields you can confidently fill; omit the rest. Do not invent values, and never include secrets.",
+    `Fields: kind (one of ${MASON_KINDS.join(", ")}), purpose (string), name (string), goals (string[]), sensitiveAreas (string[]), boundaries (string[]), successDefinition (string[]), riskPosture (one of ${MASON_RISK_POSTURES.join(", ")}), preferLocalForSensitive (boolean).`,
+    `Already collected: ${JSON.stringify(currentAnswers)}`,
+    `User message: ${message}`,
+    "Respond with JSON only.",
+  ].join("\n");
+}
+
+/**
+ * Strictly parse a model's interpretation into a MasonAnswers patch. Only well-typed,
+ * known fields with valid enum values survive — a hallucinated or injected field can
+ * never poison a Citadel's setup. Unknown/invalid output yields an empty patch.
+ */
+export function parseMasonInterpretResponse(raw: string): Partial<MasonAnswers> {
+  const parsed = extractJsonObject(raw);
+  if (!parsed) {
+    return {};
+  }
+  const out: Partial<MasonAnswers> = {};
+  if (typeof parsed.kind === "string" && (MASON_KINDS as readonly string[]).includes(parsed.kind)) {
+    out.kind = parsed.kind as CitadelKind;
+  }
+  if (typeof parsed.purpose === "string" && parsed.purpose.trim().length > 0) {
+    out.purpose = parsed.purpose.trim();
+  }
+  if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
+    out.name = parsed.name.trim();
+  }
+  for (const key of ["goals", "sensitiveAreas", "boundaries", "successDefinition"] as const) {
+    const value = parsed[key];
+    if (Array.isArray(value)) {
+      const strings = value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+      if (strings.length > 0) {
+        out[key] = strings;
+      }
+    }
+  }
+  if (typeof parsed.riskPosture === "string" && (MASON_RISK_POSTURES as readonly string[]).includes(parsed.riskPosture)) {
+    out.riskPosture = parsed.riskPosture as CitadelRiskPosture;
+  }
+  if (typeof parsed.preferLocalForSensitive === "boolean") {
+    out.preferLocalForSensitive = parsed.preferLocalForSensitive;
+  }
+  return out;
+}
+
+function extractJsonObject(raw: string): Record<string, unknown> | undefined {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end <= start) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
