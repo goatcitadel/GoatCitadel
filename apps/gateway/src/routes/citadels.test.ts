@@ -268,4 +268,58 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(removeCouncilMember).toHaveBeenCalledWith("m9");
   });
+
+  it("lists and creates missions scoped to a citadel", async () => {
+    const listMissions = vi.fn(() => [{ missionId: "m1", title: "Plan" }]);
+    const createMission = vi.fn((input: Record<string, unknown>) => ({ missionId: "m2", state: "draft", ...input }));
+    const built = buildApp({ listMissions, createMission });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/missions" });
+    expect(list.statusCode).toBe(200);
+    expect(listMissions).toHaveBeenCalledWith("ws-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/missions",
+      payload: { title: "Plan week", objective: "plan" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(createMission).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", title: "Plan week", objective: "plan" }),
+    );
+  });
+
+  it("transitions a mission state", async () => {
+    const updateMissionState = vi.fn((missionId: string, state: string) => ({ missionId, state }));
+    const built = buildApp({ updateMissionState });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "PATCH", url: "/api/v1/missions/m1", payload: { state: "running" } });
+    expect(response.statusCode).toBe(200);
+    expect(updateMissionState).toHaveBeenCalledWith("m1", "running");
+  });
+
+  it("rejects an invalid mission state", async () => {
+    const updateMissionState = vi.fn();
+    const built = buildApp({ updateMissionState });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "PATCH", url: "/api/v1/missions/m1", payload: { state: "bogus" } });
+    expect(response.statusCode).toBe(400);
+    expect(updateMissionState).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a missing mission on patch", async () => {
+    const updateMissionState = vi.fn(() => undefined);
+    const built = buildApp({ updateMissionState });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "PATCH", url: "/api/v1/missions/m9", payload: { state: "running" } });
+    expect(response.statusCode).toBe(404);
+  });
 });

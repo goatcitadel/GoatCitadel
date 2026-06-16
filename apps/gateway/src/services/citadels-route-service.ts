@@ -9,6 +9,9 @@ import type {
   CitadelCouncilMember,
   CitadelCouncilMemberInput,
   CitadelGatehouseSummary,
+  CitadelMission,
+  CitadelMissionInput,
+  CitadelMissionState,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
 import {
@@ -35,6 +38,10 @@ export interface CitadelsRoutePort {
   addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember;
   listCouncilMembers(citadelId: string): CitadelCouncilMember[];
   removeCouncilMember(memberId: string): boolean;
+  createMission(input: CitadelMissionInput): CitadelMission;
+  listMissions(citadelId: string): CitadelMission[];
+  getMission(missionId: string): CitadelMission | undefined;
+  updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined;
 }
 
 export class CitadelsRouteService {
@@ -106,5 +113,21 @@ export class CitadelsRouteService {
 
   public removeCouncilMember(memberId: string): boolean {
     return this.citadels.removeCouncilMember(memberId);
+  }
+
+  public listMissions(citadelId: string): CitadelMission[] {
+    return this.citadels.listMissions(citadelId);
+  }
+
+  public createMission(input: CitadelMissionInput): CitadelMission {
+    return this.citadels.createMission(input);
+  }
+
+  public getMission(missionId: string): CitadelMission | undefined {
+    return this.citadels.getMission(missionId);
+  }
+
+  public updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined {
+    return this.citadels.updateMissionState(missionId, state);
   }
 }

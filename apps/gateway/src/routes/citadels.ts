@@ -62,6 +62,31 @@ const memberParamsSchema = z.object({
   memberId: z.string().min(1),
 });
 
+const missionSchema = z.object({
+  title: z.string().min(1),
+  objective: z.string().min(1),
+  mode: z.enum(["ask", "plan", "cowork", "forge", "watch", "review"]).optional(),
+});
+
+const missionStateSchema = z.object({
+  state: z.enum([
+    "draft",
+    "planned",
+    "waiting_for_approval",
+    "running",
+    "paused",
+    "blocked",
+    "completed",
+    "failed",
+    "cancelled",
+    "archived",
+  ]),
+});
+
+const missionParamsSchema = z.object({
+  missionId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -252,6 +277,71 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Council member ${params.data.memberId} not found.` });
       }
       return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/missions", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listMissions(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/missions", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = missionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const mission = citadels.createMission({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(mission);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/missions/:missionId", operatorOnly, async (request, reply) => {
+    const params = missionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const mission = citadels.getMission(params.data.missionId);
+      if (!mission) {
+        return reply.code(404).send({ error: `Mission ${params.data.missionId} not found.` });
+      }
+      return reply.send(mission);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.patch("/api/v1/missions/:missionId", operatorOnly, async (request, reply) => {
+    const params = missionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = missionStateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const mission = citadels.updateMissionState(params.data.missionId, parsed.data.state);
+      if (!mission) {
+        return reply.code(404).send({ error: `Mission ${params.data.missionId} not found.` });
+      }
+      return reply.send(mission);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
