@@ -10,6 +10,8 @@ import type {
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
+  CitadelIntegrationGrant,
+  CitadelIntegrationGrantInput,
   CitadelMember,
   CitadelMemberInput,
   MasonAnswers,
@@ -75,6 +77,9 @@ export interface CitadelsRoutePort {
   getMasonSession(sessionId: string): MasonSession | undefined;
   updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): MasonSession | undefined;
   setMasonSessionStatus(sessionId: string, status: MasonSession["status"]): MasonSession | undefined;
+  addIntegrationGrant(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant;
+  listIntegrationGrants(citadelId: string): CitadelIntegrationGrant[];
+  removeIntegrationGrant(citadelId: string, grantId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -253,5 +258,19 @@ export class CitadelsRouteService {
    */
   public evaluateGatehouseAction(citadelId: string, action: string): WardEffect {
     return evaluateWards(this.citadels.listWards(citadelId), action);
+  }
+
+  // --- Gatehouse integration grants (§15.3): capabilities only, no secrets. ---
+
+  public listIntegrations(citadelId: string): CitadelIntegrationGrant[] {
+    return this.citadels.listIntegrationGrants(citadelId);
+  }
+
+  public addIntegration(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant {
+    return this.citadels.addIntegrationGrant(input);
+  }
+
+  public removeIntegration(citadelId: string, grantId: string): boolean {
+    return this.citadels.removeIntegrationGrant(citadelId, grantId);
   }
 }

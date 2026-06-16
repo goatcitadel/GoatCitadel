@@ -591,4 +591,52 @@ describe("citadels routes", () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/mason/sessions/nope" });
     expect(response.statusCode).toBe(404);
   });
+
+  it("lists and creates integration grants for a citadel", async () => {
+    const listIntegrations = vi.fn(() => [{ grantId: "g1", provider: "stripe" }]);
+    const addIntegration = vi.fn((input: Record<string, unknown>) => ({ grantId: "g2", ...input }));
+    const built = buildApp({ listIntegrations, addIntegration });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/integrations" });
+    expect(list.statusCode).toBe(200);
+    expect(listIntegrations).toHaveBeenCalledWith("ws-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/integrations",
+      payload: { provider: "google_calendar", capabilities: ["calendar.events.read"], mode: "read" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(addIntegration).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", provider: "google_calendar", mode: "read" }),
+    );
+  });
+
+  it("rejects an integration grant with an invalid mode", async () => {
+    const addIntegration = vi.fn();
+    const built = buildApp({ addIntegration });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/integrations",
+      payload: { provider: "x", capabilities: ["y"], mode: "nuke" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(addIntegration).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing integration grant", async () => {
+    const removeIntegration = vi.fn(() => false);
+    const built = buildApp({ removeIntegration });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/integrations/g9" });
+    expect(response.statusCode).toBe(404);
+    expect(removeIntegration).toHaveBeenCalledWith("ws-1", "g9");
+  });
 });

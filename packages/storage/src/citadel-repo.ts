@@ -6,6 +6,9 @@ import type {
   CitadelCharterInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
+  CitadelIntegrationGrant,
+  CitadelIntegrationGrantInput,
+  CitadelIntegrationMode,
   CitadelMember,
   CitadelMemberInput,
   CitadelPassage,
@@ -93,6 +96,17 @@ interface MasonSessionRow {
   updated_at: string;
 }
 
+interface IntegrationGrantRow {
+  grant_id: string;
+  citadel_id: string;
+  provider: string;
+  account: string | null;
+  capabilities_json: string;
+  mode: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -122,6 +136,10 @@ export class CitadelRepository {
   private readonly createMasonSessionStmt;
   private readonly getMasonSessionStmt;
   private readonly updateMasonSessionStmt;
+  private readonly addIntegrationGrantStmt;
+  private readonly getIntegrationGrantStmt;
+  private readonly listIntegrationGrantsStmt;
+  private readonly deleteIntegrationGrantStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -219,6 +237,20 @@ export class CitadelRepository {
       UPDATE mason_sessions SET answers_json = @answersJson, status = @status, updated_at = @now
       WHERE session_id = @sessionId
     `);
+    this.addIntegrationGrantStmt = db.prepare(`
+      INSERT INTO citadel_integration_grants (
+        grant_id, citadel_id, provider, account, capabilities_json, mode, expires_at, created_at
+      ) VALUES (
+        @grantId, @citadelId, @provider, @account, @capabilitiesJson, @mode, @expiresAt, @now
+      )
+    `);
+    this.getIntegrationGrantStmt = db.prepare("SELECT * FROM citadel_integration_grants WHERE grant_id = @grantId");
+    this.listIntegrationGrantsStmt = db.prepare(
+      "SELECT * FROM citadel_integration_grants WHERE citadel_id = @citadelId ORDER BY created_at ASC, grant_id ASC",
+    );
+    this.deleteIntegrationGrantStmt = db.prepare(
+      "DELETE FROM citadel_integration_grants WHERE grant_id = @grantId AND citadel_id = @citadelId",
+    );
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -441,6 +473,37 @@ export class CitadelRepository {
     this.updateMasonSessionStmt.run({ sessionId, answersJson: JSON.stringify(existing.answers), status, now });
     return this.getMasonSession(sessionId);
   }
+
+  /** Record a Gatehouse integration grant (capabilities only — no secrets). */
+  public addIntegrationGrant(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant {
+    const grantId = randomUUID();
+    const now = new Date().toISOString();
+    this.addIntegrationGrantStmt.run({
+      grantId,
+      citadelId: input.citadelId,
+      provider: input.provider,
+      account: input.account ?? null,
+      capabilitiesJson: JSON.stringify(input.capabilities ?? []),
+      mode: input.mode,
+      expiresAt: input.expiresAt ?? null,
+      now,
+    });
+    const row = this.getIntegrationGrantStmt.get({ grantId }) as IntegrationGrantRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to persist integration grant ${grantId} for citadel ${input.citadelId}`);
+    }
+    return mapIntegrationGrant(row);
+  }
+
+  public listIntegrationGrants(citadelId: string): CitadelIntegrationGrant[] {
+    const rows = this.listIntegrationGrantsStmt.all({ citadelId }) as IntegrationGrantRow[];
+    return rows.map(mapIntegrationGrant);
+  }
+
+  public removeIntegrationGrant(citadelId: string, grantId: string): boolean {
+    const result = this.deleteIntegrationGrantStmt.run({ citadelId, grantId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -521,5 +584,18 @@ function mapMasonSession(row: MasonSessionRow): MasonSession {
     status: row.status as MasonSessionStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapIntegrationGrant(row: IntegrationGrantRow): CitadelIntegrationGrant {
+  return {
+    grantId: row.grant_id,
+    citadelId: row.citadel_id,
+    provider: row.provider,
+    account: row.account ?? undefined,
+    capabilities: safeJsonParse<string[]>(row.capabilities_json, []),
+    mode: row.mode as CitadelIntegrationMode,
+    expiresAt: row.expires_at ?? undefined,
+    createdAt: row.created_at,
   };
 }

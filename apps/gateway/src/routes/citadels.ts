@@ -102,6 +102,19 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
 });
 
+const integrationSchema = z.object({
+  provider: z.string().min(1),
+  account: z.string().min(1).optional(),
+  capabilities: z.array(z.string().min(1)),
+  mode: z.enum(["read", "write", "destructive"]),
+  expiresAt: z.string().datetime().optional(),
+});
+
+const integrationParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  grantId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -430,6 +443,52 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       const removed = citadels.removeMember(params.data.citadelId, params.data.subjectId);
       if (!removed) {
         return reply.code(404).send({ error: `Member ${params.data.subjectId} not found.` });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Gatehouse integration grants (§15.3): capabilities only — secrets stay in the Secret Vault.
+  fastify.get("/api/v1/citadels/:citadelId/integrations", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listIntegrations(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/integrations", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = integrationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const grant = citadels.addIntegration({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(grant);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/integrations/:grantId", operatorOnly, async (request, reply) => {
+    const params = integrationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removeIntegration(params.data.citadelId, params.data.grantId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Integration grant ${params.data.grantId} not found.` });
       }
       return reply.code(204).send();
     } catch (error) {

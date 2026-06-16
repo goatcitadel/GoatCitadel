@@ -101,6 +101,33 @@ export interface CitadelCouncilAssignmentInput {
   agentId: string;
 }
 
+export type CitadelIntegrationMode = "read" | "write" | "destructive";
+
+/**
+ * A Gatehouse integration grant (§15.3): what a connected provider is allowed to do
+ * within a Citadel. Stores the GRANT (capabilities/mode/expiry) only — never secrets
+ * or tokens, which live in the Secret Vault and are referenced by capability wrappers.
+ */
+export interface CitadelIntegrationGrant {
+  grantId: string;
+  citadelId: string;
+  provider: string;
+  account?: string;
+  capabilities: string[];
+  mode: CitadelIntegrationMode;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+export interface CitadelIntegrationGrantInput {
+  citadelId: string;
+  provider: string;
+  account?: string;
+  capabilities: string[];
+  mode: CitadelIntegrationMode;
+  expiresAt?: string;
+}
+
 // --- Scope: the (citadelId, chamberId?) tuple that scopes every Citadel-bound action ---
 
 export interface CitadelScope {

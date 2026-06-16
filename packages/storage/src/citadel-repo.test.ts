@@ -209,4 +209,30 @@ describe("CitadelRepository", () => {
     assert.equal(repo.getMasonSession("nope"), undefined);
     assert.equal(repo.updateMasonSessionAnswers("nope", { kind: "personal" }), undefined);
   });
+
+  it("records, lists, and removes integration grants scoped to a citadel", () => {
+    const repo = createRepo();
+    const grant = repo.addIntegrationGrant({
+      citadelId: "ws-1",
+      provider: "google_calendar",
+      account: "user@example.com",
+      capabilities: ["calendar.events.read"],
+      mode: "read",
+    });
+    repo.addIntegrationGrant({ citadelId: "ws-1", provider: "stripe", capabilities: ["charges.read"], mode: "read" });
+    repo.addIntegrationGrant({ citadelId: "ws-2", provider: "github", capabilities: ["issues.read"], mode: "read" });
+
+    assert.equal(grant.provider, "google_calendar");
+    assert.deepEqual(grant.capabilities, ["calendar.events.read"]);
+    assert.equal(grant.mode, "read");
+    assert.equal(grant.account, "user@example.com");
+    assert.deepEqual(
+      repo.listIntegrationGrants("ws-1").map((entry) => entry.provider).sort(),
+      ["google_calendar", "stripe"],
+    );
+
+    assert.equal(repo.removeIntegrationGrant("ws-1", grant.grantId), true);
+    assert.equal(repo.listIntegrationGrants("ws-1").length, 1);
+    assert.equal(repo.removeIntegrationGrant("ws-1", "nope"), false);
+  });
 });

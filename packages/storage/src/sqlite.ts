@@ -1206,6 +1206,27 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 118,
+    name: "citadel_integration_grants_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_integration_grants (
+          grant_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          account TEXT,
+          capabilities_json TEXT NOT NULL DEFAULT '[]',
+          mode TEXT NOT NULL DEFAULT 'read',
+          expires_at TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_integration_grants_citadel
+          ON citadel_integration_grants(citadel_id, created_at ASC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
