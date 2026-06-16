@@ -12,7 +12,8 @@ export type LibrarySection =
   | "files"
   | "artifacts"
   | "prompt-packs"
-  | "curator";
+  | "curator"
+  | "citadel";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -652,6 +653,15 @@ export const ROUTE_RELEASE_SCOPE = [
       "Review skill health proposals without treating archive recommendations as final release automation.",
     verification: "verify:surface:regression label check",
     note: "Curator remains visible as experimental operator assistance.",
+  },
+  {
+    area: "library",
+    section: "citadel",
+    status: "experimental",
+    releaseAction:
+      "Stage a Citadel with the Mason and review the drafted Blueprint without connecting accounts or opening Gates.",
+    verification: "verify:surface:regression label check",
+    note: "The Mason and Citadel staging remain experimental until activation, Vault crypto, and Gate enforcement are release-proven.",
   },
   {
     area: "ops",

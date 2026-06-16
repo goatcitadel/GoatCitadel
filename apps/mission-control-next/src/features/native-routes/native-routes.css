@@ -4125,3 +4125,54 @@
   color: color-mix(in oklab, var(--area-code) 60%, var(--fg-primary));
   border-color: color-mix(in oklab, var(--area-code) 24%, var(--border-subtle));
 }
+
+/* The Mason setup surface (library/citadel). */
+.mc-next-mason-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mc-next-mason-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  margin: 0.7rem 0 0.55rem;
+}
+
+.mc-next-mason-field > span {
+  font-size: 0.82rem;
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.mc-next-mason-error {
+  margin: 0 0 0.55rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.mc-next-mason-footnote {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+}
