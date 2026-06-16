@@ -144,4 +144,21 @@ describe("CitadelRepository", () => {
 
     assert.equal(repo.updateMissionState("missing", "running"), undefined);
   });
+
+  it("adds, lists (optionally by chamber), and removes archive items", () => {
+    const repo = createRepo();
+    const note = repo.addArchiveItem({ citadelId: "ws-1", kind: "note", title: "N1", body: "b" });
+    repo.addArchiveItem({ citadelId: "ws-1", chamberId: "ch-1", kind: "decision", title: "D1", body: "b" });
+    repo.addArchiveItem({ citadelId: "ws-2", kind: "note", title: "Other", body: "b" });
+
+    assert.equal(note.kind, "note");
+    assert.equal(repo.listArchiveItems("ws-1").length, 2);
+    assert.deepEqual(
+      repo.listArchiveItems("ws-1", "ch-1").map((item) => item.title),
+      ["D1"],
+    );
+
+    assert.equal(repo.removeArchiveItem(note.itemId), true);
+    assert.equal(repo.listArchiveItems("ws-1").length, 1);
+  });
 });

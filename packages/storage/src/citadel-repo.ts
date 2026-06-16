@@ -1,5 +1,8 @@
 import type {
   Citadel,
+  CitadelArchiveItem,
+  CitadelArchiveItemInput,
+  CitadelArchiveItemKind,
   CitadelChamber,
   CitadelChamberInput,
   CitadelCharter,
@@ -66,6 +69,17 @@ interface MissionRow {
   completed_at: string | null;
 }
 
+interface ArchiveItemRow {
+  item_id: string;
+  citadel_id: string;
+  chamber_id: string | null;
+  kind: string;
+  title: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -84,6 +98,11 @@ export class CitadelRepository {
   private readonly getMissionStmt;
   private readonly listMissionsStmt;
   private readonly updateMissionStateStmt;
+  private readonly addArchiveItemStmt;
+  private readonly getArchiveItemStmt;
+  private readonly listArchiveItemsStmt;
+  private readonly listArchiveItemsByChamberStmt;
+  private readonly deleteArchiveItemStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -147,6 +166,21 @@ export class CitadelRepository {
         completed_at = @completedAt
       WHERE mission_id = @missionId
     `);
+    this.addArchiveItemStmt = db.prepare(`
+      INSERT INTO citadel_archive_items (
+        item_id, citadel_id, chamber_id, kind, title, body, created_at, updated_at
+      ) VALUES (
+        @itemId, @citadelId, @chamberId, @kind, @title, @body, @now, @now
+      )
+    `);
+    this.getArchiveItemStmt = db.prepare("SELECT * FROM citadel_archive_items WHERE item_id = @itemId");
+    this.listArchiveItemsStmt = db.prepare(
+      "SELECT * FROM citadel_archive_items WHERE citadel_id = @citadelId ORDER BY updated_at DESC, item_id ASC",
+    );
+    this.listArchiveItemsByChamberStmt = db.prepare(
+      "SELECT * FROM citadel_archive_items WHERE citadel_id = @citadelId AND chamber_id = @chamberId ORDER BY updated_at DESC, item_id ASC",
+    );
+    this.deleteArchiveItemStmt = db.prepare("DELETE FROM citadel_archive_items WHERE item_id = @itemId");
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -286,6 +320,44 @@ export class CitadelRepository {
     this.updateMissionStateStmt.run({ missionId, state, now, completedAt });
     return this.getMission(missionId);
   }
+
+  public addArchiveItem(input: CitadelArchiveItemInput): CitadelArchiveItem {
+    const itemId = randomUUID();
+    const now = new Date().toISOString();
+    this.addArchiveItemStmt.run({
+      itemId,
+      citadelId: input.citadelId,
+      chamberId: input.chamberId ?? null,
+      kind: input.kind,
+      title: input.title,
+      body: input.body,
+      now,
+    });
+    const item = this.getArchiveItem(itemId);
+    if (!item) {
+      throw new Error(`Failed to persist archive item ${itemId} for citadel ${input.citadelId}`);
+    }
+    return item;
+  }
+
+  public getArchiveItem(itemId: string): CitadelArchiveItem | undefined {
+    const row = this.getArchiveItemStmt.get({ itemId }) as ArchiveItemRow | undefined;
+    return row ? mapArchiveItem(row) : undefined;
+  }
+
+  public listArchiveItems(citadelId: string, chamberId?: string): CitadelArchiveItem[] {
+    const rows = (
+      chamberId
+        ? this.listArchiveItemsByChamberStmt.all({ citadelId, chamberId })
+        : this.listArchiveItemsStmt.all({ citadelId })
+    ) as ArchiveItemRow[];
+    return rows.map(mapArchiveItem);
+  }
+
+  public removeArchiveItem(itemId: string): boolean {
+    const result = this.deleteArchiveItemStmt.run({ itemId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -339,5 +411,18 @@ function mapMission(row: MissionRow): CitadelMission {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at ?? undefined,
+  };
+}
+
+function mapArchiveItem(row: ArchiveItemRow): CitadelArchiveItem {
+  return {
+    itemId: row.item_id,
+    citadelId: row.citadel_id,
+    chamberId: row.chamber_id ?? undefined,
+    kind: row.kind as CitadelArchiveItemKind,
+    title: row.title,
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }

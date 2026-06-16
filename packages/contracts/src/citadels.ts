@@ -147,6 +147,27 @@ export interface CitadelMissionInput {
   mode?: WorkMode;
 }
 
+export type CitadelArchiveItemKind = "memory" | "note" | "decision" | "artifact" | "reference";
+
+export interface CitadelArchiveItem {
+  itemId: string;
+  citadelId: string;
+  chamberId?: string;
+  kind: CitadelArchiveItemKind;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CitadelArchiveItemInput {
+  citadelId: string;
+  chamberId?: string;
+  kind: CitadelArchiveItemKind;
+  title: string;
+  body: string;
+}
+
 // --- Scope: the (citadelId, chamberId?) tuple that scopes every Citadel-bound action ---
 
 export interface CitadelScope {

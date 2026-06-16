@@ -1155,6 +1155,27 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 115,
+    name: "citadel_archive_items_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_archive_items (
+          item_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          chamber_id TEXT,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_archive_items_citadel
+          ON citadel_archive_items(citadel_id, updated_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
