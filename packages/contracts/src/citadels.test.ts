@@ -13,6 +13,7 @@ import {
   findCitadelTemplate,
   isWithinCitadelScope,
   resolveCitadelScope,
+  summarizeCitadelGatehouse,
 } from "./citadels.js";
 
 describe("resolveCitadelScope", () => {
@@ -108,5 +109,40 @@ describe("citadel templates", () => {
     expect(charters[0]?.kind).toBe("project");
     expect(chambers).toHaveLength(template!.chambers.length);
     expect(chambers.every((chamber) => chamber.citadelId === "ws-1")).toBe(true);
+  });
+});
+
+describe("summarizeCitadelGatehouse", () => {
+  it("summarizes chamber posture and charter defaults", () => {
+    const summary = summarizeCitadelGatehouse({
+      citadelId: "ws-1",
+      charter: {
+        citadelId: "ws-1",
+        purpose: "p",
+        kind: "company",
+        goals: [],
+        boundaries: [],
+        successDefinition: [],
+        riskPosture: "conservative",
+        modelPolicyDefault: "local_only",
+        createdAt: "t",
+        updatedAt: "t",
+      },
+      chambers: [
+        { chamberId: "c1", citadelId: "ws-1", name: "General", sensitivity: "private", sealed: false, createdAt: "t", updatedAt: "t" },
+        { chamberId: "c2", citadelId: "ws-1", name: "Finance", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
+        { chamberId: "c3", citadelId: "ws-1", name: "Legal", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
+      ],
+    });
+
+    expect(summary.citadelId).toBe("ws-1");
+    expect(summary.chamberCount).toBe(3);
+    expect(summary.sealedChamberCount).toBe(2);
+    expect(summary.sensitivityCounts.restricted).toBe(2);
+    expect(summary.sensitivityCounts.private).toBe(1);
+    expect(summary.riskPosture).toBe("conservative");
+    expect(summary.modelPolicyDefault).toBe("local_only");
+    expect(summary.sharingDefault).toBe("private");
+    expect(summary.externalWritesDefault).toBe("approval_required");
   });
 });

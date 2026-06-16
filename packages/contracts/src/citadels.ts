@@ -151,6 +151,53 @@ function trimmedOrUndefined(value: string | undefined): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+// --- Gatehouse: a read-only security-posture summary of a Citadel ---
+
+const CHAMBER_SENSITIVITIES: ChamberSensitivity[] = [
+  "public",
+  "internal",
+  "private",
+  "sensitive",
+  "restricted",
+  "secret",
+];
+
+export interface CitadelGatehouseSummary {
+  citadelId: string;
+  hasCharter: boolean;
+  chamberCount: number;
+  sealedChamberCount: number;
+  sensitivityCounts: Record<ChamberSensitivity, number>;
+  riskPosture: CitadelRiskPosture;
+  modelPolicyDefault: CitadelModelPolicy;
+  sharingDefault: "private";
+  externalWritesDefault: "approval_required";
+}
+
+export function summarizeCitadelGatehouse(citadel: Citadel): CitadelGatehouseSummary {
+  const sensitivityCounts = Object.fromEntries(
+    CHAMBER_SENSITIVITIES.map((sensitivity) => [sensitivity, 0]),
+  ) as Record<ChamberSensitivity, number>;
+  let sealedChamberCount = 0;
+  for (const chamber of citadel.chambers) {
+    sensitivityCounts[chamber.sensitivity] = (sensitivityCounts[chamber.sensitivity] ?? 0) + 1;
+    if (chamber.sealed) {
+      sealedChamberCount += 1;
+    }
+  }
+  return {
+    citadelId: citadel.citadelId,
+    hasCharter: Boolean(citadel.charter),
+    chamberCount: citadel.chambers.length,
+    sealedChamberCount,
+    sensitivityCounts,
+    riskPosture: citadel.charter.riskPosture,
+    modelPolicyDefault: citadel.charter.modelPolicyDefault,
+    sharingDefault: "private",
+    externalWritesDefault: "approval_required",
+  };
+}
+
 // --- Templates: starter Citadels (a Charter + default Chambers) ---
 
 export interface CitadelTemplateChamber {

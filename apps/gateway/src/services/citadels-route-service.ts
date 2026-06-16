@@ -6,6 +6,7 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelGatehouseSummary,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
 import {
@@ -14,6 +15,7 @@ import {
   CITADEL_TEMPLATES,
   exportCitadelBlueprint,
   findCitadelTemplate,
+  summarizeCitadelGatehouse,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
 
@@ -79,5 +81,13 @@ export class CitadelsRouteService {
       return { ok: false, errors: validation.errors };
     }
     return { ok: true, citadel: applyCitadelBlueprint(this.citadels, citadelId, value as CitadelBlueprint) };
+  }
+
+  public getGatehouse(citadelId: string): CitadelGatehouseSummary | undefined {
+    const citadel = this.citadels.getCitadel(citadelId);
+    if (!citadel) {
+      return undefined;
+    }
+    return summarizeCitadelGatehouse(citadel);
   }
 }

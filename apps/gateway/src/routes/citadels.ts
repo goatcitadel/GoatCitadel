@@ -104,6 +104,22 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/citadels/:citadelId/gatehouse", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const summary = citadels.getGatehouse(params.data.citadelId);
+      if (!summary) {
+        return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
+      }
+      return reply.send(summary);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/citadel-templates", operatorOnly, async (request, reply) => {
     try {
       return reply.send({ items: citadels.listTemplates() });

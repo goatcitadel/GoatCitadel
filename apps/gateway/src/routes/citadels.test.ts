@@ -99,6 +99,27 @@ describe("citadels routes", () => {
     expect(listChambers).toHaveBeenCalledWith("ws-1");
   });
 
+  it("returns a gatehouse summary for an existing citadel", async () => {
+    const getGatehouse = vi.fn(() => ({ citadelId: "ws-1", chamberCount: 2, sealedChamberCount: 1 }));
+    const built = buildApp({ getGatehouse });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/gatehouse" });
+    expect(response.statusCode).toBe(200);
+    expect(getGatehouse).toHaveBeenCalledWith("ws-1");
+  });
+
+  it("returns 404 for a gatehouse summary on a missing citadel", async () => {
+    const getGatehouse = vi.fn(() => undefined);
+    const built = buildApp({ getGatehouse });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/gatehouse" });
+    expect(response.statusCode).toBe(404);
+  });
+
   it("lists citadel templates", async () => {
     const listTemplates = vi.fn(() => [{ id: "t1", name: "T1" }]);
     const built = buildApp({ listTemplates });
