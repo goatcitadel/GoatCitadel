@@ -46,7 +46,7 @@ export interface ApprovalRuntime {
     resolutionNote?: string;
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
-  listApprovals(status?: ApprovalRequest["status"], limit?: number): ApprovalRequest[];
+  listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): ApprovalRequest[];
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
   getApprovalReplay(approvalId: string, replayedBy?: string): ApprovalReplayResult;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
@@ -121,8 +121,8 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this.host, input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return approvalLifecycleService.listApprovals(this.host, status, limit);
+  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    return approvalLifecycleService.listApprovals(this.host, status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {

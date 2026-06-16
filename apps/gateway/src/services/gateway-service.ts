@@ -5458,8 +5458,8 @@ export class GatewayService {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return this.approvalRuntime.listApprovals(status, limit);
+  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    return this.approvalRuntime.listApprovals(status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {

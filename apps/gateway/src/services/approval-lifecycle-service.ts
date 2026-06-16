@@ -181,9 +181,10 @@ export function listApprovals(
   host: ApprovalLifecycleHost,
   status?: ApprovalRequest["status"],
   limit = 100,
+  workspaceId?: string,
 ): ApprovalRequest[] {
   return host.storage.approvals
-    .list(status, limit)
+    .list(status, limit, workspaceId)
     .filter((approval) => status !== "pending" || !isApprovalExpired(approval))
     .map((approval) =>
       withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),

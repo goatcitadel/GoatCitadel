@@ -33,6 +33,39 @@ function createRepoAtPath(dbPath: string): ApprovalRepository {
 }
 
 describe("ApprovalRepository", () => {
+  it("scopes listed approvals to a workspace when a workspaceId filter is provided", () => {
+    const repo = createRepo();
+    repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "a" },
+      preview: { command: "a" },
+      linkage: { workspaceId: "workspace-a", sessionId: "s-a" },
+    });
+    repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "b" },
+      preview: { command: "b" },
+      linkage: { workspaceId: "workspace-b", sessionId: "s-b" },
+    });
+    repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "global" },
+      preview: { command: "global" },
+    });
+
+    const scoped = repo.list("pending", 100, "workspace-a");
+    assert.deepEqual(
+      scoped.map((approval) => approval.linkage?.workspaceId),
+      ["workspace-a"],
+    );
+
+    const unscoped = repo.list("pending", 100);
+    assert.equal(unscoped.length, 3);
+  });
+
   it("tracks explanation lifecycle state", () => {
     const repo = createRepo();
     const created = repo.create({
