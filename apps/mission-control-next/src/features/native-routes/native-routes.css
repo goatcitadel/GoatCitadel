@@ -4229,3 +4229,42 @@
   gap: 0.35rem;
   margin: 0 0 0.3rem;
 }
+
+.mc-next-vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-vault-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+}
+
+.mc-next-vault-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-next-vault-item-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.mc-next-vault-value {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  font-size: 0.78rem;
+  word-break: break-all;
+}

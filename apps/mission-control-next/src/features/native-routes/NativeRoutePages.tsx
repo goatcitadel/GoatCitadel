@@ -5,6 +5,7 @@ import { CitadelBlueprintRoutePage } from "./library/CitadelBlueprintRoutePage";
 import { CitadelCouncilRoutePage } from "./library/CitadelCouncilRoutePage";
 import { CitadelMasonRoutePage } from "./library/CitadelMasonRoutePage";
 import { CitadelOverviewRoutePage } from "./library/CitadelOverviewRoutePage";
+import { CitadelVaultRoutePage } from "./library/CitadelVaultRoutePage";
 import { CitadelWardsRoutePage } from "./library/CitadelWardsRoutePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
@@ -107,7 +108,8 @@ function LibraryNativePage(props: NativeRoutePagesProps) {
     section === "citadel-overview" ||
     section === "citadel-wards" ||
     section === "citadel-council" ||
-    section === "citadel-blueprint"
+    section === "citadel-blueprint" ||
+    section === "citadel-vault"
   ) {
     return renderLibrarySection(section, props);
   }
@@ -144,6 +146,8 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <CitadelCouncilRoutePage {...props} />;
     case "citadel-blueprint":
       return <CitadelBlueprintRoutePage {...props} />;
+    case "citadel-vault":
+      return <CitadelVaultRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
     case "knowledge":

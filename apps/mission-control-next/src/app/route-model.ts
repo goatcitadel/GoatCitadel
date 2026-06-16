@@ -17,7 +17,8 @@ export type LibrarySection =
   | "citadel-overview"
   | "citadel-wards"
   | "citadel-council"
-  | "citadel-blueprint";
+  | "citadel-blueprint"
+  | "citadel-vault";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -699,6 +700,14 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Export the active Citadel as a secret-free Blueprint, or validate and import one.",
     verification: "verify:surface:regression label check",
     note: "Blueprint import/export is experimental; imports are schema-checked and secret-scanned but staging never activates connections.",
+  },
+  {
+    area: "library",
+    section: "citadel-vault",
+    status: "experimental",
+    releaseAction: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
+    verification: "verify:surface:regression label check",
+    note: "Vault MVP seals with a single per-Citadel key and fails closed when the keychain is unavailable; per-Chamber keys and rotation are the deferred follow-on.",
   },
   {
     area: "ops",

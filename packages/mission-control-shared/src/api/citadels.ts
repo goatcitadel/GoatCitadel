@@ -10,6 +10,7 @@ import type {
   CitadelCouncilAssignment,
   CitadelGatehouseSummary,
   CitadelTemplate,
+  CitadelVaultSecretMetadata,
   CitadelWardInput,
   CitadelWardRecord,
   MasonAnswers,
@@ -155,4 +156,36 @@ export async function sendMasonMessage(sessionId: string, message: string): Prom
 
 export async function draftBlueprintFromMasonSession(sessionId: string): Promise<CitadelBlueprint> {
   return request<CitadelBlueprint>(`/api/v1/mason/sessions/${id(sessionId)}/draft`, { method: "POST" });
+}
+
+// --- The Vault (§13) ---
+
+export async function listCitadelVaultSecrets(citadelId: string): Promise<CitadelVaultSecretMetadata[]> {
+  const { items } = await request<{ items: CitadelVaultSecretMetadata[] }>(
+    `/api/v1/citadels/${id(citadelId)}/vault-secrets`,
+  );
+  return items;
+}
+
+export async function storeCitadelVaultSecret(
+  citadelId: string,
+  name: string,
+  value: string,
+): Promise<CitadelVaultSecretMetadata> {
+  return request<CitadelVaultSecretMetadata>(`/api/v1/citadels/${id(citadelId)}/vault-secrets`, {
+    method: "POST",
+    body: JSON.stringify({ name, value }),
+  });
+}
+
+/** Explicit reveal — returns the opened plaintext for a single secret. */
+export async function revealCitadelVaultSecret(citadelId: string, secretId: string): Promise<string> {
+  const { value } = await request<{ value: string }>(
+    `/api/v1/citadels/${id(citadelId)}/vault-secrets/${id(secretId)}/reveal`,
+  );
+  return value;
+}
+
+export async function deleteCitadelVaultSecret(citadelId: string, secretId: string): Promise<void> {
+  await request<void>(`/api/v1/citadels/${id(citadelId)}/vault-secrets/${id(secretId)}`, { method: "DELETE" });
 }
