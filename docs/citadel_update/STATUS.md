@@ -9,65 +9,54 @@
 
 ## TL;DR
 
-A coherent, fully-tested **citadel-core MVP foundation** is built, committed, and pushed — plus the standalone isolation-leak fixes. Ten green commits. The spec is not "complete" (the Mason agent, Vault crypto, Council/Missions/Archive/Watchtower wiring, and the mission-control UI are each large, multi-session efforts), but a large slice of §25 (MVP) and §26 (tickets) is done end-to-end.
+The **structural MVP data model is complete** end-to-end (storage + gateway routes), fully tested and pushed, plus the standalone isolation-leak fixes. 20 feature commits. What remains is the *experiential* and *hard-crypto* spec — the **Mason** conversational agent, the **Vault** envelope encryption, the **mission-control UI**, sharing/Passages, model routing, and the consumer-wiring that flips the scoping mechanisms from "built" to "enforced." Those are large, multi-session, and several are big new surfaces (a conversational agent; an entire React UI; cryptography). They are **not** done.
 
 ---
 
-## Commits (newest first)
+## What's built (every Citadel sub-object: storage + HTTP)
 
-| Commit | What |
-|---|---|
-| `40309778a` | feat: Blueprint export, validate, import (§8) |
-| `845a790d5` | feat: launch templates + create-from-template (§7) |
-| `e530d84d1` | feat: gateway routes for Citadel charter + chambers (§22, ticket 5) |
-| `bdedc0408` | feat: persist Citadel charters + chambers — CitadelRepository (ticket 4) |
-| `819197208` | feat: workspace-scope the memory_items store (#1) |
-| `19784b245` | feat: citadel-core identity types + scope helpers |
-| `31eb58d1f` | feat: optional workspace scope filter on approval listing (#2) |
-| `1836381f9` | fix: require explicit opt-in before plaintext `.env` secret fallback (#3) |
-| `e0e4b9dfa` | docs: spec + reuse audit |
-| (this) | docs: status |
+`citadel-core` lives in `packages/contracts/src/citadels.ts` + `citadel-blueprints.ts`, `packages/storage/src/citadel-repo.ts`, and `apps/gateway/src/{routes,services}/citadels*`.
 
-## What's built (spec mapping)
+| Spec object | Storage | Routes |
+|---|---|---|
+| **Charter** (§2) | `citadel_charters` (v111) | `GET/PUT /api/v1/citadels/:id[/charter]` |
+| **Chambers** (§2) | `citadel_chambers` (v111) | `GET/POST /api/v1/citadels/:id/chambers` |
+| **Council** (§16) | `citadel_council_members` (v113) | `GET/POST/DELETE /api/v1/citadels/:id/council[/:memberId]` |
+| **Missions** (§17) | `citadel_missions` (v114), 10-state machine | `GET/POST .../missions`, `GET/PATCH /api/v1/missions/:id` |
+| **Archive** (§18) | `citadel_archive_items` (v115), chamber-scoped | `GET/POST/DELETE /api/v1/citadels/:id/archive[/:itemId]` |
+| **Templates** (§7) | 3 built-ins + `applyCitadelTemplate` | `GET /api/v1/citadel-templates`, `POST .../from-template` |
+| **Blueprints** (§8) | export/validate(secret-scan)/import | `GET .../blueprint`, `POST /api/v1/blueprints/validate`, `POST .../from-blueprint` |
+| **Gatehouse** (§20) | `summarizeCitadelGatehouse` | `GET /api/v1/citadels/:id/gatehouse` |
+| **Watchtower** (§19) | `cron_jobs.citadel_id` (v112) + `listByCitadel` | (scheduler wiring pending) |
+| **Scope spine** | `resolveCitadelScope` / `isWithinCitadelScope` | enforced in repo isolation tests |
 
-**citadel-core (the scope/identity spine):**
-- `packages/contracts/src/citadels.ts` — `Charter`, `Chamber`, `CitadelKind`, sensitivity/risk/model-policy enums; scope primitives `resolveCitadelScope()` + `isWithinCitadelScope()` (hard cross-Citadel boundary; chamber-scoped viewers see their chamber + citadel-general items). **A Citadel IS a workspace** (citadelId aliases workspaceId).
-- `packages/storage/src/citadel-repo.ts` — `CitadelRepository` (charter upsert/get, chamber create/list/get, getCitadel) over `citadel_charters` + `citadel_chambers` (sqlite migration v111; auto-rendered to Postgres). Wired as `storage.citadels`.
-- Gateway routes (`apps/gateway/src/routes/citadels.ts`, operator-gated, zod-validated):
-  - `GET /api/v1/citadels/:id`, `PUT /api/v1/citadels/:id/charter`
-  - `GET|POST /api/v1/citadels/:id/chambers`
-  - `GET /api/v1/citadel-templates`, `POST /api/v1/citadels/:id/from-template`
-  - `GET /api/v1/citadels/:id/blueprint`, `POST /api/v1/blueprints/validate`, `POST /api/v1/citadels/:id/from-blueprint`
+All routes operator-gated + zod-validated. Citadel = Workspace (`citadelId` aliases `workspaceId`).
 
-**Templates (§7):** 3 built-in templates (Personal Chief of Staff, Company Co-Founder, Project Command) as data + pure `applyCitadelTemplate`.
-
-**Blueprints (§8):** `exportCitadelBlueprint` (structure only — strips ids/timestamps/secrets), `validateCitadelBlueprint` (schema + secret-shaped-content scan), `applyCitadelBlueprint` (import validates before applying).
-
-**Isolation leaks:** #3 fixed (real); #1 + #2 storage-layer mechanisms enforced + tested (activate when a real scope is threaded into requests — see below).
-
-### §25 MVP must-haves status
-Done: Citadel creation (routes) · templates · Blueprint generation · Blueprint import/export · Charter · lightweight Chambers · review-before-activation primitive (validate-before-apply). Not yet: Mason setup flow · basic Council · basic Missions · basic Archive · basic Watchtower · Gatehouse summary · UI surfaces.
+## Isolation leak fixes (standalone)
+- **#3** `.env` plaintext secret fallback → opt-in only (real fix).
+- **#1** `memory_items` global store → `workspace_id` (v110) + scoped read.
+- **#2** approval-listing broadcast → optional workspace filter (route→repo).
+- #1/#2 are storage-layer **mechanisms**; they enforce once a real scope is threaded into the request (the consumer-wiring below).
 
 ## Verification
-Every increment: package test suite + typecheck green before commit. Storage full suite 564 pass. Gateway typecheck clean across all route wiring. Contracts citadel suites 18 pass. (Contracts has 2 **pre-existing** failures — `follow-on-parity.alignment`, `provider-templates` — untouched by this branch; `git diff --name-only f52faa81e HEAD` confirms.)
+Every commit: package suite + typecheck green before push. **Storage full suite 568 pass / 0 fail** (migrations v110–v115 + all repos). Gateway typecheck clean. Gateway citadel route suite 25 pass. Contracts citadel suites 19 pass. (Contracts has 2 **pre-existing** failures — `follow-on-parity.alignment`, `provider-templates` — untouched by this branch.)
 
-## Deliberately deferred (citadel-core scope-spine work, not standalone patches)
-- **#4 agent grant ceiling** — scoped agent grants via the existing policy engine (don't build a parallel gate). Choke-point: `chat-agent-orchestrator.ts` tool-policy check.
-- **#5 policy global-grant fallback** — latent + lives in the security core; add `"citadel"`/`"chamber"` to `ToolGrantScope` and `buildScopeCandidates()` (`policy-engine/src/engine.ts:~1618`), make global fallback conditional.
-- **#1/#2 consumer wiring** — thread `resolveCitadelScope(request)` into the memory compose request + approval-list callers to flip the mechanisms from "built" to "enforced end-to-end."
+## Commits (20 feature + docs)
+`54d834aa8` archive routes · `0b6eb344f` archive storage · `75265e75b` mission routes · `e9f32f021` mission storage · `26ab31f79` council routes · `f98b411d7` council storage · `6cc7765ce` watchtower scope · `b34855fc1` gatehouse · `40309778a` blueprints · `845a790d5` templates · `e530d84d1` citadel routes · `bdedc0408` citadel repo · `819197208` #1 memory · `19784b245` scope helpers · `31eb58d1f` #2 approvals · `1836381f9` #3 secrets · (+ docs).
 
-## Remaining spec (large, multi-session)
-- **The Mason** (§9) — conversational setup agent producing/validating Blueprints (built on existing chat/agent infra).
-- **Council** (§16) — agents as scoped identities (extend existing agents + grants).
-- **Missions** (§17) — thin Mission wrapper over the existing orchestration/durable engine.
-- **Archive** (§18) — extend memory-core/Library with Citadel scope.
-- **Watchtower** (§19) — extend the existing cron_jobs scheduler with citadelId.
-- **Gatehouse** (§20) — summary over existing policy/approvals/secrets, scoped per Citadel.
-- **Vault** (§13) — envelope crypto + key hierarchy (genuinely net-new; defer per plan).
-- **UI** (§6, mission-control-next) — Citadel list/overview/charter/chambers/Mason/blueprint surfaces.
-- **Sharing/Passages** (§12), **model routing** (§14) — later.
+## NOT done — the large remaining spec
+- **The Mason** (§9) — conversational setup agent (built on existing chat/agent infra). Large.
+- **Vault** (§13) — envelope crypto + key hierarchy. Genuinely net-new; defer per plan.
+- **UI** (§6) — Citadel list/overview/charter/chambers/council/missions/archive/Mason/blueprint surfaces in `mission-control-next`. Large new surface.
+- **Consumer wiring** — thread `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower enforce end-to-end. (#4 agent grants, #5 policy global-grant fallback also live here — see policy-engine `buildScopeCandidates`.)
+- **Council as scoped agent identities** (§16) — current Council is membership records; binding to real agents + grants is the #4 work.
+- **Missions as orchestration** (§17) — current Missions are records + state; wrapping the durable/orchestration engine (steps/checkpoints/evidence) remains.
+- **Archive ↔ memory** (§18) — current Archive is its own store; unifying with `memory-core` retrieval remains.
+- **Sharing/Passages** (§12), **model routing** (§14), **secrets/integrations per Citadel** (§15) — later.
 
-## Open §6 decisions (recommended defaults applied so far)
-Citadel = Workspace ✓ · Chamber = real column ✓ · global-grant inheritance = empty (pending #5) · audit append-only (defer tamper-evident) · `.env` fallback opt-in ✓.
+## Suggested next session
+1. **Consumer wiring** — biggest leverage: thread the scope into requests → #1/#2/Watchtower go live; then #4/#5 in the policy engine.
+2. **The Mason** as an MCP/skill that emits Blueprints (the export/validate/import plumbing already exists).
+3. **UI** — wire the gateway routes (all built) into mission-control-next surfaces.
 
 Review: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
