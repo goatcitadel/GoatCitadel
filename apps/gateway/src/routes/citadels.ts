@@ -80,6 +80,10 @@ const memberRouteParamsSchema = z.object({
   subjectId: z.string().min(1),
 });
 
+const evaluateActionSchema = z.object({
+  action: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -432,6 +436,24 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
       return reply.send(result.review);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Gatehouse decision point: evaluate an action against this Citadel's Wards.
+  fastify.post("/api/v1/citadels/:citadelId/gatehouse/evaluate", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = evaluateActionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const effect = citadels.evaluateGatehouseAction(params.data.citadelId, parsed.data.action);
+      return reply.send({ action: parsed.data.action, effect });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

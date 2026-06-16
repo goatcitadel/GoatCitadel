@@ -17,11 +17,13 @@ import type {
   CitadelTemplate,
   CitadelWardInput,
   CitadelWardRecord,
+  WardEffect,
 } from "@goatcitadel/contracts";
 import {
   applyCitadelBlueprint,
   applyCitadelTemplate,
   CITADEL_TEMPLATES,
+  evaluateWards,
   exportCitadelBlueprint,
   findCitadelTemplate,
   generateBlueprintReviewSummary,
@@ -179,5 +181,14 @@ export class CitadelsRouteService {
       return { ok: false, errors: validation.errors };
     }
     return { ok: true, review: generateBlueprintReviewSummary(value as CitadelBlueprint) };
+  }
+
+  /**
+   * The Gatehouse decision point: evaluate an action against this Citadel's Wards
+   * (deny-wins). This is what a policy enforcement layer calls before allowing an
+   * action — the persisted Wards become an actual allow/deny/require_approval decision.
+   */
+  public evaluateGatehouseAction(citadelId: string, action: string): WardEffect {
+    return evaluateWards(this.citadels.listWards(citadelId), action);
   }
 }

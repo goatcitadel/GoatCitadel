@@ -442,4 +442,31 @@ describe("citadels routes", () => {
     const response = await app.inject({ method: "POST", url: "/api/v1/mason/review", payload: {} });
     expect(response.statusCode).toBe(400);
   });
+
+  it("evaluates an action against the citadel's wards", async () => {
+    const evaluateGatehouseAction = vi.fn(() => "require_approval");
+    const built = buildApp({ evaluateGatehouseAction });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/gatehouse/evaluate",
+      payload: { action: "email.send" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ action: "email.send", effect: "require_approval" });
+    expect(evaluateGatehouseAction).toHaveBeenCalledWith("ws-1", "email.send");
+  });
+
+  it("rejects a gatehouse evaluation without an action", async () => {
+    const evaluateGatehouseAction = vi.fn();
+    const built = buildApp({ evaluateGatehouseAction });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/gatehouse/evaluate", payload: {} });
+    expect(response.statusCode).toBe(400);
+    expect(evaluateGatehouseAction).not.toHaveBeenCalled();
+  });
 });
