@@ -47,6 +47,17 @@ const councilParamsSchema = z.object({
   agentId: z.string().min(1),
 });
 
+const wardSchema = z.object({
+  name: z.string().min(1),
+  actionPattern: z.string().min(1),
+  effect: z.enum(["allow", "deny", "require_approval", "require_dry_run", "redact", "route_local"]),
+});
+
+const wardParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  wardId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -237,6 +248,52 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       const removed = citadels.unassignAgent(params.data.citadelId, params.data.agentId);
       if (!removed) {
         return reply.code(404).send({ error: `Agent ${params.data.agentId} is not on this Citadel's council.` });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Wards = the Citadel's Gatehouse policy rules (deny-wins; see evaluateWards).
+  fastify.get("/api/v1/citadels/:citadelId/wards", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listWards(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/wards", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = wardSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const ward = citadels.addWard({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(ward);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/wards/:wardId", operatorOnly, async (request, reply) => {
+    const params = wardParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removeWard(params.data.citadelId, params.data.wardId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Ward ${params.data.wardId} not found.` });
       }
       return reply.code(204).send();
     } catch (error) {

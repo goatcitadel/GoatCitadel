@@ -12,6 +12,20 @@ export interface CitadelWard {
   effect: WardEffect;
 }
 
+/** A persisted Ward belonging to a Citadel. */
+export interface CitadelWardRecord extends CitadelWard {
+  wardId: string;
+  citadelId: string;
+  createdAt: string;
+}
+
+export interface CitadelWardInput {
+  citadelId: string;
+  name: string;
+  actionPattern: string;
+  effect: WardEffect;
+}
+
 export function wardMatchesAction(actionPattern: string, action: string): boolean {
   // Escape all regex metacharacters except "*", then replace "*" with ".*"
   const escaped = actionPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");

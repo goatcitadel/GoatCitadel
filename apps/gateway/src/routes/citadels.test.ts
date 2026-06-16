@@ -262,4 +262,52 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(unassignAgent).toHaveBeenCalledWith("ws-1", "agent-x");
   });
+
+  it("lists and creates wards for a citadel", async () => {
+    const listWards = vi.fn(() => [{ wardId: "w1", name: "No email" }]);
+    const addWard = vi.fn((input: Record<string, unknown>) => ({ wardId: "w2", ...input }));
+    const built = buildApp({ listWards, addWard });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/wards" });
+    expect(list.statusCode).toBe(200);
+    expect(listWards).toHaveBeenCalledWith("ws-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/wards",
+      payload: { name: "No email", actionPattern: "email.send", effect: "deny" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(addWard).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", actionPattern: "email.send", effect: "deny" }),
+    );
+  });
+
+  it("rejects a ward with an invalid effect", async () => {
+    const addWard = vi.fn();
+    const built = buildApp({ addWard });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/wards",
+      payload: { name: "x", actionPattern: "y", effect: "bogus" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(addWard).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing ward", async () => {
+    const removeWard = vi.fn(() => false);
+    const built = buildApp({ removeWard });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/wards/w9" });
+    expect(response.statusCode).toBe(404);
+    expect(removeWard).toHaveBeenCalledWith("ws-1", "w9");
+  });
 });

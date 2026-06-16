@@ -6,10 +6,13 @@ import type {
   CitadelCharterInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
+  CitadelWardInput,
+  CitadelWardRecord,
   ChamberSensitivity,
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
+  WardEffect,
 } from "@goatcitadel/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
@@ -46,6 +49,15 @@ interface CouncilAssignmentRow {
   created_at: string;
 }
 
+interface WardRow {
+  ward_id: string;
+  citadel_id: string;
+  name: string;
+  action_pattern: string;
+  effect: string;
+  created_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -60,6 +72,10 @@ export class CitadelRepository {
   private readonly getAssignmentByPairStmt;
   private readonly listAssignmentsStmt;
   private readonly unassignAgentStmt;
+  private readonly addWardStmt;
+  private readonly getWardStmt;
+  private readonly listWardsStmt;
+  private readonly deleteWardStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -107,6 +123,15 @@ export class CitadelRepository {
     this.unassignAgentStmt = db.prepare(
       "DELETE FROM citadel_agent_assignments WHERE citadel_id = @citadelId AND agent_id = @agentId",
     );
+    this.addWardStmt = db.prepare(`
+      INSERT INTO citadel_wards (ward_id, citadel_id, name, action_pattern, effect, created_at)
+      VALUES (@wardId, @citadelId, @name, @actionPattern, @effect, @now)
+    `);
+    this.getWardStmt = db.prepare("SELECT * FROM citadel_wards WHERE ward_id = @wardId");
+    this.listWardsStmt = db.prepare(
+      "SELECT * FROM citadel_wards WHERE citadel_id = @citadelId ORDER BY created_at ASC, ward_id ASC",
+    );
+    this.deleteWardStmt = db.prepare("DELETE FROM citadel_wards WHERE ward_id = @wardId AND citadel_id = @citadelId");
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -203,6 +228,34 @@ export class CitadelRepository {
     const result = this.unassignAgentStmt.run({ citadelId, agentId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  public addWard(input: CitadelWardInput): CitadelWardRecord {
+    const wardId = randomUUID();
+    const now = new Date().toISOString();
+    this.addWardStmt.run({
+      wardId,
+      citadelId: input.citadelId,
+      name: input.name,
+      actionPattern: input.actionPattern,
+      effect: input.effect,
+      now,
+    });
+    const row = this.getWardStmt.get({ wardId }) as WardRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to persist ward ${wardId} for citadel ${input.citadelId}`);
+    }
+    return mapWard(row);
+  }
+
+  public listWards(citadelId: string): CitadelWardRecord[] {
+    const rows = this.listWardsStmt.all({ citadelId }) as WardRow[];
+    return rows.map(mapWard);
+  }
+
+  public removeWard(citadelId: string, wardId: string): boolean {
+    const result = this.deleteWardStmt.run({ citadelId, wardId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -238,6 +291,17 @@ function mapCouncilAssignment(row: CouncilAssignmentRow): CitadelCouncilAssignme
     assignmentId: row.assignment_id,
     citadelId: row.citadel_id,
     agentId: row.agent_id,
+    createdAt: row.created_at,
+  };
+}
+
+function mapWard(row: WardRow): CitadelWardRecord {
+  return {
+    wardId: row.ward_id,
+    citadelId: row.citadel_id,
+    name: row.name,
+    actionPattern: row.action_pattern,
+    effect: row.effect as WardEffect,
     createdAt: row.created_at,
   };
 }

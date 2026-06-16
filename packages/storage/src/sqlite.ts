@@ -1130,6 +1130,25 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 114,
+    name: "citadel_wards_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_wards (
+          ward_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          action_pattern TEXT NOT NULL,
+          effect TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_wards_citadel
+          ON citadel_wards(citadel_id, created_at ASC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

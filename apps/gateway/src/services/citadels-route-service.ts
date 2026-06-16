@@ -10,6 +10,8 @@ import type {
   CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
   CitadelTemplate,
+  CitadelWardInput,
+  CitadelWardRecord,
 } from "@goatcitadel/contracts";
 import {
   applyCitadelBlueprint,
@@ -35,6 +37,9 @@ export interface CitadelsRoutePort {
   assignAgent(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment;
   listCouncilAssignments(citadelId: string): CitadelCouncilAssignment[];
   unassignAgent(citadelId: string, agentId: string): boolean;
+  addWard(input: CitadelWardInput): CitadelWardRecord;
+  listWards(citadelId: string): CitadelWardRecord[];
+  removeWard(citadelId: string, wardId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -88,12 +93,24 @@ export class CitadelsRouteService {
     return { ok: true, citadel: applyCitadelBlueprint(this.citadels, citadelId, value as CitadelBlueprint) };
   }
 
-  public getGatehouse(citadelId: string): CitadelGatehouseSummary | undefined {
+  public getGatehouse(citadelId: string): (CitadelGatehouseSummary & { wardCount: number }) | undefined {
     const citadel = this.citadels.getCitadel(citadelId);
     if (!citadel) {
       return undefined;
     }
-    return summarizeCitadelGatehouse(citadel);
+    return { ...summarizeCitadelGatehouse(citadel), wardCount: this.citadels.listWards(citadelId).length };
+  }
+
+  public listWards(citadelId: string): CitadelWardRecord[] {
+    return this.citadels.listWards(citadelId);
+  }
+
+  public addWard(input: CitadelWardInput): CitadelWardRecord {
+    return this.citadels.addWard(input);
+  }
+
+  public removeWard(citadelId: string, wardId: string): boolean {
+    return this.citadels.removeWard(citadelId, wardId);
   }
 
   /** The Council is the set of existing agents assigned to this Citadel (by id). */

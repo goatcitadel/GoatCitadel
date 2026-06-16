@@ -119,4 +119,26 @@ describe("CitadelRepository", () => {
     );
     assert.equal(repo.unassignAgent("ws-1", "nope"), false);
   });
+
+  it("adds, lists, and removes wards scoped to a citadel", () => {
+    const repo = createRepo();
+    const ward = repo.addWard({
+      citadelId: "ws-1",
+      name: "No prod writes",
+      actionPattern: "database.*",
+      effect: "require_approval",
+    });
+    repo.addWard({ citadelId: "ws-1", name: "No email send", actionPattern: "email.send", effect: "deny" });
+    repo.addWard({ citadelId: "ws-2", name: "Other", actionPattern: "*", effect: "allow" });
+
+    assert.equal(ward.effect, "require_approval");
+    assert.deepEqual(
+      repo.listWards("ws-1").map((entry) => entry.name).sort(),
+      ["No email send", "No prod writes"],
+    );
+
+    assert.equal(repo.removeWard("ws-1", ward.wardId), true);
+    assert.equal(repo.listWards("ws-1").length, 1);
+    assert.equal(repo.removeWard("ws-1", "nope"), false);
+  });
 });
