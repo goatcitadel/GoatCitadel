@@ -4168,11 +4168,17 @@
   font-size: 0.85rem;
 }
 
-.mc-next-mason-footnote {
+.mc-next-mason-footnote,
+.mc-next-citadel-footnote {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   margin: 0.85rem 0 0;
   color: var(--muted-foreground);
   font-size: 0.78rem;
+}
+
+.mc-next-citadel-purpose {
+  margin: 0 0 0.6rem;
+  color: var(--foreground);
 }

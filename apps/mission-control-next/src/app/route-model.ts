@@ -13,7 +13,8 @@ export type LibrarySection =
   | "artifacts"
   | "prompt-packs"
   | "curator"
-  | "citadel";
+  | "citadel"
+  | "citadel-overview";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -662,6 +663,15 @@ export const ROUTE_RELEASE_SCOPE = [
       "Stage a Citadel with the Mason and review the drafted Blueprint without connecting accounts or opening Gates.",
     verification: "verify:surface:regression label check",
     note: "The Mason and Citadel staging remain experimental until activation, Vault crypto, and Gate enforcement are release-proven.",
+  },
+  {
+    area: "library",
+    section: "citadel-overview",
+    status: "experimental",
+    releaseAction:
+      "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
+    verification: "verify:surface:regression label check",
+    note: "Citadel overview is read-only and experimental until Gate enforcement and Vault crypto are release-proven.",
   },
   {
     area: "ops",

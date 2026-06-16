@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import type { AppRoute } from "@next/app/route-model";
 import { NativePageFrame } from "./NativeRoutePageLayout";
 import { CitadelMasonRoutePage } from "./library/CitadelMasonRoutePage";
+import { CitadelOverviewRoutePage } from "./library/CitadelOverviewRoutePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
@@ -96,7 +97,7 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
 
 function LibraryNativePage(props: NativeRoutePagesProps) {
   const section = routeSectionWithDefault(props.route, "agents");
-  if (section === "curator" || section === "memory" || section === "citadel") {
+  if (section === "curator" || section === "memory" || section === "citadel" || section === "citadel-overview") {
     return renderLibrarySection(section, props);
   }
 
@@ -124,6 +125,8 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <CuratorRoutePage {...props} />;
     case "citadel":
       return <CitadelMasonRoutePage {...props} />;
+    case "citadel-overview":
+      return <CitadelOverviewRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
     case "knowledge":
