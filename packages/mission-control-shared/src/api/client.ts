@@ -260,6 +260,7 @@ export async function runUiAction<T>(operation: () => Promise<T>): Promise<UiAct
 }
 
 export * from "./types.js";
+export * from "./citadels.js";
 export {
   controlAgenticRun,
   fetchAgenticChannelDeliveries,
