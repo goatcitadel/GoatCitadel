@@ -19,6 +19,9 @@ import type {
   CitadelPassage,
   CitadelPassageInput,
   CitadelTemplate,
+  CitadelVaultSecretInput,
+  CitadelVaultSecretMetadata,
+  CitadelVaultSecretRecord,
   CitadelWardInput,
   CitadelWardRecord,
   WardEffect,
@@ -35,13 +38,30 @@ import {
   findCitadelTemplate,
   generateBlueprintReviewSummary,
   MASON_SETUP_QUESTIONS,
+  openValue,
   parseMasonInterpretResponse,
+  sealValue,
   summarizeCitadelGatehouse,
+  toVaultSecretMetadata,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
 
 /** Interprets a freeform message into raw model output (the Mason's one LLM dependency). */
 export type MasonInterpret = (prompt: string) => Promise<string>;
+
+/**
+ * Resolves the per-Citadel Vault master key. Returns undefined when the secret
+ * store is unavailable — the Vault then fails closed (never plaintext fallback).
+ */
+export type VaultKeyProvider = (citadelId: string) => Buffer | undefined;
+
+export type VaultStoreResult =
+  | { ok: false; reason: "unavailable" }
+  | { ok: true; secret: CitadelVaultSecretMetadata };
+
+export type VaultRevealResult =
+  | { ok: false; reason: "unavailable" | "not_found" }
+  | { ok: true; value: string };
 
 export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
 
@@ -89,12 +109,17 @@ export interface CitadelsRoutePort {
   addIntegrationGrant(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant;
   listIntegrationGrants(citadelId: string): CitadelIntegrationGrant[];
   removeIntegrationGrant(citadelId: string, grantId: string): boolean;
+  storeVaultSecret(input: CitadelVaultSecretInput): CitadelVaultSecretRecord;
+  getVaultSecret(citadelId: string, secretId: string): CitadelVaultSecretRecord | undefined;
+  listVaultSecrets(citadelId: string): CitadelVaultSecretRecord[];
+  deleteVaultSecret(citadelId: string, secretId: string): boolean;
 }
 
 export class CitadelsRouteService {
   public constructor(
     private readonly citadels: CitadelsRoutePort,
     private readonly masonInterpret?: MasonInterpret,
+    private readonly vaultKey?: VaultKeyProvider,
   ) {}
 
   public getCitadel(citadelId: string): Citadel | undefined {
@@ -163,6 +188,43 @@ export class CitadelsRouteService {
 
   public removeWard(citadelId: string, wardId: string): boolean {
     return this.citadels.removeWard(citadelId, wardId);
+  }
+
+  /** Vault secret names + provenance — never the sealed or opened value. */
+  public listVaultSecrets(citadelId: string): CitadelVaultSecretMetadata[] {
+    return this.citadels.listVaultSecrets(citadelId).map(toVaultSecretMetadata);
+  }
+
+  /** Seal a plaintext under the Citadel's master key and persist it. Fails closed if no key. */
+  public storeVaultSecret(citadelId: string, secretName: string, plaintext: string): VaultStoreResult {
+    const key = this.vaultKey?.(citadelId);
+    if (!key) {
+      return { ok: false, reason: "unavailable" };
+    }
+    const record = this.citadels.storeVaultSecret({ citadelId, secretName, sealedValue: sealValue(plaintext, key) });
+    return { ok: true, secret: toVaultSecretMetadata(record) };
+  }
+
+  /** Open a stored secret with the Citadel's master key. Fails closed if no key or undecryptable. */
+  public revealVaultSecret(citadelId: string, secretId: string): VaultRevealResult {
+    const key = this.vaultKey?.(citadelId);
+    if (!key) {
+      return { ok: false, reason: "unavailable" };
+    }
+    const record = this.citadels.getVaultSecret(citadelId, secretId);
+    if (!record) {
+      return { ok: false, reason: "not_found" };
+    }
+    try {
+      return { ok: true, value: openValue(record.sealedValue, key) };
+    } catch {
+      // Wrong key or tampered envelope — never leak ciphertext or a partial result.
+      return { ok: false, reason: "unavailable" };
+    }
+  }
+
+  public deleteVaultSecret(citadelId: string, secretId: string): boolean {
+    return this.citadels.deleteVaultSecret(citadelId, secretId);
   }
 
   /** The Council is the set of existing agents assigned to this Citadel (by id). */

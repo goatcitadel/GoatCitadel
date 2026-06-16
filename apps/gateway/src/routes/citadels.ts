@@ -58,6 +58,16 @@ const wardParamsSchema = z.object({
   wardId: z.string().min(1),
 });
 
+const vaultSecretSchema = z.object({
+  name: z.string().min(1),
+  value: z.string().min(1),
+});
+
+const vaultSecretParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  secretId: z.string().min(1),
+});
+
 const passageSchema = z.object({
   destinationCitadelId: z.string().min(1),
   allowedFields: z.array(z.string().min(1)),
@@ -355,6 +365,75 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       const removed = citadels.removeWard(params.data.citadelId, params.data.wardId);
       if (!removed) {
         return reply.code(404).send({ error: `Ward ${params.data.wardId} not found.` });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/vault-secrets", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listVaultSecrets(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/vault-secrets", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = vaultSecretSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const result = citadels.storeVaultSecret(params.data.citadelId, parsed.data.name, parsed.data.value);
+      if (!result.ok) {
+        return reply.code(503).send({ error: "Vault is unavailable — the secret store could not provide a key." });
+      }
+      return reply.code(201).send(result.secret);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get(
+    "/api/v1/citadels/:citadelId/vault-secrets/:secretId/reveal",
+    operatorOnly,
+    async (request, reply) => {
+      const params = vaultSecretParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      try {
+        const result = citadels.revealVaultSecret(params.data.citadelId, params.data.secretId);
+        if (!result.ok) {
+          const code = result.reason === "not_found" ? 404 : 503;
+          return reply.code(code).send({ error: `Vault secret ${params.data.secretId} ${result.reason}.` });
+        }
+        return reply.send({ value: result.value });
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.delete("/api/v1/citadels/:citadelId/vault-secrets/:secretId", operatorOnly, async (request, reply) => {
+    const params = vaultSecretParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.deleteVaultSecret(params.data.citadelId, params.data.secretId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Vault secret ${params.data.secretId} not found.` });
       }
       return reply.code(204).send();
     } catch (error) {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { generateVaultKey, type CitadelVaultSecretRecord } from "@goatcitadel/contracts";
 import { CitadelsRouteService, type CitadelsRoutePort } from "./citadels-route-service.js";
 
 function repoStub(overrides: Partial<CitadelsRoutePort>): CitadelsRoutePort {
@@ -45,5 +46,59 @@ describe("CitadelsRouteService.interpretSessionMessage", () => {
     const service = new CitadelsRouteService(repo, async () => "{}");
 
     expect(await service.interpretSessionMessage("nope", "hi")).toEqual({ ok: false, reason: "not_found" });
+  });
+});
+
+describe("CitadelsRouteService vault", () => {
+  it("seals on store and opens on reveal, never exposing the value on store or list", () => {
+    const key = generateVaultKey();
+    const store = new Map<string, CitadelVaultSecretRecord>();
+    let lastSealed: unknown;
+    const repo = repoStub({
+      storeVaultSecret: vi.fn((input) => {
+        lastSealed = input.sealedValue;
+        const record: CitadelVaultSecretRecord = {
+          secretId: "s1",
+          citadelId: input.citadelId,
+          secretName: input.secretName,
+          sealedValue: input.sealedValue,
+          createdAt: "t",
+          updatedAt: "t",
+        };
+        store.set("s1", record);
+        return record;
+      }),
+      getVaultSecret: vi.fn((_cid: string, sid: string) => store.get(sid)),
+      listVaultSecrets: vi.fn(() => [...store.values()]),
+    });
+    const service = new CitadelsRouteService(repo, undefined, () => key);
+
+    const stored = service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123");
+    expect(stored).toEqual({
+      ok: true,
+      secret: { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
+    });
+    // The persisted envelope is ciphertext, not the plaintext.
+    expect(JSON.stringify(lastSealed)).not.toContain("sk-live-SECRET-123");
+
+    expect(service.revealVaultSecret("c1", "s1")).toEqual({ ok: true, value: "sk-live-SECRET-123" });
+
+    // The list view carries names + provenance only — never the sealed or opened value.
+    expect(service.listVaultSecrets("c1")).toEqual([
+      { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
+    ]);
+  });
+
+  it("fails closed (unavailable) when no vault key is configured", () => {
+    const service = new CitadelsRouteService(repoStub({}));
+    expect(service.storeVaultSecret("c1", "k", "v")).toEqual({ ok: false, reason: "unavailable" });
+    expect(service.revealVaultSecret("c1", "s1")).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("returns not_found when revealing a missing secret", () => {
+    const key = generateVaultKey();
+    const repo = repoStub({ getVaultSecret: vi.fn(() => undefined) });
+    const service = new CitadelsRouteService(repo, undefined, () => key);
+    expect(service.revealVaultSecret("c1", "nope")).toEqual({ ok: false, reason: "not_found" });
   });
 });

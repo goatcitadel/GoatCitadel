@@ -719,6 +719,7 @@ export class GatewayService {
   public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
+  public readonly secretStore: SecretStoreService;
   private readonly skillsService: SkillsService;
   public readonly orchestrationEngine: OrchestrationEngine;
   private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
@@ -873,6 +874,7 @@ export class GatewayService {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
     });
     const secretStore = new SecretStoreService();
+    this.secretStore = secretStore;
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,

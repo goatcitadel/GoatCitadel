@@ -311,6 +311,75 @@ describe("citadels routes", () => {
     expect(removeWard).toHaveBeenCalledWith("ws-1", "w9");
   });
 
+  it("stores and lists vault secrets (metadata only)", async () => {
+    const listVaultSecrets = vi.fn(() => [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }]);
+    const storeVaultSecret = vi.fn(() => ({
+      ok: true as const,
+      secret: { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
+    }));
+    const built = buildApp({ listVaultSecrets, storeVaultSecret });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/vault-secrets" });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual({ items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/vault-secrets",
+      payload: { name: "stripe", value: "sk-live-123" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(storeVaultSecret).toHaveBeenCalledWith("ws-1", "stripe", "sk-live-123");
+    // The response never carries the value.
+    expect(JSON.stringify(create.json())).not.toContain("sk-live-123");
+  });
+
+  it("returns 503 when the vault is unavailable", async () => {
+    const storeVaultSecret = vi.fn(() => ({ ok: false as const, reason: "unavailable" as const }));
+    const built = buildApp({ storeVaultSecret });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/vault-secrets",
+      payload: { name: "stripe", value: "sk-live-123" },
+    });
+    expect(response.statusCode).toBe(503);
+  });
+
+  it("reveals a vault secret, and 404s a missing one", async () => {
+    const revealVaultSecret = vi.fn((_cid: string, secretId: string) =>
+      secretId === "s1" ? { ok: true as const, value: "sk-live-123" } : { ok: false as const, reason: "not_found" as const },
+    );
+    const built = buildApp({ revealVaultSecret });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const ok = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/vault-secrets/s1/reveal" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ value: "sk-live-123" });
+
+    const missing = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/vault-secrets/nope/reveal" });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("deletes a vault secret and 404s a missing one", async () => {
+    const deleteVaultSecret = vi.fn((_cid: string, secretId: string) => secretId === "s1");
+    const built = buildApp({ deleteVaultSecret });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const ok = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/s1" });
+    expect(ok.statusCode).toBe(204);
+    expect(deleteVaultSecret).toHaveBeenCalledWith("ws-1", "s1");
+
+    const missing = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/nope" });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("lists and creates passages for a citadel", async () => {
     const listPassages = vi.fn(() => [{ passageId: "p1", destinationCitadelId: "ws-2" }]);
     const createPassage = vi.fn((input: Record<string, unknown>) => ({ passageId: "p2", ...input }));
