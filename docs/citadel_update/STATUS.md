@@ -26,11 +26,20 @@ The **structural MVP data model is complete** end-to-end (storage + gateway rout
 | **Archive** (§18) | **reuse existing memory** scoped by `workspaceId` (leak #1's `listActiveMemoryItems(workspaceId)`) — no new table | (existing memory API, scoped) |
 | **Templates** (§7) | 3 built-ins + `applyCitadelTemplate` | `GET /api/v1/citadel-templates`, `POST .../from-template` |
 | **Blueprints** (§8) | export/validate(secret-scan)/import | `GET .../blueprint`, `POST /api/v1/blueprints/validate`, `POST .../from-blueprint` |
-| **Gatehouse** (§20) | `summarizeCitadelGatehouse` | `GET /api/v1/citadels/:id/gatehouse` |
+| **Gatehouse** (§20) | `summarizeCitadelGatehouse` + persisted **Wards** (`citadel_wards` v114) | `GET /api/v1/citadels/:id/gatehouse`, `GET/POST/DELETE .../wards` |
 | **Watchtower** (§19) | `cron_jobs.citadel_id` (v112) + `listByCitadel` | (scheduler wiring pending) |
 | **Scope spine** | `resolveCitadelScope` / `isWithinCitadelScope` | enforced in repo isolation tests |
 
 All routes operator-gated + zod-validated. Citadel = Workspace (`citadelId` aliases `workspaceId`).
+
+### Pure logic modules (built; wiring into enforcement points is the follow-on)
+Self-contained, tested contracts modules (100 contracts citadel tests total) — several built by **parallel agents**:
+- `citadel-vault.ts` — AES-256-GCM `sealValue`/`openValue`/`generateVaultKey` (Vault MVP, §13.9).
+- `citadel-model-routing.ts` — `routeModelForSensitivity` (data sensitivity → model decision, §14).
+- `citadel-wards.ts` — `WardEffect` + `evaluateWards` (deny-wins) + `wardMatchesAction` (§20.3/§11.3); **persisted + routed** (above).
+- `citadel-passages.ts` — `isPassageActive` + `filterPassageFields` (cross-Citadel bridge, §12.7).
+- `citadel-sharing.ts` — `roleCan` over 8 roles × capabilities (§12.4).
+- `citadel-automation.ts` — `AutomationRiskMode` + external-write/approval rules (§19.2).
 
 ### Reuse correction (2026-06-16)
 Council/Missions/Archive were first built as **parallel tables** duplicating data the existing
