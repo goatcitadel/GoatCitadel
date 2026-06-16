@@ -28,12 +28,11 @@ public sealed class LauncherEnvironment
     public static LauncherEnvironment FromProcess()
     {
         var variables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()
+                     .Cast<DictionaryEntry>()
+                     .Where(entry => entry.Key is string))
         {
-            if (entry.Key is string key)
-            {
-                variables[key] = entry.Value?.ToString();
-            }
+            variables[(string)entry.Key] = entry.Value?.ToString();
         }
 
         return new LauncherEnvironment(variables, Environment.ProcessPath);
