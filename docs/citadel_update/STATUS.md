@@ -21,9 +21,9 @@ The **structural MVP data model is complete** end-to-end (storage + gateway rout
 |---|---|---|
 | **Charter** (§2) | `citadel_charters` (v111) | `GET/PUT /api/v1/citadels/:id[/charter]` |
 | **Chambers** (§2) | `citadel_chambers` (v111) | `GET/POST /api/v1/citadels/:id/chambers` |
-| **Council** (§16) | `citadel_council_members` (v113) | `GET/POST/DELETE /api/v1/citadels/:id/council[/:memberId]` |
-| **Missions** (§17) | `citadel_missions` (v114), 10-state machine | `GET/POST .../missions`, `GET/PATCH /api/v1/missions/:id` |
-| **Archive** (§18) | `citadel_archive_items` (v115), chamber-scoped | `GET/POST/DELETE /api/v1/citadels/:id/archive[/:itemId]` |
+| **Council** (§16) | `citadel_agent_assignments` (v113) — **thin reference to existing agents** (agentId), not a duplicate | `GET/POST/DELETE /api/v1/citadels/:id/council[/:agentId]` |
+| **Missions** (§17) | **reuse existing `tasks`** scoped by `workspaceId` (task-repo already filters `workspace_id`) — no new table | (existing tasks API, scoped) |
+| **Archive** (§18) | **reuse existing memory** scoped by `workspaceId` (leak #1's `listActiveMemoryItems(workspaceId)`) — no new table | (existing memory API, scoped) |
 | **Templates** (§7) | 3 built-ins + `applyCitadelTemplate` | `GET /api/v1/citadel-templates`, `POST .../from-template` |
 | **Blueprints** (§8) | export/validate(secret-scan)/import | `GET .../blueprint`, `POST /api/v1/blueprints/validate`, `POST .../from-blueprint` |
 | **Gatehouse** (§20) | `summarizeCitadelGatehouse` | `GET /api/v1/citadels/:id/gatehouse` |
@@ -31,6 +31,13 @@ The **structural MVP data model is complete** end-to-end (storage + gateway rout
 | **Scope spine** | `resolveCitadelScope` / `isWithinCitadelScope` | enforced in repo isolation tests |
 
 All routes operator-gated + zod-validated. Citadel = Workspace (`citadelId` aliases `workspaceId`).
+
+### Reuse correction (2026-06-16)
+Council/Missions/Archive were first built as **parallel tables** duplicating data the existing
+agents/orchestration/memory systems own — a drift from the reuse directive. **Reverted** (commit
+`20380f087`) and rebuilt the reuse-correct way: **Council** references existing agents via a thin
+assignment table; **Missions** = existing tasks scoped by `workspaceId`; **Archive** = existing
+memory scoped by `workspaceId`. We build *on top of* the existing services, not beside them.
 
 ## Isolation leak fixes (standalone)
 - **#3** `.env` plaintext secret fallback → opt-in only (real fix).
