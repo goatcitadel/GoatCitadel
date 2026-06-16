@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+// node:crypto is accessed lazily (as a namespace) so merely LOADING this module is
+// browser-safe. The contracts barrel re-exports this file, and browser surfaces pull
+// the barrel for the types below; a top-level `import { createCipheriv } from "node:crypto"`
+// would access Vite's externalized stub at load and crash every page. The seal/open
+// functions are only ever called server-side, so the namespace access never runs in a browser.
+import * as nodeCrypto from "node:crypto";
 
 export interface SealedValue {
   iv: string;         // base64
@@ -11,12 +16,12 @@ const IV_LENGTH = 12; // 96-bit IV recommended for GCM
 const KEY_LENGTH = 32; // 256-bit key
 
 export function generateVaultKey(): Buffer {
-  return randomBytes(KEY_LENGTH);
+  return nodeCrypto.randomBytes(KEY_LENGTH);
 }
 
 export function sealValue(plaintext: string, key: Buffer): SealedValue {
-  const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const iv = nodeCrypto.randomBytes(IV_LENGTH);
+  const cipher = nodeCrypto.createCipheriv(ALGORITHM, key, iv);
 
   const encryptedParts: Buffer[] = [
     cipher.update(plaintext, "utf8"),
@@ -37,7 +42,7 @@ export function openValue(sealed: SealedValue, key: Buffer): string {
   const ciphertext = Buffer.from(sealed.ciphertext, "base64");
   const tag = Buffer.from(sealed.tag, "base64");
 
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  const decipher = nodeCrypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
 
   const decryptedParts: Buffer[] = [

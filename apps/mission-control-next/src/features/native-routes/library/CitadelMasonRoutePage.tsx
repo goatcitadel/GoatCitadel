@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { Hammer, RefreshCw, Send, Sparkles } from "lucide-react";
 import type { BlueprintReviewSummary, MasonAnswers, MasonSession } from "@goatcitadel/contracts";
-import { masonSessionCanDraft } from "@goatcitadel/contracts";
 import {
   createMasonSession,
   draftBlueprintFromMasonSession,
@@ -126,7 +125,12 @@ export function CitadelMasonRoutePage({ activeWorkspaceName }: NativeRoutePagesP
 
   const session = sessionState.session;
   const answerRows = session ? describeAnswers(session.answers) : [];
-  const canDraft = session ? masonSessionCanDraft(session) : false;
+  // Mirrors contracts' masonSessionCanDraft (kind + non-empty purpose). Inlined so
+  // this browser surface never value-imports the contracts barrel, which pulls in
+  // the Node-only `node:crypto` Vault primitives and crashes in the browser.
+  const canDraft = session
+    ? typeof session.answers.kind === "string" && (session.answers.purpose ?? "").trim().length > 0
+    : false;
 
   return (
     <NativePageFrame
