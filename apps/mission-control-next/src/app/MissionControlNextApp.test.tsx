@@ -234,6 +234,8 @@ vi.mock("./lazy-legacy-pages", () => ({
       ),
       createElement("button", { type: "button", onClick: () => onOpenStartHere?.() }, "Open threaded Start Here"),
     ),
+  preloadNativeRoutePages: vi.fn(() => Promise.resolve()),
+  preloadPromptPacksWorkbenchPage: vi.fn(() => Promise.resolve()),
   preloadThreadedSurfaceRoute: vi.fn(() => Promise.resolve()),
 }));
 

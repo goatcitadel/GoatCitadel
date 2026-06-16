@@ -46,6 +46,8 @@ import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
   LazyThreadedSurfaceRoute,
+  preloadNativeRoutePages,
+  preloadPromptPacksWorkbenchPage,
   preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
@@ -111,6 +113,19 @@ const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{
   { area: "ops", section: "improvement", label: "Ops → Improvement" },
   { area: "ops", section: "kanban", label: "Ops → Kanban" },
 ];
+
+function preloadRouteChunk(targetRoute: AppRoute): void {
+  const normalized = normalizeAppRoute(targetRoute);
+  if (normalized.area === "chat" || normalized.area === "cowork" || normalized.area === "code") {
+    void preloadThreadedSurfaceRoute();
+    return;
+  }
+  if (normalized.area === "library" && normalized.section === "prompt-packs") {
+    void preloadPromptPacksWorkbenchPage();
+    return;
+  }
+  void preloadNativeRoutePages();
+}
 
 export function MissionControlNextApp() {
   useBeforeUnloadGuard();
@@ -473,10 +488,8 @@ export function MissionControlNextApp() {
   }, []);
 
   useEffect(() => {
-    if (route.area === "chat" || route.area === "cowork" || route.area === "code") {
-      void preloadThreadedSurfaceRoute();
-    }
-  }, [route.area]);
+    preloadRouteChunk(route);
+  }, [route]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -581,17 +594,22 @@ export function MissionControlNextApp() {
                 <h1>Mission Control</h1>
               </div>
               <nav className="mc-next-primary-nav" aria-label="Primary mission areas">
-                {PRIMARY_NAV.map(({ area, icon: Icon }) => (
-                  <button
-                    key={area}
-                    type="button"
-                    className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
-                    onClick={() => navigate(buildPrimaryAreaRoute(area))}
-                  >
-                    <Icon size={16} />
-                    <span>{AREA_META[area].label}</span>
-                  </button>
-                ))}
+                {PRIMARY_NAV.map(({ area, icon: Icon }) => {
+                  const target = buildPrimaryAreaRoute(area);
+                  return (
+                    <button
+                      key={area}
+                      type="button"
+                      className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
+                      onFocus={() => preloadRouteChunk(target)}
+                      onMouseEnter={() => preloadRouteChunk(target)}
+                      onClick={() => navigate(target)}
+                    >
+                      <Icon size={16} />
+                      <span>{AREA_META[area].label}</span>
+                    </button>
+                  );
+                })}
               </nav>
             </div>
             <div className="mc-next-topbar-right">
@@ -754,6 +772,8 @@ export function MissionControlNextApp() {
                             type="button"
                             className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
                             aria-label={`${item.label}: ${item.description}`}
+                            onFocus={() => preloadRouteChunk(target)}
+                            onMouseEnter={() => preloadRouteChunk(target)}
                             onClick={() => navigate(target)}
                           >
                             <div>

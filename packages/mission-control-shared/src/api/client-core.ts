@@ -29,6 +29,7 @@ export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
 let volatileGatewayBasicAuth: Pick<GatewayAuthState, "mode" | "username" | "password"> | undefined;
 
 export interface GatewayAuthState {
@@ -114,6 +115,22 @@ export function buildGatewayHeaders(
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = normalizeHttpMethod(init?.method);
+  const coalescingKey = buildGetRequestCoalescingKey(path, method, init);
+  if (coalescingKey) {
+    const existing = inFlightGetRequests.get(coalescingKey) as Promise<T> | undefined;
+    if (existing) {
+      return existing;
+    }
+    const promise = requestUncoalesced<T>(path, init, method).finally(() => {
+      inFlightGetRequests.delete(coalescingKey);
+    });
+    inFlightGetRequests.set(coalescingKey, promise);
+    return promise;
+  }
+  return requestUncoalesced<T>(path, init, method);
+}
+
+async function requestUncoalesced<T>(path: string, init: RequestInit | undefined, method: string): Promise<T> {
   const correlationId = createCorrelationId();
   const headers = buildGatewayHeaders(path, method, correlationId, init?.headers);
   recordClientDiagnostic({
@@ -242,6 +259,23 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   throw lastError ?? new Error(`Unreachable request state for ${method} ${path}`);
+}
+
+function buildGetRequestCoalescingKey(path: string, method: string, init?: RequestInit): string | undefined {
+  if (method !== "GET" || init?.body || init?.signal) {
+    return undefined;
+  }
+  const headers = init?.headers ? Array.from(new Headers(init.headers).entries()).sort() : [];
+  return JSON.stringify({
+    path,
+    headers,
+    cache: init?.cache,
+    credentials: init?.credentials,
+    mode: init?.mode,
+    redirect: init?.redirect,
+    referrer: init?.referrer,
+    referrerPolicy: init?.referrerPolicy,
+  });
 }
 
 export interface UiActionResult<T> {

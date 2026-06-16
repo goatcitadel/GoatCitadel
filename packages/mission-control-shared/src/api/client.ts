@@ -230,6 +230,7 @@ export { ApiRequestError, isApiRequestError, isTrustedGatewayHost };
 export { connectDevDiagnosticsStream, fetchDevDiagnostics } from "./diagnostics.js";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
 const EVENT_CLIENT_ID_STORAGE_KEY = "goatcitadel.events.client.v1";
+const EVENT_CURSOR_FLUSH_DELAY_MS = 250;
 
 export interface UiActionResult<T> {
   state: UiActionState;
@@ -912,6 +913,9 @@ let lastErrorAt: string | undefined;
 let activeEventStreamLeaseId: string | undefined;
 let activeEventStreamClientId: string | undefined;
 let activeEventStreamGatewayNodeId: string | undefined;
+let pendingRealtimeCursor: number | undefined;
+let realtimeCursorFlushTimer: number | null = null;
+let realtimeCursorFlushListenersRegistered = false;
 
 export function connectEventStream(
   onEvent: (event: RealtimeEvent) => void,
@@ -1233,14 +1237,56 @@ function persistRealtimeCursor(sequence: number): void {
   if (typeof window === "undefined" || !Number.isFinite(sequence) || sequence <= 0) {
     return;
   }
-  window.localStorage.setItem(EVENT_CURSOR_STORAGE_KEY, String(sequence));
+  pendingRealtimeCursor =
+    pendingRealtimeCursor === undefined ? Math.trunc(sequence) : Math.max(pendingRealtimeCursor, Math.trunc(sequence));
+  registerRealtimeCursorFlushListeners();
+  if (realtimeCursorFlushTimer !== null) {
+    return;
+  }
+  realtimeCursorFlushTimer = window.setTimeout(flushRealtimeCursor, EVENT_CURSOR_FLUSH_DELAY_MS);
 }
 
 function clearStoredRealtimeCursor(): void {
   if (typeof window === "undefined") {
     return;
   }
+  if (realtimeCursorFlushTimer !== null) {
+    window.clearTimeout(realtimeCursorFlushTimer);
+    realtimeCursorFlushTimer = null;
+  }
+  pendingRealtimeCursor = undefined;
   window.localStorage.removeItem(EVENT_CURSOR_STORAGE_KEY);
+}
+
+function flushRealtimeCursor(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (realtimeCursorFlushTimer !== null) {
+    window.clearTimeout(realtimeCursorFlushTimer);
+    realtimeCursorFlushTimer = null;
+  }
+  if (pendingRealtimeCursor === undefined) {
+    return;
+  }
+  window.localStorage.setItem(EVENT_CURSOR_STORAGE_KEY, String(pendingRealtimeCursor));
+  pendingRealtimeCursor = undefined;
+}
+
+function registerRealtimeCursorFlushListeners(): void {
+  if (typeof window === "undefined" || realtimeCursorFlushListenersRegistered) {
+    return;
+  }
+  realtimeCursorFlushListenersRegistered = true;
+  window.addEventListener("pagehide", flushRealtimeCursor);
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushRealtimeCursor();
+    }
+  });
 }
 
 function getOrCreateRealtimeClientId(): string {
