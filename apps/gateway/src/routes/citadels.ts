@@ -38,6 +38,15 @@ const fromTemplateSchema = z.object({
   templateId: z.string().min(1),
 });
 
+const assignAgentSchema = z.object({
+  agentId: z.string().min(1),
+});
+
+const councilParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  agentId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -183,6 +192,53 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
       return reply.code(201).send(result.citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Council = existing agents assigned to this Citadel (by agentId). Agent details
+  // (name/role/tools) are resolved from the agents system, not duplicated here.
+  fastify.get("/api/v1/citadels/:citadelId/council", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listCouncil(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/council", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = assignAgentSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const assignment = citadels.assignAgent({ citadelId: params.data.citadelId, agentId: parsed.data.agentId });
+      return reply.code(201).send(assignment);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/council/:agentId", operatorOnly, async (request, reply) => {
+    const params = councilParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.unassignAgent(params.data.citadelId, params.data.agentId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Agent ${params.data.agentId} is not on this Citadel's council.` });
+      }
+      return reply.code(204).send();
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

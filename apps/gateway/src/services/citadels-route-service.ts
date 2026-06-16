@@ -6,6 +6,8 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCouncilAssignment,
+  CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
@@ -30,6 +32,9 @@ export interface CitadelsRoutePort {
   upsertCharter(input: CitadelCharterInput): CitadelCharter;
   createChamber(input: CitadelChamberInput): CitadelChamber;
   listChambers(citadelId: string): CitadelChamber[];
+  assignAgent(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment;
+  listCouncilAssignments(citadelId: string): CitadelCouncilAssignment[];
+  unassignAgent(citadelId: string, agentId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -89,5 +94,18 @@ export class CitadelsRouteService {
       return undefined;
     }
     return summarizeCitadelGatehouse(citadel);
+  }
+
+  /** The Council is the set of existing agents assigned to this Citadel (by id). */
+  public listCouncil(citadelId: string): CitadelCouncilAssignment[] {
+    return this.citadels.listCouncilAssignments(citadelId);
+  }
+
+  public assignAgent(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment {
+    return this.citadels.assignAgent(input);
+  }
+
+  public unassignAgent(citadelId: string, agentId: string): boolean {
+    return this.citadels.unassignAgent(citadelId, agentId);
   }
 }

@@ -213,4 +213,53 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(201);
     expect(createFromBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
   });
+
+  it("lists the council (agent assignments) for a citadel", async () => {
+    const listCouncil = vi.fn(() => [{ assignmentId: "a1", agentId: "agent-architect" }]);
+    const built = buildApp({ listCouncil });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/council" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ assignmentId: "a1", agentId: "agent-architect" }] });
+    expect(listCouncil).toHaveBeenCalledWith("ws-1");
+  });
+
+  it("assigns an existing agent to the council", async () => {
+    const assignAgent = vi.fn((input: Record<string, unknown>) => ({ assignmentId: "a1", ...input }));
+    const built = buildApp({ assignAgent });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/council",
+      payload: { agentId: "agent-architect" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(assignAgent).toHaveBeenCalledWith({ citadelId: "ws-1", agentId: "agent-architect" });
+  });
+
+  it("rejects a council assignment without an agentId", async () => {
+    const assignAgent = vi.fn();
+    const built = buildApp({ assignAgent });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/council", payload: {} });
+    expect(response.statusCode).toBe(400);
+    expect(assignAgent).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when unassigning an agent that is not on the council", async () => {
+    const unassignAgent = vi.fn(() => false);
+    const built = buildApp({ unassignAgent });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/council/agent-x" });
+    expect(response.statusCode).toBe(404);
+    expect(unassignAgent).toHaveBeenCalledWith("ws-1", "agent-x");
+  });
 });

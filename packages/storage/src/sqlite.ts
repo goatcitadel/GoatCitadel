@@ -1113,6 +1113,23 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 113,
+    name: "citadel_agent_assignments_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_agent_assignments (
+          assignment_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_agent_assignments_unique
+          ON citadel_agent_assignments(citadel_id, agent_id);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

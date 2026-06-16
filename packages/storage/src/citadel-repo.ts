@@ -4,6 +4,8 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCouncilAssignment,
+  CitadelCouncilAssignmentInput,
   ChamberSensitivity,
   CitadelKind,
   CitadelModelPolicy,
@@ -37,6 +39,13 @@ interface ChamberRow {
   updated_at: string;
 }
 
+interface CouncilAssignmentRow {
+  assignment_id: string;
+  citadel_id: string;
+  agent_id: string;
+  created_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -47,6 +56,10 @@ export class CitadelRepository {
   private readonly createChamberStmt;
   private readonly getChamberStmt;
   private readonly listChambersStmt;
+  private readonly assignAgentStmt;
+  private readonly getAssignmentByPairStmt;
+  private readonly listAssignmentsStmt;
+  private readonly unassignAgentStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -79,6 +92,20 @@ export class CitadelRepository {
     this.getChamberStmt = db.prepare("SELECT * FROM citadel_chambers WHERE chamber_id = @chamberId");
     this.listChambersStmt = db.prepare(
       "SELECT * FROM citadel_chambers WHERE citadel_id = @citadelId ORDER BY name ASC, chamber_id ASC",
+    );
+    this.assignAgentStmt = db.prepare(`
+      INSERT INTO citadel_agent_assignments (assignment_id, citadel_id, agent_id, created_at)
+      VALUES (@assignmentId, @citadelId, @agentId, @now)
+      ON CONFLICT(citadel_id, agent_id) DO NOTHING
+    `);
+    this.getAssignmentByPairStmt = db.prepare(
+      "SELECT * FROM citadel_agent_assignments WHERE citadel_id = @citadelId AND agent_id = @agentId",
+    );
+    this.listAssignmentsStmt = db.prepare(
+      "SELECT * FROM citadel_agent_assignments WHERE citadel_id = @citadelId ORDER BY created_at ASC, assignment_id ASC",
+    );
+    this.unassignAgentStmt = db.prepare(
+      "DELETE FROM citadel_agent_assignments WHERE citadel_id = @citadelId AND agent_id = @agentId",
     );
   }
 
@@ -147,6 +174,35 @@ export class CitadelRepository {
       chambers: this.listChambers(citadelId),
     };
   }
+
+  /** Assign an existing agent (by id) to this Citadel's Council. Idempotent. */
+  public assignAgent(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment {
+    const now = new Date().toISOString();
+    this.assignAgentStmt.run({
+      assignmentId: randomUUID(),
+      citadelId: input.citadelId,
+      agentId: input.agentId,
+      now,
+    });
+    const row = this.getAssignmentByPairStmt.get({
+      citadelId: input.citadelId,
+      agentId: input.agentId,
+    }) as CouncilAssignmentRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to assign agent ${input.agentId} to citadel ${input.citadelId}`);
+    }
+    return mapCouncilAssignment(row);
+  }
+
+  public listCouncilAssignments(citadelId: string): CitadelCouncilAssignment[] {
+    const rows = this.listAssignmentsStmt.all({ citadelId }) as CouncilAssignmentRow[];
+    return rows.map(mapCouncilAssignment);
+  }
+
+  public unassignAgent(citadelId: string, agentId: string): boolean {
+    const result = this.unassignAgentStmt.run({ citadelId, agentId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -174,5 +230,14 @@ function mapChamber(row: ChamberRow): CitadelChamber {
     sealed: row.sealed === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapCouncilAssignment(row: CouncilAssignmentRow): CitadelCouncilAssignment {
+  return {
+    assignmentId: row.assignment_id,
+    citadelId: row.citadel_id,
+    agentId: row.agent_id,
+    createdAt: row.created_at,
   };
 }

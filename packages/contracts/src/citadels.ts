@@ -83,6 +83,24 @@ export interface CitadelChamberInput {
   sealed?: boolean;
 }
 
+/**
+ * A Citadel's Council is the set of EXISTING agents assigned to it. This is a thin
+ * reference (it stores `agentId`, which points at an `AgentProfileRecord` in the
+ * agents system) — it deliberately does NOT duplicate the agent's name/role/tools.
+ * Resolve agent details from the agents system, not from here.
+ */
+export interface CitadelCouncilAssignment {
+  assignmentId: string;
+  citadelId: string;
+  agentId: string;
+  createdAt: string;
+}
+
+export interface CitadelCouncilAssignmentInput {
+  citadelId: string;
+  agentId: string;
+}
+
 // --- Scope: the (citadelId, chamberId?) tuple that scopes every Citadel-bound action ---
 
 export interface CitadelScope {

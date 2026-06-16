@@ -98,4 +98,25 @@ describe("CitadelRepository", () => {
 
     assert.equal(repo.getCitadel("ws-missing"), undefined);
   });
+
+  it("assigns existing agents to a citadel council idempotently and unassigns them", () => {
+    const repo = createRepo();
+    const architect = repo.assignAgent({ citadelId: "ws-1", agentId: "agent-architect" });
+    repo.assignAgent({ citadelId: "ws-1", agentId: "agent-architect" }); // idempotent — no duplicate
+    repo.assignAgent({ citadelId: "ws-1", agentId: "agent-coder" });
+    repo.assignAgent({ citadelId: "ws-2", agentId: "agent-architect" });
+
+    assert.equal(architect.agentId, "agent-architect");
+    assert.deepEqual(
+      repo.listCouncilAssignments("ws-1").map((assignment) => assignment.agentId).sort(),
+      ["agent-architect", "agent-coder"],
+    );
+
+    assert.equal(repo.unassignAgent("ws-1", "agent-architect"), true);
+    assert.deepEqual(
+      repo.listCouncilAssignments("ws-1").map((assignment) => assignment.agentId),
+      ["agent-coder"],
+    );
+    assert.equal(repo.unassignAgent("ws-1", "nope"), false);
+  });
 });
