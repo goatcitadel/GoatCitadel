@@ -4,7 +4,10 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCouncilMember,
+  CitadelCouncilMemberInput,
   ChamberSensitivity,
+  CouncilArchetype,
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
@@ -37,6 +40,16 @@ interface ChamberRow {
   updated_at: string;
 }
 
+interface CouncilMemberRow {
+  member_id: string;
+  citadel_id: string;
+  name: string;
+  archetype: string;
+  role: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -47,6 +60,10 @@ export class CitadelRepository {
   private readonly createChamberStmt;
   private readonly getChamberStmt;
   private readonly listChambersStmt;
+  private readonly addCouncilMemberStmt;
+  private readonly getCouncilMemberStmt;
+  private readonly listCouncilMembersStmt;
+  private readonly deleteCouncilMemberStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -80,6 +97,18 @@ export class CitadelRepository {
     this.listChambersStmt = db.prepare(
       "SELECT * FROM citadel_chambers WHERE citadel_id = @citadelId ORDER BY name ASC, chamber_id ASC",
     );
+    this.addCouncilMemberStmt = db.prepare(`
+      INSERT INTO citadel_council_members (
+        member_id, citadel_id, name, archetype, role, created_at, updated_at
+      ) VALUES (
+        @memberId, @citadelId, @name, @archetype, @role, @now, @now
+      )
+    `);
+    this.getCouncilMemberStmt = db.prepare("SELECT * FROM citadel_council_members WHERE member_id = @memberId");
+    this.listCouncilMembersStmt = db.prepare(
+      "SELECT * FROM citadel_council_members WHERE citadel_id = @citadelId ORDER BY name ASC, member_id ASC",
+    );
+    this.deleteCouncilMemberStmt = db.prepare("DELETE FROM citadel_council_members WHERE member_id = @memberId");
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -147,6 +176,39 @@ export class CitadelRepository {
       chambers: this.listChambers(citadelId),
     };
   }
+
+  public addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember {
+    const memberId = randomUUID();
+    const now = new Date().toISOString();
+    this.addCouncilMemberStmt.run({
+      memberId,
+      citadelId: input.citadelId,
+      name: input.name,
+      archetype: input.archetype,
+      role: input.role,
+      now,
+    });
+    const member = this.getCouncilMember(memberId);
+    if (!member) {
+      throw new Error(`Failed to persist council member ${memberId} for citadel ${input.citadelId}`);
+    }
+    return member;
+  }
+
+  public getCouncilMember(memberId: string): CitadelCouncilMember | undefined {
+    const row = this.getCouncilMemberStmt.get({ memberId }) as CouncilMemberRow | undefined;
+    return row ? mapCouncilMember(row) : undefined;
+  }
+
+  public listCouncilMembers(citadelId: string): CitadelCouncilMember[] {
+    const rows = this.listCouncilMembersStmt.all({ citadelId }) as CouncilMemberRow[];
+    return rows.map(mapCouncilMember);
+  }
+
+  public removeCouncilMember(memberId: string): boolean {
+    const result = this.deleteCouncilMemberStmt.run({ memberId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -172,6 +234,18 @@ function mapChamber(row: ChamberRow): CitadelChamber {
     name: row.name,
     sensitivity: row.sensitivity as ChamberSensitivity,
     sealed: row.sealed === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapCouncilMember(row: CouncilMemberRow): CitadelCouncilMember {
+  return {
+    memberId: row.member_id,
+    citadelId: row.citadel_id,
+    name: row.name,
+    archetype: row.archetype as CouncilArchetype,
+    role: row.role,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

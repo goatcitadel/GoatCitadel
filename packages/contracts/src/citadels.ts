@@ -83,6 +83,37 @@ export interface CitadelChamberInput {
   sealed?: boolean;
 }
 
+export type CouncilArchetype =
+  | "chief_of_staff"
+  | "planner"
+  | "researcher"
+  | "operator"
+  | "archivist"
+  | "watcher"
+  | "finance"
+  | "relationships"
+  | "coach"
+  | "automation_builder"
+  | "builder"
+  | "specialist";
+
+export interface CitadelCouncilMember {
+  memberId: string;
+  citadelId: string;
+  name: string;
+  archetype: CouncilArchetype;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CitadelCouncilMemberInput {
+  citadelId: string;
+  name: string;
+  archetype: CouncilArchetype;
+  role: string;
+}
+
 // --- Scope: the (citadelId, chamberId?) tuple that scopes every Citadel-bound action ---
 
 export interface CitadelScope {

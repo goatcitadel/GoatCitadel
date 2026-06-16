@@ -1113,6 +1113,26 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 113,
+    name: "citadel_council_members_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_council_members (
+          member_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          archetype TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_council_members_citadel
+          ON citadel_council_members(citadel_id, name);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

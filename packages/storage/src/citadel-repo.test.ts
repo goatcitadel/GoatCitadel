@@ -98,4 +98,29 @@ describe("CitadelRepository", () => {
 
     assert.equal(repo.getCitadel("ws-missing"), undefined);
   });
+
+  it("adds, lists, and removes council members scoped to a citadel", () => {
+    const repo = createRepo();
+    const cos = repo.addCouncilMember({
+      citadelId: "ws-1",
+      name: "Chief of Staff",
+      archetype: "chief_of_staff",
+      role: "Coordinate priorities",
+    });
+    repo.addCouncilMember({ citadelId: "ws-1", name: "Planner", archetype: "planner", role: "Plan the week" });
+    repo.addCouncilMember({ citadelId: "ws-2", name: "Other", archetype: "operator", role: "x" });
+
+    assert.equal(cos.archetype, "chief_of_staff");
+    assert.deepEqual(
+      repo.listCouncilMembers("ws-1").map((member) => member.name).sort(),
+      ["Chief of Staff", "Planner"],
+    );
+    assert.deepEqual(repo.getCouncilMember(cos.memberId), cos);
+
+    assert.equal(repo.removeCouncilMember(cos.memberId), true);
+    assert.deepEqual(
+      repo.listCouncilMembers("ws-1").map((member) => member.name),
+      ["Planner"],
+    );
+  });
 });
