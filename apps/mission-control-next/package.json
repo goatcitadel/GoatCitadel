@@ -68,6 +68,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "happy-dom": "^20.9.0",
     "react-test-renderer": "^19.1.1",
-    "vite": "^6.4.2"
+    "vite": "^6.4.3"
   }
 }
