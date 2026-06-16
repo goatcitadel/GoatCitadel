@@ -406,4 +406,40 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(removeMember).toHaveBeenCalledWith("ws-1", "ghost");
   });
+
+  it("lists the Mason setup questions", async () => {
+    const getMasonSetupQuestions = vi.fn(() => ["q1", "q2"]);
+    const built = buildApp({ getMasonSetupQuestions });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/mason/setup-questions" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: ["q1", "q2"] });
+  });
+
+  it("reviews a valid blueprint via the Mason", async () => {
+    const reviewBlueprint = vi.fn(() => ({ ok: true, review: { name: "Co", chamberCount: 2 } }));
+    const built = buildApp({ reviewBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/review",
+      payload: { schemaVersion: "goatcitadel.blueprint.v1" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ name: "Co", chamberCount: 2 });
+  });
+
+  it("rejects reviewing an invalid blueprint", async () => {
+    const reviewBlueprint = vi.fn(() => ({ ok: false, errors: ["bad"] }));
+    const built = buildApp({ reviewBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/mason/review", payload: {} });
+    expect(response.statusCode).toBe(400);
+  });
 });

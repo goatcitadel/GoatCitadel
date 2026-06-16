@@ -414,4 +414,26 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  // The Mason: deterministic setup surface — setup questions + blueprint review
+  // (validates, then summarizes; never connects or activates anything).
+  fastify.get("/api/v1/mason/setup-questions", operatorOnly, async (request, reply) => {
+    try {
+      return reply.send({ items: citadels.getMasonSetupQuestions() });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mason/review", operatorOnly, async (request, reply) => {
+    try {
+      const result = citadels.reviewBlueprint(request.body ?? {});
+      if (!result.ok) {
+        return reply.code(400).send({ error: { blueprint: result.errors } });
+      }
+      return reply.send(result.review);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 };

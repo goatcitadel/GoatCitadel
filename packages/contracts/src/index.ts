@@ -34,6 +34,7 @@ export * from "./citadel-wards.js";
 export * from "./citadel-passages.js";
 export * from "./citadel-sharing.js";
 export * from "./citadel-automation.js";
+export * from "./citadel-mason.js";
 export * from "./mesh.js";
 export * from "./onboarding.js";
 export * from "./memory.js";

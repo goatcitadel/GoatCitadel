@@ -1,4 +1,5 @@
 import type {
+  BlueprintReviewSummary,
   Citadel,
   CitadelBlueprint,
   CitadelBlueprintValidationResult,
@@ -23,11 +24,17 @@ import {
   CITADEL_TEMPLATES,
   exportCitadelBlueprint,
   findCitadelTemplate,
+  generateBlueprintReviewSummary,
+  MASON_SETUP_QUESTIONS,
   summarizeCitadelGatehouse,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
 
 export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
+
+export type MasonReviewResult =
+  | { ok: false; errors: string[] }
+  | { ok: true; review: BlueprintReviewSummary };
 
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
@@ -158,5 +165,19 @@ export class CitadelsRouteService {
 
   public removeMember(citadelId: string, subjectId: string): boolean {
     return this.citadels.removeMember(citadelId, subjectId);
+  }
+
+  // --- The Mason: deterministic setup surface (§9/§10). Stages, never activates. ---
+
+  public getMasonSetupQuestions(): readonly string[] {
+    return MASON_SETUP_QUESTIONS;
+  }
+
+  public reviewBlueprint(value: unknown): MasonReviewResult {
+    const validation = validateCitadelBlueprint(value);
+    if (!validation.ok) {
+      return { ok: false, errors: validation.errors };
+    }
+    return { ok: true, review: generateBlueprintReviewSummary(value as CitadelBlueprint) };
   }
 }
