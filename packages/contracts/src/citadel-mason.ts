@@ -3,7 +3,10 @@
 // Blueprint (see citadel-blueprints.ts), and shows generateBlueprintReviewSummary
 // before the human opens any Gates. Nothing here connects or activates anything.
 
-import type { CitadelBlueprint } from "./citadel-blueprints.js";
+import type { CitadelKind, CitadelRiskPosture } from "./citadels.js";
+import { CITADEL_TEMPLATES } from "./citadels.js";
+import type { CitadelBlueprint, CitadelBlueprintChamber } from "./citadel-blueprints.js";
+import { CITADEL_BLUEPRINT_SCHEMA_VERSION } from "./citadel-blueprints.js";
 
 /** The Mason's core setup questions (spec §9.5). */
 export const MASON_SETUP_QUESTIONS: readonly string[] = [
@@ -60,5 +63,64 @@ export function generateBlueprintReviewSummary(blueprint: CitadelBlueprint): Blu
     boundaries,
     riskNotes,
     lines,
+  };
+}
+
+/**
+ * Structured setup answers the Mason collects (the conversational runtime turns
+ * freeform replies to MASON_SETUP_QUESTIONS into this shape).
+ */
+export interface MasonAnswers {
+  kind: CitadelKind;
+  purpose: string;
+  name?: string;
+  goals?: string[];
+  /** Each becomes a sealed, restricted Chamber. */
+  sensitiveAreas?: string[];
+  boundaries?: string[];
+  successDefinition?: string[];
+  riskPosture?: CitadelRiskPosture;
+  preferLocalForSensitive?: boolean;
+}
+
+/**
+ * Deterministically draft a Blueprint from structured answers (the Mason's
+ * generate-blueprint step, §9.4 / §22.2). Picks a starter template by kind,
+ * seals each stated sensitive area into its own restricted Chamber, and applies
+ * the chosen boundaries/posture. The result always validates and contains no secrets.
+ */
+export function draftBlueprintFromAnswers(answers: MasonAnswers): CitadelBlueprint {
+  const template = CITADEL_TEMPLATES.find((entry) => entry.kind === answers.kind);
+
+  const chambers: CitadelBlueprintChamber[] = (template?.chambers ?? [{ name: "General" }]).map((chamber) => ({
+    name: chamber.name,
+    sensitivity: chamber.sensitivity ?? "private",
+    sealed: chamber.sealed ?? false,
+  }));
+
+  for (const area of answers.sensitiveAreas ?? []) {
+    const name = area.trim();
+    if (name.length === 0 || chambers.some((chamber) => chamber.name.toLowerCase() === name.toLowerCase())) {
+      continue;
+    }
+    chambers.push({ name, sensitivity: "restricted", sealed: true });
+  }
+
+  return {
+    schemaVersion: CITADEL_BLUEPRINT_SCHEMA_VERSION,
+    metadata: { name: answers.name?.trim() || template?.name || "New Citadel" },
+    charter: {
+      purpose: answers.purpose,
+      kind: answers.kind,
+      goals: answers.goals ?? template?.goals ?? [],
+      boundaries: answers.boundaries ?? template?.boundaries ?? [],
+      successDefinition: answers.successDefinition ?? template?.successDefinition ?? [],
+      riskPosture: answers.riskPosture ?? template?.riskPosture ?? "balanced",
+      modelPolicyDefault: answers.preferLocalForSensitive
+        ? "local_only"
+        : (template?.modelPolicyDefault ?? "hybrid_guarded"),
+    },
+    chambers,
+    riskNotes: ["This Blueprint contains structure only — no credentials, secrets, tokens, or private data."],
   };
 }

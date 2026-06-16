@@ -84,6 +84,18 @@ const evaluateActionSchema = z.object({
   action: z.string().min(1),
 });
 
+const masonAnswersSchema = z.object({
+  kind: z.enum(["personal", "company", "project", "household", "client", "creator", "learning", "team", "custom"]),
+  purpose: z.string().min(1),
+  name: z.string().min(1).optional(),
+  goals: z.array(z.string().min(1)).optional(),
+  sensitiveAreas: z.array(z.string().min(1)).optional(),
+  boundaries: z.array(z.string().min(1)).optional(),
+  successDefinition: z.array(z.string().min(1)).optional(),
+  riskPosture: z.enum(["conservative", "balanced", "collaborative", "automation_forward"]).optional(),
+  preferLocalForSensitive: z.boolean().optional(),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -424,6 +436,18 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/mason/setup-questions", operatorOnly, async (request, reply) => {
     try {
       return reply.send({ items: citadels.getMasonSetupQuestions() });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mason/draft", operatorOnly, async (request, reply) => {
+    const parsed = masonAnswersSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(citadels.draftBlueprint(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

@@ -502,4 +502,39 @@ describe("citadels routes", () => {
     const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/mason/stage", payload: {} });
     expect(response.statusCode).toBe(400);
   });
+
+  it("drafts a blueprint from Mason answers", async () => {
+    const draftBlueprint = vi.fn((answers: Record<string, unknown>) => ({
+      schemaVersion: "goatcitadel.blueprint.v1",
+      charter: { kind: answers.kind },
+    }));
+    const built = buildApp({ draftBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/draft",
+      payload: { kind: "company", purpose: "Run the company", sensitiveAreas: ["Payroll"] },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(draftBlueprint).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "company", purpose: "Run the company", sensitiveAreas: ["Payroll"] }),
+    );
+  });
+
+  it("rejects a Mason draft with an invalid kind", async () => {
+    const draftBlueprint = vi.fn();
+    const built = buildApp({ draftBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/draft",
+      payload: { kind: "wizard", purpose: "x" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(draftBlueprint).not.toHaveBeenCalled();
+  });
 });

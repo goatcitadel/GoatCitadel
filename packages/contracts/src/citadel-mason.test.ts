@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Citadel, CitadelChamber, CitadelCharter } from "./citadels.js";
-import { exportCitadelBlueprint } from "./citadel-blueprints.js";
-import { MASON_SETUP_QUESTIONS, generateBlueprintReviewSummary } from "./citadel-mason.js";
+import { CITADEL_BLUEPRINT_SCHEMA_VERSION, exportCitadelBlueprint, validateCitadelBlueprint } from "./citadel-blueprints.js";
+import { MASON_SETUP_QUESTIONS, draftBlueprintFromAnswers, generateBlueprintReviewSummary } from "./citadel-mason.js";
 
 function sampleCitadel(): Citadel {
   const charter: CitadelCharter = {
@@ -43,5 +43,35 @@ describe("generateBlueprintReviewSummary", () => {
     expect(summary.boundaries).toContain("production writes require approval");
     expect(summary.riskNotes.length).toBeGreaterThan(0);
     expect(summary.lines.some((line) => /nothing is connected or activated yet/i.test(line))).toBe(true);
+  });
+});
+
+describe("draftBlueprintFromAnswers", () => {
+  it("drafts a valid blueprint from structured answers, sealing sensitive areas", () => {
+    const blueprint = draftBlueprintFromAnswers({
+      kind: "company",
+      purpose: "Run the company",
+      sensitiveAreas: ["Payroll"],
+      boundaries: ["No prod writes without approval"],
+      preferLocalForSensitive: true,
+    });
+
+    expect(blueprint.schemaVersion).toBe(CITADEL_BLUEPRINT_SCHEMA_VERSION);
+    expect(blueprint.charter.kind).toBe("company");
+    expect(blueprint.charter.purpose).toBe("Run the company");
+    expect(blueprint.charter.boundaries).toContain("No prod writes without approval");
+    expect(blueprint.charter.modelPolicyDefault).toBe("local_only");
+
+    const payroll = blueprint.chambers.find((chamber) => chamber.name === "Payroll");
+    expect(payroll?.sealed).toBe(true);
+    expect(payroll?.sensitivity).toBe("restricted");
+
+    expect(validateCitadelBlueprint(blueprint).ok).toBe(true);
+  });
+
+  it("defaults to a General chamber for a kind with no template and validates", () => {
+    const blueprint = draftBlueprintFromAnswers({ kind: "custom", purpose: "Something custom" });
+    expect(blueprint.chambers.some((chamber) => chamber.name === "General")).toBe(true);
+    expect(validateCitadelBlueprint(blueprint).ok).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ import type {
   CitadelGatehouseSummary,
   CitadelMember,
   CitadelMemberInput,
+  MasonAnswers,
   CitadelPassage,
   CitadelPassageInput,
   CitadelTemplate,
@@ -23,6 +24,7 @@ import {
   applyCitadelBlueprint,
   applyCitadelTemplate,
   CITADEL_TEMPLATES,
+  draftBlueprintFromAnswers,
   evaluateWards,
   exportCitadelBlueprint,
   findCitadelTemplate,
@@ -177,6 +179,11 @@ export class CitadelsRouteService {
 
   public getMasonSetupQuestions(): readonly string[] {
     return MASON_SETUP_QUESTIONS;
+  }
+
+  /** Deterministically draft a Blueprint from structured setup answers (§9.4). */
+  public draftBlueprint(answers: MasonAnswers): CitadelBlueprint {
+    return draftBlueprintFromAnswers(answers);
   }
 
   public reviewBlueprint(value: unknown): MasonReviewResult {
