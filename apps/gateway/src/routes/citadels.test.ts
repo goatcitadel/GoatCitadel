@@ -1,0 +1,101 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import Fastify, { type FastifyInstance } from "fastify";
+import { citadelsRoutes } from "./citadels.js";
+
+function buildApp(citadels: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
+  const app = Fastify();
+  app.decorate("services", { citadels } as never);
+  app.decorate("requireOperatorAuth", requireOperatorAuth as never);
+  return { app, requireOperatorAuth };
+}
+
+describe("citadels routes", () => {
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    if (!app) {
+      return;
+    }
+    await app.close();
+    app = null;
+  });
+
+  it("returns 404 when the citadel has no charter", async () => {
+    const built = buildApp({ getCitadel: vi.fn(() => undefined) });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1" });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("upserts a charter scoped to the citadel id from the path", async () => {
+    const upsertCharter = vi.fn((input: Record<string, unknown>) => ({ ...input, createdAt: "t", updatedAt: "t" }));
+    const built = buildApp({ upsertCharter });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/citadels/ws-1/charter",
+      payload: { purpose: "Run the company", kind: "company", goals: ["ship 1.0"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(upsertCharter).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", purpose: "Run the company", kind: "company", goals: ["ship 1.0"] }),
+    );
+  });
+
+  it("rejects an invalid charter kind", async () => {
+    const upsertCharter = vi.fn();
+    const built = buildApp({ upsertCharter });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/v1/citadels/ws-1/charter",
+      payload: { purpose: "x", kind: "not-a-kind" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(upsertCharter).not.toHaveBeenCalled();
+  });
+
+  it("creates a chamber scoped to the citadel", async () => {
+    const createChamber = vi.fn((input: Record<string, unknown>) => ({
+      chamberId: "ch-1",
+      ...input,
+      sealed: Boolean(input.sealed),
+      createdAt: "t",
+      updatedAt: "t",
+    }));
+    const built = buildApp({ createChamber });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/chambers",
+      payload: { name: "Finance", sensitivity: "restricted", sealed: true },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createChamber).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", name: "Finance", sensitivity: "restricted", sealed: true }),
+    );
+  });
+
+  it("lists chambers for a citadel", async () => {
+    const listChambers = vi.fn(() => [{ chamberId: "ch-1", name: "General" }]);
+    const built = buildApp({ listChambers });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/chambers" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ chamberId: "ch-1", name: "General" }] });
+    expect(listChambers).toHaveBeenCalledWith("ws-1");
+  });
+});

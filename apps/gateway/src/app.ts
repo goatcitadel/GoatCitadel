@@ -14,6 +14,7 @@ import { gatewayEventsRoute } from "./routes/gateway-events.js";
 import { sessionsListRoute } from "./routes/sessions-list.js";
 import { toolsInvokeRoute } from "./routes/tools-invoke.js";
 import { approvalsRoutes } from "./routes/approvals.js";
+import { citadelsRoutes } from "./routes/citadels.js";
 import { costsRoutes } from "./routes/costs.js";
 import { browserSessionsRoutes } from "./routes/browser-sessions.js";
 import { reviewReadinessRoutes } from "./routes/review-readiness.js";
@@ -331,6 +332,7 @@ export async function buildApp() {
   await app.register(sessionsListRoute);
   await app.register(toolsInvokeRoute);
   await app.register(approvalsRoutes);
+  await app.register(citadelsRoutes);
   await app.register(costsRoutes);
   await app.register(browserSessionsRoutes);
   await app.register(reviewReadinessRoutes);

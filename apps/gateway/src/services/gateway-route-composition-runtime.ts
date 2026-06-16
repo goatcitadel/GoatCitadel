@@ -31,6 +31,7 @@ export function composeRuntimeAdminRouteDependencies(
 ): RouteDependencyDomain<
   | "authAdmin"
   | "approvals"
+  | "citadels"
   | "cron"
   | "dashboard"
   | "daemon"
@@ -105,6 +106,7 @@ export function composeRuntimeAdminRouteDependencies(
       verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),
     },
     approvals: gateway.approvalRuntime,
+    citadels: gateway.storage.citadels,
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
       backupRetentionService: gateway.backupRetentionService,
