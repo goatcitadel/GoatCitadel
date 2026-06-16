@@ -1,19 +1,12 @@
 import type {
   Citadel,
-  CitadelArchiveItem,
-  CitadelArchiveItemInput,
   CitadelBlueprint,
   CitadelBlueprintValidationResult,
   CitadelChamber,
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
-  CitadelCouncilMember,
-  CitadelCouncilMemberInput,
   CitadelGatehouseSummary,
-  CitadelMission,
-  CitadelMissionInput,
-  CitadelMissionState,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
 import {
@@ -37,16 +30,6 @@ export interface CitadelsRoutePort {
   upsertCharter(input: CitadelCharterInput): CitadelCharter;
   createChamber(input: CitadelChamberInput): CitadelChamber;
   listChambers(citadelId: string): CitadelChamber[];
-  addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember;
-  listCouncilMembers(citadelId: string): CitadelCouncilMember[];
-  removeCouncilMember(memberId: string): boolean;
-  createMission(input: CitadelMissionInput): CitadelMission;
-  listMissions(citadelId: string): CitadelMission[];
-  getMission(missionId: string): CitadelMission | undefined;
-  updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined;
-  addArchiveItem(input: CitadelArchiveItemInput): CitadelArchiveItem;
-  listArchiveItems(citadelId: string, chamberId?: string): CitadelArchiveItem[];
-  removeArchiveItem(itemId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -106,45 +89,5 @@ export class CitadelsRouteService {
       return undefined;
     }
     return summarizeCitadelGatehouse(citadel);
-  }
-
-  public listCouncil(citadelId: string): CitadelCouncilMember[] {
-    return this.citadels.listCouncilMembers(citadelId);
-  }
-
-  public addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember {
-    return this.citadels.addCouncilMember(input);
-  }
-
-  public removeCouncilMember(memberId: string): boolean {
-    return this.citadels.removeCouncilMember(memberId);
-  }
-
-  public listMissions(citadelId: string): CitadelMission[] {
-    return this.citadels.listMissions(citadelId);
-  }
-
-  public createMission(input: CitadelMissionInput): CitadelMission {
-    return this.citadels.createMission(input);
-  }
-
-  public getMission(missionId: string): CitadelMission | undefined {
-    return this.citadels.getMission(missionId);
-  }
-
-  public updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined {
-    return this.citadels.updateMissionState(missionId, state);
-  }
-
-  public listArchive(citadelId: string, chamberId?: string): CitadelArchiveItem[] {
-    return this.citadels.listArchiveItems(citadelId, chamberId);
-  }
-
-  public addArchiveItem(input: CitadelArchiveItemInput): CitadelArchiveItem {
-    return this.citadels.addArchiveItem(input);
-  }
-
-  public removeArchiveItem(itemId: string): boolean {
-    return this.citadels.removeArchiveItem(itemId);
   }
 }

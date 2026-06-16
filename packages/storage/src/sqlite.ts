@@ -1113,69 +1113,6 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
-  {
-    version: 113,
-    name: "citadel_council_members_schema",
-    up: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS citadel_council_members (
-          member_id TEXT PRIMARY KEY,
-          citadel_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          archetype TEXT NOT NULL,
-          role TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_citadel_council_members_citadel
-          ON citadel_council_members(citadel_id, name);
-      `);
-    },
-  },
-  {
-    version: 114,
-    name: "citadel_missions_schema",
-    up: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS citadel_missions (
-          mission_id TEXT PRIMARY KEY,
-          citadel_id TEXT NOT NULL,
-          title TEXT NOT NULL,
-          objective TEXT NOT NULL,
-          mode TEXT NOT NULL DEFAULT 'ask',
-          state TEXT NOT NULL DEFAULT 'draft',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          completed_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_citadel_missions_citadel
-          ON citadel_missions(citadel_id, state, updated_at DESC);
-      `);
-    },
-  },
-  {
-    version: 115,
-    name: "citadel_archive_items_schema",
-    up: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS citadel_archive_items (
-          item_id TEXT PRIMARY KEY,
-          citadel_id TEXT NOT NULL,
-          chamber_id TEXT,
-          kind TEXT NOT NULL,
-          title TEXT NOT NULL,
-          body TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_citadel_archive_items_citadel
-          ON citadel_archive_items(citadel_id, updated_at DESC);
-      `);
-    },
-  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
