@@ -1,12 +1,23 @@
 import type {
   Citadel,
+  CitadelBlueprint,
+  CitadelBlueprintValidationResult,
   CitadelChamber,
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
-import { applyCitadelTemplate, CITADEL_TEMPLATES, findCitadelTemplate } from "@goatcitadel/contracts";
+import {
+  applyCitadelBlueprint,
+  applyCitadelTemplate,
+  CITADEL_TEMPLATES,
+  exportCitadelBlueprint,
+  findCitadelTemplate,
+  validateCitadelBlueprint,
+} from "@goatcitadel/contracts";
+
+export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
 
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
@@ -48,5 +59,25 @@ export class CitadelsRouteService {
       return undefined;
     }
     return applyCitadelTemplate(this.citadels, citadelId, template);
+  }
+
+  public exportBlueprint(citadelId: string): CitadelBlueprint | undefined {
+    const citadel = this.citadels.getCitadel(citadelId);
+    if (!citadel) {
+      return undefined;
+    }
+    return exportCitadelBlueprint(citadel);
+  }
+
+  public validateBlueprint(value: unknown): CitadelBlueprintValidationResult {
+    return validateCitadelBlueprint(value);
+  }
+
+  public createFromBlueprint(citadelId: string, value: unknown): CitadelImportResult {
+    const validation = validateCitadelBlueprint(value);
+    if (!validation.ok) {
+      return { ok: false, errors: validation.errors };
+    }
+    return { ok: true, citadel: applyCitadelBlueprint(this.citadels, citadelId, value as CitadelBlueprint) };
   }
 }

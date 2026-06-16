@@ -131,4 +131,44 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  fastify.get("/api/v1/citadels/:citadelId/blueprint", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const blueprint = citadels.exportBlueprint(params.data.citadelId);
+      if (!blueprint) {
+        return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
+      }
+      return reply.send(blueprint);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/blueprints/validate", operatorOnly, async (request, reply) => {
+    try {
+      return reply.send(citadels.validateBlueprint(request.body ?? {}));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/from-blueprint", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const result = citadels.createFromBlueprint(params.data.citadelId, request.body ?? {});
+      if (!result.ok) {
+        return reply.code(400).send({ error: { blueprint: result.errors } });
+      }
+      return reply.code(201).send(result.citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 };

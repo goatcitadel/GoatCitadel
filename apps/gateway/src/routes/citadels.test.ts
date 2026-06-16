@@ -138,4 +138,58 @@ describe("citadels routes", () => {
     });
     expect(response.statusCode).toBe(404);
   });
+
+  it("exports a blueprint for an existing citadel", async () => {
+    const exportBlueprint = vi.fn(() => ({ schemaVersion: "goatcitadel.blueprint.v1" }));
+    const built = buildApp({ exportBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/blueprint" });
+    expect(response.statusCode).toBe(200);
+    expect(exportBlueprint).toHaveBeenCalledWith("ws-1");
+  });
+
+  it("validates a blueprint via the route", async () => {
+    const validateBlueprint = vi.fn(() => ({ ok: true, errors: [] }));
+    const built = buildApp({ validateBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/blueprints/validate",
+      payload: { schemaVersion: "x" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, errors: [] });
+  });
+
+  it("rejects importing an invalid blueprint", async () => {
+    const createFromBlueprint = vi.fn(() => ({ ok: false, errors: ["bad"] }));
+    const built = buildApp({ createFromBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/from-blueprint", payload: {} });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("imports a valid blueprint", async () => {
+    const createFromBlueprint = vi.fn((citadelId: string) => ({
+      ok: true,
+      citadel: { citadelId, charter: {}, chambers: [] },
+    }));
+    const built = buildApp({ createFromBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/from-blueprint",
+      payload: { schemaVersion: "goatcitadel.blueprint.v1" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(createFromBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
+  });
 });

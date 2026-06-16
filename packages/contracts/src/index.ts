@@ -27,6 +27,7 @@ export * from "./auth.js";
 export * from "./connectors.js";
 export * from "./integrations.js";
 export * from "./citadels.js";
+export * from "./citadel-blueprints.js";
 export * from "./mesh.js";
 export * from "./onboarding.js";
 export * from "./memory.js";
