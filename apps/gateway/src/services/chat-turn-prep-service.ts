@@ -59,6 +59,11 @@ import {
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
 import { sanitizeMobileContextForAudit } from "./mobile-route-service.js";
+import {
+  routeWithModelRouter,
+  shouldBypassOrchestrationWithModelRouter,
+  withModelRouterOrchestrationDecision,
+} from "./model-router-decision-service.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
@@ -146,6 +151,7 @@ export interface PreparedAgentChatTurn {
   prefs: ChatSessionPrefsRecord;
   autonomy: SessionAutonomyPrefsRecord;
   normalized: NormalizedAgentInputFromSend;
+  modelRouterDecision: NonNullable<ChatTurnTraceRecord["routing"]["modelRouter"]>;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
   threadKnowledgeCitations: ChatCitationRecord[];
   resolvedGuidance: ResolvedRuntimeGuidance;
@@ -381,6 +387,10 @@ export async function prepareAgentChatTurn(
   const prefs = host.ensureChatSessionModelDefaults(sessionId, prefsPatched);
   const autonomy = host.getSessionAutonomyPrefs(sessionId);
   const normalized = normalizeAgentInputFromSend(input);
+  const modelRouterDecision = routeWithModelRouter({
+    prompt: content,
+    hasAttachments: Boolean(input.attachments?.length || input.parts?.some((part) => part.type !== "text")),
+  });
   const projectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
   const requiresProjectBinding = chatModeRequiresProjectBinding(prefs.mode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
@@ -475,6 +485,7 @@ export async function prepareAgentChatTurn(
     prefs,
     autonomy,
     normalized,
+    modelRouterDecision,
     retrievalTrace,
     threadKnowledgeCitations: threadKnowledgeContext.citations,
     resolvedGuidance,
@@ -587,6 +598,18 @@ export async function resolvePreparedTurnOrchestration(
     policy,
   };
   const advisoryOnly = prepared.prefs.planningMode === "advisory";
+  const modelRouterBypass = shouldBypassOrchestrationWithModelRouter({
+    routerInput,
+    decision: prepared.modelRouterDecision,
+    advisoryOnly,
+  });
+  prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+    decision: modelRouterBypass.bypass ? "bypassed" : "allowed",
+    reason: modelRouterBypass.reason,
+  });
+  if (modelRouterBypass.bypass) {
+    return undefined;
+  }
   if (!advisoryOnly && !shouldUseModeOrchestration(routerInput)) {
     return undefined;
   }

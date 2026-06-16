@@ -4721,6 +4721,7 @@ export class GatewayService {
         primaryModel: input.model ?? prepared.prefs.model,
         effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
         effectiveModel: input.model ?? prepared.prefs.model,
+        modelRouter: prepared.modelRouterDecision,
       },
       durable: {
         runId: run.runId,

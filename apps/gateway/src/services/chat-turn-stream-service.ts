@@ -429,10 +429,10 @@ export async function executePreparedModeOrchestration(
               : step.degradedHandoffStepIds?.length
                 ? "degraded"
                 : step.status === "failed" && activeToolWork
-                ? "degraded"
-                : step.status === "failed"
-                  ? "failed"
-                  : "completed",
+                  ? "degraded"
+                  : step.status === "failed"
+                    ? "failed"
+                    : "completed",
           runtimeError: step.error
             ? {
                 message: step.error,
@@ -994,6 +994,7 @@ export async function* streamPreparedAgentChatTurn(
             input.providerId ??
             prepared.prefs.providerId,
           effectiveModel: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+          modelRouter: prepared.modelRouterDecision,
         },
       });
       yield {
@@ -1033,6 +1034,7 @@ export async function* streamPreparedAgentChatTurn(
                 modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
                 input.model ??
                 prepared.prefs.model,
+              modelRouter: prepared.modelRouterDecision,
             },
           });
           progressQueue.push(progressTrace);
@@ -1144,6 +1146,7 @@ export async function* streamPreparedAgentChatTurn(
               modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
               input.model ??
               prepared.prefs.model,
+            modelRouter: prepared.modelRouterDecision,
           },
           retrieval: prepared.retrievalTrace,
           reflection: {
@@ -1337,6 +1340,7 @@ export async function* streamPreparedAgentChatTurn(
       policyTaskId: input.policyTaskId,
       fullWebAccess: input.fullWebAccess,
       historyMessages: historyWithSteers,
+      modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
     })) {
       if (chunk.type === "message_done" && chunk.content) {
