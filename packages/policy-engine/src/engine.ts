@@ -206,11 +206,7 @@ export class ToolPolicyEngine {
     return this.registry.toCatalog();
   }
 
-  public listGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.storage.toolGrants.list(scope, scopeRef, limit);
   }
 
@@ -1615,15 +1611,28 @@ export class ToolPolicyEngine {
   }
 }
 
-function buildScopeCandidates(
-  request: ToolAccessEvaluateRequest,
-): Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> {
-  const out: Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> = [];
+type ScopeCandidate = {
+  scope: "task" | "agent" | "session" | "chamber" | "citadel" | "workspace" | "global";
+  scopeRef: string;
+};
+
+function buildScopeCandidates(request: ToolAccessEvaluateRequest): ScopeCandidate[] {
+  const out: ScopeCandidate[] = [];
   if (request.taskId) {
     out.push({ scope: "task", scopeRef: request.taskId });
   }
   out.push({ scope: "agent", scopeRef: request.agentId });
   out.push({ scope: "session", scopeRef: request.sessionId });
+  // Citadel/Chamber scope is dormant by default: candidates only appear when the
+  // request carries the ids, which nothing on the request path sets yet. Ordered
+  // specific→broad so a Chamber grant's constraints win over a Citadel-wide one;
+  // deny-wins is order-independent, so a deny at any of these scopes still blocks.
+  if (request.chamberId) {
+    out.push({ scope: "chamber", scopeRef: request.chamberId });
+  }
+  if (request.citadelId) {
+    out.push({ scope: "citadel", scopeRef: request.citadelId });
+  }
   if (request.workspaceId) {
     out.push({ scope: "workspace", scopeRef: request.workspaceId });
   }

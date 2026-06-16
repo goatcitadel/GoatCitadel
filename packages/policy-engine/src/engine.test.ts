@@ -364,6 +364,61 @@ describe("ToolPolicyEngine grants", () => {
   });
 });
 
+describe("ToolPolicyEngine citadel scope", () => {
+  it("honors a citadel-scoped deny grant when the request carries a citadelId", () => {
+    const storage = createStorageStub();
+    Object.assign(storage.toolGrants, {
+      listActive: vi.fn((scope: string, scopeRef: string) =>
+        scope === "citadel" && scopeRef === "c1"
+          ? [
+              {
+                grantId: "citadel-deny",
+                toolPattern: "shell.exec",
+                decision: "deny",
+                scope: "citadel",
+                scopeRef: "c1",
+                grantType: "persistent",
+                createdBy: "test",
+                createdAt: "2026-03-22T12:00:00.000Z",
+              },
+            ]
+          : [],
+      ),
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toEqual(["grant_deny"]);
+    expect(evaluation.matchedGrantId).toBe("citadel-deny");
+  });
+
+  it("does not consult citadel/chamber scope when the request carries no citadelId (dormant by default)", () => {
+    const storage = createStorageStub();
+    const listActive = vi.fn((_scope: string, _scopeRef: string) => [] as unknown[]);
+    Object.assign(storage.toolGrants, { listActive });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    const scopesQueried = listActive.mock.calls.map((call) => call[0]);
+    expect(scopesQueried).not.toContain("citadel");
+    expect(scopesQueried).not.toContain("chamber");
+  });
+});
+
 describe("ToolPolicyEngine invocation coverage", () => {
   it("lets approved Code Mode wrapper calls skip prompts without widening profile access", async () => {
     const storage = createStorageStub();

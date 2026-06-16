@@ -26,6 +26,7 @@ import {
   type RealtimeEvent,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
+  type ToolGrantScope,
   type ToolInvokeResult,
   ValidationError,
 } from "@goatcitadel/contracts";
@@ -141,7 +142,7 @@ export interface ApprovalLifecycleHost {
 
 export function listToolGrants(
   host: ApprovalLifecycleHost,
-  scope?: "global" | "session" | "workspace" | "agent" | "task",
+  scope?: ToolGrantScope,
   scopeRef?: string,
   limit = 200,
 ): ToolGrantRecord[] {

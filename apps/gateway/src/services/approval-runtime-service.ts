@@ -6,6 +6,7 @@ import type {
   ApprovalResolveInput,
   ToolGrantCreateInput,
   ToolGrantRecord,
+  ToolGrantScope,
 } from "@goatcitadel/contracts";
 import type {
   ApprovalReplayResult,
@@ -17,7 +18,7 @@ import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 
 export interface ApprovalRuntime {
   listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
+    scope?: ToolGrantScope,
     scopeRef?: string,
     limit?: number,
   ): ToolGrantRecord[];
@@ -71,7 +72,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
   public constructor(private readonly host: ApprovalLifecycleHost) {}
 
   public listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
+    scope?: ToolGrantScope,
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {

@@ -5393,11 +5393,7 @@ export class GatewayService {
     return record;
   }
 
-  public listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
