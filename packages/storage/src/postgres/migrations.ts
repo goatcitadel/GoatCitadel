@@ -1706,4 +1706,118 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT;
     `,
   },
+  {
+    // The Citadel tables were added to the sqlite blueprint, but Postgres only gains
+    // them via the canonical runtime schema embedded at v2/v7 — already applied on
+    // existing runtimes, so a runtime past v7 never created them and every Citadel route
+    // 500s with `relation "citadel_charters" does not exist`. Re-running the FULL
+    // canonical schema here is unsafe (it emits indexes on columns that existing tables
+    // only gained via later ALTERs), so this is a TARGETED, idempotent backfill of just
+    // the Citadel tables + the cron_jobs.citadel_id column the Watchtower index needs.
+    // The DDL is copied verbatim from the canonical render so it matches a fresh install.
+    version: 63,
+    name: "citadel_tables_backfill",
+    sql: `
+      CREATE TABLE IF NOT EXISTS citadel_charters (
+        citadel_id TEXT PRIMARY KEY,
+        purpose TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        goals_json TEXT NOT NULL DEFAULT '[]',
+        boundaries_json TEXT NOT NULL DEFAULT '[]',
+        success_definition_json TEXT NOT NULL DEFAULT '[]',
+        default_chamber_id TEXT,
+        risk_posture TEXT NOT NULL DEFAULT 'balanced',
+        model_policy_default TEXT NOT NULL DEFAULT 'hybrid_guarded',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_chambers (
+        chamber_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        sensitivity TEXT NOT NULL DEFAULT 'private',
+        sealed BIGINT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_agent_assignments (
+        assignment_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_wards (
+        ward_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        action_pattern TEXT NOT NULL,
+        effect TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_passages (
+        passage_id TEXT PRIMARY KEY,
+        source_citadel_id TEXT NOT NULL,
+        source_chamber_id TEXT,
+        destination_citadel_id TEXT NOT NULL,
+        allowed_fields_json TEXT NOT NULL DEFAULT '[]',
+        expires_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_members (
+        member_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_integration_grants (
+        grant_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        account TEXT,
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        mode TEXT NOT NULL DEFAULT 'read',
+        expires_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS citadel_vault_secrets (
+        secret_id TEXT PRIMARY KEY,
+        citadel_id TEXT NOT NULL,
+        secret_name TEXT NOT NULL,
+        sealed_value_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS mason_sessions (
+        session_id TEXT PRIMARY KEY,
+        answers_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'collecting',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS citadel_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_citadel_chambers_citadel ON citadel_chambers(citadel_id, name);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_agent_assignments_unique ON citadel_agent_assignments(citadel_id, agent_id);
+      CREATE INDEX IF NOT EXISTS idx_citadel_wards_citadel ON citadel_wards(citadel_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_citadel_passages_source ON citadel_passages(source_citadel_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_members_unique ON citadel_members(citadel_id, subject_id);
+      CREATE INDEX IF NOT EXISTS idx_citadel_integration_grants_citadel ON citadel_integration_grants(citadel_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_citadel_vault_secrets_citadel ON citadel_vault_secrets(citadel_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_vault_secrets_name ON citadel_vault_secrets(citadel_id, secret_name);
+      CREATE INDEX IF NOT EXISTS idx_cron_jobs_citadel ON cron_jobs(citadel_id, job_id);
+      CREATE INDEX IF NOT EXISTS idx_mason_sessions_updated ON mason_sessions(updated_at);
+    `,
+  },
 ];
