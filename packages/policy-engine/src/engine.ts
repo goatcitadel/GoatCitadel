@@ -186,6 +186,13 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
 
 export interface ToolPolicyEngineRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /**
+   * Wrap-first activation switch for Citadel enforcement. When it returns true, a
+   * request's workspace acts as its Citadel (citadelId aliases workspaceId), so
+   * Citadel Wards and citadel-scoped grants take effect. Default (absent) → false →
+   * fully dormant: behavior is byte-identical to a non-Citadel build.
+   */
+  citadelEnforcementEnabled?: () => boolean;
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
@@ -685,17 +692,24 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
-    // Citadel Wards (deny-wins) gate the request before grants. Dormant by default:
-    // only consulted when the request carries a citadelId, which nothing on the
-    // request path sets yet — so existing decisions are unchanged.
-    const wardEffect = request.citadelId
-      ? this.evaluateCitadelWards(request.citadelId, request.toolName)
+    // Effective Citadel scope. citadelId aliases workspaceId; with the wrap-first
+    // flag on, the workspace acts as its Citadel. Default (flag off, no explicit
+    // citadelId) → undefined → fully dormant, so existing decisions are unchanged.
+    const effectiveCitadelId =
+      request.citadelId ??
+      (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
+    const scopedRequest =
+      effectiveCitadelId === request.citadelId ? request : { ...request, citadelId: effectiveCitadelId };
+
+    // Citadel Wards (deny-wins) gate the request before grants.
+    const wardEffect = effectiveCitadelId
+      ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
       : undefined;
     if (wardEffect === "deny") {
       return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
     }
 
-    const grantDecision = this.resolveGrantDecision(request, toolDef);
+    const grantDecision = this.resolveGrantDecision(scopedRequest, toolDef);
     if (grantDecision?.decision === "deny") {
       return {
         allowed: false,

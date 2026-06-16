@@ -458,6 +458,50 @@ describe("ToolPolicyEngine citadel scope", () => {
 
     expect(listWards).not.toHaveBeenCalled();
   });
+
+  it("activates enforcement for a workspace when the wrap-first flag is on (workspace acts as its Citadel)", () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "ws-1"
+            ? [{ wardId: "w1", citadelId: "ws-1", name: "No shell", actionPattern: "shell.*", effect: "deny", createdAt: "t" }]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
+      citadelEnforcementEnabled: () => true,
+    });
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      workspaceId: "ws-1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("citadel_ward_deny");
+  });
+
+  it("stays dormant for a workspace when the flag is off (default)", () => {
+    const storage = createStorageStub();
+    const listWards = vi.fn(() => []);
+    Object.assign(storage, { citadels: { listWards } });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      workspaceId: "ws-1",
+    });
+
+    expect(listWards).not.toHaveBeenCalled();
+  });
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {

@@ -872,6 +872,11 @@ export class GatewayService {
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      // Wrap-first Citadel enforcement. Off by default; when the operator sets
+      // GOATCITADEL_CITADEL_ENFORCEMENT=1 the engine treats each workspace as its
+      // Citadel and enforces that Citadel's Wards (deny-wins) — no per-call-site
+      // threading needed, since citadelId aliases the workspaceId requests already carry.
+      citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
