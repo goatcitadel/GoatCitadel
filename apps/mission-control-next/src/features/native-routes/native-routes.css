@@ -4125,3 +4125,146 @@
   color: color-mix(in oklab, var(--area-code) 60%, var(--fg-primary));
   border-color: color-mix(in oklab, var(--area-code) 24%, var(--border-subtle));
 }
+
+/* The Mason setup surface (library/citadel). */
+.mc-next-mason-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mc-next-mason-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  margin: 0.7rem 0 0.55rem;
+}
+
+.mc-next-mason-field > span {
+  font-size: 0.82rem;
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.mc-next-mason-error {
+  margin: 0 0 0.55rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.mc-next-mason-footnote,
+.mc-next-citadel-footnote {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+}
+
+.mc-next-citadel-purpose {
+  margin: 0 0 0.6rem;
+  color: var(--foreground);
+}
+
+.mc-next-ward-result {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: var(--foreground);
+}
+
+.mc-next-blueprint-json {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.mc-next-blueprint-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-blueprint-ok {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: color-mix(in oklab, var(--area-cowork, var(--foreground)) 70%, var(--foreground));
+}
+
+.mc-next-blueprint-errors {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.mc-next-blueprint-errors > p {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.3rem;
+}
+
+.mc-next-vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-vault-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+}
+
+.mc-next-vault-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-next-vault-item-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.mc-next-vault-value {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  font-size: 0.78rem;
+  word-break: break-all;
+}

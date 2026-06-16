@@ -148,18 +148,26 @@ export class ApprovalRepository {
     return mapRow(row);
   }
 
-  public list(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
+  public list(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    const scopedWorkspaceId = workspaceId?.trim();
+    // The workspace lives inside linkage_json, so a workspace-scoped list filters in memory.
+    // Over-fetch when scoping so the post-filter `limit` still returns a full page where possible.
+    const fetchLimit = scopedWorkspaceId ? Math.max(limit * 10, 1000) : limit;
     const rows = toApprovalRows(
       status
         ? this.listByStatusStmt.all({
             status,
-            limit,
+            limit: fetchLimit,
           })
         : this.listStmt.all({
-            limit,
+            limit: fetchLimit,
           }),
     );
-    return rows.map(mapRow);
+    const mapped = rows.map(mapRow);
+    if (!scopedWorkspaceId) {
+      return mapped;
+    }
+    return mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId).slice(0, limit);
   }
 
   public resolve(approvalId: string, input: ApprovalResolveInput): ApprovalRequest {

@@ -719,6 +719,7 @@ export class GatewayService {
   public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
+  public readonly secretStore: SecretStoreService;
   private readonly skillsService: SkillsService;
   public readonly orchestrationEngine: OrchestrationEngine;
   private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
@@ -871,8 +872,14 @@ export class GatewayService {
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      // Wrap-first Citadel enforcement. Off by default; when the operator sets
+      // GOATCITADEL_CITADEL_ENFORCEMENT=1 the engine treats each workspace as its
+      // Citadel and enforces that Citadel's Wards (deny-wins) — no per-call-site
+      // threading needed, since citadelId aliases the workspaceId requests already carry.
+      citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
     });
     const secretStore = new SecretStoreService();
+    this.secretStore = secretStore;
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -5391,11 +5398,7 @@ export class GatewayService {
     return record;
   }
 
-  public listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
@@ -5458,8 +5461,8 @@ export class GatewayService {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return this.approvalRuntime.listApprovals(status, limit);
+  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    return this.approvalRuntime.listApprovals(status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {

@@ -26,6 +26,15 @@ export type { LlmModelMetadataEntry, LlmModelMetadataManifest } from "./llm-mode
 export * from "./auth.js";
 export * from "./connectors.js";
 export * from "./integrations.js";
+export * from "./citadels.js";
+export * from "./citadel-blueprints.js";
+export * from "./citadel-vault.js";
+export * from "./citadel-model-routing.js";
+export * from "./citadel-wards.js";
+export * from "./citadel-passages.js";
+export * from "./citadel-sharing.js";
+export * from "./citadel-automation.js";
+export * from "./citadel-mason.js";
 export * from "./mesh.js";
 export * from "./onboarding.js";
 export * from "./memory.js";

@@ -1082,6 +1082,173 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "knowledge_chunks", "embedding_metadata_json", "TEXT");
     },
   },
+  {
+    version: 110,
+    name: "memory_items_workspace_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "memory_items", "workspace_id", "TEXT");
+      if (tableExists(db, "memory_items")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_memory_items_workspace
+            ON memory_items(workspace_id, status, updated_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 111,
+    name: "citadel_core_schema",
+    up: createCitadelCoreSchema,
+  },
+  {
+    version: 112,
+    name: "cron_jobs_citadel_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "citadel_id", "TEXT");
+      if (tableExists(db, "cron_jobs")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_cron_jobs_citadel
+            ON cron_jobs(citadel_id, job_id);
+        `);
+      }
+    },
+  },
+  {
+    version: 113,
+    name: "citadel_agent_assignments_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_agent_assignments (
+          assignment_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_agent_assignments_unique
+          ON citadel_agent_assignments(citadel_id, agent_id);
+      `);
+    },
+  },
+  {
+    version: 114,
+    name: "citadel_wards_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_wards (
+          ward_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          action_pattern TEXT NOT NULL,
+          effect TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_wards_citadel
+          ON citadel_wards(citadel_id, created_at ASC);
+      `);
+    },
+  },
+  {
+    version: 115,
+    name: "citadel_passages_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_passages (
+          passage_id TEXT PRIMARY KEY,
+          source_citadel_id TEXT NOT NULL,
+          source_chamber_id TEXT,
+          destination_citadel_id TEXT NOT NULL,
+          allowed_fields_json TEXT NOT NULL DEFAULT '[]',
+          expires_at TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_passages_source
+          ON citadel_passages(source_citadel_id, created_at ASC);
+      `);
+    },
+  },
+  {
+    version: 116,
+    name: "citadel_members_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_members (
+          member_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          subject_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_members_unique
+          ON citadel_members(citadel_id, subject_id);
+      `);
+    },
+  },
+  {
+    version: 117,
+    name: "mason_sessions_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mason_sessions (
+          session_id TEXT PRIMARY KEY,
+          answers_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'collecting',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mason_sessions_updated
+          ON mason_sessions(updated_at DESC);
+      `);
+    },
+  },
+  {
+    version: 118,
+    name: "citadel_integration_grants_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_integration_grants (
+          grant_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          account TEXT,
+          capabilities_json TEXT NOT NULL DEFAULT '[]',
+          mode TEXT NOT NULL DEFAULT 'read',
+          expires_at TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_integration_grants_citadel
+          ON citadel_integration_grants(citadel_id, created_at ASC);
+      `);
+    },
+  },
+  {
+    version: 119,
+    name: "citadel_vault_secrets_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_vault_secrets (
+          secret_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          secret_name TEXT NOT NULL,
+          sealed_value_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_vault_secrets_name
+          ON citadel_vault_secrets(citadel_id, secret_name);
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_vault_secrets_citadel
+          ON citadel_vault_secrets(citadel_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1510,6 +1677,7 @@ function createBaseSchema(db: DatabaseSync): void {
       context_from TEXT,
       last_run_output TEXT,
       last_run_id TEXT,
+      citadel_id TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -4582,13 +4750,16 @@ function createGapClosureExtensionSchema(db: DatabaseSync): void {
       status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      forgotten_at TEXT
+      forgotten_at TEXT,
+      workspace_id TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_status
       ON memory_items(namespace, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_items_pinned_updated
       ON memory_items(pinned DESC, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_items_workspace
+      ON memory_items(workspace_id, status, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS memory_change_history (
       change_id TEXT PRIMARY KEY,
@@ -5223,6 +5394,37 @@ function createMemoryQualityIssueSchema(db: DatabaseSync): void {
       ON memory_quality_issues(kind, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_quality_issues_target
       ON memory_quality_issues(target_kind, target_ref, updated_at DESC);
+  `);
+}
+
+function createCitadelCoreSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS citadel_charters (
+      citadel_id TEXT PRIMARY KEY,
+      purpose TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      goals_json TEXT NOT NULL DEFAULT '[]',
+      boundaries_json TEXT NOT NULL DEFAULT '[]',
+      success_definition_json TEXT NOT NULL DEFAULT '[]',
+      default_chamber_id TEXT,
+      risk_posture TEXT NOT NULL DEFAULT 'balanced',
+      model_policy_default TEXT NOT NULL DEFAULT 'hybrid_guarded',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS citadel_chambers (
+      chamber_id TEXT PRIMARY KEY,
+      citadel_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      sensitivity TEXT NOT NULL DEFAULT 'private',
+      sealed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_citadel_chambers_citadel
+      ON citadel_chambers(citadel_id, name);
   `);
 }
 

@@ -16,6 +16,8 @@ import type {
   ToolPolicyConfig,
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
+import { evaluateWards } from "@goatcitadel/contracts";
+import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -184,6 +186,13 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
 
 export interface ToolPolicyEngineRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /**
+   * Wrap-first activation switch for Citadel enforcement. When it returns true, a
+   * request's workspace acts as its Citadel (citadelId aliases workspaceId), so
+   * Citadel Wards and citadel-scoped grants take effect. Default (absent) → false →
+   * fully dormant: behavior is byte-identical to a non-Citadel build.
+   */
+  citadelEnforcementEnabled?: () => boolean;
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
@@ -206,11 +215,7 @@ export class ToolPolicyEngine {
     return this.registry.toCatalog();
   }
 
-  public listGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.storage.toolGrants.list(scope, scopeRef, limit);
   }
 
@@ -687,7 +692,24 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
-    const grantDecision = this.resolveGrantDecision(request, toolDef);
+    // Effective Citadel scope. citadelId aliases workspaceId; with the wrap-first
+    // flag on, the workspace acts as its Citadel. Default (flag off, no explicit
+    // citadelId) → undefined → fully dormant, so existing decisions are unchanged.
+    const effectiveCitadelId =
+      request.citadelId ??
+      (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
+    const scopedRequest =
+      effectiveCitadelId === request.citadelId ? request : { ...request, citadelId: effectiveCitadelId };
+
+    // Citadel Wards (deny-wins) gate the request before grants.
+    const wardEffect = effectiveCitadelId
+      ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
+      : undefined;
+    if (wardEffect === "deny") {
+      return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
+    }
+
+    const grantDecision = this.resolveGrantDecision(scopedRequest, toolDef);
     if (grantDecision?.decision === "deny") {
       return {
         allowed: false,
@@ -860,6 +882,23 @@ export class ToolPolicyEngine {
       risky: true,
       matchedPattern: risk.matchedPattern ?? "unknown",
     };
+  }
+
+  /**
+   * Consult the Citadel's Wards (deny-wins) for an action. Returns undefined when the
+   * citadel repo is unavailable (e.g. a minimal storage stub) so callers fall through
+   * to the normal grant path. Architecture decision: the engine consults the
+   * `citadel_wards` table directly (preserving the rich WardEffects) rather than
+   * mirroring Wards into tool-grants (which would be lossy to allow/deny).
+   */
+  private evaluateCitadelWards(citadelId: string, action: string): WardEffect | undefined {
+    const citadelRepo = this.storage.citadels as
+      | { listWards?: (id: string) => CitadelWardRecord[] }
+      | undefined;
+    if (!citadelRepo?.listWards) {
+      return undefined;
+    }
+    return evaluateWards(citadelRepo.listWards(citadelId), action);
   }
 
   private resolveGrantDecision(
@@ -1615,15 +1654,28 @@ export class ToolPolicyEngine {
   }
 }
 
-function buildScopeCandidates(
-  request: ToolAccessEvaluateRequest,
-): Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> {
-  const out: Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> = [];
+type ScopeCandidate = {
+  scope: "task" | "agent" | "session" | "chamber" | "citadel" | "workspace" | "global";
+  scopeRef: string;
+};
+
+function buildScopeCandidates(request: ToolAccessEvaluateRequest): ScopeCandidate[] {
+  const out: ScopeCandidate[] = [];
   if (request.taskId) {
     out.push({ scope: "task", scopeRef: request.taskId });
   }
   out.push({ scope: "agent", scopeRef: request.agentId });
   out.push({ scope: "session", scopeRef: request.sessionId });
+  // Citadel/Chamber scope is dormant by default: candidates only appear when the
+  // request carries the ids, which nothing on the request path sets yet. Ordered
+  // specific→broad so a Chamber grant's constraints win over a Citadel-wide one;
+  // deny-wins is order-independent, so a deny at any of these scopes still blocks.
+  if (request.chamberId) {
+    out.push({ scope: "chamber", scopeRef: request.chamberId });
+  }
+  if (request.citadelId) {
+    out.push({ scope: "citadel", scopeRef: request.citadelId });
+  }
   if (request.workspaceId) {
     out.push({ scope: "workspace", scopeRef: request.workspaceId });
   }

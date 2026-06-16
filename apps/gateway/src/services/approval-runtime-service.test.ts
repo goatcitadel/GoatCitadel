@@ -85,7 +85,7 @@ describe("ApprovalRuntimeService", () => {
 
     expect(lifecycle.listToolGrants).toHaveBeenCalledWith(host, undefined, undefined, 200);
     expect(lifecycle.revokeToolGrant).toHaveBeenCalledWith(host, "grant-1", "operator-test");
-    expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, undefined, 100);
+    expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, undefined, 100, undefined);
     expect(lifecycle.getApprovalReplay).toHaveBeenCalledWith(host, "approval-1", "operator");
   });
 
@@ -99,7 +99,7 @@ describe("ApprovalRuntimeService", () => {
     await service.resolveChatToolApproval("session-2", "approval-2", "reject");
 
     expect(lifecycle.listToolGrants).toHaveBeenCalledWith(host, "session", "session-1", 5);
-    expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, "pending", 7);
+    expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, "pending", 7, undefined);
     expect(lifecycle.getApprovalReplay).toHaveBeenCalledWith(host, "approval-2", "auditor");
     expect(lifecycle.resolveChatToolApproval).toHaveBeenCalledWith(
       host,

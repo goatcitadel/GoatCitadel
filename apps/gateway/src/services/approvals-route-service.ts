@@ -21,8 +21,9 @@ export class ApprovalsRouteService {
   public listApprovals(
     status?: Parameters<ApprovalsRoutePort["listApprovals"]>[0],
     limit?: Parameters<ApprovalsRoutePort["listApprovals"]>[1],
+    workspaceId?: Parameters<ApprovalsRoutePort["listApprovals"]>[2],
   ) {
-    return this.approvals.listApprovals(status, limit);
+    return this.approvals.listApprovals(status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: Parameters<ApprovalsRoutePort["resolveApprovalsBulk"]>[0]) {
