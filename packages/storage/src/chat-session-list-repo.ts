@@ -32,7 +32,10 @@ interface CursorPinnedRow {
 }
 
 export class ChatSessionListRepository {
+  private static readonly maxListCandidatesStatementCacheSize = 64;
+
   private readonly cursorPinnedStmt;
+  private readonly listCandidatesStmtCache = new Map<string, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(private readonly db: DatabaseClient) {
     this.cursorPinnedStmt = db.prepare(`
@@ -164,7 +167,7 @@ export class ChatSessionListRepository {
       ORDER BY COALESCE(m.pinned, 0) DESC, s.updated_at DESC, s.session_id DESC
       LIMIT ?
     `;
-    const rows = toCandidateRows(this.db.prepare(sql).all(...params, limit));
+    const rows = toCandidateRows(this.getListCandidatesStmt(sql).all(...params, limit));
     return rows.map((row) => ({
       sessionId: row.session_id,
       updatedAt: row.updated_at,
@@ -175,6 +178,22 @@ export class ChatSessionListRepository {
   private resolveCursorPinned(sessionId: string): number | undefined {
     const row = toCursorPinnedRow(this.cursorPinnedStmt.get(sessionId));
     return row?.pinned;
+  }
+
+  private getListCandidatesStmt(sql: string): ReturnType<DatabaseClient["prepare"]> {
+    const cached = this.listCandidatesStmtCache.get(sql);
+    if (cached) {
+      return cached;
+    }
+    if (this.listCandidatesStmtCache.size >= ChatSessionListRepository.maxListCandidatesStatementCacheSize) {
+      const oldestKey = this.listCandidatesStmtCache.keys().next().value;
+      if (typeof oldestKey === "string") {
+        this.listCandidatesStmtCache.delete(oldestKey);
+      }
+    }
+    const stmt = this.db.prepare(sql);
+    this.listCandidatesStmtCache.set(sql, stmt);
+    return stmt;
   }
 }
 
