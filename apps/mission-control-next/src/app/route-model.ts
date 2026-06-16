@@ -14,7 +14,10 @@ export type LibrarySection =
   | "prompt-packs"
   | "curator"
   | "citadel"
-  | "citadel-overview";
+  | "citadel-overview"
+  | "citadel-wards"
+  | "citadel-council"
+  | "citadel-blueprint";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -672,6 +675,30 @@ export const ROUTE_RELEASE_SCOPE = [
       "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
     verification: "verify:surface:regression label check",
     note: "Citadel overview is read-only and experimental until Gate enforcement and Vault crypto are release-proven.",
+  },
+  {
+    area: "library",
+    section: "citadel-wards",
+    status: "experimental",
+    releaseAction: "List, add, and test Gatehouse Wards (deny-wins) without treating them as enforced on the request path.",
+    verification: "verify:surface:regression label check",
+    note: "Wards are authored and evaluated here but remain experimental until threaded into the policy engine for live enforcement.",
+  },
+  {
+    area: "library",
+    section: "citadel-council",
+    status: "experimental",
+    releaseAction: "Inspect the agents seated in the Citadel by reference to the existing agents catalog.",
+    verification: "verify:surface:regression label check",
+    note: "Council seating is read-only and experimental until per-seat grant ceilings are enforced by the policy engine.",
+  },
+  {
+    area: "library",
+    section: "citadel-blueprint",
+    status: "experimental",
+    releaseAction: "Export the active Citadel as a secret-free Blueprint, or validate and import one.",
+    verification: "verify:surface:regression label check",
+    note: "Blueprint import/export is experimental; imports are schema-checked and secret-scanned but staging never activates connections.",
   },
   {
     area: "ops",

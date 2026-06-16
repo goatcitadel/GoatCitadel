@@ -1,8 +1,11 @@
 import { Suspense, lazy } from "react";
 import type { AppRoute } from "@next/app/route-model";
 import { NativePageFrame } from "./NativeRoutePageLayout";
+import { CitadelBlueprintRoutePage } from "./library/CitadelBlueprintRoutePage";
+import { CitadelCouncilRoutePage } from "./library/CitadelCouncilRoutePage";
 import { CitadelMasonRoutePage } from "./library/CitadelMasonRoutePage";
 import { CitadelOverviewRoutePage } from "./library/CitadelOverviewRoutePage";
+import { CitadelWardsRoutePage } from "./library/CitadelWardsRoutePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
@@ -97,7 +100,15 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
 
 function LibraryNativePage(props: NativeRoutePagesProps) {
   const section = routeSectionWithDefault(props.route, "agents");
-  if (section === "curator" || section === "memory" || section === "citadel" || section === "citadel-overview") {
+  if (
+    section === "curator" ||
+    section === "memory" ||
+    section === "citadel" ||
+    section === "citadel-overview" ||
+    section === "citadel-wards" ||
+    section === "citadel-council" ||
+    section === "citadel-blueprint"
+  ) {
     return renderLibrarySection(section, props);
   }
 
@@ -127,6 +138,12 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <CitadelMasonRoutePage {...props} />;
     case "citadel-overview":
       return <CitadelOverviewRoutePage {...props} />;
+    case "citadel-wards":
+      return <CitadelWardsRoutePage {...props} />;
+    case "citadel-council":
+      return <CitadelCouncilRoutePage {...props} />;
+    case "citadel-blueprint":
+      return <CitadelBlueprintRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
     case "knowledge":

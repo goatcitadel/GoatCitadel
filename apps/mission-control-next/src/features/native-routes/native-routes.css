@@ -4182,3 +4182,50 @@
   margin: 0 0 0.6rem;
   color: var(--foreground);
 }
+
+.mc-next-ward-result {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: var(--foreground);
+}
+
+.mc-next-blueprint-json {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.mc-next-blueprint-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-blueprint-ok {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: color-mix(in oklab, var(--area-cowork, var(--foreground)) 70%, var(--foreground));
+}
+
+.mc-next-blueprint-errors {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.mc-next-blueprint-errors > p {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.3rem;
+}
