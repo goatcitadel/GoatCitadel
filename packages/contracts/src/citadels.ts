@@ -114,6 +114,39 @@ export interface CitadelCouncilMemberInput {
   role: string;
 }
 
+export type WorkMode = "ask" | "plan" | "cowork" | "forge" | "watch" | "review";
+
+export type CitadelMissionState =
+  | "draft"
+  | "planned"
+  | "waiting_for_approval"
+  | "running"
+  | "paused"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "archived";
+
+export interface CitadelMission {
+  missionId: string;
+  citadelId: string;
+  title: string;
+  objective: string;
+  mode: WorkMode;
+  state: CitadelMissionState;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface CitadelMissionInput {
+  citadelId: string;
+  title: string;
+  objective: string;
+  mode?: WorkMode;
+}
+
 // --- Scope: the (citadelId, chamberId?) tuple that scopes every Citadel-bound action ---
 
 export interface CitadelScope {

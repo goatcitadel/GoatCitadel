@@ -6,11 +6,15 @@ import type {
   CitadelCharterInput,
   CitadelCouncilMember,
   CitadelCouncilMemberInput,
+  CitadelMission,
+  CitadelMissionInput,
+  CitadelMissionState,
   ChamberSensitivity,
   CouncilArchetype,
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
+  WorkMode,
 } from "@goatcitadel/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
@@ -50,6 +54,18 @@ interface CouncilMemberRow {
   updated_at: string;
 }
 
+interface MissionRow {
+  mission_id: string;
+  citadel_id: string;
+  title: string;
+  objective: string;
+  mode: string;
+  state: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -64,6 +80,10 @@ export class CitadelRepository {
   private readonly getCouncilMemberStmt;
   private readonly listCouncilMembersStmt;
   private readonly deleteCouncilMemberStmt;
+  private readonly createMissionStmt;
+  private readonly getMissionStmt;
+  private readonly listMissionsStmt;
+  private readonly updateMissionStateStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -109,6 +129,24 @@ export class CitadelRepository {
       "SELECT * FROM citadel_council_members WHERE citadel_id = @citadelId ORDER BY name ASC, member_id ASC",
     );
     this.deleteCouncilMemberStmt = db.prepare("DELETE FROM citadel_council_members WHERE member_id = @memberId");
+    this.createMissionStmt = db.prepare(`
+      INSERT INTO citadel_missions (
+        mission_id, citadel_id, title, objective, mode, state, created_at, updated_at, completed_at
+      ) VALUES (
+        @missionId, @citadelId, @title, @objective, @mode, 'draft', @now, @now, NULL
+      )
+    `);
+    this.getMissionStmt = db.prepare("SELECT * FROM citadel_missions WHERE mission_id = @missionId");
+    this.listMissionsStmt = db.prepare(
+      "SELECT * FROM citadel_missions WHERE citadel_id = @citadelId ORDER BY updated_at DESC, mission_id ASC",
+    );
+    this.updateMissionStateStmt = db.prepare(`
+      UPDATE citadel_missions SET
+        state = @state,
+        updated_at = @now,
+        completed_at = @completedAt
+      WHERE mission_id = @missionId
+    `);
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -209,6 +247,45 @@ export class CitadelRepository {
     const result = this.deleteCouncilMemberStmt.run({ memberId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  public createMission(input: CitadelMissionInput): CitadelMission {
+    const missionId = randomUUID();
+    const now = new Date().toISOString();
+    this.createMissionStmt.run({
+      missionId,
+      citadelId: input.citadelId,
+      title: input.title,
+      objective: input.objective,
+      mode: input.mode ?? "ask",
+      now,
+    });
+    const mission = this.getMission(missionId);
+    if (!mission) {
+      throw new Error(`Failed to persist mission ${missionId} for citadel ${input.citadelId}`);
+    }
+    return mission;
+  }
+
+  public getMission(missionId: string): CitadelMission | undefined {
+    const row = this.getMissionStmt.get({ missionId }) as MissionRow | undefined;
+    return row ? mapMission(row) : undefined;
+  }
+
+  public listMissions(citadelId: string): CitadelMission[] {
+    const rows = this.listMissionsStmt.all({ citadelId }) as MissionRow[];
+    return rows.map(mapMission);
+  }
+
+  public updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined {
+    const existing = this.getMission(missionId);
+    if (!existing) {
+      return undefined;
+    }
+    const now = new Date().toISOString();
+    const completedAt = state === "completed" ? now : (existing.completedAt ?? null);
+    this.updateMissionStateStmt.run({ missionId, state, now, completedAt });
+    return this.getMission(missionId);
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -248,5 +325,19 @@ function mapCouncilMember(row: CouncilMemberRow): CitadelCouncilMember {
     role: row.role,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapMission(row: MissionRow): CitadelMission {
+  return {
+    missionId: row.mission_id,
+    citadelId: row.citadel_id,
+    title: row.title,
+    objective: row.objective,
+    mode: row.mode as WorkMode,
+    state: row.state as CitadelMissionState,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at ?? undefined,
   };
 }

@@ -123,4 +123,25 @@ describe("CitadelRepository", () => {
       ["Planner"],
     );
   });
+
+  it("creates, lists, and transitions missions scoped to a citadel", () => {
+    const repo = createRepo();
+    const mission = repo.createMission({ citadelId: "ws-1", title: "Plan week", objective: "plan" });
+    repo.createMission({ citadelId: "ws-1", title: "Organize docs", objective: "organize", mode: "review" });
+    repo.createMission({ citadelId: "ws-2", title: "Other", objective: "x" });
+
+    assert.equal(mission.state, "draft");
+    assert.equal(mission.mode, "ask");
+    assert.equal(repo.listMissions("ws-1").length, 2);
+
+    const running = repo.updateMissionState(mission.missionId, "running");
+    assert.equal(running?.state, "running");
+    assert.equal(running?.completedAt, undefined);
+
+    const done = repo.updateMissionState(mission.missionId, "completed");
+    assert.equal(done?.state, "completed");
+    assert.ok(done?.completedAt);
+
+    assert.equal(repo.updateMissionState("missing", "running"), undefined);
+  });
 });
