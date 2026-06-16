@@ -64,3 +64,7 @@ assets/source/office/_downloads/
 workspace/goatcitadel_out/
 reports/external-repo-reviews/
 reports/visual-rebaseline-*/
+
+# Local runtime state and run logs (process PIDs, gateway/UI logs, curator run reports)
+runtime/
+logs/

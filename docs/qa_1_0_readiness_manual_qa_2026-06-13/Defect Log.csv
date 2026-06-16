@@ -1,0 +1,2 @@
+DefectID,DateFound,Tester,Environment,Severity,Priority,Area,RouteOrEndpoint,Title,StepsToReproduce,Expected,Actual,Evidence,Workaround,Owner,Status,LinkedTestCase,Notes
+"","","","","","","","","","","","","","","","New","",""

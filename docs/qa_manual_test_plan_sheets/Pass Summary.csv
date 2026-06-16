@@ -1,0 +1,21 @@
+﻿Field,Value
+Manual QA pass name,
+Date range,
+Tester(s),
+Commit,
+Environment(s),
+Total cases,=COUNTA('Test Cases'!A2:A500)
+Passed,"=COUNTIF('Test Cases'!J2:J500,""Pass"")"
+Failed,"=COUNTIF('Test Cases'!J2:J500,""Fail"")"
+Blocked,"=COUNTIF('Test Cases'!J2:J500,""Blocked"")"
+Not run,"=COUNTIF('Test Cases'!J2:J500,""Not Run"")"
+N/A,"=COUNTIF('Test Cases'!J2:J500,""N/A"")"
+P0/P1 failures,
+P2 failures,
+P3 failures,
+Automated lanes run,
+Automated lanes skipped,
+Known unrelated failures,
+Release recommendation,
+Remaining risk,
+Next focused regression subset,

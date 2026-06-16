@@ -1,0 +1,10 @@
+Field,Value,Notes
+"Workbook","GoatCitadel 1.0 Readiness Manual QA Plan","Dated refresh generated from live repo review."
+"GeneratedAt","2026-06-13","Current date from environment context."
+"Repo","F:\code\personal-ai","Workspace reviewed."
+"Branch","main","Recorded for traceability."
+"Commit","8f550da17a09e629100e615965fdfc22a4975559","Manual QA should update this before execution if branch moves."
+"PrimarySourceDocs","AGENTS.md; docs/1_0_CONTRACT.md; docs/CANONICAL_RUNTIME_STATE_MODEL.md; docs/1_0_RELEASE_SURFACE_SCOPE.md; docs/1_0_RELEASE_EVIDENCE.md","Use current implementation first if these conflict."
+"CanonicalShell","apps/mission-control-next","apps/mission-control contains generated/runtime residue only and is not release-bearing source."
+"VisibleSurfaceCount","44 routes: 39 ship, 5 experimental","From 1.0 release evidence and release-surface manifest."
+"HowToUse","Fill Result, Tester, Date, Environment, Evidence, Notes, FollowUpIssue, Severity, and Owner columns during execution.","Recommended result values: Pass, Fail, Blocked, Not Run, N/A."

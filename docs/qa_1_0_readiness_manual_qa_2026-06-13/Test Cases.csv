@@ -1,0 +1,290 @@
+ID,Priority,Area,Surface,RouteOrEndpoint,Scenario,Preconditions,Steps,ExpectedResult,DataOrFixtures,RiskCovered,NegativeOrEdgeChecks,AutomatedCompanion,Result,Tester,Date,Environment,Evidence,Notes,FollowUpIssue,Severity,Owner
+"PRE-01","P0","Preflight","Repo","workspace","Record baseline before manual QA","Clean or intentionally dirty checkout, selected environment known.","Record git rev-parse HEAD and git status --short.
+Record Node, pnpm, .NET, Docker, OS, browser versions.
+Start the selected environment.
+Open gateway /health and Mission Control root.","Baseline is captured; /health is ok; Mission Control Next shell loads, not the retired shell.","Current SHA, environment notes","Manual results cannot be tied to an exact build.","If worktree is dirty, record whether changes are unrelated.","pnpm verify:fast; pnpm docs:check","","","","","","","","","Manual QA"
+"PRE-02","P0","Preflight","Config","config/runtime","Config sync and secrets posture","Use test env only.","Run pnpm config:sync or equivalent managed config setup.
+Verify no real secrets are committed or displayed in UI.
+Open Settings Access and Settings Providers.","Config loads; provider secret references are masked; unavailable secure-store paths are described honestly.","Synthetic provider keys or intentionally missing keys","Leaking secrets or claiming secure-store when unavailable.","Missing provider credentials should show setup-needed, not crash.","pnpm docs:check; security-focused route tests","","","","","","","","","Manual QA"
+"NAV-01","P0","Navigation","Shell","/chat /cowork /code /projects /library /ops /settings","Primary IA navigation and active state","Mission Control Next running.","Click each primary nav area.
+Confirm URL, active rail item, page title, and shell chrome.
+Use browser back/forward across areas.","Routes update correctly; active state follows current route; no legacy Work/Observe/Tune primary chrome appears.","Desktop browser","Wrong shell or route model regressions.","Back/forward and deep links keep expected section.","pnpm verify:surface:regression","","","","","","","","","Manual QA"
+"NAV-02","P0","Navigation","Shell","all release routes","Command palette and direct-route coverage","Mission Control Next running.","Open command palette or route finder if available.
+Search for Chat, Cowork, Code, Runtime, Providers, Memory, Approvals.
+Navigate to experimental routes by direct route or command surface.","Ship routes are discoverable; experimental routes are reachable but clearly labeled experimental.","Route list from Route Coverage tab","Hidden or experimental routes misrepresented.","Invalid route falls back safely to Chat or not-found copy.","pnpm verify:surface:regression; route-model tests","","","","","","","","","Manual QA"
+"NAV-03","P1","Navigation","Legacy redirects","legacy query URLs","Legacy URL compatibility redirects","Mission Control Next running.","Open representative legacy URLs from release-surface manifest.
+Confirm expected modern path.
+Check no legacy shell source is used.","Legacy redirects land on current Mission Control Next paths.","Legacy redirect manifest","Old links strand operators or imply retired shell parity.","Unknown legacy params fail safely.","pnpm verify:ui:parity","","","","","","","","","Manual QA"
+"NAV-04","P0","Navigation","Responsive shell","all top routes","Desktop, narrow desktop, laptop, and mobile layout smoke","Browser dev tools available.","Open Chat, Cowork, Code, Memory, Runtime, Providers, Approvals at 1440x1024, 1180x900, 1280x800, and 390x844.
+Check for overlapping text, clipped controls, scroll traps, and inaccessible actions.
+Repeat dark and light themes.","Core controls remain reachable; text does not overlap; layout state is readable in both themes.","Viewport variants from release manifest","Visual readiness gap despite automated screenshot pass.","Long provider names and long session titles should not break layout.","pnpm verify:visual:regression","","","","","","","","","Manual QA"
+"NAV-05","P1","Navigation","Theme","?theme=light; dark default","Theme persistence and contrast","Mission Control Next running.","Switch theme from dark to light and back.
+Refresh route.
+Navigate between top areas.
+Check status chips, disabled buttons, links, and danger actions for contrast.","Theme persists or URL-selected theme applies; contrast remains readable; no invisible text.","Dark/light variants","Accessibility and visual polish regression.","System high-contrast mode if practical.","visual regression; accessibility checks","","","","","","","","","Manual QA"
+"CHAT-01","P0","Chat","Threaded Chat","/chat","Send a normal chat turn and inspect runtime context","At least one provider or fake provider configured.","Open /chat.
+Send a simple prompt.
+Wait for streaming completion.
+Open trace/runtime/model details for the turn.","User and assistant messages persist; provider/model/tool/memory context is inspectable when present; no raw trace required for main comprehension.","Simple prompt and fake provider if needed","Core product feels like a shallow chat box or hides runtime truth.","Provider missing should show setup guidance, not blank failure.","pnpm verify:runtime:truth; focused chat tests","","","","","","","","","Manual QA"
+"CHAT-02","P0","Chat","Streaming","/chat","Streaming, cancel, retry, and partial failure handling","Provider configured or fake stream fixture available.","Send a longer prompt.
+Cancel during streaming if supported.
+Retry or regenerate.
+Observe partial output and status labels.","Cancel/retry state is clear; partial failures do not silently retry after emitting unsafe/tool-protocol content.","Long response fixture","Duplicate or misleading assistant output.","Network drop during stream shows recoverable/degraded state.","llm-completion-service tests; realtime truth lane","","","","","","","","","Manual QA"
+"CHAT-03","P1","Chat","Attachments","/chat","Attachment upload and safe handling","Use synthetic text, image, and unsupported file.","Attach a small supported file.
+Send prompt referencing it.
+Try unsupported type or oversized file.
+Inspect attachment provenance and error copy.","Supported attachments are visible and referenced; unsupported/oversized files fail with readable policy copy.","Synthetic attachment set","Unsafe file ingestion or confusing failure.","Mime spoof and empty file edge cases.","chat attachment route tests; policy-engine guard tests","","","","","","","","","Manual QA"
+"CHAT-04","P0","Chat","Memory","/chat; /library/memory","Explicit memory recall and why-used evidence","Seed or create a synthetic memory item.","Ask Chat a question that should use targeted recall.
+Inspect memory citation/retrieval reason.
+Open /library/memory and find the item.
+Submit useful/stale/irrelevant feedback if UI supports it.","Recall mode and citation strategy are visible; memory is not invisible prompt injection; feedback records surface in Library/Ops.","Synthetic memory item","Hidden or stale memory affects output without operator visibility.","Ask unrelated question and confirm memory not overused.","pnpm verify:memory:truth","","","","","","","","","Manual QA"
+"CHAT-05","P1","Chat","Approvals","/chat; /ops/approvals","Approval-gated tool request from Chat","Use a safe local tool/action that requires approval.","Ask Chat to perform an approval-gated action.
+Observe composer blocking/pending approval state.
+Open /ops/approvals.
+Approve or deny, then return to Chat.","Approval linkages are visible; Chat waits without pretending completion; resolution resumes through durable/runtime path where applicable.","Safe fixture tool","Approval bypass or lost context.","Deny should not execute action and should leave evidence.","verify:agentic:governance; approval tests","","","","","","","","","Manual QA"
+"CHAT-06","P1","Chat","Sessions","/chat; /ops/sessions","Session persistence, branch, and history navigation","Multiple chat turns available.","Create a short conversation.
+Navigate away and back.
+Open session list/history.
+Start a branch or restore prior context if UI supports it.","Session summary is a derived view but messages/turns persist; route parameters keep expected context.","Synthetic chat session","Lost history or derived projection treated as canonical.","Deleted/archived session behavior is clear.","chat session storage tests","","","","","","","","","Manual QA"
+"COWORK-01","P0","Cowork","Threaded Cowork","/cowork","Start a supervised multi-step task","Provider/fake provider configured; synthetic workspace.","Open /cowork.
+Start a task that needs planning and execution.
+Inspect plan, current step, blockers, and evidence.
+Verify distinction from plain Chat.","Cowork shows decomposition, current execution state, checkpoints, and oversight controls.","Synthetic task prompt","Cowork degenerates into opaque chat.","Ambiguous task should request clarification or safe plan.","verify:durable:recovery; agentic proof lanes","","","","","","","","","Manual QA"
+"COWORK-02","P0","Cowork","Durable execution","/cowork; /ops/diagnostics","Approval wait, resume, and durable Run Detail","Create a task that requests an approval.","Start Cowork task.
+Pause at approval.
+Open approval and Run Detail.
+Approve.
+Confirm phase advances through durable run.","Approval resume re-enters durable execution; Run Detail links session/task/approval/run truth.","Approval-gated fixture","UI advances without durable run.","Deny, timeout, and retry paths stay inspectable.","verify:runtime:truth; verify:durable:recovery","","","","","","","","","Manual QA"
+"COWORK-03","P1","Cowork","Task Board","/cowork/tasks","Task state, blockers, deliverables","At least one active and one completed/blocked task.","Open /cowork/tasks.
+Filter/sort if available.
+Open task detail.
+Check blocker hierarchy and deliverables.","Task states are readable and tied to underlying run/session evidence.","Synthetic tasks","Task board becomes unrelated product or stale projection.","Empty state and large list performance.","surface regression; task route tests","","","","","","","","","Manual QA"
+"COWORK-04","P2","Cowork","Agent Board","/cowork/board","Agent posture without autonomy overclaim","Mission Control Next running.","Open /cowork/board.
+Inspect available agents/posture.
+Check labels around autonomy and live control.
+Try board actions that are enabled.","Board shows inspectable posture and does not imply ungoverned autonomous control.","Agent catalog fixtures","Autonomy claim exceeds governed grants.","No agents configured state.","surface regression; agentic governance","","","","","","","","","Manual QA"
+"COWORK-05","P1","Cowork","Worktree evidence","/cowork; /ops/sessions","Worktree-owned orchestration truth","Use a task that creates or references a worktree if supported.","Start orchestration task.
+Inspect worktree path/status/base ref.
+Open session/run evidence.
+Confirm UI labels inferred vs canonical fields.","Worktree execution truth is explicit; derived positions do not overwrite durable state.","Safe test repo","Lost ownership or misleading execution state.","Missing worktree should block clearly.","orchestration service tests","","","","","","","","","Manual QA"
+"CODE-01","P0","Code","Threaded Code","/code","Bind source and run a code-assist workflow","Use disposable fixture repo/workspace.","Open /code.
+Bind or select source.
+Ask for a small safe change plan, but do not apply real changes in manual QA unless intended.
+Inspect file/diff/validation controls.","Code feels technical and precise; source, diffs, validation, and approval posture are visible.","Disposable fixture repo","Code surface edits unintended files or hides diff.","No source selected state is clear.","verify:code:workbench-loop","","","","","","","","","Manual QA"
+"CODE-02","P0","Code","Code Mode","/code; /ops/approvals","Governed Code Mode approval and artifact proof","Code Mode feature enabled in safe fixture.","Request a Code Mode run.
+Review approval payload and policy snapshot.
+Approve.
+Inspect run record, artifact hashes, stdout/stderr truncation state, and backend metadata.","Run is approved before execution; immutable artifact refs and hashes are inspectable; backend truth is shown.","Synthetic code input","Bypassing approval or unverified artifact mutation.","Expired approval must not execute.","verify:code-mode:sandbox; code-mode repo tests","","","","","","","","","Manual QA"
+"CODE-03","P0","Code","Sandbox truth","/code; /ops/quality","Fail-closed and hostile-sandbox claim copy","Configured environment with one unavailable isolation requirement if safe.","Inspect Code Mode backend availability.
+Trigger or simulate unavailable required isolation.
+Search UI/release copy for hostile-code claims.
+Check fail-closed metadata.","Required isolation unavailable blocks execution; hostile-code claims are platform/exact-proof scoped only.","Sandbox metadata fixture","Overclaiming public hostile-code sandboxing.","Docker selected without config should be disabled or blocked.","verify:code-mode:sandbox; verify:code-mode:hostile-sandbox","","","","","","","","","Manual QA"
+"PROJECTS-01","P1","Projects","Projects","/projects","Project home and cross-surface continuation","Create or seed a project with Chat/Cowork/Code sessions.","Open /projects.
+Select project.
+Open recent Chat, Cowork, and Code items.
+Return to project home.","Project groups work without losing route context; continuation links preserve correct surface.","Synthetic project","Project route becomes a disconnected file browser.","Pinned/archived project state.","projects route tests; surface regression","","","","","","","","","Manual QA"
+"LIB-AGENTS-01","P1","Library","Agents","/library/agents","Agent profiles and catalog controls","Agent catalog present or empty state.","Open Agents.
+Inspect profile details, trust/provenance, and actions.
+Try disabled or unavailable actions.","Profiles are inspectable; unavailable actions explain why.","Built-in agents","Profile action bypasses policy or lacks provenance.","Empty catalog state.","surface regression; agent route tests","","","","","","","","","Manual QA"
+"LIB-SKILLS-01","P0","Library","Skills","/library/skills","Skill lifecycle and trust state","At least one built-in skill and one candidate/proposal if available.","Open Skills.
+Inspect SKILL.md-driven metadata, lifecycle, provenance, and activation posture.
+Confirm inactive candidates are not callable.","Skill lifecycle is clear; activation requires governed trust/provenance.","Built-in and candidate skill fixtures","Candidate script becomes callable from review-only state.","Missing or malformed skill bundle surfaces readable error.","verify:skills:catalog; verify:agentic:proof","","","","","","","","","Manual QA"
+"LIB-CAP-01","P0","Library","Capabilities","/library/capabilities","Inspectable vs callable catalog truth","Capability snapshot available.","Open Capabilities.
+Compare inspectable entries, inactive candidates, and callable entries.
+Trigger a safe allowed capability action.
+Try an inactive/proposal entry.","Only activated policy-allowed entries are callable; degraded entries show reason and health.","Capability fixtures","Inactive proposal callable or health hidden.","Revoked capability disappears from callable path.","verify:catalog:parity","","","","","","","","","Manual QA"
+"LIB-MEM-01","P0","Library","Memory","/library/memory","Memory list, edit, forget, history","Use synthetic memory item only.","Open Memory.
+Create or find synthetic item.
+Edit it.
+Forget it.
+Open history/provenance if available.","Memory actions route through lifecycle owner; state is explicit, scoped, reversible where supported.","Synthetic workspace memory","Silent durable memory mutation.","Expired pinned/unpinned items show correct lifecycle.","verify:memory:truth","","","","","","","","","Manual QA"
+"LIB-MEM-02","P1","Library","Memory","/library/memory","Trace-derived memory proposal flow","Have a trace that could propose memory.","Generate or seed trace-derived proposal.
+Open Memory proposals.
+Review source/provenance.
+Approve or reject if safe.","Proposal remains non-trusted until operator authority/write gate; raw logs/secrets are rejected.","Synthetic trace with harmless content","Raw tool output or secret-like data promoted.","Reject path records evidence.","memory lifecycle tests","","","","","","","","","Manual QA"
+"LIB-KNOW-01","P1","Library","Knowledge","/library/knowledge","Knowledge source provenance and attachment","Synthetic knowledge file/source available.","Open Knowledge.
+Inspect source metadata and provenance.
+Attach source to Chat if supported.
+Ask a question using it.","Source visibility remains clear; generated answer cites or references source context appropriately.","Synthetic knowledge source","Knowledge source appears as hidden memory.","Missing source/deleted file state.","knowledge route tests","","","","","","","","","Manual QA"
+"LIB-NOTES-01","P2","Library","Notes","/library/notes","Workspace-scoped notes separate from learned memory","Synthetic workspace.","Open Notes.
+Create a checklist/reminder/note.
+Confirm scope and follow-up state.
+Search or filter notes if available.","Notes persist as operator notes and do not silently become durable learned memory.","Synthetic note","Workspace leakage or memory promotion confusion.","Long note and empty title.","personal-ops route tests","","","","","","","","","Manual QA"
+"LIB-COMMS-01","P1","Library","Communications","/library/communications","Inbox, agenda, contacts, and approval-gated drafts","Use sandbox connector or disconnected state.","Open Communications.
+Inspect inbox/agenda/contact panes.
+Draft outbound content if supported.
+Verify send requires approval/configured connector.","Communication data is scoped and governed; outbound side effects require approval and evidence.","Sandbox mail/calendar connector","Unapproved send or raw credential exposure.","Disconnected connector shows setup guidance.","communications route/service tests","","","","","","","","","Manual QA"
+"LIB-FILES-01","P1","Library","Files","/library/files","Browse files without bypassing path jails","Synthetic workspace files.","Open Files.
+Browse allowed workspace path.
+Try path traversal or outside-root link if UI allows.
+Open file preview.","Allowed files show previews; blocked paths fail safely and visibly.","Synthetic files","Path jail bypass.","Large file and binary file handling.","files route tests; path-jail tests","","","","","","","","","Manual QA"
+"LIB-ART-01","P1","Library","Artifacts","/library/artifacts","Generated artifact provenance","Have at least one generated artifact.","Open Artifacts.
+Open artifact detail.
+Inspect linked session/run/source/decision evidence.
+Download or copy if supported.","Artifact provenance is inspectable; missing source is labeled, not hidden.","Synthetic generated artifact","Artifact detached from run evidence.","Deleted underlying file state.","artifact redaction verification","","","","","","","","","Manual QA"
+"LIB-PP-01","P1","Library","Prompt Packs","/library/prompt-packs","Prompt-pack author, benchmark, review, export","Use small synthetic prompt pack.","Open Prompt Packs.
+Create or import pack.
+Run or inspect benchmark/eval posture without unintended provider spend.
+Review export and model comparison evidence.","Prompt pack workflows show status, judgment provenance, and quality gates; read-only dashboards do not run hidden tests.","Synthetic pack","Provider calls run without confirmation or budget visibility.","Empty outputs and parser failures.","prompt:gates; prompt-pack tests","","","","","","","","","Manual QA"
+"LIB-CURATOR-01","P2","Library","Curator","/library/curator","Experimental curator labeling","Mission Control Next running.","Open /library/curator.
+Confirm experimental label/stage.
+Inspect recommendations/proposals.
+Check no action is described as final automation.","Curator is visibly experimental and recommendations are review-only.","Skill health fixtures","Experimental route counted as release proof.","No curator data state.","surface regression label check","","","","","","","","","Manual QA"
+"OPS-ACT-01","P0","Ops","Activity","/ops/activity","Retained realtime event inspection","Generate a chat turn, approval, or task event.","Open Activity.
+Find event.
+Inspect eventClass, eventAuthority, links if visible.
+Disconnect/reconnect SSE if practical.","Activity is a retained operator signal lane; canonical links are explicit or fallback labeled.","Synthetic event","Realtime event treated as complete historical record.","Replay-gap and degraded stream states.","verify:realtime:truth","","","","","","","","","Manual QA"
+"OPS-SES-01","P1","Ops","Sessions","/ops/sessions","Session timelines and evidence navigation","At least two sessions exist.","Open Sessions.
+Filter or open a session.
+Navigate to related turns/runs/artifacts.
+Compare with Chat route state.","Session summaries are useful projections and link to canonical turn/run evidence.","Synthetic sessions","Derived summary hides missing canonical data.","Deleted or archived session.","session list tests","","","","","","","","","Manual QA"
+"OPS-SCH-01","P1","Ops","Schedules","/ops/schedules","Scheduler posture and governed recurring work","Scheduler feature available.","Open Schedules.
+Inspect current jobs.
+Create or simulate safe recurring work if supported.
+Check approval/risk copy.","Scheduler posture is visible; experimental no-agent cron is not described as 1.0 guarantee.","Synthetic schedule","Ungoverned recurring side effects.","Disabled scheduler state.","scheduler tests; docs truth","","","","","","","","","Manual QA"
+"OPS-NOTIF-01","P1","Ops","Notifications","/ops/notifications","Runtime issues and self-repair proposals","Create or seed a runtime issue/proposal.","Open Notifications.
+Inspect issue details.
+Open linked route.
+Dismiss or mark follow-up if supported.","Notifications explain source, severity, and next action without hiding uncertainty.","Synthetic issue","Self-repair proposal implies autonomous fix without approval.","No notification state.","surface regression","","","","","","","","","Manual QA"
+"OPS-APP-01","P0","Ops","Approvals","/ops/approvals","Pending decisions, replay effects, approval history","Approval fixture or real safe approval pending.","Open Approvals.
+Inspect pending approval linkage fields.
+Approve and deny representative actions.
+Review history and effect records.","Approval resolution records follow-on effects and does not re-fire already executed actions.","Safe approval fixture","Duplicate side effect on replay or missing linkage.","Expired/invalid approval token.","verify:auth:matrix; approval effect tests","","","","","","","","","Manual QA"
+"OPS-COST-01","P1","Ops","Costs","/ops/costs","Spend visibility and budget evidence","Generate at least one usage/cost event or seed data.","Open Costs.
+Inspect provider/model/spend/time filters.
+Compare with Chat trace usage.
+Check empty/degraded state.","Cost evidence is understandable and does not invent zero spend when source unavailable.","Synthetic usage ledger","False cost certainty.","Provider without pricing metadata.","cost ledger tests","","","","","","","","","Manual QA"
+"OPS-QUALITY-01","P1","Ops","Quality","/ops/quality","Quality dashboard read-only evidence","Prompt-pack/eval evidence present or empty state.","Open Quality.
+Inspect prompt-pack gate status, eval proof, defensive security pack state.
+Try any export or drill-in links.","Dashboard is read-only evidence; it does not run providers, approve changes, or replay effects.","Synthetic reports","Quality dashboard performs hidden side effects.","Not imported/not run/needs score statuses.","verify:security:evals; prompt:gates","","","","","","","","","Manual QA"
+"OPS-RUN-01","P0","Ops","Runtime","/ops/runtime","Gateway health, daemon posture, host vitals, backup state","Gateway running; optional daemon state known.","Open Runtime.
+Inspect gateway, daemon, host, and backup cards.
+Stop optional source if safe or simulate failure.
+Confirm degraded/unavailable copy.","Failed backend sources show unavailable/degraded, not false stopped or zero telemetry.","Runtime snapshot fixtures","Operator receives wrong runtime status.","Offline/unknown source states.","verify:runtime:truth","","","","","","","","","Manual QA"
+"OPS-DIAG-01","P1","Ops","Diagnostics","/ops/diagnostics","Diagnostics directory and readiness drill-ins","Mission Control Next running.","Open Diagnostics.
+Inspect durable, daemon, admin, docs, and readiness sections.
+Open a linked diagnostic detail.
+Check copy for blocked/manual proof boundaries.","Diagnostics are high-signal and actionable without raw JSON as primary UI.","Diagnostic fixtures","Raw table/JSON-only operator experience.","No diagnostics available state.","docs:check; surface regression","","","","","","","","","Manual QA"
+"OPS-KANBAN-01","P2","Ops","Kanban","/ops/kanban","Experimental kanban labeling and bulk-control boundaries","Mission Control Next running.","Open /ops/kanban.
+Confirm experimental label.
+Inspect cards/distress signals if present.
+Try only safe read-only controls.","Kanban is visibly experimental; bulk controls are not final release control.","Kanban fixtures","Experimental multi-agent board overclaimed as final.","Empty board state.","surface regression label check","","","","","","","","","Manual QA"
+"SET-GEN-01","P1","Settings","General","/settings/general","Base defaults and persistence","Mission Control Next running.","Open General.
+Change a harmless display/default setting.
+Save if required.
+Refresh and navigate away/back.","Defaults persist and show saved/degraded state clearly.","Synthetic setting","Settings silently fail or mutate wrong scope.","Invalid input validation.","settings route tests","","","","","","","","","Manual QA"
+"SET-ONB-01","P0","Settings","Start Here","/settings/onboarding","First-run readiness path","Fresh or reset test runtime if possible.","Open Start Here.
+Walk provider/local path selection.
+Complete first Chat, Cowork, and Code task prompts if safe.
+Open retained evidence and Run Detail links.","Onboarding guides a beginner without hiding provider, local runtime, approval, or evidence truth.","Fresh runtime","First-run flow dead-ends or overclaims readiness.","Missing provider path and local-only path.","verify:install; surface regression","","","","","","","","","Manual QA"
+"SET-PROV-01","P0","Settings","Providers","/settings/providers","Provider credentials, model discovery, smoke evidence","Use fake provider or sandbox credentials.","Open Providers.
+Inspect configured/unconfigured providers.
+Run model discovery/smoke where safe.
+Check auth, proxy, TLS, rate-limit, and usage errors.","Provider status and failures are readable; active routing defaults are explicit.","Fake provider, optional real test key","Provider appears healthy without runtime connectivity.","Invalid key and network outage.","provider service tests; verify:runtime:truth","","","","","","","","","Manual QA"
+"SET-PERS-01","P2","Settings","Personalities","/settings/personalities","Experimental personality presets labeling","Mission Control Next running.","Open Personalities.
+Confirm experimental label.
+Change a harmless preset if supported.
+Return to Chat and inspect default behavior if safe.","Personalities are labeled experimental polish and do not affect governed policy invisibly.","Synthetic preset","Experimental preset represented as release-critical runtime guarantee.","No presets state.","surface regression label check","","","","","","","","","Manual QA"
+"SET-ACC-01","P0","Settings","Access","/settings/access","Auth posture, device grants, secrets","Token auth or auth fixture available.","Open Access.
+Inspect auth mode, device grants, secret-store truth.
+Try denied companion/device action in safe way.
+Check error copy.","Access boundaries are clear; device/companion mutation denied where expected.","Auth test tokens","Privilege escalation or secret exposure.","Expired/tampered token.","verify:auth:matrix; privileged auth tests","","","","","","","","","Manual QA"
+"SET-PERM-01","P0","Settings","Permissions","/settings/permissions","Permission profiles and local operator override","Synthetic profile or built-in profiles.","Open Permissions.
+Inspect active profile for Chat/Cowork/Code.
+Create/edit safe custom profile if supported.
+Enable/revoke local operator override and inspect audit/evidence.","Profiles and override are scoped, time-boxed, audited, and subordinate to deny-wins boundaries.","Synthetic workspace profile","Override bypasses auth/path jail/disabled capability.","Expired override and missing profile.","verify:agentic:governance","","","","","","","","","Manual QA"
+"SET-TRUST-01","P0","Settings","Trust & Policy","/settings/trust-policy","Unified trust and policy snapshot","Gateway running.","Open Trust & Policy.
+Inspect capability, tool, source, and policy matrix.
+Use jump links to Permissions, Tools, MCP, Skills, Capabilities, Approvals.
+Simulate snapshot API unavailable if safe.","Dashboard fails closed when snapshot unavailable and points to owning edit surfaces.","Trust snapshot data","Dashboard presents stale state as trusted.","Unavailable API locks mutating controls.","verify:agentic:governance","","","","","","","","","Manual QA"
+"SET-BUD-01","P1","Settings","Budget","/settings/budget","Budget mode and cost evidence","Synthetic budget settings.","Open Budget.
+Change budget mode/limit if safe.
+Run small provider action.
+Check Ops Costs reflects evidence.","Budget settings persist and connect to cost evidence; over-budget warnings are clear.","Synthetic budget","Provider spend without budget visibility.","Invalid/zero limit.","cost tests; surface regression","","","","","","","","","Manual QA"
+"SET-RUN-01","P0","Settings","Runtime","/settings/runtime","Runtime posture, sidecars, backups, mesh","Gateway running.","Open Runtime settings.
+Inspect local runtime, mesh, backup, sidecar status.
+Check experimental sidecars are labeled.
+Open linked Ops Runtime diagnostics.","Runtime controls are clear and experimental sidecars stay labeled.","Runtime fixtures","Experimental NPU/local sidecar overclaimed.","Missing Docker/sidecar state.","verify:runtime:truth; verify:mesh:readiness","","","","","","","","","Manual QA"
+"SET-LAI-01","P1","Settings","Local AI","/settings/local-ai","Hardware readiness and local model job truth","Local AI can be unconfigured.","Open Local AI.
+Inspect hardware readiness and model-fit recommendations.
+Try setup/smoke path only if safe.
+Check copy around installs and local inference maturity.","Local AI is advisory/approval-gated and does not claim autonomous installs or full maturity.","No local model required","Overclaims NPU/local inference readiness.","Unsupported hardware state.","local-ai route tests","","","","","","","","","Manual QA"
+"SET-WORK-01","P1","Settings","Workspaces","/settings/workspaces","Workspace context and guidance","Synthetic workspace available.","Open Workspaces.
+Create/edit workspace context if safe.
+Add guidance and inspect scope.
+Verify Chat/Cowork/Code inherit scope visibly.","Workspace memory/guidance is scoped and does not leak into user identity memory.","Synthetic workspace","Workspace guidance silently affects all workspaces.","Archived/deleted workspace.","workspace route/storage tests","","","","","","","","","Manual QA"
+"SET-ADD-01","P2","Settings","Add-ons","/settings/addons","Experimental add-on and capability-pack posture","Mission Control Next running.","Open Add-ons.
+Confirm experimental label.
+Preview/stage/export capability pack if safe.
+Confirm materialization receipts are evidence-only.","Add-ons remain experimental; staged assets do not become callable or grant tools.","Synthetic pack manifest","Marketplace/install lifecycle overclaimed.","Malformed manifest and rollback copy.","capability-pack tests","","","","","","","","","Manual QA"
+"SET-INT-01","P0","Settings","Integrations","/settings/integrations","Integration setup/action path or blocked copy","Use sandbox integrations only.","Open Integrations.
+Inspect each visible connector status.
+Open supported setup/action path.
+Check blocked/incomplete connectors say so plainly.","Every visible integration has real action diagnostics or explicit blocked/incomplete copy.","Sandbox connectors","Visible connector advertises unsupported actions.","Missing credentials and provider error states.","verify:catalog:parity; integration tests","","","","","","","","","Manual QA"
+"SET-CHAN-01","P0","Settings","Channels","/settings/channels","Guided channel setup and live diagnostics","Sandbox target for one channel.","Open Channels.
+Select Discord/Slack/Telegram or another sandbox channel.
+Walk guided setup and retest.
+Confirm sends require sandbox/manual confirmation where needed.","Guided setup runs live probes where supported and marks manual confirmation needs honestly.","Sandbox channel credentials","Unapproved production send or credentials stored unsafely.","Invalid token, wrong channel id, permission denied.","verify:channels:runtime; channel setup tests","","","","","","","","","Manual QA"
+"SET-MCP-01","P0","Settings","MCP","/settings/mcp","Local stdio and governed remote MCP auth truth","Local MCP test server or templates available.","Open MCP.
+Inspect local stdio server/template.
+Add or preview no-auth/token/OAuth remote config if safe.
+Check OAuth missing/expired token shows needs_auth and fail-closed.","MCP invocation stays gateway-governed; auth/network allowlist/policy status is visible.","Safe local MCP fixture","Gateway-free or unauthenticated remote invocation overclaim.","Expired OAuth token and disallowed env key.","verify:mcp:conformance; mcp tests","","","","","","","","","Manual QA"
+"SET-TOOLS-01","P0","Settings","Tools","/settings/tools","Tool catalog and scoped allow/deny grants","Tool catalog available.","Open Tools.
+Inspect risk, grants, and profile linkage.
+Enable a safe scoped grant if supported.
+Try denied/high-risk tool path.","Deny-wins policy and scoped grants are visible; high-risk tools remain approval-gated.","Safe fixture tool","Tool grant bypasses policy or path jail.","Revoked grant and disabled capability.","policy-engine tests; verify:agentic:governance","","","","","","","","","Manual QA"
+"BK-01","P0","Backup","Ops Runtime/Admin CLI","/ops/runtime; admin CLI","Backup create/list/verify and offline restore wording","Use synthetic runtime root.","Create a backup through UI or CLI if supported.
+List backups.
+Verify archive integrity and contract coverage.
+Inspect live restore route/offline restore instructions.","Verify reports both archive integrity and contractVerified; live restore does not mutate active runtime and points to offline restore.","Synthetic data/index.db, transcripts, audit, config","False backup restore guarantee.","Legacy or contract-incomplete archive state.","verify:backup:roundtrip","","","","","","","","","Manual QA"
+"DESKTOP-01","P0","Desktop","Windows Host","Start Menu; WebView2","Packaged Windows host launch","Packaged Windows installer available.","Install package.
+Launch from Start Menu.
+Confirm exactly one WinUI window and Mission Control Next loads.
+Open browser fallback from tray/status menu if available.","Native host starts gateway/UI readiness, hosts Mission Control Next, and browser fallback works.","Windows x64 package","Installer works only in browser but not release desktop host.","Gateway already running and port conflict.","pnpm verify:desktop; windows:test","","","","","","","","","Manual QA"
+"DESKTOP-02","P0","Desktop","Protocol and tray","goatcitadel://open","Protocol routing, tray actions, and URL validation","Packaged Windows host running.","Open goatcitadel://open?route=/ops/activity.
+Try malformed protocol URL.
+Use tray Open, Runtime Status, Restart Runtime, Stop Runtime, Open Logs, Open Install Folder, Quit.
+Check diagnostics for ignored unsafe URLs.","Valid protocol focuses app and routes WebView; malformed/external URLs are ignored with diagnostic.","Packaged Windows host","External URL opened unsafely or protocol ignored.","App closed-to-tray behavior.","desktop unit tests; install smoke","","","","","","","","","Manual QA"
+"INSTALL-01","P0","Install","Source bootstrap","install.ps1/install.sh","Source install and launcher commands","Disposable install dir.","Run platform bootstrap into custom install dir.
+Run goatcitadel help.
+Run status --json, launch --no-open --json --wait, stop --json.
+Uninstall if in disposable target.","Source bootstrap installs launchers and does not create packaged desktop shortcut promises.","Disposable install root","Install mutates wrong directory or overpromises packaging.","Skip voice path.","pnpm verify:install","","","","","","","","","Manual QA"
+"INSTALL-02","P1","Install","Docker","docker compose","Docker runtime boundary smoke","Docker available; generated secrets.","Generate Docker secrets.
+Start docker compose.
+Open Mission Control.
+Check auth, approvals, policy, and path jail still apply.","Docker starts a governed runtime but does not replace auth/approvals/policy.","Synthetic docker env","Docker deployment bypasses governance.","Missing secret and restart behavior.","check:docker-secrets; verify:fast","","","","","","","","","Manual QA"
+"SEC-01","P0","Security","Auth","/api/v1 privileged routes","Token, device, and companion denial smoke","Safe test tokens or curl/browser network tools.","Call representative privileged route without token.
+Call with invalid/tampered token.
+Call with companion/device principal if fixture exists.
+Inspect UI copy for denied action.","Privileged routes deny non-operator callers and return readable error without leaking internals.","Synthetic tokens","Auth bypass.","Expired token and missing header.","verify:auth:matrix","","","","","","","","","Manual QA"
+"SEC-02","P0","Security","Policy/path jail","tools/files/code","Path jail and dangerous action boundaries","Use disposable workspace.","Attempt outside-root file browse or tool path.
+Attempt dangerous command/tool if UI provides safe simulation.
+Inspect approval/policy denial evidence.","Deny-wins policy blocks unsafe paths/actions and records reason.","Synthetic path traversal string","Path traversal or policy bypass.","Symlink and relative path variants.","policy-engine path-jail tests","","","","","","","","","Manual QA"
+"SEC-03","P1","Security","Input handling","chat/settings/forms","XSS, injection, and long-input handling in visible forms","Use harmless payload strings only.","Enter <script>alert(1)</script> in names/notes/search where safe.
+Enter very long provider/workspace/session names.
+Refresh and inspect display.","Payload is escaped/sanitized; UI remains usable; no script execution.","Harmless XSS string","Stored/reflected XSS or layout break.","Unicode/emoji if product supports it.","security tests; lint","","","","","","","","","Manual QA"
+"SEC-04","P0","Security","External side effects","integrations/channels","Idempotency and unknown-outcome truth","Sandbox connector only.","Trigger a safe external write action.
+Repeat with same idempotency context if supported.
+Simulate provider failure before/after boundary if possible.
+Inspect ledger/status copy.","Pre-boundary failures may be replay-eligible; unknown post-boundary outcomes remain manual; duplicate sends are blocked.","Sandbox external target","Duplicate external side effect.","Provider timeout after request start.","external-side-effect tests","","","","","","","","","Manual QA"
+"SEC-05","P1","Security","Webhooks","integration webhooks","Webhook signature, idempotency, and rate-limit copy","Use test webhook payloads only.","Send unsigned or malformed webhook to a test route.
+Send valid signed fixture if available.
+Repeat same event id.
+Inspect logs and UI diagnostics.","Unsigned/malformed rejected; duplicate idempotent; errors are clear without secret leakage.","Webhook fixtures","Webhook accepts spoofed event or duplicates effects.","Clock skew and missing headers.","webhook security tests","","","","","","","","","Manual QA"
+"A11Y-01","P0","Accessibility","Keyboard","primary surfaces","Keyboard-only navigation and focus visibility","Browser running.","Use Tab/Shift+Tab through Chat, Cowork, Code, Settings Providers, Approvals.
+Activate primary actions with Enter/Space.
+Open and close modals/panels without mouse.","Focus is visible and logical; actions are reachable; focus returns sensibly.","Desktop browser","Keyboard trap or hidden focus.","Mobile keyboard/accessibility if practical.","manual axe/keyboard checks","","","","","","","","","Manual QA"
+"A11Y-02","P1","Accessibility","Screen reader semantics","primary surfaces","Landmarks, headings, labels, live status","Screen reader or accessibility tree inspector.","Inspect headings and landmarks.
+Check buttons/icon controls have accessible names.
+Verify streaming/status updates are announced or visibly persistent.
+Check error states.","Controls are named; status and errors are accessible without relying on color only.","Representative surfaces","Unlabeled icon-only actions.","Collapsed/expanded controls.","component tests; manual SR pass","","","","","","","","","Manual QA"
+"PERF-01","P1","Performance","UI","route navigation","Manual responsiveness under normal data","Seed moderate sessions/tasks/events if available.","Navigate Chat -> Cowork -> Code -> Memory -> Runtime -> Providers repeatedly.
+Scroll long lists.
+Open inspectors/details.
+Record visible lag over 2 seconds.","Navigation feels responsive; long lists are scannable and do not freeze the shell.","Moderate synthetic dataset","1.0 shell feels too heavy for operator work.","Low-power laptop and mobile viewport.","perf:check:next","","","","","","","","","Manual QA"
+"TRUTH-01","P0","Truth","Public claims","docs and UI copy","No prohibited claims without proof","Repo docs and UI available.","Search UI/docs/release copy for hostile-code sandboxing, ungoverned autonomy, mature local inference, marketplace/add-on completion, remote MCP bypass, and backup restore guarantees.
+Compare findings to 1.0 contract.
+Record exceptions in Observation Log.","No prohibited claim appears without fresh named proof and exact scope.","Claim search terms","Public trust overclaim.","Experimental route copy.","pnpm docs:check","","","","","","","","","Manual QA"
+"TRUTH-02","P1","Truth","Raw data UX","visible primary surfaces","No primary surface relies on raw JSON/table-only UI","Mission Control Next running.","Open every ship route in Route Coverage.
+Look for raw JSON/table-only primary treatment.
+Confirm there is readable hierarchy, actions, and context.","Operators can understand state without reading raw JSON as the main UI.","Route Coverage tab","Internal data dump ships as product UI.","Diagnostics can include raw detail as secondary drill-in.","surface regression; manual UX pass","","","","","","","","","Manual QA"

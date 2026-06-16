@@ -1,0 +1,7 @@
+Metric,Target,Actual,Result,Notes
+"Total manual test cases","Complete P0/P1 before 1.0 release claim","75","","P2 can be sampled unless touching that area."
+"Route coverage rows","44 current-shell routes reviewed","44","","39 ship, 5 experimental."
+"P0 cases","0 Fail/Blocked without accepted release exception","38","","P0 covers core 1.0 promise."
+"P1 cases","All high-value flows pass or have owner/issue","31","","P1 covers common release workflows."
+"P2 cases","Sample or run where related changes occurred","6","","P2 includes experimental and polish surfaces."
+"Release gate rows","Each gate has evidence or explicit blocker","15","","Automated lanes are companions, not manual substitutes."

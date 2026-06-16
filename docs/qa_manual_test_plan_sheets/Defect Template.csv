@@ -1,0 +1,18 @@
+﻿Field,Value
+Bug ID,
+Title,
+Severity,P0 / P1 / P2 / P3
+Environment,
+Commit,
+Route / command / endpoint,
+Workspace / project / session / run / approval ID,
+Steps to reproduce,
+Expected,
+Actual,
+Evidence,
+Logs,
+Browser console/network,
+Regression?,
+Suspected owner,
+Blocks release?,
+Notes,

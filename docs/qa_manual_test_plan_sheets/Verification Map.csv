@@ -1,0 +1,12 @@
+﻿Area,Manual Sections,Useful Automated Lanes
+Shell/routes,NAV-*,"pnpm verify:surface:regression, pnpm verify:visual:regression, pnpm verify:ui:parity"
+Runtime truth,"OPS-*, DUR-*","pnpm verify:runtime:truth, pnpm verify:realtime:truth"
+Durable runs,"COWORK-*, DUR-*",pnpm verify:durable:recovery
+Auth/access,"SET-*, SEC-*","pnpm verify:auth:matrix, pnpm verify:agentic:governance"
+Capabilities/tools,"LIB-CAP-*, CODE-*, SET-08","pnpm verify:catalog:parity, pnpm verify:agentic:proof, pnpm verify:code-mode:sandbox"
+Code hostile-sandbox claim metadata,"CODE-*, SEC-*",pnpm verify:code-mode:hostile-sandbox
+Memory,LIB-MEM-*,pnpm verify:memory:truth
+Backup/restore,BK-*,pnpm verify:backup:roundtrip
+Installer/desktop,"INST-*, CLI-*","pnpm verify:install, pnpm verify:desktop, pnpm windows:test"
+Mesh/A2A,"A2A-*, runtime diagnostics","pnpm verify:mesh:readiness, pnpm verify:a2a:full"
+Docs/truth,all,"pnpm docs:check, git diff --check"

@@ -1,0 +1,12 @@
+﻿ID,Name,How to run / Purpose,Coverage,Notes
+ENV-01,Source Dev Stack,,,
+ENV-02,Split Dev Stack,,,
+ENV-03,Docker Compose,,,
+ENV-04,Packaged Windows Installer,,"Windows x64 installer
+Windows arm64 installer when hardware is available
+Start Menu launch
+desktop shortcut if selected
+native WinUI 3 / Windows App SDK host
+WebView2-hosted Mission Control
+launcher fallback commands",
+ENV-05,Optional / Experimental Runtime,,,

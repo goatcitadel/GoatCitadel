@@ -1,0 +1,11 @@
+Area,ManualSections,UsefulAutomatedLanes,Notes
+"Shell/routes","NAV-*; ROUTE-*","pnpm verify:surface:regression; pnpm verify:visual:regression; pnpm verify:ui:parity","Manual verifies operator sensemaking, labels, and no raw JSON primary UI."
+"Runtime truth","OPS-*; RUNTIME-*; DUR-*","pnpm verify:runtime:truth; pnpm verify:realtime:truth","Manual verifies visible provenance and recovery language."
+"Durable runs","COWORK-*; CHAT-*; CODE-*; DUR-*","pnpm verify:durable:recovery; pnpm verify:operator:proof","Manual follows wait/resume/restart and Run Detail."
+"Auth/access","SEC-*; SETTINGS-ACCESS-*; APPROVAL-*","pnpm verify:auth:matrix; pnpm verify:agentic:governance","Manual probes token/device/companion denial copy and operator-only actions."
+"Capabilities/tools","LIB-CAP-*; SETTINGS-TOOLS-*; CODE-*","pnpm verify:catalog:parity; pnpm verify:agentic:proof; pnpm verify:code-mode:sandbox","Manual checks inspectable vs callable split."
+"Memory","LIB-MEM-*; CHAT-MEM-*","pnpm verify:memory:truth","Manual checks recall reason, lifecycle state, proposals, and feedback."
+"Backup/restore","BK-*; OPS-RUNTIME-*","pnpm verify:backup:roundtrip","Manual confirms offline restore copy and no live mutation promise."
+"Desktop/install","INSTALL-*; DESKTOP-*; CLI-*","pnpm verify:install; pnpm verify:desktop; pnpm windows:test","Manual covers shortcuts, protocol, tray, logs, and uninstall."
+"Integrations/channels/MCP","INT-*; CHANNEL-*; MCP-*","pnpm verify:catalog:parity; pnpm verify:channels:runtime; pnpm verify:mcp:conformance","Manual uses sandbox targets and checks approval/idempotency language."
+"Docs/truth","TRUTH-*; RELEASE-*","pnpm docs:check; git diff --check","Manual checks public copy against implementation and release evidence."

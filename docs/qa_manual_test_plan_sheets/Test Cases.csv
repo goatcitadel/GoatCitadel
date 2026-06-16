@@ -1,0 +1,947 @@
+﻿ID,Section,Title,Preconditions,Coverage / Inputs,Steps,Trigger Prompt / Action,Expected,Edge Cases,Result,Tester,Date,Environment,Evidence,Notes,Follow-up Issue,Severity,Owner
+ENV-01,Test Environments,Source Dev Stack,,,,"Action: run pnpm install --frozen-lockfile, pnpm config:sync, then pnpm dev.",,,,,,,,,,,
+ENV-02,Test Environments,Split Dev Stack,,,,Action: in two terminals run pnpm dev:gateway and pnpm dev:ui.,,,,,,,,,,,
+ENV-03,Test Environments,Docker Compose,,,,"Action: run pnpm secrets:docker | Tee-Object -FilePath .env, then docker compose up --build.",,,,,,,,,,,
+ENV-04,Test Environments,Packaged Windows Installer,,"Windows x64 installer
+Windows arm64 installer when hardware is available
+Start Menu launch
+desktop shortcut if selected
+native WinUI 3 / Windows App SDK host
+WebView2-hosted Mission Control
+launcher fallback commands",,"Action: install the Windows package, then launch GoatCitadel from the Start Menu.",,,,,,,,,,,
+ENV-05,Test Environments,Optional / Experimental Runtime,,,,"Action: enable only the optional runtime under test, such as voice, NPU, local AI, add-ons, or experimental package smoke.",,,,,,,,,,,
+PRE-01,Preflight Checklist,Repo And Runtime Baseline,,,"Record the current commit SHA.
+Record whether the worktree is clean or dirty.
+Record Node, pnpm, .NET SDK, Docker, and OS versions.
+Start the selected environment.
+Hit /health.
+Open Mission Control.",Action: run git rev-parse HEAD; git status --short; node --version; pnpm --version; dotnet --list-sdks; docker version; then start the selected stack.,"Runtime starts without unexplained stack traces.
+/health returns {""status"":""ok""}.
+Mission Control reaches the next shell, not a legacy or fallback shell.
+If auth is enabled, unauthenticated access is blocked cleanly.",,,,,,,,,,
+PRE-02,Preflight Checklist,Automated Baseline Before Manual QA,,,"Run the smallest relevant proof lane for the change.
+For a broad release-style pass, run the high-signal lanes below as time allows.
+Recommended commands:
+pnpm verify:fast
+pnpm verify:surface:regression
+pnpm verify:runtime:truth
+pnpm verify:durable:recovery
+pnpm verify:catalog:parity
+pnpm verify:memory:truth
+pnpm verify:realtime:truth
+pnpm verify:backup:roundtrip
+pnpm docs:check
+git diff --check",Action: for a broad pass run pnpm verify:fast; pnpm verify:surface:regression; pnpm verify:runtime:truth; pnpm docs:check; git diff --check.,"Manual QA starts with known automated status.
+Any skipped or failing lane is recorded before manual testing begins.
+Manual results do not silently override failed proof lanes.",,,,,,,,,,
+PRE-03,Preflight Checklist,Test Data And Safety Setup,,,"Create a dedicated QA workspace.
+Use sandbox provider keys, test channels, and throwaway projects.
+Confirm no production credentials, private user files, or real external destinations are selected.
+For external writes, prepare a sandbox Slack/Discord/Telegram/etc. target.
+For Code Mode, select a disposable test repo or temp workspace.","Action: create a QA-only workspace named Manual QA <date>, use sandbox provider/channel credentials, and create a disposable test repo or temp folder for Code Mode.","Test actions cannot accidentally mutate personal or production data.
+Every external side effect has a known sandbox destination.
+Dangerous actions remain approval-gated.",,,,,,,,,,
+INST-01,"Startup, Install, And Runtime",Source Dev Startup,,,"Run pnpm dev.
+Wait for gateway and UI readiness.
+Open http://localhost:5173.
+Hit http://127.0.0.1:8787/health.
+Stop and restart the stack once.","Action: run pnpm dev, open http://localhost:5173, then stop/restart the dev stack once.","Gateway and UI start without port confusion.
+Mission Control loads after refresh.
+Gateway restart does not leave the UI permanently stuck in a fake healthy state.","Port 5173 already in use.
+Port 8787 already in use.
+.env missing provider keys.
+stale config/*.json files before pnpm config:sync.",,,,,,,,,
+INST-02,"Startup, Install, And Runtime",Split Gateway / UI Startup,,,"Start pnpm dev:gateway.
+Start pnpm dev:ui.
+Refresh Mission Control while gateway is up.
+Stop gateway while UI remains open.
+Restart gateway.","Action: keep the UI open, stop the gateway terminal with Ctrl+C, wait for degraded UI state, then restart pnpm dev:gateway.","UI shows degraded/checking state while gateway is down.
+UI recovers after gateway restart.
+No page claims fresh runtime truth while API calls are failing.",,,,,,,,,,
+INST-03,"Startup, Install, And Runtime",Doctor And Setup Readiness,,,"Run pnpm doctor:deep.
+Open Settings -> Start Here.
+Confirm readiness, missing setup, and provider guidance.","Action: run pnpm doctor:deep, then open /settings/onboarding.","Doctor output is actionable.
+Start Here does not block on unrelated background refreshes.
+Missing provider/local runtime state is labeled clearly.",,,,,,,,,,
+INST-04,"Startup, Install, And Runtime",Docker Compose Startup,,,"Generate Docker secrets.
+Start docker compose up --build.
+Open http://localhost:4173.
+Hit gateway health.
+Restart containers.","Action: run the Docker compose startup commands, then restart containers with docker compose restart.","Stack uses token auth by default.
+Postgres healthcheck stabilizes.
+UI and gateway agree on auth and runtime state.
+Ports bind to 127.0.0.1 unless explicitly configured otherwise.","placeholder GOATCITADEL_AUTH_TOKEN.
+weak or missing GOATCITADEL_POSTGRES_PASSWORD.
+custom bind IP with missing allowed origins.",,,,,,,,,
+INST-05,"Startup, Install, And Runtime",Packaged Windows Installer Smoke,,,"Install the Windows package.
+Launch from Start Menu.
+Confirm one native WinUI window opens.
+Confirm Mission Control loads in WebView2.
+Close the window.
+Use tray actions: Open, Open in Browser, Runtime Status, Restart Runtime, Stop Runtime, Open Logs, Open Install Folder, Quit.
+Run goatcitadel status --json.
+Run goatcitadel launch --no-open --json --wait.
+Run goatcitadel stop --json.
+Uninstall.",Action: use the installed Start Menu app and tray menu items; no chat prompt involved.,"Native host starts the same gateway/UI runtime.
+Close-to-tray keeps runtime behavior truthful.
+Tray commands work and surface failures.
+Launcher commands are installer-safe.
+Uninstall removes package/runtime artifacts according to installer contract without deleting unrelated files.","WebView2 missing or broken.
+malformed goatcitadel:// protocol URL.
+external URL opened inside WebView.
+Windows SmartScreen unsigned-installer warning.",,,,,,,,,
+INST-06,"Startup, Install, And Runtime",Protocol Routing,,,"With the Windows host installed, open goatcitadel://open?route=/ops/activity.
+Try a valid deep link for /chat, /cowork, /code, and /settings/providers.
+Try a malformed protocol URL.
+Try an external HTTP URL.","Action: paste goatcitadel://open?route=/ops/activity into Windows Run or browser address bar, then repeat with /chat, /cowork, /code, and /settings/providers.","Valid routes focus the app and navigate the WebView.
+Malformed URLs are ignored or reported with operator-visible diagnostics.
+External URLs are not allowed to navigate the hosted app frame.",,,,,,,,,,
+INST-07,"Startup, Install, And Runtime",macOS / Linux Experimental Package Smoke,,,"Build the relevant package target.
+Verify checksum artifact.
+Install/extract locally.
+Launch packaged runtime.
+Confirm health and Mission Control.
+Record signing/notarization or unsigned/ad-hoc warning state.","Action: build the exact experimental package target under test, then install/extract and launch it.","macOS arm64 DMG is labeled experimental friend-smoke unless signed/notarized/stapled for the exact release.
+Linux tarball is labeled experimental until exact artifact proof promotes it.
+No experimental artifact is described as public-trust proof without matching release evidence.",,,,,,,,,,
+NAV-01,"Shell, Navigation, And Visual Coverage",Canonical Route Coverage,,"/chat
+/cowork
+/cowork/tasks
+/cowork/board
+/code
+/projects
+/library/agents
+/library/skills
+/library/capabilities
+/library/memory
+/library/knowledge
+/library/notes
+/library/communications
+/library/files
+/library/artifacts
+/library/prompt-packs
+/library/curator
+/ops/activity
+/ops/sessions
+/ops/schedules
+/ops/improvement
+/ops/notifications
+/ops/approvals
+/ops/costs
+/ops/quality
+/ops/runtime
+/ops/diagnostics
+/ops/kanban
+/settings/general
+/settings/onboarding
+/settings/providers
+/settings/personalities
+/settings/access
+/settings/permissions
+/settings/trust-policy
+/settings/budget
+/settings/runtime
+/settings/local-ai
+/settings/workspaces
+/settings/addons
+/settings/integrations
+/settings/channels
+/settings/mcp
+/settings/tools",,"Action: open each listed route directly in the browser address bar, then navigate there through the app chrome where possible.","Each direct URL loads the right page.
+Page title/label matches route.
+Route inspector or visible chrome agrees with current route.
+No page falls back silently to the wrong surface.
+Experimental pages are labeled experimental: /library/curator, /ops/improvement, /ops/kanban, /settings/personalities, /settings/addons.",,,,,,,,,,
+NAV-02,"Shell, Navigation, And Visual Coverage",Legacy Redirects,,,"Open legacy URLs such as /?tab=chat, /?surface=code, and /?space=observe&page=activity&tab=scheduler.
+Compare expected redirect paths in the release-surface manifest.","Action: open /?tab=chat, /?surface=code, and /?space=observe&page=activity&tab=scheduler.","Legacy URLs redirect to current routes.
+Redirected routes load the next shell.
+No legacy shell source is treated as canonical product proof.",,,,,,,,,,
+NAV-03,"Shell, Navigation, And Visual Coverage",Shell State Persistence,,,"Switch between Chat, Cowork, Code, Projects, Library, Ops, and Settings.
+Change route query params such as sessionId, projectId, runId, and theme where supported.
+Refresh after each major area.
+Use browser back/forward.","Action: while on /chat, add a real sessionId query param from an existing session, then switch areas, refresh, and use browser back/forward.","Shell chrome persists.
+URL state matches visible page state.
+Back/forward does not strand the app in stale route state.
+Thread-preserving nav items preserve only intended IDs.",,,,,,,,,,
+NAV-04,"Shell, Navigation, And Visual Coverage","Desktop, Laptop, Narrow, And Mobile Layout",,"desktop: 1440 x 1024
+laptop: 1280 x 800
+narrow desktop: 1180 x 900
+mobile: 390 x 844","Open /chat, /cowork, /code, /projects, /library/capabilities, /ops/runtime, and /settings/providers.
+Repeat in light and dark theme.
+Test primary navigation and secondary nav at each viewport.","Action: use browser devtools or Playwright viewport presets for 1440x1024, 1280x800, 1180x900, and 390x844.","No clipped primary actions.
+No overlapping status chips or toolbar controls.
+Mobile page picker works.
+Threaded surfaces remain usable.
+Light/dark themes keep readable contrast.",,,,,,,,,,
+NAV-05,"Shell, Navigation, And Visual Coverage",Accessibility And Keyboard Basics,,,"Navigate major surfaces using keyboard only.
+Confirm focus ring visibility.
+Open/close modals, menus, tabs, command palette, and dialogs with keyboard.
+Verify important status changes have visible text, not color alone.","Action: use Tab, Shift+Tab, Enter, Space, Escape, and arrow keys only for this pass.","Focus order is understandable.
+Escape closes transient overlays.
+Buttons and icon-only controls expose labels/tooltips.
+Streaming, waiting, blocked, and error states are visible.",,,,,,,,,,
+SETUP-01,"Onboarding, Providers, And Models",Start Here First-Run Flow,,,"Open /settings/onboarding.
+Follow Start Here through setup readiness.
+Choose provider/local path.
+Complete first Chat, Cowork, and Code guidance if available.
+Inspect retained evidence and Run Detail links.",Prompt after onboarding reaches first Chat: Give me a one-paragraph smoke-test response for GoatCitadel setup and mention the active provider/model if you can see it.,"Start Here guides without overwhelming.
+Incomplete items are clear.
+Completed items persist after refresh.
+First-run proof links resolve or are clearly absent.",,,,,,,,,,
+SETUP-02,"Onboarding, Providers, And Models",Provider Secret Lifecycle,,,"Open /settings/providers.
+Add or update a sandbox provider key.
+Confirm storage mode: OS secure store, env fallback, or config fallback.
+Run model/provider smoke if available.
+Delete or rotate the key.","Action: add a sandbox key in /settings/providers, then run the provider smoke/test button. Bad-key edge: paste QA_BAD_KEY_DO_NOT_USE and verify readable failure.","Secret state is visible without leaking the secret.
+Bad key produces readable auth error.
+Deleted/rotated key changes effective runtime behavior after refresh.
+Provider status does not claim success from stale cached data.","secure-store unavailable.
+key exists in .env but not secure store.
+provider base URL is invalid.
+model name exists in config but not provider.",,,,,,,,,
+SETUP-03,"Onboarding, Providers, And Models",Model Discovery And Routing Truth,,,"Refresh model catalog.
+Select a default provider/model.
+Trigger a Chat turn.
+Inspect requested vs effective provider/model.
+Create a fallback scenario if possible.","Prompt: Say exactly which provider and model handled this request. If you are using a fallback, say what was requested, what actually ran, and why.","Requested and effective provider/model are both visible.
+Fallback reason is visible when a fallback occurs.
+Usage/cost/token estimates are labeled with confidence.",,,,,,,,,,
+SETUP-04,"Onboarding, Providers, And Models",Local AI And llama.cpp,,,"Open /settings/local-ai.
+Inspect hardware readiness.
+Inspect model fit recommendations.
+Start or prepare a local model job if supported.
+Open runtime diagnostics for local endpoints.",Prompt in Chat after Local AI setup: Use the local AI runtime if it is available; otherwise explain the exact Local AI readiness blocker shown in Settings.,"Local AI stays honest about advisory vs runnable state.
+Jobs are approval-gated where required.
+Optional sidecars do not imply mature local inference.",,,,,,,,,,
+CHAT-01,Chat Surface,Basic Chat Send And Persistence,,,"Open /chat.
+Create a fresh session.
+Send a simple prompt.
+Wait for completion.
+Refresh.
+Return to the same session.",Prompt: Give me a two-sentence summary of what GoatCitadel is for. Keep it plain and include the word QA-CANARY.,"User and assistant messages persist.
+Session title/list updates.
+Runtime context is visible when present.
+No duplicate assistant response appears after refresh.",,,,,,,,,,
+CHAT-02,Chat Surface,"Streaming, Cancel, Retry, And Resume",,,"Send a prompt that streams for several seconds.
+Cancel mid-stream.
+Retry the turn.
+Refresh during or after retry.
+Inspect turn status and stream state.",Prompt: Write a 30-item numbered checklist for manually testing an AI operations console. Add one short explanation sentence under each item so the response streams for a while.,"Cancel state is explicit.
+Retry creates a clear branch or replacement according to UI rules.
+Final content is not overwritten by stale fetched content.
+Partial stream failures do not concatenate retry output into the same assistant turn.",,,,,,,,,,
+CHAT-03,Chat Surface,Edit And Branch Behavior,,,"Send a prompt.
+Edit the user turn.
+Generate a new response.
+Navigate between branches if controls exist.
+Refresh and verify selected branch.",Initial prompt: Draft three names for a QA workspace. Edit prompt to: Draft three names for a QA workspace focused on approvals and runtime recovery.,"Branch/tail selection is stable.
+Edited turn does not corrupt prior transcript.
+Session rail reflects current branch/title truth.",,,,,,,,,,
+CHAT-04,Chat Surface,Local Slash Commands,,,"Run /help before configuring a cloud provider if possible.
+Run one command from the command catalog.
+Parse an invalid command.","Prompt/action: type /help, then type an intentionally invalid slash command such as /not-a-real-command.","Local command path does not require unnecessary provider validation.
+Results render as stable thread updates.
+Invalid commands return readable guidance.",,,,,,,,,,
+CHAT-05,Chat Surface,Attachments And File Preview,,,"Attach a small text file.
+Attach a small image if supported.
+Try an unsupported or oversized file.
+Reopen uploaded attachment content.
+Inspect generated preview CSP behavior if possible.","Prompt after attaching files: Summarize the attached QA text file and describe the attached image, then list any attachment metadata you can inspect.","Supported attachments persist and can be reopened.
+Unsupported MIME/oversized files are rejected clearly.
+Preview content cannot run active scripts.
+Attachment errors do not break the whole session.",,,,,,,,,,
+CHAT-06,Chat Surface,"Context, Memory, Citations, And Tool Visibility",,,"Ask a question that should use memory or knowledge if available.
+Inspect context manifest.
+Inspect citations/tool calls/runtime status.
+Give memory feedback if available.",Setup action: create a memory or knowledge item containing QA memory canary = blue circuit. Prompt: Use any available memory or knowledge to tell me the QA memory canary and show what source/context you used.,"Context sources are inspectable.
+Recall strategy/provenance is visible where applicable.
+Tool use is neither hidden nor overclaimed.
+Memory is not silently promoted from temporary context.",,,,,,,,,,
+CHAT-07,Chat Surface,Delegation And Specialist Candidates,,,"Trigger or inspect delegation suggestions.
+Accept a delegation if safe.
+Inspect linked run/task/state.
+Create or update a specialist candidate if supported.","Prompt: Delegate this to a QA specialist: produce a five-step plan for testing provider fallback, approvals, and durable recovery. Show the delegation plan and any linked run/task state.","Delegation lineage is visible.
+Suggested vs accepted state is clear.
+Candidate/proposal state does not become callable without activation.",,,,,,,,,,
+CHAT-08,Chat Surface,Research Search,,,"Start a research/search run from Chat if configured.
+Inspect run status.
+Open result and source details.
+Test failure with no network or bad search config if feasible.","Prompt: Use the research/search capability to find current documentation for GoatCitadel-style manual QA checklists, cite sources, and summarize only after search completes.","Research run status is durable or clearly transient.
+Sources are visible.
+Failure does not masquerade as no results.",,,,,,,,,,
+CHAT-09,Chat Surface,Proactive Policy,,,"Inspect proactive status.
+Change proactive policy where exposed.
+Trigger a safe proactive run if supported.
+Confirm run list/history.","Prompt: Set a proactive follow-up for this session to remind me to check approval and runtime recovery evidence later; if proactive runs are disabled, show the blocker.","Proactive behavior is opt-in/governed.
+Policy changes persist.
+Triggered work produces visible evidence and does not run hidden high-risk actions.",,,,,,,,,,
+CHAT-10,Chat Surface,"Side Chat, Dock, And Workbench Panels",,,"Open side chat or context drawer.
+Open artifact/memory/approval dock panels.
+Switch routes and return.
+Test mobile layout.","Prompt: Create a small QA Artifact Canary with a title and three bullets, then keep the context drawer/dock open so I can inspect artifact, memory, and approval panels.","Panels do not cover composer or critical status.
+Drawer state is understandable after route switches.
+Mobile panel behavior is usable.",,,,,,,,,,
+COWORK-01,Cowork Surface,Start Or Resume Durable Cowork Run,,,"Open /cowork.
+Start a supervised multi-step task.
+Inspect plan, next action, blockers, and evidence.
+Refresh during the run.
+Resume an existing run.","Prompt in Cowork: Plan and execute a three-step QA sweep: 1 inspect route coverage, 2 identify one runtime-truth risk, 3 produce a checklist. Pause and show evidence after each step.","Cowork feels distinct from Chat.
+Durable run/run detail is visible when present.
+Current step and checkpoint state survive refresh.
+Blocked/waiting/running/completed states are not blurred.",,,,,,,,,,
+COWORK-02,Cowork Surface,Task Board,,,"Open /cowork/tasks.
+Create a task.
+Edit status, owner/agent, deliverable, and blocker fields if available.
+Soft-delete/archive and restore.
+Refresh.","Action/prompt: create task titled QA Board Canary, status Blocked, deliverable Manual evidence link, blocker Awaiting approval test.","Task state persists.
+Board counts match visible items.
+Restore works without duplicating tasks.
+Blocker hierarchy is clear.",,,,,,,,,,
+COWORK-03,Cowork Surface,Agent Board,,,"Open /cowork/board.
+Inspect agent posture.
+Trigger or seed a running/blocked/done agent state.
+Compare with /ops/kanban if relevant.","Prompt in Cowork: Create a tiny delegation board with three agent states: one running, one blocked on approval, and one done. Keep it as inspectable posture only.","Agent board is an inspectable posture surface.
+It does not imply autonomous live-control parity.
+Experimental bulk controls stay labeled when present.",,,,,,,,,,
+COWORK-04,Cowork Surface,Approval Wait And Resume,,,"Trigger a Cowork action that requires approval.
+Confirm composer/run state blocks appropriately.
+Resolve approval from Ops -> Approvals.
+Return to Cowork and resume if required.",Prompt in Cowork: Run a supervised task that must ask for my approval before creating or modifying any file. Stop at the approval gate and show the pending approval.,"Approval wait is explicit.
+Approval resolution does not advance only UI-side state.
+Durable execution owns the resume.",,,,,,,,,,
+COWORK-05,Cowork Surface,Gateway Restart During Cowork Run,,,"Start a durable Cowork run.
+Stop gateway mid-run.
+Restart gateway.
+Inspect Cowork, Ops -> Sessions, Ops -> Diagnostics, and run detail.",Prompt in Cowork: Start a durable QA task that takes at least three checkpoints and waits between steps. Restart the gateway after checkpoint one.,"Run recovers, waits, retries, dead-letters, or fails with clear state.
+No orphaned ""running"" fiction remains.
+Recovery evidence is inspectable.",,,,,,,,,,
+CODE-01,Code Surface And Code Mode,Code Workbench Basics,,,"Open /code.
+Bind a safe test source/workspace.
+Inspect file tree.
+Open and edit a file if supported.
+Review diff.
+Run a targeted validation command if supported.","Prompt in Code: Bind the QA test repo, open package.json, identify the dev and verification scripts, and propose a one-line change in a throwaway QA file for diff review.","Code feels distinct from Chat/Cowork.
+Source binding and path boundaries are visible.
+Diffs are inspectable before risky mutation.
+Validation output is bounded and readable.",,,,,,,,,,
+CODE-02,Code Surface And Code Mode,File Path Jail,,,"Attempt to open a file inside the allowed workspace.
+Attempt a traversal-like path outside the allowed workspace.
+Attempt symlink or junction edge cases if safe.","Action/prompt in Code: Open README.md inside the workspace, then attempt to open ../.env or C:\Windows\win.ini and verify the path jail blocks it.","Allowed files open.
+Out-of-root paths are blocked.
+Error copy explains the boundary without exposing secrets.",,,,,,,,,,
+CODE-03,Code Surface And Code Mode,Code Mode Approval Gate,,,"Start a simple trusted-code Code Mode run.
+Inspect pending approval.
+Approve.
+Inspect run detail, artifacts, hashes, stdout/stderr, and backend metadata.",Prompt in Code with Code Mode enabled: Run a trusted Code Mode canary that reads package.json scripts and writes a bounded artifact summary. Require approval before execution.,"Every run is operator-approved.
+Source/artifact hashes are recorded.
+stdout/stderr are bounded and truncation state is visible.
+Host isolation metadata is truthful.
+No hostile-code safety claim is made unless named proof supports it.",,,,,,,,,,
+CODE-04,Code Surface And Code Mode,Code Mode Reject And Failure,,,"Start a Code Mode run.
+Reject the approval.
+Start another run that fails validation or runtime execution safely.
+Inspect run ledger.","Prompt in Code with Code Mode enabled: Run an intentional failure canary that throws Error('QA intentional Code Mode failure') after approval, then keep the failed run ledger visible.","Rejected runs do not execute.
+Failed runs retain artifact evidence.
+Failure phase/error code is visible.
+Candidate-save does not happen after reject/failure.",,,,,,,,,,
+CODE-05,Code Surface And Code Mode,Candidate Lifecycle,,,"Create or inspect a generated candidate.
+Open candidate details.
+Promote candidate.
+Revoke candidate.
+Roll back if supported.
+Inspect callable catalog after each step.","Prompt in Code: After a successful Code Mode run, save the result as a candidate, then walk me through promote, revoke, and rollback while showing callable catalog changes.","Candidate/proposal is inspectable before activation.
+Promotion/revocation changes lifecycle state.
+Callable catalog widens only after explicit activation.
+Rollback/revoke does not leave stale callable entries.",,,,,,,,,,
+CODE-06,Code Surface And Code Mode,Execution Backend Truth,,,"Inspect /api/v1/code-mode/execution-backends or UI equivalent.
+Compare host runner, Docker backend, and Aider adapter availability.
+Try an unavailable required backend.","Action: open /api/v1/code-mode/execution-backends or the Code Mode backend UI. For unavailable-backend edge, require Docker backend while Docker/image config is missing.","Default trusted-code host runner is visible.
+Docker runs only when explicitly configured.
+Aider remains audit-only if enabled.
+Required isolation fails closed when unavailable.",,,,,,,,,,
+PROJ-01,Projects,Project CRUD And Navigation,,,"Open /projects.
+Create a test project.
+Open project detail route.
+Link or continue Chat, Cowork, and Code work from the project.
+Edit project metadata.
+Archive/delete if supported.","Action/prompt: create project QA Project Canary, then from that project start a Chat prompt: Summarize this project and link this session to the project.","Project appears in list and direct route.
+Cross-surface continuation keeps project identity.
+Project changes do not leak across workspaces.",,,,,,,,,,
+PROJ-02,Projects,Project Import,,,"Import a small test project/workspace if supported.
+Inspect created sessions/tasks/files.
+Re-import same source.","Action: import a small disposable folder/project named qa-import-canary, then import the same source again to check duplicate/idempotent behavior.","Import result is understandable.
+Duplicate import is idempotent or explicitly creates a separate item.
+Errors identify invalid source or unsupported shape.",,,,,,,,,,
+LIB-AG-01,"Library: Agents, Skills, Capabilities",Agents Catalog And Profiles,,,"Open /library/agents.
+List agent profiles.
+Create or edit a test profile.
+Archive/restore.
+Activate session from a profile if available.","Action: create agent profile QA Agent Canary with role 'manual QA helper', archive it, restore it, then activate a session if available.","Agent roster loads.
+Profile lifecycle state persists.
+Archived agents do not appear as active unless filter says so.",,,,,,,,,,
+LIB-SK-01,"Library: Agents, Skills, Capabilities",Skills Catalog,,,"Open /library/skills.
+Inspect skill sources and lifecycle state.
+Search or filter.
+Reload skills.","Action: search skills for QA, filter by lifecycle/trust state, then reload the skill catalog.","Skill list is readable.
+Source/provenance is visible.
+Reload does not silently widen activation.",,,,,,,,,,
+LIB-SK-02,"Library: Agents, Skills, Capabilities",Skill Import Validate / Install,,,"Validate a known-good local skill bundle.
+Validate a malformed bundle.
+Install the known-good bundle after review.
+Inspect import history.",Action: validate/install a known test skill bundle with SKILL.md and goatcitadel.skill-bundle.json; malformed edge: remove or alter one sha256 before validation.,"Good bundle shows manifest/hash review evidence.
+Bad bundle fails with specific errors.
+Scripts remain review-only/non-callable unless separately governed.
+Import history is durable.",,,,,,,,,,
+LIB-SK-03,"Library: Agents, Skills, Capabilities",Skill Evaluation And Activation,,,"Preview a skill evaluation.
+Run evaluation.
+Create proposal from evaluation if supported.
+Change skill state.
+Inspect activation policy.","Action: choose a harmless skill, run evaluation preview, run evaluation, then create a proposal from the result if the UI offers it.","Evaluation output links to skill identity.
+Proposal lifecycle is clear.
+State changes respect policy and approval boundaries.",,,,,,,,,,
+LIB-CAP-01,"Library: Agents, Skills, Capabilities",Capability Browser,,,"Open /library/capabilities.
+Compare inspectable and callable catalog concepts in the UI.
+Inspect degraded, inactive, proposed, and active entries where available.",Action: open capability browser and inspect one active callable entry plus one proposed/inactive/degraded entry; no prompt needed.,"Inactive candidates/proposals are inspectable but not callable.
+Degraded posture is visible.
+Catalog state agrees with Settings -> Trust & Policy and Tools.",,,,,,,,,,
+LIB-CAP-02,"Library: Agents, Skills, Capabilities",Autonomy Grants,,,"Create a low-risk, narrow autonomy grant.
+Evaluate it.
+Trigger a covered action if safe.
+Revoke the grant.
+Attempt the action again.","Prompt/action: create narrow grant for a safe read-only capability pattern in QA workspace, then ask Chat: Use the granted safe read-only capability to inspect runtime status.","Grant has workspace, surface, risk tier, patterns, budget/count, grantor, reason, expiry, and revocation state.
+Deny-wins policy still overrides grant.
+Revoked or expired grant no longer authorizes the action.",,,,,,,,,,
+LIB-CAP-03,"Library: Agents, Skills, Capabilities",Capability Packs,,,"Preview local capability pack.
+Install/stage a pack if safe.
+Export preview/evidence.
+Inspect Settings -> Add-ons and Library -> Capabilities.","Action: preview a local capability pack using a reference/test pack, stage/install only in QA workspace, then verify no callable entries appear without activation.","Pack materialization receipts are review evidence only.
+Installing/staging does not auto-activate assets.
+Asset activation remains routed through existing governed lifecycle.",,,,,,,,,,
+LIB-MEM-01,"Library: Memory, Knowledge, Notes","Memory List, Edit, Forget, History",,,"Open /library/memory.
+Create or identify a test memory item.
+Edit it.
+View history.
+Forget/delete it.
+Refresh and switch workspace.",Action: create memory item QA Memory Canary = blue circuit. Prompt in Chat: What is the QA Memory Canary value and what memory source did you use? Then edit/forget it.,"Memory lifecycle routes through operator-facing controls.
+History/provenance is visible.
+Forgotten items do not keep influencing context.
+Workspace scope is explicit.",,,,,,,,,,
+LIB-MEM-02,"Library: Memory, Knowledge, Notes",Explicit Recall Modes,,,"Run targeted recall.
+Run broad summary recall.
+Trigger post-compaction/resume context if feasible.
+Inspect context pack provenance.","Prompt: Run targeted recall for QA Memory Canary, then run broad summary recall for this QA workspace, and show the recall strategy/provenance for each.","Recall modes are explicit.
+Retrieval strategy and match signals are labeled.
+Memory is not hidden automatic prompt injection.",,,,,,,,,,
+LIB-MEM-03,"Library: Memory, Knowledge, Notes",Trace-Derived Memory Proposals,,,"Create a chat/tool trace that may propose memory.
+Inspect proposal queue.
+Promote or reject a proposal.
+Confirm raw logs/tool outputs/secret-like values are not stored as trusted memory.","Prompt: If memory proposals are enabled, propose remembering that QA trace-derived memory canary = orange checkpoint. Do not promote it without asking me.","Trace-derived memory is proposal-first.
+Promotion requires operator authority or write-gate path.
+Sensitive/browser-content guard evidence is respected.",,,,,,,,,,
+LIB-MEM-04,"Library: Memory, Knowledge, Notes",Memory Quality And Maintenance,,,"Inspect memory quality issues.
+Trigger scan/maintenance if feature flag is enabled.
+Resolve/dismiss an issue.
+Confirm suppression/history.","Action: run memory quality scan/maintenance if enabled. If not enabled, use QA Memory Canary duplicate/stale entries to inspect the blocker/empty state.","Maintenance controls obey feature flags.
+Issues include source drift, stale low-value records, duplicates, contradictions, or retrieval gaps when detected.
+Resolution persists.",,,,,,,,,,
+LIB-KNOW-01,"Library: Memory, Knowledge, Notes",Knowledge Sources,,,"Open /library/knowledge.
+Add or inspect a knowledge source.
+Search or attach it to Chat/Cowork context.
+Remove or disable it if supported.",Action: add a knowledge source containing QA Knowledge Canary = silver relay. Prompt: Use knowledge context to tell me the QA Knowledge Canary and cite the source.,"Source identity/provenance is visible.
+Attached context can be inspected.
+Disabled source no longer appears as active context.",,,,,,,,,,
+LIB-NOTES-01,"Library: Memory, Knowledge, Notes",Notes And Reminders,,,"Open /library/notes.
+Create note.
+Edit and archive.
+Create reminder.
+Complete reminder.","Action: create note QA Note Canary and reminder Review approval queue in 5 minutes, then archive/complete them.","Notes/reminders are workspace-scoped personal ops, not learned memory.
+Archive/complete state persists.
+Empty and filtered states are clean.",,,,,,,,,,
+LIB-COMM-01,"Library: Communications, Files, Artifacts, Prompt Packs",Communications Overview,,,"Open /library/communications.
+Inspect inbox/agenda/contacts/drafts where configured.
+Create a draft if supported.
+Attempt send path only against a sandbox account.","Prompt/action: create draft to sandbox recipient only: Subject QA Draft Canary, body This is a manual QA draft; do not send until approved.","Missing connector state is clear.
+Outbound draft/send is approval-gated where required.
+Raw credentials are not shown.",,,,,,,,,,
+LIB-FILE-01,"Library: Communications, Files, Artifacts, Prompt Packs",Files Browser,,,"Open /library/files.
+Upload or select a safe file.
+Preview it.
+Download it.
+Try unsupported MIME and traversal-like paths.","Action: upload qa-file-canary.txt containing 'file canary blue circuit', preview/download it, then try unsupported .exe or traversal-like path.","File metadata and preview are clear.
+Preview route uses safe CSP.
+Traversal and unsupported content are rejected clearly.",,,,,,,,,,
+LIB-ART-01,"Library: Communications, Files, Artifacts, Prompt Packs",Generated Artifacts,,,"Open /library/artifacts.
+Generate a small artifact from Chat/Cowork/Code.
+Reopen artifact.
+Inspect linked run/session/source/decision evidence.","Prompt: Create a markdown artifact titled QA Artifact Canary with three bullets: route coverage, approval evidence, runtime recovery.","Artifact remains accessible after refresh.
+Provenance links resolve.
+Missing provenance is admitted plainly.",,,,,,,,,,
+LIB-PP-01,"Library: Communications, Files, Artifacts, Prompt Packs",Prompt Pack Import And Preview,,,"Open /library/prompt-packs.
+Preview import.
+Import a built-in or local pack.
+Inspect tests.","Action: import a built-in prompt pack or fixture pack, then preview a malformed copy with a missing required field.","Preview catches malformed pack shape.
+Imported pack identity/source label persists.
+Built-in import does not duplicate unexpectedly.",,,,,,,,,,
+LIB-PP-02,"Library: Communications, Files, Artifacts, Prompt Packs","Prompt Pack Run, Score, Review",,,"Run one prompt-pack test.
+Inspect raw output.
+Add manual review/verdict.
+Auto-score if configured.
+Reload report.",Action: run the smallest imported prompt-pack test. Manual review note: QA manual verdict canary. Auto-score only if a provider is configured.,"Run status is explicit.
+Manual and auto scores are attributed separately.
+Failed runs do not show as pass.
+Review persists.",,,,,,,,,,
+LIB-PP-03,"Library: Communications, Files, Artifacts, Prompt Packs","Benchmark, Cancel, Replay, Trends, Export, Reset",,,"Start a small benchmark matrix.
+Cancel a benchmark leg if safe.
+Run replay regression.
+Inspect report/trends.
+Export pack.
+Reset with safe flags.",Action: run a two-model/two-test benchmark if configured; cancel one leg if possible; then run replay regression and export/reset with safe flags.,"Matrix rows stay attached to correct run IDs.
+Cancelled/incomplete legs remain visible.
+Replay runs are labeled as replay.
+Reset affects only intended data.",,,,,,,,,,
+LIB-CUR-01,"Library: Communications, Files, Artifacts, Prompt Packs",Skill Curator Experimental Surface,,,"Open /library/curator.
+Inspect proposals and health ranking.
+Try an archive/proposal path only if safe.","Action: inspect curator proposals; if testing action path, archive only a disposable test proposal/candidate.","Surface is experimental.
+Recommendations do not act as final release automation.
+Actions remain reviewable.",,,,,,,,,,
+OPS-ACT-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Activity Feed And Realtime Events,,,"Open /ops/activity.
+Generate a chat turn, approval, task change, and runtime diagnostic.
+Watch retained event feed.
+Open event details.","Prompt/action: send Chat prompt 'Activity feed QA canary', create task QA Activity Task, and create a pending approval via Code Mode canary.","Events are human-readable.
+Raw payload is secondary.
+eventClass, eventAuthority, and links are visible or reflected in UI truth.
+Activity does not pretend to be complete historical record.",,,,,,,,,,
+OPS-ACT-02,"Ops: Activity, Sessions, Runtime, Diagnostics",SSE Degradation,,,"Open activity feed.
+Interrupt SSE/network or stop gateway.
+Watch status banner.
+Restore gateway/network.","Action: open /ops/activity, stop gateway or block the event stream, wait for degraded banner, then restore gateway.","UI shows degraded live updates.
+Stale counts/status are labeled.
+Recovery does not duplicate events wildly.",,,,,,,,,,
+OPS-SES-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Sessions And Timeline,,,"Open /ops/sessions.
+Open a Chat session detail.
+Inspect transcript, summary, and timeline.
+Compare with Chat route.","Prompt: Session timeline QA canary. Please answer in one sentence, then I will inspect this session in Ops -> Sessions.","Session is distinct from durable run.
+Transcript and timeline agree with Chat.
+Missing summaries show explicit empty/unavailable state.",,,,,,,,,,
+OPS-SES-02,"Ops: Activity, Sessions, Runtime, Diagnostics",Runtime Lifecycle Export,,,"Open or call runtime lifecycle view/export.
+Inspect canonical vs linked fields for a session/run/approval case.","Action: use a real approvalId/runId/sessionId from prior tests, then open runtime lifecycle/export for that ID.","Canonical fields prefer explicit stored linkage.
+Inferred/linked fields are labeled separately.
+Export is redacted and usable as evidence.",,,,,,,,,,
+OPS-RUN-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Runtime Page,,,"Open /ops/runtime.
+Inspect gateway health, daemon posture, host vitals, spend, backups, and local runtime indicators.
+Restart gateway or daemon if safe.","Action: open /ops/runtime, then restart the gateway/daemon only in the QA environment.","Runtime truth is high-signal and readable.
+Backup state is visible.
+Experimental sidecars stay labeled.",,,,,,,,,,
+OPS-DIAG-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Diagnostics Directory,,,"Open /ops/diagnostics.
+Inspect durable, daemon, admin, docs, readiness, and verification diagnostics.
+Open one run/detail view.","Action: open /ops/diagnostics after creating a Chat turn, Cowork run, and pending approval so diagnostics have real links to inspect.","Diagnostics are drill-in surfaces, not raw JSON-only.
+Readiness failures are actionable.
+Docs/verification links resolve.",,,,,,,,,,
+OPS-COST-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Costs And Budget Evidence,,,"Open /ops/costs.
+Run a Chat turn.
+Inspect usage/cost update.
+Open /settings/budget and adjust mode if safe.",Prompt: Costs QA canary: answer with exactly five bullet points so I can check token/usage/cost evidence afterward.,"Costs distinguish measured usage from estimates.
+Budget mode persists.
+Cost UI does not claim certainty it lacks.",,,,,,,,,,
+OPS-QUAL-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Quality Dashboard,,,"Open /ops/quality.
+Inspect eval proof, prompt-pack gate posture, design quality card, and export paths.
+Compare with Library -> Prompt Packs.","Action: run one prompt-pack test first, then open /ops/quality to inspect the evidence dashboard.","Quality reflects real evidence.
+Export/report paths are read-only where appropriate.
+Prompt-pack failures are not smoothed into green summaries.",,,,,,,,,,
+OPS-SCHED-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Schedules,,,"Open /ops/schedules.
+Create or inspect a safe recurring job.
+Disable/pause it.
+Check next-run time and timezone behavior.","Action: create schedule QA Schedule Canary with a harmless reminder/read-only action, then pause/disable it.","Scheduler posture is visible.
+Risky recurring work remains governed.
+Timezone and disabled state are clear.",,,,,,,,,,
+OPS-NOTIF-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Notifications And Operator Attention,,,"Open /ops/notifications.
+Generate a blocked/failed/done/waiting event.
+Inspect notification signals.
+Adjust notification preferences if visible.","Prompt/action: create one done Chat turn, one failed Code Mode canary, and one approval-wait Cowork task to produce done/failed/waiting signals.","Needs-attention signals appear.
+Done/failed/blocked states are distinguishable.
+Sound/browser notification settings persist.",,,,,,,,,,
+OPS-IMP-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Improvement Experimental Surface,,,"Open /ops/improvement.
+Inspect replay/self-improvement support.
+Run only safe read-only paths unless explicitly testing improvement loops.",Action: open /ops/improvement and use read-only replay/inspection only unless intentionally testing improvement loops.,"Surface is experimental.
+No copy implies autonomous release magic.",,,,,,,,,,
+OPS-KAN-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Kanban Experimental Surface,,,"Open /ops/kanban.
+Inspect task/subagent board.
+Create distress signal or retry budget in a safe test task.
+Try bulk controls only in QA workspace.","Action: create task QA Kanban Canary, add distress signal 'blocked on QA approval', set retry budget to 1, then test bulk controls only on QA items.","Surface is experimental.
+Bulk controls are not presented as final release control.
+Distress/retry/artifact verification state persists.",,,,,,,,,,
+APPR-01,Approvals And Durable Runs,Pending Approval Creation,,,"Trigger a risky tool, Code Mode run, external send, or other approval-gated action.
+Open /ops/approvals.
+Inspect pending item.","Strongest trigger: in Code with Code Mode enabled, prompt: Run a trusted Code Mode canary that reads package.json and writes an artifact summary; require approval before execution.","Approval appears in queue and linked surface.
+Risk, action type, preview, affected resources, and linkage are readable.
+Pending item does not require raw JSON to understand.",,,,,,,,,,
+APPR-02,Approvals And Durable Runs,"Approve, Reject, And History",,,"Approve one pending item.
+Reject another pending item.
+Inspect history and replay.
+Return to linked Chat/Cowork/Code surface.",Action: create two pending approvals with APPR-01 trigger; approve one and reject the other.,"Approved/rejected state is durable.
+Follow-on work is visible as completed, pending, skipped, unknown, or failed.
+Reject prevents side effects.",,,,,,,,,,
+APPR-03,Approvals And Durable Runs,Resolve Failure,,,"Open a pending approval.
+Simulate or cause resolve failure.
+Inspect modal, row, and error copy.","Action: create a pending approval, then stop gateway/network during resolve or use an invalid/stale approval ID to force resolve failure.","Modal remains open.
+Pending row does not disappear optimistically.
+Retry path is clear.",,,,,,,,,,
+APPR-04,Approvals And Durable Runs,Bulk Resolve,,,"Create multiple pending approvals.
+Select subset.
+Bulk approve or reject.
+Refresh.","Action: create three pending approvals with the Code Mode canary trigger, select two, and bulk resolve only those two.","Only selected approvals change.
+Counts update.
+History records each decision.",,,,,,,,,,
+APPR-05,Approvals And Durable Runs,Remote Token Flow,,,"Generate remote approval token.
+Resolve through remote flow.
+Inspect canonical approval and audit.","Action: create approval with APPR-01 trigger, click/generate remote token, then resolve through the remote-token flow.","Token issuance is explicit.
+Remote resolution updates same canonical approval.
+Expired/invalid tokens fail closed.",,,,,,,,,,
+APPR-06,Approvals And Durable Runs,Expired Approval,,,"Use seeded or naturally expired approval.
+Inspect pending and history.
+Attempt resolve if control remains visible.",Action: use a seeded expired approval fixture if available; otherwise create a short-TTL approval through test/dev fixture route and wait for expiry.,"Expired item leaves pending.
+History shows expired.
+Resolve action is disabled or rejected.",,,,,,,,,,
+DUR-01,Approvals And Durable Runs,Durable Run List And Detail,,,"Create or find a durable run.
+Open run detail from Cowork, Ops -> Diagnostics, or lifecycle links.
+Inspect timeline, checkpoints, retry status, dead-letter state, and evidence.",Prompt in Cowork: Start a durable run named QA Durable Canary with three checkpoints and show me the run detail link before completing.,"Run state is readable.
+Checkpoints are available when expected.
+Session/turn/run/approval concepts are not conflated.",,,,,,,,,,
+DUR-02,Approvals And Durable Runs,"Pause, Resume, Retry, Dead Letter",,,"Create a pauseable/waiting run.
+Pause.
+Resume manually.
+Trigger retry if safe.
+Inspect dead-letter or blocked state if available.",Prompt in Cowork: Start a durable run that pauses for manual approval after checkpoint one; keep it paused until I explicitly resume.,"Paused vs waiting-for-event is distinct.
+Resume is an operator-visible action.
+Retry/dead-letter states have evidence and next action.",,,,,,,,,,
+DUR-03,Approvals And Durable Runs,Approval Resolves While Run Paused,,,"Create paused run linked to approval.
+Resolve approval.
+Inspect run and approval state.","Prompt in Cowork: Start a durable run that asks for approval, then pause the run before I resolve the approval.","Approval may resolve.
+Run remains paused unless explicitly resumed.
+UI does not say ""all done"" when downstream work is unresolved.",,,,,,,,,,
+DUR-04,Approvals And Durable Runs,Restart Recovery,,,"Start durable Chat/Cowork/Code flow.
+Restart gateway.
+Inspect run, session, approval, and activity state.",Prompt in Cowork: Start a durable QA run with three checkpoints and wait 20 seconds between checkpoints; restart gateway after checkpoint one.,"State survives restart.
+Recovery truth is visible.
+No stale running/completed fiction remains.",,,,,,,,,,
+SET-01,Settings And Governance,General Settings,,,"Open /settings/general.
+Change a harmless preference.
+Refresh.
+Switch workspace.","Action: change a harmless setting such as theme/default preference, then refresh and switch workspace.","Preference persists at intended scope.
+Unsaved changes are protected.",,,,,,,,,,
+SET-02,Settings And Governance,Personalities Experimental,,,"Open /settings/personalities.
+Select or adjust a preset.
+Open Chat and verify default framing if supported.","Action: select a personality preset, then Chat prompt: Respond to this in the currently selected personality while still following safety and tool policy.","Surface is experimental.
+Personality changes do not override safety/policy/tool rules.",,,,,,,,,,
+SET-03,Settings And Governance,Access And Auth,,,"Open /settings/access.
+Inspect auth mode, secrets, device grants, companion sessions, and audit.
+Revoke a test device/session if available.",Action: revoke only a QA/test device or companion session from /settings/access.,"Auth posture is clear.
+Secrets are redacted.
+Revoked sessions cannot continue.",,,,,,,,,,
+SET-04,Settings And Governance,Companion / Mobile Continuity,,,"Create device request or companion session.
+Exchange/refresh session.
+Inspect /api/v1/mobile/capabilities or UI equivalent.
+Revoke device grant.","Action: create a QA companion/device request, exchange/refresh it, inspect mobile capabilities, then revoke it.","Device grants are signed/scoped.
+Mobile companion does not imply ungoverned control plane.
+Revoke blocks future use.",,,,,,,,,,
+SET-05,Settings And Governance,Permissions,,,"Open /settings/permissions.
+Create or edit a permission profile.
+Evaluate safe vs risky tool/action access.
+Test local operator override if supported.","Action: create QA permission profile allowing safe read but denying risky write; prompt Chat: Try the allowed read, then request the denied write and show the policy result.","Deny-wins policy remains authoritative.
+Override evidence is explicit.
+Profile changes affect subsequent actions only as intended.",,,,,,,,,,
+SET-06,Settings And Governance,Trust And Policy Snapshot,,,"Open /settings/trust-policy.
+Inspect capability/tool/source trust matrix.
+Jump to Permissions, Tools, MCP, Skills, Capabilities, or Approvals.
+Simulate snapshot API unavailable if feasible.","Action: open Trust & Policy, then click jump links to Permissions, Tools, MCP, Skills, Capabilities, and Approvals.","Dashboard is inspectable and read-oriented.
+Jumps land on correct settings/library pages.
+Snapshot failure is fail-closed and readable.",,,,,,,,,,
+SET-07,Settings And Governance,Workspaces And Guidance,,,"Open /settings/workspaces.
+Create workspace.
+Edit workspace guidance.
+Switch to another workspace.
+Archive/restore if supported.","Action: create workspace QA Workspace Canary and guidance text 'Always label manual QA evidence', then switch away/back.","Workspace state and guidance persist.
+Data does not leak silently across workspaces.
+Archived workspace is clearly inactive.",,,,,,,,,,
+SET-08,Settings And Governance,Tools Catalog And Grants,,,"Open /settings/tools.
+Inspect tool catalog.
+Evaluate access for a safe tool and risky tool.
+Create, expire, and revoke a grant.","Action: create a scoped QA grant for a safe tool, verify it, revoke it, then attempt the same tool action again.","Tool access state is readable.
+Grants are scoped and expiring.
+Risky tool remains approval/policy governed.",,,,,,,,,,
+INT-01,"Integrations, Channels, MCP, A2A, Add-ons",Integrations Overview,,,"Open /settings/integrations.
+Inspect all visible connectors.
+For each visible beta/native connector, identify setup/action path or blocked copy.",Action: inspect each integration card and click its setup/test/action entrypoint; no chat prompt needed.,"No visible connector is a diagnostics-only shell without saying so.
+Runnable entries expose real operator actions.
+Blocked/incomplete entries are labeled.",,,,,,,,,,
+INT-02,"Integrations, Channels, MCP, A2A, Add-ons",Channel Setup Matrix,,"Discord
+Slack
+Telegram
+Google Chat
+Teams
+Mattermost
+WhatsApp
+Signal
+iMessage / BlueBubbles
+Nextcloud Talk
+LINE
+Zalo OA
+Zalo Personal","Open /settings/channels.
+Create or edit connection.
+Run guided auth/check/test/retest.
+Send sandbox message when supported.
+Inspect capability and diagnostics state.
+Test bad token or missing permission.",Action: use a sandbox connection. Test message body: QA channel canary from GoatCitadel manual test. Bad-token edge: replace token env with QA_BAD_TOKEN.,"Channel capability metadata agrees between UI and API.
+Bad token/missing permission errors are readable.
+Webhook-only/manual-confirm paths are labeled.
+Break-glass or public-webhook requirements are explicit.",,,,,,,,,,
+INT-03,"Integrations, Channels, MCP, A2A, Add-ons",Comms Public Actions,,,"Use safe sandbox connection.
+Test send, reply, react, unsend, typing, and activity where supported.
+Inspect diagnostics.","Action: send sandbox text 'QA comms send canary', reply 'QA comms reply canary', react with thumbs-up if supported, then unsend/typing/activity where supported.","Unsupported actions fail clearly.
+Supported actions go through configured connector.
+Approval/policy boundaries still apply.",,,,,,,,,,
+INT-04,"Integrations, Channels, MCP, A2A, Add-ons",Webhooks And Inbound Verification,,,"Configure one inbound webhook-capable channel.
+Send inbound sandbox event.
+Try invalid signature/token.
+Inspect linked session/task/activity.",Action: send inbound sandbox webhook payload from the channel provider; invalid edge: repeat with bad signature/token.,"Valid inbound event creates/updates intended state.
+Invalid signature/token is rejected.
+No secret payload is logged or shown raw.",,,,,,,,,,
+INT-05,"Integrations, Channels, MCP, A2A, Add-ons",External Side Effects And Replay,,,"Trigger a safe external write in sandbox.
+Inspect evidence envelope and side-effect ledger.
+Test failed-before-boundary case.
+Test unknown-post-boundary/manual reconciliation case.
+Run explicit Activepieces check_run_status if configured.",Action: trigger sandbox write body 'QA external side-effect canary'; failed-before-boundary edge: use blocked/missing credential; unknown edge requires sandbox/provider interruption after send claim.,"Idempotency is claimed before crossing external boundary.
+Replay only retries eligible failed-before-boundary/stale claimed-not-sent states.
+Unknown post-boundary outcomes stay manual.
+Activepieces status is explicit operator read, not background polling.",,,,,,,,,,
+MCP-01,"Integrations, Channels, MCP, A2A, Add-ons",Local stdio MCP,,,"Open /settings/mcp.
+Configure a safe local stdio server.
+Inspect tool/resource discovery.
+Invoke a safe tool through governed path.
+Disable server.","Action: configure a harmless local stdio MCP server such as a test echo/list server, then invoke an echo or list-safe-resources tool.","Local stdio readiness is visible.
+Invocation remains Gateway-mediated.
+Disable removes callable availability.",,,,,,,,,,
+MCP-02,"Integrations, Channels, MCP, A2A, Add-ons",Approval Inbox MCP,,,"Enable/inspect built-in Approval Inbox path.
+Generate approval.
+Read/resolve through MCP path if configured.","Action: create pending approval with APPR-01 trigger, then read/resolve it through the Approval Inbox MCP path if configured.","Approval Inbox truth matches Ops -> Approvals.
+Resolution remains governed and audited.",,,,,,,,,,
+MCP-03,"Integrations, Channels, MCP, A2A, Add-ons",Remote HTTP/SSE MCP With Auth,,"no auth
+token env
+OAuth2","Configure remote server.
+Verify network allowlist/auth readiness.
+For OAuth2, connect/reconnect and inspect token refs.
+Invoke safe tool.
+Expire/remove token and retry.",Action: configure a sandbox remote MCP server. Invoke a safe echo/list tool. Auth edge: remove/expire OAuth/token ref and retry.,"Remote invocation is Gateway-mediated.
+Missing OAuth tokens show needs_auth.
+Expired tokens show expired until reconnect/refresh.
+Bearer/token details stay redacted.",,,,,,,,,,
+A2A-01,"Integrations, Channels, MCP, A2A, Add-ons",Agent Card And Peer Auth,,,"Request public /.well-known/agent-card.json.
+Request operator /api/v1/a2a/agent-card.
+Test peer-authenticated path if configured.","Action: GET /.well-known/agent-card.json, then GET /api/v1/a2a/agent-card with operator auth, then test a configured peer credential.","Public discovery disabled by default.
+Operator diagnostics available.
+Peer auth is separate from operator auth.",,,,,,,,,,
+A2A-02,"Integrations, Channels, MCP, A2A, Add-ons",Inbound / Outbound Task Binding,,,"Preview inbound or outbound A2A task.
+Send a sandbox task.
+Inspect task/session/durable binding.
+Send duplicate peer/context/message if safe.","Action: send sandbox A2A task message 'QA A2A binding canary', then resend the same peer/context/message identity to test idempotency.","Binding is idempotent by peer/context/message identity.
+A2A task creates or links canonical local session/task/run state.
+A2A does not claim to replace GoatCitadel mesh.",,,,,,,,,,
+A2A-03,"Integrations, Channels, MCP, A2A, Add-ons",Push Notification And gRPC,,,"Configure peer push notification.
+Send a task event.
+Configure gRPC transport only with explicit binding/listener.
+Inspect audit/network allowlist behavior.",Action: use a configured sandbox A2A peer push target; send task event 'QA A2A push canary'. Only test gRPC when listener/binding is explicitly configured.,"Push/gRPC remain explicit Gateway transports.
+Network allowlists and audit apply.
+Missing config fails closed.",,,,,,,,,,
+ADDON-01,"Integrations, Channels, MCP, A2A, Add-ons",Add-ons Experimental Lifecycle,,,"Open /settings/addons.
+Inspect catalog/source/trust tier.
+Install a safe reference add-on only after review.
+Launch/stop/update/disable/uninstall.
+Inspect health checks and install location.","Action: install only the reference/test add-on after reviewing source/trust tier; launch, stop, update, disable, and uninstall it.","Surface is experimental.
+Add-on install is never silent.
+Install path is outside core checkout.
+Trust metadata is visible and not treated as cryptographic proof.",,,,,,,,,,
+BROW-01,"Browser Sessions, Voice, Media, Optional Sidecars",Browser Session Grants,,,"Create browser session.
+Inspect state/events.
+Grant scoped access.
+Rotate grant.
+Delete grant and session.","Action: create browser session QA Browser Canary, grant read-only scoped access, rotate the grant, then delete grant and session.","Grants are scoped, inspectable, rotatable, and revocable.
+Deleted grants stop working.
+Events are redacted.",,,,,,,,,,
+VOICE-01,"Browser Sessions, Voice, Media, Optional Sidecars",Transcription And Voice Runtime,,,"Open voice runtime status.
+Install/select/remove a managed model.
+Transcribe safe sample audio.
+Start/stop talk session.","Action: use sample audio saying 'QA voice canary blue circuit'; transcribe it, then start/stop a talk session.","Managed runtime install explains what and why.
+Model files live outside repo.
+Missing ffmpeg/whisper produces actionable error.",,,,,,,,,,
+VOICE-02,"Browser Sessions, Voice, Media, Optional Sidecars",Wake And Google Meet,,,"Start/stop wake.
+Check Google Meet prerequisites.
+Start a test session.
+Submit transcript and consult.
+Stop session.","Action: start wake only in QA environment, then use transcript text 'QA meet canary: summarize approval testing' for consult.","Permission/runtime requirements are explicit.
+Sessions stop cleanly.
+Transcript/consult data is not stored unexpectedly.",,,,,,,,,,
+MEDIA-01,"Browser Sessions, Voice, Media, Optional Sidecars",Media Routes,,,"Upload or process safe media sample.
+Test unsupported media.
+Inspect output/artifact and redaction.",Action: upload/process safe media named qa-media-canary; unsupported edge: upload a fake or unsupported extension and verify readable rejection.,"Supported media path works.
+Unsupported input is rejected clearly.
+Outputs link to artifact provenance.",,,,,,,,,,
+NPU-01,"Browser Sessions, Voice, Media, Optional Sidecars",NPU Sidecar Experimental,,,"Start Python sidecar.
+Open /settings/local-ai and /ops/runtime.
+Hit NPU diagnostics.
+Stop sidecar.","Action: start apps/npu-sidecar/server.py in its venv, then inspect Local AI and Runtime pages; stop sidecar to verify degraded state.","NPU is labeled optional/experimental.
+Sidecar absence is not treated as product failure.
+Local inference maturity is not overclaimed.",,,,,,,,,,
+SEC-01,"Security, Auth, And Runtime Boundaries",Token Auth,,,"Start with token auth enabled.
+Open Mission Control without token/bootstrap.
+Authenticate.
+Retry API calls.","Action: start runtime with GOATCITADEL_AUTH_MODE=token and a long test token; open UI without token, then authenticate.","Unauthenticated access is blocked cleanly.
+Authenticated path succeeds.
+UI does not enter half-ready state.",,,,,,,,,,
+SEC-02,"Security, Auth, And Runtime Boundaries",Browser Mutation Intent Header,,,"Trigger a normal UI mutation.
+Attempt equivalent browser-origin mutation without x-goatcitadel-browser-intent: mutation.","Action: create note QA Mutation Canary through UI, then repeat the same POST from browser-origin tooling without x-goatcitadel-browser-intent: mutation.","Valid UI path succeeds.
+Missing intent header is rejected.
+Error is clear.",,,,,,,,,,
+SEC-03,"Security, Auth, And Runtime Boundaries",CORS And Allowed Origins,,,"Confirm default loopback origins work.
+Try disallowed origin.
+Try Tailnet dev origin when enabled.
+Try invalid configured origin value on startup.","Action: use curl/browser with allowed localhost origin, then a disallowed Origin header such as https://evil.example.","Allowed origins succeed.
+Disallowed origins fail.
+Invalid origins fail loudly at startup/config time.",,,,,,,,,,
+SEC-04,"Security, Auth, And Runtime Boundaries",Rate Limiting,,,"Send normal reads below limit.
+Burst auth, mutation, and SSE paths in safe local test.",Action: run a safe local loop that bursts auth/mutation/SSE endpoints below and above configured limits; do not target external services.,"Rate-limit headers are present where configured.
+Auth/mutation/SSE limits differ according to bucket.
+Loopback allowlisting behaves as expected.",,,,,,,,,,
+SEC-05,"Security, Auth, And Runtime Boundaries",Suspicious Encoded Path And Traversal,,,"Request normal API path.
+Request suspicious encoded path segments.
+Try traversal-like file/backup/restore paths.","Action: request /api/v1/health normally, then a suspicious encoded path such as /api/v1/files/%2e%2e/%2e%2e/.env and traversal backup/file paths.","Suspicious paths are rejected before handler work.
+Traversal does not reach filesystem mutation.",,,,,,,,,,
+SEC-06,"Security, Auth, And Runtime Boundaries",Response Security Headers,,,"Inspect normal API response headers.
+Inspect file/attachment preview response headers.
+Test non-loopback bind in safe environment.",Action: inspect headers with curl -I for /health and for a file/attachment preview route; compare CSP strictness.,"Baseline headers include nosniff, DENY frame, referrer policy, permissions policy, and CSP.
+Preview routes keep stricter CSP.
+HSTS appears for non-loopback bind.",,,,,,,,,,
+SEC-07,"Security, Auth, And Runtime Boundaries",Route Access Classes,,,"Call public read route.
+Call operator route without auth.
+Call device/companion route with wrong actor.
+Call webhook route with invalid peer/signature.","Action: call a public route, then call /api/v1/tools/catalog or /api/v1/trust/policy-snapshot without auth, then a webhook route with invalid signature.","Access classes behave distinctly.
+Unauthorized failures are not confused with missing resource.
+Protected routes fail closed.",,,,,,,,,,
+SEC-08,"Security, Auth, And Runtime Boundaries",Idempotency,,,"Repeat same mutation with same idempotency key.
+Repeat with different body under same key if possible.
+Repeat without key where key is required.","Action: repeat a safe mutation such as creating QA Idempotency Note with the same Idempotency-Key, then same key with different body.","Duplicate mutation returns stable result or safe no-op.
+Key/body mismatch is rejected.
+Side effects do not duplicate.",,,,,,,,,,
+SEC-09,"Security, Auth, And Runtime Boundaries",Secret Redaction,,,"Use a bad provider/channel token.
+Inspect UI, gateway logs, diagnostics, artifacts, and event feed.","Action: set provider/channel token to QA_SECRET_CANARY_DO_NOT_LEAK, trigger failure, then search UI/logs/artifacts for that exact string.","Secrets are not printed.
+Errors remain actionable.
+Redaction does not remove necessary non-secret context.",,,,,,,,,,
+SEC-10,"Security, Auth, And Runtime Boundaries",Policy Deny-Wins,,,"Configure a permission/grant that would allow a risky action.
+Configure deny policy for same action.
+Attempt action.","Action: create grant that allows safe tool, then deny same tool/pattern in policy/profile; prompt Chat: Try to use the denied tool and show the policy result.","Deny policy wins.
+UI explains policy block.
+Approval/grant cannot bypass deny boundary.",,,,,,,,,,
+BK-01,"Backup, Restore, Storage, And Retention","Backup Create, List, Verify",,,"Create backup.
+List backups.
+Verify backup.
+Inspect archive path and contract truth.","Action: run goatcitadel admin backup create --name qa-manual-canary, then list and verify that backup.","Backup includes minimum operator set.
+Verify reports archive integrity and contractVerified-style truth.
+Backup path is readable and safe.",,,,,,,,,,
+BK-02,"Backup, Restore, Storage, And Retention",Live Restore Blocked,,,"Attempt live admin restore route.
+Inspect response.",Action: attempt the live admin restore route/API against the QA backup and verify it returns offline_restore_required.,"Live restore returns offline_restore_required.
+No live mutation occurs.
+CLI/offline hint is present.",,,,,,,,,,
+BK-03,"Backup, Restore, Storage, And Retention",Offline Restore,,,"Stop runtime.
+Run offline restore command against a test backup.
+Restart runtime.
+Inspect restored Chat, memory, audit, config, and files.","Action: stop runtime, run goatcitadel admin backup restore --file <qa-backup-file> --confirm, restart runtime, then inspect restored data.","Restore requires offline posture.
+Restored runtime starts cleanly.
+Backup guarantees do not exceed documented minimum set.",,,,,,,,,,
+BK-04,"Backup, Restore, Storage, And Retention",Postgres / SQLite Storage,,,"Run SQLite-backed dev stack.
+Run Postgres-backed Docker stack.
+Compare core flows: Chat, tasks, approvals, memory, backup verify.","Action: run same smoke set in SQLite dev and Postgres Docker: CHAT-01, COWORK-02, APPR-01, LIB-MEM-01, BK-01.","Core state behaves the same.
+Postgres-specific failures are surfaced.
+SQLite remains supported fallback.",,,,,,,,,,
+BK-05,"Backup, Restore, Storage, And Retention",Database Cutover And Verify,,,"Run dry-run or verify flow.
+Inspect counts/issues.
+Abort before destructive work unless this is an explicit cutover test.",Action: run database cutover verify/dry-run only; do not proceed past destructive confirmation unless this is a dedicated cutover test.,"Output is operator-readable.
+Counts make sense.
+Risky cutover requires clear confirmation.",,,,,,,,,,
+BK-06,"Backup, Restore, Storage, And Retention",Retention And Prune,,,"Inspect retention config.
+Update retention in test environment.
+Run prune.
+Inspect audit/evidence.","Action: set retention for QA-only short window, create old disposable records if possible, run prune, then inspect audit.","Retention changes are explicit.
+Prune affects only intended data.
+Audit remains inspectable.",,,,,,,,,,
+CLI-01,"CLI, TUI, Launcher, And Admin Commands",Launcher Basics,,,"Run goatcitadel help.
+Run goatcitadel status --json.
+Run goatcitadel launch --no-open --json --wait.
+Run goatcitadel up.
+Run goatcitadel stop --json.",Action: run goatcitadel help; goatcitadel status --json; goatcitadel launch --no-open --json --wait; goatcitadel up; goatcitadel stop --json.,"Commands work from installed launcher.
+JSON output is parseable.
+Missing launcher gives clear install/update guidance.",,,,,,,,,,
+CLI-02,"CLI, TUI, Launcher, And Admin Commands",TUI,,,"Run pnpm tui or goatcitadel tui.
+Inspect live feed.
+Navigate a few views.
+Try read-only and mutation paths.","Action: run pnpm tui or goatcitadel tui, then navigate read views and try a safe mutation such as creating QA TUI Canary if available.","TUI starts.
+Degraded SSE is surfaced.
+Mutations respect auth/policy/approval.",,,,,,,,,,
+CLI-03,"CLI, TUI, Launcher, And Admin Commands",Admin And Tools,,,"Run tools catalog.
+Run backup list.
+Run safe admin verification.
+Run command with bad auth/config.","Action: run tools catalog, admin backups list, then repeat one command with deliberately bad auth/config.","Output is operator-usable.
+Bad config errors are specific.
+Commands do not require browser UI.",,,,,,,,,,
+CLI-04,"CLI, TUI, Launcher, And Admin Commands",Config Sync And Update,,,"Delete or move a local config/*.json copy in test clone.
+Run pnpm config:sync.
+Inspect recreated file.
+Run launcher update in installed environment if safe.","Action: move one QA clone config JSON aside, run pnpm config:sync, compare recreated file, then run launcher update if installed.","Templates materialize local config.
+Existing local values are not clobbered unexpectedly.
+Update repairs launcher drift.",,,,,,,,,,
+EDGE-01,Cross-Cutting Edge Cases,Multi-Tab And Stale State,,,"Open two browser tabs to same workspace/session.
+Create a message/task/approval in tab A.
+Resolve/edit from tab B.
+Refresh both.","Prompt in tab A: Multi-tab QA canary. In tab B, edit or resolve the related item before refreshing both tabs.","Stale state is reconciled.
+Duplicate actions are blocked or idempotent.
+User gets clear conflict/freshness signal.",,,,,,,,,,
+EDGE-02,Cross-Cutting Edge Cases,Long Input And Large Output,,,"Send a long prompt.
+Generate long assistant output.
+Attach a large-but-allowed file.
+Test mobile display.","Prompt: Write 120 numbered QA observations about an AI operations console, each with a short sentence. Include QA-LONG-CANARY every 20 items.","UI remains responsive.
+Text wraps without overlap.
+Output virtualization/windowing works.
+Large content has bounded previews.",,,,,,,,,,
+EDGE-03,Cross-Cutting Edge Cases,Provider Outage And Fallback,,,"Configure unavailable provider/model.
+Send Chat turn.
+Restore provider or configure fallback.
+Retry.","Action/prompt: select a deliberately unavailable provider/model, then prompt Chat: Provider outage QA canary. Restore provider/fallback and retry.","Error is readable.
+Fallback is explicit if used.
+Retry does not duplicate or corrupt turn.",,,,,,,,,,
+EDGE-04,Cross-Cutting Edge Cases,Network Offline / Online,,,"Open Chat and Activity.
+Disconnect network or block gateway locally.
+Try read and mutation actions.
+Restore.","Prompt before disconnect: Network offline QA canary. Then disconnect/block gateway, try a read and mutation, restore, and inspect recovery.","Offline/degraded state is visible.
+Mutations do not appear successful until confirmed.
+Recovery refreshes current truth.",,,,,,,,,,
+EDGE-05,Cross-Cutting Edge Cases,Workspace Switch During Work,,,"Start Chat/Cowork/Code work in workspace A.
+Switch to workspace B mid-flow.
+Create memory/task/note.
+Switch back.",Prompt/action: in workspace A start Chat prompt 'Workspace A QA canary'; switch to workspace B and create note 'Workspace B QA canary'; switch back and compare scope.,"Workspace-specific state does not leak silently.
+In-progress work remains linked to original workspace.
+UI labels current workspace clearly.",,,,,,,,,,
+EDGE-06,Cross-Cutting Edge Cases,Theme And Preference Persistence,,,"Toggle light/dark theme.
+Adjust notification/sound/preferences.
+Refresh.
+Open mobile viewport.","Action: toggle theme, change notification/sound preference, refresh, then test mobile viewport.","Preferences persist.
+No route loses readability in either theme.
+Mobile preference controls remain usable.",,,,,,,,,,
+EDGE-07,Cross-Cutting Edge Cases,Error Boundaries,,,"Trigger a known-safe API failure.
+Navigate away and back.
+Retry.","Action: use a known bad ID route/API such as /api/v1/sessions/does-not-exist or stop gateway briefly, then navigate away/back and retry.","Error boundary is local to affected surface.
+Shell remains usable.
+Retry path works.",,,,,,,,,,
+EDGE-08,Cross-Cutting Edge Cases,Performance Sanity,,,"Load a session with many messages.
+Load task board with many items.
+Load activity feed with many events.
+Switch routes repeatedly.","Setup prompt: create or use a long session with EDGE-02 output; create 20 QA tasks; generate activity events with CHAT-01/APPR-01/COWORK-02, then switch routes repeatedly.","No obvious freezes.
+Virtualized lists do not jump unexpectedly.
+Memory usage does not climb without release during normal navigation.",,,,,,,,,,

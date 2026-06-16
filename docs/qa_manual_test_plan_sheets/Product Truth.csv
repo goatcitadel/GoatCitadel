@@ -1,0 +1,29 @@
+﻿Product Truth
+apps/mission-control-next is the canonical 1.0 shell.
+apps/gateway is the runtime/control-plane owner.
+"Chat, Cowork, and Code are distinct operator surfaces."
+Durable execution owns the shipped resumable Chat / Cowork / Code flow set.
+Code Mode is governed trusted-code execution; do not treat it as general hostile-code sandboxing without fresh named proof.
+"Docker is a runtime boundary, not a replacement for auth, policy, approvals, or path jails."
+Experimental routes must be visibly labeled and must not be counted as release-ready proof.
+""
+Source Anchor
+README.md (../README.md)
+AGENTS.md (../AGENTS.md)
+docs/1_0_CONTRACT.md (./1_0_CONTRACT.md)
+docs/1_0_RELEASE_SURFACE_SCOPE.md (./1_0_RELEASE_SURFACE_SCOPE.md)
+docs/CANONICAL_RUNTIME_STATE_MODEL.md (./CANONICAL_RUNTIME_STATE_MODEL.md)
+docs/INSTALL_SETUP_TESTING.md (./INSTALL_SETUP_TESTING.md)
+docs/PACKAGING.md (./PACKAGING.md)
+docs/CAPABILITY_SYSTEM_V1.md (./CAPABILITY_SYSTEM_V1.md)
+docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md (./COMMUNICATION_CHANNEL_SETUP_GUIDE.md)
+apps/mission-control-next/src/app/route-model.ts (../apps/mission-control-next/src/app/route-model.ts)
+scripts/verification/lib/release-surface-manifest.mjs (../scripts/verification/lib/release-surface-manifest.mjs)
+apps/gateway/src/app.ts (../apps/gateway/src/app.ts)
+apps/mission-control-next is the canonical 1.0 shell.
+apps/gateway is the runtime/control-plane owner.
+"Chat, Cowork, and Code are distinct operator surfaces."
+Durable execution owns the shipped resumable Chat / Cowork / Code flow set.
+Code Mode is governed trusted-code execution; do not treat it as general hostile-code sandboxing without fresh named proof.
+"Docker is a runtime boundary, not a replacement for auth, policy, approvals, or path jails."
+Experimental routes must be visibly labeled and must not be counted as release-ready proof.
