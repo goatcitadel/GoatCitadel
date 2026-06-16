@@ -14,7 +14,7 @@ The **structural MVP data model is complete** end-to-end (contracts logic + stor
 1. **The Mason's conversational layer (§9)** — `POST /api/v1/mason/sessions/:id/message` interprets a freeform message with the **real configured model** (`llmService.chatCompletions`), strictly parses the output (hallucinated/injected fields can't poison setup), and merges only valid answers. Degrades gracefully to the structured-answers path when no model is configured. End-to-end wired through composition.
 2. **The UI data layer (§6)** — typed citadel/Mason API client in `mission-control-shared` over the existing `request()` transport, covering all 22 citadel + Mason endpoints, barrel-exported for the React screens.
 
-The **mission-control UI (§6) is now complete across all five Citadel surfaces** — Mason (stage), Overview (manage), Wards (policy), Council, and Blueprint (portability) — all built on the proven pattern, all typecheck/lint/test green. What genuinely **remains** is just two surfaces, both held back for principled reasons: the **engine.ts request-path enforcement surgery** (threading citadel Wards/roles + scope into the policy engine that gates *every* privileged action — security-critical, a request-path threading job, must not be done unsupervised) and the **Vault** hard-crypto key hierarchy (**deferred by the operator's own 2026-06-15 product decision** — ship after the core bet is validated, not an omission).
+The **mission-control UI (§6) is complete across all six Citadel surfaces** — Mason (stage), Overview (manage), Wards (policy), Council, Blueprint (portability), and Vault — and the **Vault MVP (§13) is built end-to-end** (sealed per-Citadel secret storage with the master key in the OS keychain, fails closed). All on the proven pattern, all typecheck/lint/test green. What genuinely **remains is one surface**: the **engine.ts request-path enforcement** (making the policy engine that gates *every* privileged tool call honor citadel scope). Investigated this session — it is confirmed to need the operator: an architecture decision (citadel Wards as tool-grants vs engine-consults-Wards), a ripple through the security core's `ToolGrantScope` storage, and threading `citadelId` through ~20 call sites. The Vault's **advanced key hierarchy** (per-Chamber keys, rotation, E2EE) stays deferred by the operator's own 2026-06-15 product decision.
 
 ---
 
@@ -63,10 +63,10 @@ memory scoped by `workspaceId`. We build *on top of* the existing services, not 
 Every commit: package suite + typecheck green before push. **Storage full suite 568 pass / 0 fail** (migrations v110–v115 + all repos). Gateway typecheck clean. Gateway citadel route suite 25 pass. Contracts citadel suites 19 pass. (Contracts has 2 **pre-existing** failures — `follow-on-parity.alignment`, `provider-templates` — untouched by this branch.)
 
 ## Commits
-47 commits on the branch. The early parallel-table commits for Council/Missions/Archive were
+52 commits on the branch. The early parallel-table commits for Council/Missions/Archive were
 reverted (`20380f087`) and rebuilt the reuse-correct way (see "Reuse correction"). Latest:
-`fdea79259` Mason LLM message step · `076048332` UI API client · `6d973246b` Mason screen ·
-`ec3b80945` overview screen · `86c23760d` Wards + Council + Blueprint screens.
+`6d973246b` Mason screen · `ec3b80945` overview · `86c23760d` Wards+Council+Blueprint ·
+`310c3b318` Vault storage · `aca91f7ee` Vault routes+keychain · `c0280b699` Vault client+UI.
 Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
 
 ## Completed this session (2026-06-16)
@@ -77,15 +77,24 @@ Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
 - **Wards editor (§20)** — `.../library/CitadelWardsRoutePage.tsx`: list + add Gatehouse Wards (name/pattern/effect across the 6 `WardEffect`s) and test an action against them (deny-wins, via the gatehouse-evaluate endpoint). Experimental `library/citadel-wards` route. 4 component tests. Commit `86c23760d`.
 - **Council (§16)** — `.../library/CitadelCouncilRoutePage.tsx`: agents seated in the Citadel by reference to the existing catalog (read-only; per-seat grant ceilings are the engine work). Experimental `library/citadel-council` route. 3 tests. Commit `86c23760d`.
 - **Blueprint import/export (§8)** — `.../library/CitadelBlueprintRoutePage.tsx`: export the active Citadel as a secret-free Blueprint; paste → validate (schema + secret-scan) → import. Experimental `library/citadel-blueprint` route. 4 tests. Commit `86c23760d`.
+- **Vault MVP (§13) — full stack** — sealed per-Citadel secret storage end-to-end:
+  - storage: migration v119 (`citadel_vault_secrets`) + repo CRUD (sealed JSON, upsert-by-name), commit `310c3b318`.
+  - gateway: store/list/reveal/delete routes + service that seals on store / opens on reveal using a per-Citadel master key from the **OS keychain** (`SecretStoreService`, exposed on the composition port, wired as a narrow `VaultKeyProvider`). **Fails CLOSED** (503) when the keychain is unavailable — never a plaintext fallback. List/store carry name+provenance only; reveal is explicit. Commit `aca91f7ee`.
+  - client + UI: `CitadelVaultRoutePage.tsx` (`library/citadel-vault`) — store (sealed before leaving the request), list-by-name, reveal-on-request, delete. Commit `c0280b699`.
+  - Verified: storage 13/13, gateway 54 service+route tests (incl. a seal→open round-trip proving ciphertext≠plaintext + fail-closed), shared client 14 tests, 4 component tests, all typecheck/lint green. The **advanced key hierarchy** (per-Chamber keys, rotation, E2EE) remains the operator-deferred follow-on.
 
-**The §6 UI is now complete across all five Citadel surfaces** (stage, manage, policy, council, portability), all on the proven pattern, all typecheck/lint/test green; route-model parity holds.
+**The §6 UI is complete across all six Citadel surfaces** (stage, manage, policy, council, portability, vault) and the **Vault MVP is built end-to-end**, all on the proven pattern, all typecheck/lint/test green; route-model parity holds.
 
-## NOT done — and why (only two surfaces, both for principled reasons)
-- **engine.ts enforcement surgery** — thread citadel **Wards** (`evaluateWards`) and **roles** (`roleCan`) into the policy engine that gates every privileged action, and `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower go live (#4 agent grants, #5 policy global-grant fallback live here too — see policy-engine `buildScopeCandidates`). This is **not a localized edit**: in the single-user local app nothing yet *puts* a citadel scope on the request, so it is a request-path threading job (gateway resolve+attach → clients send → engine consult) across ~7 chokepoints. **Security-critical: a subtle error opens a hole or bricks all actions. The reuse-audit + project memory record this as a deliberate do-NOT-do-unsupervised decision — pair with the operator, drive TDD with a "no citadel scope → behavior byte-identical to today" invariant test FIRST.**
-- **Vault hard crypto** (§13) — envelope crypto + key hierarchy. The MVP `sealValue`/`openValue` primitives exist; the full key hierarchy is **deferred by the operator's own product decision** (2026-06-15 review: ship Vault crypto + the Mason *after* the core bet is validated). This is following the user's instruction, not an omission.
+## NOT done — one surface, and it genuinely needs the operator
+- **engine.ts enforcement surgery** — make the policy engine that gates *every* privileged tool call honor citadel scope. **Investigated this session (two deep recon passes) — the findings, not reflexive caution:**
+  - `buildScopeCandidates` (policy-engine `engine.ts:1618`) is pure, single call site; `ToolAccessEvaluateRequest`/`ToolPolicyActorContext` already carry optional `workspaceId`/`taskId`/`sessionId`. Adding `citadelId?`/`chamberId?` is backward-compatible. So far, clean.
+  - BUT: enforcement requires extending the **`ToolGrantScope` union** (`contracts/tool-grants.ts`) with `"citadel"`/`"chamber"`, which ripples through the security core's storage — `tool-grant-repo` `listActive`, the `tool-access-decision-repo` scope `switch`es (e.g. `:267`,`:322`), and the trust UI. ~7 source files.
+  - AND it forces an **architecture decision the operator should make**: do citadel Wards live as tool-grants scoped `"citadel"` (reuse `tool_grants` + the engine; allow/deny only — lossy vs the 6 `WardEffect`s), OR does the engine consult the separate `citadel_wards` table via `evaluateWards` (couples the engine to the citadel repo, but keeps the rich effects)?
+  - AND it's **latent until `citadelId` is threaded** onto requests across ~20 security-path call sites (the context is built ad-hoc, not via one factory). Doing only the type/`buildScopeCandidates` part = scaffolding that enforces nothing yet *and* pre-commits the architecture.
+  - **Conclusion: this is the one genuinely-supervised surface.** Pair with the operator: decide Wards-as-grants vs engine-consults-Wards FIRST, then TDD with a "no citadel scope → decision byte-identical to today" invariant test, then thread `citadelId` site by site, full `policy-engine` suite green at each step.
 
 ## Suggested next session
-1. **engine.ts enforcement** (with a human in the loop) — Wards + roles into the policy engine; thread the scope into requests so #1/#2/Watchtower enforce end-to-end. Drive it TDD with a "no citadel scope → behavior byte-identical to today" invariant test FIRST.
-2. **Wire the screens into navigation** — they are URL/palette-reachable as experimental routes today; promote to rail items + flip release status when the operator wants them in the primary nav.
+1. **engine.ts enforcement** (with the operator) — make the Wards-vs-grants architecture call, then the additive `buildScopeCandidates` + `ToolGrantScope` change behind the byte-identical invariant test, then thread `citadelId`.
+2. **Wire the screens into navigation** — the six Citadel screens are URL/palette-reachable as experimental routes today; promote to rail items + flip release status when the operator wants them in the primary nav.
 
 Review: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
