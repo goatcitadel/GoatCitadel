@@ -34,6 +34,10 @@ const paramsSchema = z.object({
   citadelId: z.string().min(1),
 });
 
+const fromTemplateSchema = z.object({
+  templateId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -95,6 +99,34 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const chamber = citadels.createChamber({ citadelId: params.data.citadelId, ...parsed.data });
       return reply.code(201).send(chamber);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadel-templates", operatorOnly, async (request, reply) => {
+    try {
+      return reply.send({ items: citadels.listTemplates() });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/from-template", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = fromTemplateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const citadel = citadels.createFromTemplate(params.data.citadelId, parsed.data.templateId);
+      if (!citadel) {
+        return reply.code(404).send({ error: `Template ${parsed.data.templateId} not found.` });
+      }
+      return reply.code(201).send(citadel);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

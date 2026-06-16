@@ -150,3 +150,142 @@ function trimmedOrUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
+
+// --- Templates: starter Citadels (a Charter + default Chambers) ---
+
+export interface CitadelTemplateChamber {
+  name: string;
+  sensitivity?: ChamberSensitivity;
+  sealed?: boolean;
+}
+
+export interface CitadelTemplate {
+  id: string;
+  name: string;
+  description: string;
+  kind: CitadelKind;
+  purpose: string;
+  goals: string[];
+  boundaries: string[];
+  successDefinition: string[];
+  chambers: CitadelTemplateChamber[];
+  riskPosture?: CitadelRiskPosture;
+  modelPolicyDefault?: CitadelModelPolicy;
+}
+
+export const CITADEL_TEMPLATES: CitadelTemplate[] = [
+  {
+    id: "personal-chief-of-staff",
+    name: "Personal Chief of Staff",
+    description: "A private Citadel for life admin, routines, commitments, documents, and goals.",
+    kind: "personal",
+    purpose: "Help the owner run daily life, commitments, goals, documents, and personal routines.",
+    goals: ["Keep track of important commitments", "Reduce missed follow-ups", "Support weekly planning"],
+    boundaries: [
+      "Do not send messages without approval",
+      "Do not share sealed Chambers with other Citadels unless explicitly allowed",
+    ],
+    successDefinition: [
+      "The owner gets a useful daily brief",
+      "The owner completes a weekly review",
+      "Important documents and commitments are easy to find",
+    ],
+    chambers: [
+      { name: "General" },
+      { name: "Calendar & Commitments" },
+      { name: "People & Relationships" },
+      { name: "Documents" },
+      { name: "Private Reflection", sensitivity: "sensitive", sealed: true },
+    ],
+  },
+  {
+    id: "company-co-founder",
+    name: "Company Co-Founder",
+    description: "A Citadel for running product, customers, growth, finance, and operations.",
+    kind: "company",
+    purpose: "Help a founder run product, customers, growth, finance, and operations.",
+    goals: ["Maintain a current operating picture", "Surface what needs attention", "Support a weekly business review"],
+    boundaries: [
+      "Production writes require approval",
+      "External emails are draft-only by default",
+      "Billing changes require explicit approval",
+    ],
+    successDefinition: [
+      "A useful daily founder brief",
+      "A completed weekly business review",
+      "Customer feedback is captured and reviewed",
+    ],
+    riskPosture: "conservative",
+    chambers: [
+      { name: "General" },
+      { name: "Product" },
+      { name: "Customers" },
+      { name: "Growth" },
+      { name: "Finance", sensitivity: "restricted", sealed: true },
+      { name: "Legal", sensitivity: "restricted", sealed: true },
+      { name: "Founder", sensitivity: "sensitive", sealed: true },
+    ],
+  },
+  {
+    id: "project-command",
+    name: "Project Command",
+    description: "A Citadel for planning, executing, and reviewing an ambitious project.",
+    kind: "project",
+    purpose: "Plan, execute, and review an ambitious project with AI coworkers.",
+    goals: ["Define scope and milestones", "Track risks and decisions", "Review progress weekly"],
+    boundaries: ["No external writes without approval", "Project-specific integrations only"],
+    successDefinition: ["A clear scope and milestone plan", "Tracked risks and decisions", "A weekly project review"],
+    chambers: [
+      { name: "General" },
+      { name: "Requirements" },
+      { name: "Tasks" },
+      { name: "Decisions" },
+      { name: "Artifacts" },
+    ],
+  },
+];
+
+export function findCitadelTemplate(id: string): CitadelTemplate | undefined {
+  return CITADEL_TEMPLATES.find((template) => template.id === id);
+}
+
+/** The subset of Citadel persistence a template needs to instantiate itself. */
+export interface CitadelTemplateTarget {
+  upsertCharter(input: CitadelCharterInput): CitadelCharter;
+  createChamber(input: CitadelChamberInput): CitadelChamber;
+  getCitadel(citadelId: string): Citadel | undefined;
+}
+
+/**
+ * Instantiate a Citadel (= workspace) from a template: upsert the Charter and
+ * create the default Chambers, then return the assembled Citadel.
+ */
+export function applyCitadelTemplate(
+  target: CitadelTemplateTarget,
+  citadelId: string,
+  template: CitadelTemplate,
+): Citadel {
+  target.upsertCharter({
+    citadelId,
+    purpose: template.purpose,
+    kind: template.kind,
+    goals: template.goals,
+    boundaries: template.boundaries,
+    successDefinition: template.successDefinition,
+    riskPosture: template.riskPosture,
+    modelPolicyDefault: template.modelPolicyDefault,
+  });
+  for (const chamber of template.chambers) {
+    target.createChamber({
+      citadelId,
+      name: chamber.name,
+      sensitivity: chamber.sensitivity,
+      sealed: chamber.sealed,
+    });
+  }
+  const citadel = target.getCitadel(citadelId);
+  if (!citadel) {
+    throw new Error(`Failed to instantiate citadel ${citadelId} from template ${template.id}`);
+  }
+  return citadel;
+}

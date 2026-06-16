@@ -4,7 +4,9 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelTemplate,
 } from "@goatcitadel/contracts";
+import { applyCitadelTemplate, CITADEL_TEMPLATES, findCitadelTemplate } from "@goatcitadel/contracts";
 
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
@@ -34,5 +36,17 @@ export class CitadelsRouteService {
 
   public listChambers(citadelId: string): CitadelChamber[] {
     return this.citadels.listChambers(citadelId);
+  }
+
+  public listTemplates(): CitadelTemplate[] {
+    return CITADEL_TEMPLATES;
+  }
+
+  public createFromTemplate(citadelId: string, templateId: string): Citadel | undefined {
+    const template = findCitadelTemplate(templateId);
+    if (!template) {
+      return undefined;
+    }
+    return applyCitadelTemplate(this.citadels, citadelId, template);
   }
 }

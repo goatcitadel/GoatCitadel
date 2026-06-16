@@ -98,4 +98,44 @@ describe("citadels routes", () => {
     expect(response.json()).toEqual({ items: [{ chamberId: "ch-1", name: "General" }] });
     expect(listChambers).toHaveBeenCalledWith("ws-1");
   });
+
+  it("lists citadel templates", async () => {
+    const listTemplates = vi.fn(() => [{ id: "t1", name: "T1" }]);
+    const built = buildApp({ listTemplates });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadel-templates" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ id: "t1", name: "T1" }] });
+  });
+
+  it("creates a citadel from a template", async () => {
+    const createFromTemplate = vi.fn((citadelId: string) => ({ citadelId, charter: { kind: "company" }, chambers: [] }));
+    const built = buildApp({ createFromTemplate });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/from-template",
+      payload: { templateId: "company-co-founder" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(createFromTemplate).toHaveBeenCalledWith("ws-1", "company-co-founder");
+  });
+
+  it("returns 404 for an unknown template", async () => {
+    const createFromTemplate = vi.fn(() => undefined);
+    const built = buildApp({ createFromTemplate });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/from-template",
+      payload: { templateId: "nope" },
+    });
+    expect(response.statusCode).toBe(404);
+  });
 });
