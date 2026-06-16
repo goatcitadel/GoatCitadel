@@ -1095,6 +1095,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 111,
+    name: "citadel_core_schema",
+    up: createCitadelCoreSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -5239,6 +5244,37 @@ function createMemoryQualityIssueSchema(db: DatabaseSync): void {
       ON memory_quality_issues(kind, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_quality_issues_target
       ON memory_quality_issues(target_kind, target_ref, updated_at DESC);
+  `);
+}
+
+function createCitadelCoreSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS citadel_charters (
+      citadel_id TEXT PRIMARY KEY,
+      purpose TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      goals_json TEXT NOT NULL DEFAULT '[]',
+      boundaries_json TEXT NOT NULL DEFAULT '[]',
+      success_definition_json TEXT NOT NULL DEFAULT '[]',
+      default_chamber_id TEXT,
+      risk_posture TEXT NOT NULL DEFAULT 'balanced',
+      model_policy_default TEXT NOT NULL DEFAULT 'hybrid_guarded',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS citadel_chambers (
+      chamber_id TEXT PRIMARY KEY,
+      citadel_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      sensitivity TEXT NOT NULL DEFAULT 'private',
+      sealed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_citadel_chambers_citadel
+      ON citadel_chambers(citadel_id, name);
   `);
 }
 
