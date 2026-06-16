@@ -28,4 +28,18 @@ describe("isExperimentalRoute (NAV-02 rail gating)", () => {
       expect(isExperimentalRoute(route)).toBe(false);
     }
   });
+
+  it("keeps the promoted Citadel surfaces out of experimental gating so they render in the primary rail", () => {
+    const citadelSections = [
+      "citadel-overview",
+      "citadel",
+      "citadel-wards",
+      "citadel-council",
+      "citadel-vault",
+      "citadel-blueprint",
+    ] as const;
+    for (const section of citadelSections) {
+      expect(isExperimentalRoute({ area: "library", section })).toBe(false);
+    }
+  });
 });
