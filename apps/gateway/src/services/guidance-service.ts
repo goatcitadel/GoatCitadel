@@ -86,12 +86,17 @@ export class GuidanceService {
     const workspaceFilesUsed: string[] = [];
     const selectedBlocks: Array<{ title: string; content: string }> = [];
 
-    for (const docType of RUNTIME_GUIDANCE_DOC_TYPES) {
-      const [workspaceDoc, globalDoc] = await Promise.all([
-        readGuidanceDocument(this.ctx, docType, "workspace", normalizedWorkspaceId),
-        readGuidanceDocument(this.ctx, docType, "global"),
-      ]);
-      const selected = workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined;
+    const guidanceDocs = await Promise.all(
+      RUNTIME_GUIDANCE_DOC_TYPES.map(async (docType) => {
+        const [workspaceDoc, globalDoc] = await Promise.all([
+          readGuidanceDocument(this.ctx, docType, "workspace", normalizedWorkspaceId),
+          readGuidanceDocument(this.ctx, docType, "global"),
+        ]);
+        return workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined;
+      }),
+    );
+
+    for (const selected of guidanceDocs) {
       if (!selected || !selected.content.trim()) {
         continue;
       }

@@ -11,6 +11,7 @@ import type { KnowledgeChunkRecord, Storage } from "@goatcitadel/storage";
 
 const FULL_TEXT_SOURCE_CHAR_LIMIT = 12_000;
 const FULL_TEXT_TOTAL_CHAR_BUDGET = 32_000;
+const FULL_TEXT_ATTACHMENT_READ_CONCURRENCY = 4;
 
 export interface ChatThreadKnowledgeDependencies {
   readonly storage: Pick<Storage, "chatAttachments" | "chatThreadKnowledgeAttachments" | "gatewaySql" | "knowledge">;
@@ -314,8 +315,15 @@ export async function resolveThreadKnowledgeContext(
   let remainingFullTextBudget = FULL_TEXT_TOTAL_CHAR_BUDGET;
   const now = new Date().toISOString();
 
-  for (const attachment of fullTextAttachments) {
-    const text = await resolveFullTextAttachmentContent(deps, attachment);
+  const fullTextAttachmentContents = await mapWithConcurrency(
+    fullTextAttachments,
+    FULL_TEXT_ATTACHMENT_READ_CONCURRENCY,
+    async (attachment) => ({
+      attachment,
+      text: await resolveFullTextAttachmentContent(deps, attachment),
+    }),
+  );
+  for (const { attachment, text } of fullTextAttachmentContents) {
     if (!text.trim()) {
       deps.storage.chatThreadKnowledgeAttachments.patch(
         attachment.attachmentId,
@@ -394,6 +402,16 @@ export async function resolveThreadKnowledgeContext(
         const retrievalByDocId = new Map(
           retrievalReadyAttachments.filter((item) => item.documentId).map((item) => [item.documentId!, item] as const),
         );
+        const chunksByDocumentId = new Map<string, KnowledgeChunkRecord[]>();
+        const listChunksByDocumentCached = (docId: string): KnowledgeChunkRecord[] => {
+          const existing = chunksByDocumentId.get(docId);
+          if (existing) {
+            return existing;
+          }
+          const chunks = deps.storage.knowledge.listChunksByDocument(docId, 200);
+          chunksByDocumentId.set(docId, chunks);
+          return chunks;
+        };
         const groupedSnippets: string[] = [];
         for (const item of readEmbeddingItems(queryResult)) {
           const attachment = retrievalByDocId.get(item.docId);
@@ -401,7 +419,7 @@ export async function resolveThreadKnowledgeContext(
             continue;
           }
           const doc = docsById.get(item.docId);
-          const chunk = findChunkById(deps.storage.knowledge.listChunksByDocument(item.docId, 200), item.chunkId);
+          const chunk = findChunkById(listChunksByDocumentCached(item.docId), item.chunkId);
           citations.push(
             buildKnowledgeCitationRecord(attachment, {
               title: doc?.title ?? attachment.title,
@@ -495,6 +513,29 @@ async function resolveFullTextAttachmentContent(
   }
   const record = deps.storage.chatAttachments.get(attachment.chatAttachmentId);
   return extractAttachmentKnowledgeText(deps, record);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < items.length) {
+        const index = cursor;
+        cursor += 1;
+        results[index] = await worker(items[index] as T, index);
+      }
+    }),
+  );
+  return results;
 }
 
 async function extractAttachmentKnowledgeText(

@@ -194,6 +194,80 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
   return orderedToolRuns;
 }
 
+function scheduleCompletedTurnSuggestionRefresh(
+  host: ChatTurnStreamHost,
+  input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    assistantText: string;
+    mode: ChatMode;
+    trace: ChatTurnTraceRecord;
+    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited";
+  },
+): void {
+  void (async () => {
+    const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
+      sessionId: input.sessionId,
+      content: input.content,
+      assistantText: input.assistantText,
+      trace: input.trace,
+    });
+    const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
+      sessionId: input.sessionId,
+      mode: input.mode,
+      content: input.content,
+      capabilitySuggestions: capabilityUpgradeSuggestions,
+      trace: input.trace,
+    });
+    const shouldPatchSuggestions = capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0;
+    const enrichedTrace = shouldPatchSuggestions
+      ? {
+          ...host.storage.chatTurnTraces.patch(input.turnId, {
+            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+            specialistCandidateSuggestions:
+              specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+          }),
+          toolRuns: input.trace.toolRuns,
+        }
+      : input.trace;
+    host.recordCapabilityGapFromTrace({
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      content: input.content,
+      trace: enrichedTrace,
+    });
+    if (shouldPatchSuggestions) {
+      host.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: input.threadEventType,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          activeLeafTurnId: input.turnId,
+          capabilitySuggestionsUpdated: capabilityUpgradeSuggestions.length > 0,
+          specialistSuggestionsUpdated: specialistCandidateSuggestions.length > 0,
+        },
+        buildChatTurnRealtimeOptions({ sessionId: input.sessionId, turnId: input.turnId }),
+      );
+    }
+  })().catch((error: unknown) => {
+    host.recordDevDiagnostic({
+      level: "warn",
+      category: "chat",
+      event: "capability_suggestions.refresh_failed",
+      message: "Failed to refresh completed-turn capability suggestions after stream completion.",
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      runtimeError: {
+        name: error instanceof Error ? error.name : undefined,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+  });
+}
+
 export async function executePreparedModeOrchestration(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
@@ -429,10 +503,10 @@ export async function executePreparedModeOrchestration(
               : step.degradedHandoffStepIds?.length
                 ? "degraded"
                 : step.status === "failed" && activeToolWork
-                ? "degraded"
-                : step.status === "failed"
-                  ? "failed"
-                  : "completed",
+                  ? "degraded"
+                  : step.status === "failed"
+                    ? "failed"
+                    : "completed",
           runtimeError: step.error
             ? {
                 message: step.error,
@@ -1117,7 +1191,7 @@ export async function* streamPreparedAgentChatTurn(
               ? "partial"
               : "completed";
 
-      let hydratedTrace: ChatTurnTraceRecord = {
+      const hydratedTrace: ChatTurnTraceRecord = {
         ...host.storage.chatTurnTraces.patch(turnId, {
           assistantMessageId,
           executionPlanId: orchestrationResult.executionPlanId,
@@ -1185,37 +1259,6 @@ export async function* streamPreparedAgentChatTurn(
         repaired: Boolean(hydratedTrace.completion?.repaired),
         repair: hydratedTrace.completion?.repair,
       };
-      const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
-        sessionId,
-        content: prepared.content,
-        assistantText: finalText,
-        trace: hydratedTrace,
-      });
-      const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
-        sessionId,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
-        content: prepared.content,
-        capabilitySuggestions: capabilityUpgradeSuggestions,
-        trace: hydratedTrace,
-      });
-      if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-        hydratedTrace = {
-          ...host.storage.chatTurnTraces.patch(turnId, {
-            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-            specialistCandidateSuggestions:
-              specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-          }),
-          toolRuns: orchestrationToolRuns,
-        };
-        if (capabilityUpgradeSuggestions.length > 0) {
-          yield {
-            type: "capability_upgrade_suggestion",
-            sessionId,
-            turnId,
-            capabilityUpgradeSuggestions,
-          };
-        }
-      }
       yield {
         type: "trace_update",
         sessionId,
@@ -1261,6 +1304,15 @@ export async function* streamPreparedAgentChatTurn(
         taskId: `chat-orchestration:${turnId}`,
         providerId: hydratedTrace.routing?.effectiveProviderId ?? hydratedTrace.routing?.primaryProviderId,
         model: hydratedTrace.routing?.effectiveModel ?? hydratedTrace.model,
+      });
+      scheduleCompletedTurnSuggestionRefresh(host, {
+        sessionId,
+        turnId,
+        content: prepared.content,
+        assistantText: finalText,
+        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        trace: hydratedTrace,
+        threadEventType,
       });
       if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
         yield {
@@ -1595,7 +1647,7 @@ export async function* streamPreparedAgentChatTurn(
         },
         usage: assistantUsage,
       });
-      let hydratedTrace: ChatTurnTraceRecord = {
+      const hydratedTrace: ChatTurnTraceRecord = {
         ...host.storage.chatTurnTraces.patch(turnId, {
           assistantMessageId,
           status: "completed",
@@ -1639,43 +1691,6 @@ export async function* streamPreparedAgentChatTurn(
         repaired: streamLayerRepaired || Boolean(hydratedTrace.completion?.repaired),
         repair: streamLayerRepair ?? hydratedTrace.completion?.repair,
       };
-      const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
-        sessionId,
-        content: prepared.content,
-        assistantText: finalText,
-        trace: hydratedTrace,
-      });
-      const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
-        sessionId,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
-        content: prepared.content,
-        capabilitySuggestions: capabilityUpgradeSuggestions,
-        trace: hydratedTrace,
-      });
-      if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-        hydratedTrace = {
-          ...host.storage.chatTurnTraces.patch(turnId, {
-            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-            specialistCandidateSuggestions:
-              specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-          }),
-          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
-        };
-        if (capabilityUpgradeSuggestions.length > 0) {
-          yield {
-            type: "capability_upgrade_suggestion",
-            sessionId,
-            turnId,
-            capabilityUpgradeSuggestions,
-          };
-        }
-      }
-      host.recordCapabilityGapFromTrace({
-        sessionId,
-        turnId,
-        content: prepared.content,
-        trace: hydratedTrace,
-      });
       yield {
         type: "trace_update",
         sessionId,
@@ -1709,6 +1724,15 @@ export async function* streamPreparedAgentChatTurn(
         relationScope: "self",
       });
       host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
+      scheduleCompletedTurnSuggestionRefresh(host, {
+        sessionId,
+        turnId,
+        content: prepared.content,
+        assistantText: finalText,
+        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        trace: hydratedTrace,
+        threadEventType,
+      });
     }
 
     const completedTrace = host.storage.chatTurnTraces.get(turnId);
