@@ -16,6 +16,8 @@ import type {
   ToolPolicyConfig,
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
+import { evaluateWards } from "@goatcitadel/contracts";
+import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -683,6 +685,16 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
+    // Citadel Wards (deny-wins) gate the request before grants. Dormant by default:
+    // only consulted when the request carries a citadelId, which nothing on the
+    // request path sets yet — so existing decisions are unchanged.
+    const wardEffect = request.citadelId
+      ? this.evaluateCitadelWards(request.citadelId, request.toolName)
+      : undefined;
+    if (wardEffect === "deny") {
+      return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
+    }
+
     const grantDecision = this.resolveGrantDecision(request, toolDef);
     if (grantDecision?.decision === "deny") {
       return {
@@ -856,6 +868,23 @@ export class ToolPolicyEngine {
       risky: true,
       matchedPattern: risk.matchedPattern ?? "unknown",
     };
+  }
+
+  /**
+   * Consult the Citadel's Wards (deny-wins) for an action. Returns undefined when the
+   * citadel repo is unavailable (e.g. a minimal storage stub) so callers fall through
+   * to the normal grant path. Architecture decision: the engine consults the
+   * `citadel_wards` table directly (preserving the rich WardEffects) rather than
+   * mirroring Wards into tool-grants (which would be lossy to allow/deny).
+   */
+  private evaluateCitadelWards(citadelId: string, action: string): WardEffect | undefined {
+    const citadelRepo = this.storage.citadels as
+      | { listWards?: (id: string) => CitadelWardRecord[] }
+      | undefined;
+    if (!citadelRepo?.listWards) {
+      return undefined;
+    }
+    return evaluateWards(citadelRepo.listWards(citadelId), action);
   }
 
   private resolveGrantDecision(

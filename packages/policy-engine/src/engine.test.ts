@@ -417,6 +417,47 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(scopesQueried).not.toContain("citadel");
     expect(scopesQueried).not.toContain("chamber");
   });
+
+  it("denies a tool when a Citadel Ward matches with deny (engine consults the Wards table)", () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "c1"
+            ? [{ wardId: "w1", citadelId: "c1", name: "No shell", actionPattern: "shell.*", effect: "deny", createdAt: "t" }]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("citadel_ward_deny");
+  });
+
+  it("does not consult Citadel Wards when the request carries no citadelId", () => {
+    const storage = createStorageStub();
+    const listWards = vi.fn(() => []);
+    Object.assign(storage, { citadels: { listWards } });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(listWards).not.toHaveBeenCalled();
+  });
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {
