@@ -6,8 +6,11 @@ import type {
   CitadelCharterInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
+  CitadelMember,
+  CitadelMemberInput,
   CitadelPassage,
   CitadelPassageInput,
+  CitadelRole,
   CitadelWardInput,
   CitadelWardRecord,
   ChamberSensitivity,
@@ -70,6 +73,15 @@ interface PassageRow {
   created_at: string;
 }
 
+interface MemberRow {
+  member_id: string;
+  citadel_id: string;
+  subject_id: string;
+  role: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -92,6 +104,10 @@ export class CitadelRepository {
   private readonly getPassageStmt;
   private readonly listPassagesStmt;
   private readonly deletePassageStmt;
+  private readonly upsertMemberStmt;
+  private readonly getMemberByPairStmt;
+  private readonly listMembersStmt;
+  private readonly deleteMemberStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -163,6 +179,22 @@ export class CitadelRepository {
     );
     this.deletePassageStmt = db.prepare(
       "DELETE FROM citadel_passages WHERE passage_id = @passageId AND source_citadel_id = @sourceCitadelId",
+    );
+    this.upsertMemberStmt = db.prepare(`
+      INSERT INTO citadel_members (member_id, citadel_id, subject_id, role, created_at, updated_at)
+      VALUES (@memberId, @citadelId, @subjectId, @role, @now, @now)
+      ON CONFLICT(citadel_id, subject_id) DO UPDATE SET
+        role = @role,
+        updated_at = @now
+    `);
+    this.getMemberByPairStmt = db.prepare(
+      "SELECT * FROM citadel_members WHERE citadel_id = @citadelId AND subject_id = @subjectId",
+    );
+    this.listMembersStmt = db.prepare(
+      "SELECT * FROM citadel_members WHERE citadel_id = @citadelId ORDER BY created_at ASC, member_id ASC",
+    );
+    this.deleteMemberStmt = db.prepare(
+      "DELETE FROM citadel_members WHERE citadel_id = @citadelId AND subject_id = @subjectId",
     );
   }
 
@@ -318,6 +350,36 @@ export class CitadelRepository {
     const result = this.deletePassageStmt.run({ sourceCitadelId, passageId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  /** Add a member to a Citadel, or update their role if already a member. */
+  public upsertMember(input: CitadelMemberInput): CitadelMember {
+    const now = new Date().toISOString();
+    this.upsertMemberStmt.run({
+      memberId: randomUUID(),
+      citadelId: input.citadelId,
+      subjectId: input.subjectId,
+      role: input.role,
+      now,
+    });
+    const row = this.getMemberByPairStmt.get({
+      citadelId: input.citadelId,
+      subjectId: input.subjectId,
+    }) as MemberRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to persist member ${input.subjectId} for citadel ${input.citadelId}`);
+    }
+    return mapMember(row);
+  }
+
+  public listMembers(citadelId: string): CitadelMember[] {
+    const rows = this.listMembersStmt.all({ citadelId }) as MemberRow[];
+    return rows.map(mapMember);
+  }
+
+  public removeMember(citadelId: string, subjectId: string): boolean {
+    const result = this.deleteMemberStmt.run({ citadelId, subjectId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -377,5 +439,16 @@ function mapPassage(row: PassageRow): CitadelPassage {
     allowedFields: safeJsonParse<string[]>(row.allowed_fields_json, []),
     expiresAt: row.expires_at ?? undefined,
     createdAt: row.created_at,
+  };
+}
+
+function mapMember(row: MemberRow): CitadelMember {
+  return {
+    memberId: row.member_id,
+    citadelId: row.citadel_id,
+    subjectId: row.subject_id,
+    role: row.role as CitadelRole,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }

@@ -92,3 +92,19 @@ const ROLE_CAPABILITIES: Record<CitadelRole, ReadonlyArray<CitadelCapability>> =
 export function roleCan(role: CitadelRole, capability: CitadelCapability): boolean {
   return (ROLE_CAPABILITIES[role] as ReadonlyArray<CitadelCapability>).includes(capability);
 }
+
+/** A member of a Citadel: a subject (user/principal id) granted a role. */
+export interface CitadelMember {
+  memberId: string;
+  citadelId: string;
+  subjectId: string;
+  role: CitadelRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CitadelMemberInput {
+  citadelId: string;
+  subjectId: string;
+  role: CitadelRole;
+}

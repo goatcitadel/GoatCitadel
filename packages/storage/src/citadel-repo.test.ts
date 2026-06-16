@@ -165,4 +165,26 @@ describe("CitadelRepository", () => {
     assert.equal(repo.listPassages("ws-1").length, 1);
     assert.equal(repo.removePassage("ws-1", "nope"), false);
   });
+
+  it("upserts members with roles and removes them, scoped to a citadel", () => {
+    const repo = createRepo();
+    const alice = repo.upsertMember({ citadelId: "ws-1", subjectId: "alice", role: "operator" });
+    repo.upsertMember({ citadelId: "ws-1", subjectId: "bob", role: "viewer" });
+    repo.upsertMember({ citadelId: "ws-2", subjectId: "alice", role: "owner" });
+
+    assert.equal(alice.role, "operator");
+    assert.equal(repo.listMembers("ws-1").length, 2);
+
+    // Upsert updates the role idempotently on (citadel, subject).
+    const promoted = repo.upsertMember({ citadelId: "ws-1", subjectId: "alice", role: "steward" });
+    assert.equal(promoted.role, "steward");
+    assert.equal(repo.listMembers("ws-1").length, 2);
+
+    assert.equal(repo.removeMember("ws-1", "alice"), true);
+    assert.deepEqual(
+      repo.listMembers("ws-1").map((member) => member.subjectId),
+      ["bob"],
+    );
+    assert.equal(repo.removeMember("ws-1", "nope"), false);
+  });
 });

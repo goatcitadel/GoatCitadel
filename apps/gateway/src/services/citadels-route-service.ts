@@ -9,6 +9,8 @@ import type {
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
+  CitadelMember,
+  CitadelMemberInput,
   CitadelPassage,
   CitadelPassageInput,
   CitadelTemplate,
@@ -45,6 +47,9 @@ export interface CitadelsRoutePort {
   createPassage(input: CitadelPassageInput): CitadelPassage;
   listPassages(sourceCitadelId: string): CitadelPassage[];
   removePassage(sourceCitadelId: string, passageId: string): boolean;
+  upsertMember(input: CitadelMemberInput): CitadelMember;
+  listMembers(citadelId: string): CitadelMember[];
+  removeMember(citadelId: string, subjectId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -141,5 +146,17 @@ export class CitadelsRouteService {
 
   public removePassage(sourceCitadelId: string, passageId: string): boolean {
     return this.citadels.removePassage(sourceCitadelId, passageId);
+  }
+
+  public listMembers(citadelId: string): CitadelMember[] {
+    return this.citadels.listMembers(citadelId);
+  }
+
+  public upsertMember(input: CitadelMemberInput): CitadelMember {
+    return this.citadels.upsertMember(input);
+  }
+
+  public removeMember(citadelId: string, subjectId: string): boolean {
+    return this.citadels.removeMember(citadelId, subjectId);
   }
 }

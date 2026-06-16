@@ -70,6 +70,16 @@ const passageParamsSchema = z.object({
   passageId: z.string().min(1),
 });
 
+const memberSchema = z.object({
+  subjectId: z.string().min(1),
+  role: z.enum(["owner", "steward", "builder", "operator", "contributor", "viewer", "guest", "agent"]),
+});
+
+const memberRouteParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  subjectId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -352,6 +362,52 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       const removed = citadels.removePassage(params.data.citadelId, params.data.passageId);
       if (!removed) {
         return reply.code(404).send({ error: `Passage ${params.data.passageId} not found.` });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Members = subjects granted a sharing role on this Citadel (see roleCan for the matrix).
+  fastify.get("/api/v1/citadels/:citadelId/members", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listMembers(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/members", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = memberSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const member = citadels.upsertMember({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(member);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/members/:subjectId", operatorOnly, async (request, reply) => {
+    const params = memberRouteParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removeMember(params.data.citadelId, params.data.subjectId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Member ${params.data.subjectId} not found.` });
       }
       return reply.code(204).send();
     } catch (error) {

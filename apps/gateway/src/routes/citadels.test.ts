@@ -358,4 +358,52 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(removePassage).toHaveBeenCalledWith("ws-1", "p9");
   });
+
+  it("lists and upserts members for a citadel", async () => {
+    const listMembers = vi.fn(() => [{ memberId: "m1", subjectId: "alice", role: "operator" }]);
+    const upsertMember = vi.fn((input: Record<string, unknown>) => ({ memberId: "m2", ...input }));
+    const built = buildApp({ listMembers, upsertMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/members" });
+    expect(list.statusCode).toBe(200);
+    expect(listMembers).toHaveBeenCalledWith("ws-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/members",
+      payload: { subjectId: "alice", role: "operator" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(upsertMember).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", subjectId: "alice", role: "operator" }),
+    );
+  });
+
+  it("rejects a member with an invalid role", async () => {
+    const upsertMember = vi.fn();
+    const built = buildApp({ upsertMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/members",
+      payload: { subjectId: "x", role: "wizard" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(upsertMember).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing member", async () => {
+    const removeMember = vi.fn(() => false);
+    const built = buildApp({ removeMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/members/ghost" });
+    expect(response.statusCode).toBe(404);
+    expect(removeMember).toHaveBeenCalledWith("ws-1", "ghost");
+  });
 });
