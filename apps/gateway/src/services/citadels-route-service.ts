@@ -6,6 +6,8 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCouncilMember,
+  CitadelCouncilMemberInput,
   CitadelGatehouseSummary,
   CitadelTemplate,
 } from "@goatcitadel/contracts";
@@ -30,6 +32,9 @@ export interface CitadelsRoutePort {
   upsertCharter(input: CitadelCharterInput): CitadelCharter;
   createChamber(input: CitadelChamberInput): CitadelChamber;
   listChambers(citadelId: string): CitadelChamber[];
+  addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember;
+  listCouncilMembers(citadelId: string): CitadelCouncilMember[];
+  removeCouncilMember(memberId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -89,5 +94,17 @@ export class CitadelsRouteService {
       return undefined;
     }
     return summarizeCitadelGatehouse(citadel);
+  }
+
+  public listCouncil(citadelId: string): CitadelCouncilMember[] {
+    return this.citadels.listCouncilMembers(citadelId);
+  }
+
+  public addCouncilMember(input: CitadelCouncilMemberInput): CitadelCouncilMember {
+    return this.citadels.addCouncilMember(input);
+  }
+
+  public removeCouncilMember(memberId: string): boolean {
+    return this.citadels.removeCouncilMember(memberId);
   }
 }

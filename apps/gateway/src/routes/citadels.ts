@@ -38,6 +38,30 @@ const fromTemplateSchema = z.object({
   templateId: z.string().min(1),
 });
 
+const councilMemberSchema = z.object({
+  name: z.string().min(1),
+  archetype: z.enum([
+    "chief_of_staff",
+    "planner",
+    "researcher",
+    "operator",
+    "archivist",
+    "watcher",
+    "finance",
+    "relationships",
+    "coach",
+    "automation_builder",
+    "builder",
+    "specialist",
+  ]),
+  role: z.string().min(1),
+});
+
+const memberParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  memberId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -183,6 +207,51 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
       return reply.code(201).send(result.citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/council", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listCouncil(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/council", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = councilMemberSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const member = citadels.addCouncilMember({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(member);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/council/:memberId", operatorOnly, async (request, reply) => {
+    const params = memberParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removeCouncilMember(params.data.memberId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Council member ${params.data.memberId} not found.` });
+      }
+      return reply.code(204).send();
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

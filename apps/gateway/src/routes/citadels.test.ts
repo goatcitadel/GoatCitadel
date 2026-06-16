@@ -213,4 +213,59 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(201);
     expect(createFromBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
   });
+
+  it("lists council members", async () => {
+    const listCouncil = vi.fn(() => [{ memberId: "m1", name: "CoS" }]);
+    const built = buildApp({ listCouncil });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/council" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ memberId: "m1", name: "CoS" }] });
+    expect(listCouncil).toHaveBeenCalledWith("ws-1");
+  });
+
+  it("adds a council member scoped to the citadel", async () => {
+    const addCouncilMember = vi.fn((input: Record<string, unknown>) => ({ memberId: "m1", ...input }));
+    const built = buildApp({ addCouncilMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/council",
+      payload: { name: "Chief of Staff", archetype: "chief_of_staff", role: "coordinate" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(addCouncilMember).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", name: "Chief of Staff", archetype: "chief_of_staff" }),
+    );
+  });
+
+  it("rejects a council member with an invalid archetype", async () => {
+    const addCouncilMember = vi.fn();
+    const built = buildApp({ addCouncilMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/council",
+      payload: { name: "X", archetype: "wizard", role: "y" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(addCouncilMember).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing council member", async () => {
+    const removeCouncilMember = vi.fn(() => false);
+    const built = buildApp({ removeCouncilMember });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/council/m9" });
+    expect(response.statusCode).toBe(404);
+    expect(removeCouncilMember).toHaveBeenCalledWith("m9");
+  });
 });
