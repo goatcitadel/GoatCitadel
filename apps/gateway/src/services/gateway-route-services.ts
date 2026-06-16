@@ -9,7 +9,7 @@ import {
 } from "./assembly-route-service.js";
 import type { ApprovalRuntime } from "./approval-runtime-service.js";
 import { ApprovalsRouteService } from "./approvals-route-service.js";
-import { CitadelsRouteService, type CitadelsRoutePort } from "./citadels-route-service.js";
+import { CitadelsRouteService, type CitadelsRoutePort, type MasonInterpret } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
 import {
   createCapabilityPacksRouteService,
@@ -243,6 +243,7 @@ export interface GatewayRouteServiceDependencies {
   authAdmin: AuthAdminRoutePort;
   approvals: ApprovalRuntime;
   citadels: CitadelsRoutePort;
+  masonInterpret?: MasonInterpret;
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
@@ -310,7 +311,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     assembly: createAssemblyRouteService(deps.assembly),
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
     approvals: new ApprovalsRouteService(deps.approvals),
-    citadels: new CitadelsRouteService(deps.citadels),
+    citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),

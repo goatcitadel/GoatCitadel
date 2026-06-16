@@ -26,6 +26,7 @@ import type {
 import {
   applyCitadelBlueprint,
   applyCitadelTemplate,
+  buildMasonInterpretPrompt,
   CITADEL_TEMPLATES,
   draftBlueprintFromAnswers,
   evaluateWards,
@@ -34,9 +35,13 @@ import {
   findCitadelTemplate,
   generateBlueprintReviewSummary,
   MASON_SETUP_QUESTIONS,
+  parseMasonInterpretResponse,
   summarizeCitadelGatehouse,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
+
+/** Interprets a freeform message into raw model output (the Mason's one LLM dependency). */
+export type MasonInterpret = (prompt: string) => Promise<string>;
 
 export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
 
@@ -51,6 +56,10 @@ export type MasonStageResult =
 export type MasonDraftResult =
   | { ok: false; reason: "not_found" | "incomplete" }
   | { ok: true; blueprint: CitadelBlueprint };
+
+export type MasonMessageResult =
+  | { ok: false; reason: "not_found" | "no_interpreter" }
+  | { ok: true; session: MasonSession };
 
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
@@ -83,7 +92,10 @@ export interface CitadelsRoutePort {
 }
 
 export class CitadelsRouteService {
-  public constructor(private readonly citadels: CitadelsRoutePort) {}
+  public constructor(
+    private readonly citadels: CitadelsRoutePort,
+    private readonly masonInterpret?: MasonInterpret,
+  ) {}
 
   public getCitadel(citadelId: string): Citadel | undefined {
     return this.citadels.getCitadel(citadelId);
@@ -226,6 +238,26 @@ export class CitadelsRouteService {
     const blueprint = draftBlueprintFromAnswers(session.answers as MasonAnswers);
     this.citadels.setMasonSessionStatus(sessionId, "drafted");
     return { ok: true, blueprint };
+  }
+
+  /**
+   * Process a freeform message in a Mason session: build the extraction prompt, call
+   * the model (if configured), strictly parse the result, and merge it into the
+   * session's accumulated answers. Degrades gracefully when no model is configured.
+   */
+  public async interpretSessionMessage(sessionId: string, message: string): Promise<MasonMessageResult> {
+    const session = this.citadels.getMasonSession(sessionId);
+    if (!session) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (!this.masonInterpret) {
+      return { ok: false, reason: "no_interpreter" };
+    }
+    const prompt = buildMasonInterpretPrompt(message, session.answers);
+    const raw = await this.masonInterpret(prompt);
+    const patch = parseMasonInterpretResponse(raw);
+    const updated = this.citadels.updateMasonSessionAnswers(sessionId, patch) ?? session;
+    return { ok: true, session: updated };
   }
 
   public reviewBlueprint(value: unknown): MasonReviewResult {

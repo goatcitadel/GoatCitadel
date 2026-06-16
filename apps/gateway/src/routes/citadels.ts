@@ -102,6 +102,10 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
 });
 
+const masonMessageSchema = z.object({
+  message: z.string().min(1),
+});
+
 const integrationSchema = z.object({
   provider: z.string().min(1),
   account: z.string().min(1).optional(),
@@ -577,6 +581,31 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Session is missing required answers (kind and purpose)." });
       }
       return reply.send(result.blueprint);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mason/sessions/:sessionId/message", operatorOnly, async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = masonMessageSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const result = await citadels.interpretSessionMessage(params.data.sessionId, parsed.data.message);
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
+        }
+        return reply
+          .code(503)
+          .send({ error: "No language model is configured for the Mason; use the structured /answers endpoint instead." });
+      }
+      return reply.send(result.session);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

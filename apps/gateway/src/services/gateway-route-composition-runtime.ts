@@ -32,6 +32,7 @@ export function composeRuntimeAdminRouteDependencies(
   | "authAdmin"
   | "approvals"
   | "citadels"
+  | "masonInterpret"
   | "cron"
   | "dashboard"
   | "daemon"
@@ -107,6 +108,19 @@ export function composeRuntimeAdminRouteDependencies(
     },
     approvals: gateway.approvalRuntime,
     citadels: gateway.storage.citadels,
+    masonInterpret: async (prompt: string): Promise<string> => {
+      // Best-effort extraction. If no model/provider is configured, chatCompletions
+      // throws — we swallow it so the Mason degrades to the structured answers path.
+      try {
+        const response = await gateway.llmService.chatCompletions({
+          messages: [{ role: "user", content: prompt }],
+        });
+        const content = response.choices?.[0]?.message?.content;
+        return typeof content === "string" ? content : "";
+      } catch {
+        return "";
+      }
+    },
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
       backupRetentionService: gateway.backupRetentionService,

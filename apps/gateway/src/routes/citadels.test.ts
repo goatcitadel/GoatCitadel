@@ -639,4 +639,36 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(removeIntegration).toHaveBeenCalledWith("ws-1", "g9");
   });
+
+  it("interprets a mason session message via the model", async () => {
+    const interpretSessionMessage = vi.fn(async () => ({
+      ok: true,
+      session: { sessionId: "s1", answers: { kind: "company" }, status: "collecting" },
+    }));
+    const built = buildApp({ interpretSessionMessage });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/sessions/s1/message",
+      payload: { message: "I run a startup" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(interpretSessionMessage).toHaveBeenCalledWith("s1", "I run a startup");
+  });
+
+  it("returns 503 when no model is configured for the mason", async () => {
+    const interpretSessionMessage = vi.fn(async () => ({ ok: false, reason: "no_interpreter" }));
+    const built = buildApp({ interpretSessionMessage });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/sessions/s1/message",
+      payload: { message: "x" },
+    });
+    expect(response.statusCode).toBe(503);
+  });
 });
