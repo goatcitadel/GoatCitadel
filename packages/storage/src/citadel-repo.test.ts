@@ -142,6 +142,44 @@ describe("CitadelRepository", () => {
     assert.equal(repo.removeWard("ws-1", "nope"), false);
   });
 
+  it("stores, lists (metadata only), reveals, and deletes vault secrets scoped to a citadel", () => {
+    const repo = createRepo();
+    const sealed = { iv: "aXY=", ciphertext: "Y2lwaGVy", tag: "dGFn" };
+    const stored = repo.storeVaultSecret({ citadelId: "ws-1", secretName: "stripe", sealedValue: sealed });
+    assert.equal(stored.secretName, "stripe");
+    assert.deepEqual(stored.sealedValue, sealed);
+
+    repo.storeVaultSecret({ citadelId: "ws-1", secretName: "openai", sealedValue: sealed });
+    repo.storeVaultSecret({ citadelId: "ws-2", secretName: "other", sealedValue: sealed });
+
+    assert.deepEqual(
+      repo.listVaultSecrets("ws-1").map((entry) => entry.secretName).sort(),
+      ["openai", "stripe"],
+    );
+
+    // Reveal returns the sealed value; the service opens it with the master key.
+    assert.deepEqual(repo.getVaultSecret("ws-1", stored.secretId)?.sealedValue, sealed);
+
+    // Isolation: a ws-2 secret id is not retrievable under ws-1.
+    const otherId = repo.listVaultSecrets("ws-2")[0]?.secretId ?? "missing";
+    assert.equal(repo.getVaultSecret("ws-1", otherId), undefined);
+
+    assert.equal(repo.deleteVaultSecret("ws-1", stored.secretId), true);
+    assert.equal(repo.listVaultSecrets("ws-1").length, 1);
+    assert.equal(repo.deleteVaultSecret("ws-1", "nope"), false);
+  });
+
+  it("re-storing a vault secret by name overwrites the sealed value and keeps one row", () => {
+    const repo = createRepo();
+    const a = { iv: "YQ==", ciphertext: "YQ==", tag: "YQ==" };
+    const b = { iv: "Yg==", ciphertext: "Yg==", tag: "Yg==" };
+    const first = repo.storeVaultSecret({ citadelId: "ws-1", secretName: "k", sealedValue: a });
+    const second = repo.storeVaultSecret({ citadelId: "ws-1", secretName: "k", sealedValue: b });
+    assert.equal(repo.listVaultSecrets("ws-1").length, 1);
+    assert.equal(second.secretId, first.secretId);
+    assert.deepEqual(repo.getVaultSecret("ws-1", first.secretId)?.sealedValue, b);
+  });
+
   it("creates, lists, and removes passages originating from a citadel", () => {
     const repo = createRepo();
     const passage = repo.createPassage({

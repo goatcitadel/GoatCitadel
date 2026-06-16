@@ -14,9 +14,12 @@ import type {
   CitadelPassage,
   CitadelPassageInput,
   CitadelRole,
+  CitadelVaultSecretInput,
+  CitadelVaultSecretRecord,
   CitadelWardInput,
   CitadelWardRecord,
   ChamberSensitivity,
+  SealedValue,
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
@@ -67,6 +70,15 @@ interface WardRow {
   action_pattern: string;
   effect: string;
   created_at: string;
+}
+
+interface VaultSecretRow {
+  secret_id: string;
+  citadel_id: string;
+  secret_name: string;
+  sealed_value_json: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface PassageRow {
@@ -125,6 +137,11 @@ export class CitadelRepository {
   private readonly getWardStmt;
   private readonly listWardsStmt;
   private readonly deleteWardStmt;
+  private readonly storeVaultSecretStmt;
+  private readonly getVaultSecretStmt;
+  private readonly getVaultSecretByNameStmt;
+  private readonly listVaultSecretsStmt;
+  private readonly deleteVaultSecretStmt;
   private readonly createPassageStmt;
   private readonly getPassageStmt;
   private readonly listPassagesStmt;
@@ -196,6 +213,25 @@ export class CitadelRepository {
       "SELECT * FROM citadel_wards WHERE citadel_id = @citadelId ORDER BY created_at ASC, ward_id ASC",
     );
     this.deleteWardStmt = db.prepare("DELETE FROM citadel_wards WHERE ward_id = @wardId AND citadel_id = @citadelId");
+    this.storeVaultSecretStmt = db.prepare(`
+      INSERT INTO citadel_vault_secrets (secret_id, citadel_id, secret_name, sealed_value_json, created_at, updated_at)
+      VALUES (@secretId, @citadelId, @secretName, @sealedValueJson, @now, @now)
+      ON CONFLICT(citadel_id, secret_name) DO UPDATE SET
+        sealed_value_json = excluded.sealed_value_json,
+        updated_at = excluded.updated_at
+    `);
+    this.getVaultSecretStmt = db.prepare(
+      "SELECT * FROM citadel_vault_secrets WHERE secret_id = @secretId AND citadel_id = @citadelId",
+    );
+    this.getVaultSecretByNameStmt = db.prepare(
+      "SELECT * FROM citadel_vault_secrets WHERE citadel_id = @citadelId AND secret_name = @secretName",
+    );
+    this.listVaultSecretsStmt = db.prepare(
+      "SELECT * FROM citadel_vault_secrets WHERE citadel_id = @citadelId ORDER BY secret_name ASC, secret_id ASC",
+    );
+    this.deleteVaultSecretStmt = db.prepare(
+      "DELETE FROM citadel_vault_secrets WHERE secret_id = @secretId AND citadel_id = @citadelId",
+    );
     this.createPassageStmt = db.prepare(`
       INSERT INTO citadel_passages (
         passage_id, source_citadel_id, source_chamber_id, destination_citadel_id,
@@ -376,6 +412,41 @@ export class CitadelRepository {
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
 
+  public storeVaultSecret(input: CitadelVaultSecretInput): CitadelVaultSecretRecord {
+    const secretId = randomUUID();
+    const now = new Date().toISOString();
+    this.storeVaultSecretStmt.run({
+      secretId,
+      citadelId: input.citadelId,
+      secretName: input.secretName,
+      sealedValueJson: JSON.stringify(input.sealedValue),
+      now,
+    });
+    const row = this.getVaultSecretByNameStmt.get({
+      citadelId: input.citadelId,
+      secretName: input.secretName,
+    }) as VaultSecretRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to persist vault secret ${input.secretName} for citadel ${input.citadelId}`);
+    }
+    return mapVaultSecret(row);
+  }
+
+  public getVaultSecret(citadelId: string, secretId: string): CitadelVaultSecretRecord | undefined {
+    const row = this.getVaultSecretStmt.get({ citadelId, secretId }) as VaultSecretRow | undefined;
+    return row ? mapVaultSecret(row) : undefined;
+  }
+
+  public listVaultSecrets(citadelId: string): CitadelVaultSecretRecord[] {
+    const rows = this.listVaultSecretsStmt.all({ citadelId }) as VaultSecretRow[];
+    return rows.map(mapVaultSecret);
+  }
+
+  public deleteVaultSecret(citadelId: string, secretId: string): boolean {
+    const result = this.deleteVaultSecretStmt.run({ citadelId, secretId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
+
   public createPassage(input: CitadelPassageInput): CitadelPassage {
     const passageId = randomUUID();
     const now = new Date().toISOString();
@@ -551,6 +622,17 @@ function mapWard(row: WardRow): CitadelWardRecord {
     actionPattern: row.action_pattern,
     effect: row.effect as WardEffect,
     createdAt: row.created_at,
+  };
+}
+
+function mapVaultSecret(row: VaultSecretRow): CitadelVaultSecretRecord {
+  return {
+    secretId: row.secret_id,
+    citadelId: row.citadel_id,
+    secretName: row.secret_name,
+    sealedValue: safeJsonParse<SealedValue>(row.sealed_value_json, { iv: "", ciphertext: "", tag: "" }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

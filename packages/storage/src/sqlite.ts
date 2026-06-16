@@ -1227,6 +1227,28 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 119,
+    name: "citadel_vault_secrets_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_vault_secrets (
+          secret_id TEXT PRIMARY KEY,
+          citadel_id TEXT NOT NULL,
+          secret_name TEXT NOT NULL,
+          sealed_value_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_citadel_vault_secrets_name
+          ON citadel_vault_secrets(citadel_id, secret_name);
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_vault_secrets_citadel
+          ON citadel_vault_secrets(citadel_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
