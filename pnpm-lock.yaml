@@ -151,6 +151,9 @@ importers:
       shell-quote:
         specifier: 1.8.4
         version: 1.8.4
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
       undici:
         specifier: ^6.24.1
         version: 6.24.1

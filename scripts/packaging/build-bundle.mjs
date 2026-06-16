@@ -56,11 +56,33 @@ async function main() {
   removeDirectory(bundleRoot);
   fs.mkdirSync(appRoot, { recursive: true });
 
-  runPnpm(["--dir", repoRoot, "--filter", "@goatcitadel/gateway", "deploy", "--prod", "--legacy", gatewayDeployDir], {
-    attempts: 3,
-    beforeRetry: () => removeDirectory(gatewayDeployDir),
-    retryDelayMs: 2500,
-  });
+  // node-linker=hoisted produces a flat, symlink-free node_modules. The default (isolated)
+  // layout relies on symlinks into .pnpm, which do NOT survive the bundle's tar archive +
+  // lowest-privilege `tar -x` install on Windows (a non-elevated user cannot create symlinks,
+  // and tar dereferences the junctions into real dir copies). Dereferenced @goatcitadel/*
+  // workspace packages then cannot reach their third-party deps (docx, mammoth, pptxgenjs,
+  // sharp, unpdf, @e965/xlsx, playwright) that lived as sibling symlinks in .pnpm, so the
+  // gateway crashes at startup with ERR_MODULE_NOT_FOUND and the installer's Chromium step
+  // (node node_modules/playwright/cli.js) fails. Hoisting puts every dependency at the
+  // top level as a real directory, which the tar round-trip preserves losslessly.
+  runPnpm(
+    [
+      "--dir",
+      repoRoot,
+      "--filter",
+      "@goatcitadel/gateway",
+      "deploy",
+      "--prod",
+      "--legacy",
+      "--config.node-linker=hoisted",
+      gatewayDeployDir,
+    ],
+    {
+      attempts: 3,
+      beforeRetry: () => removeDirectory(gatewayDeployDir),
+      retryDelayMs: 2500,
+    },
+  );
   pruneGatewayDeploy(gatewayDeployDir);
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
