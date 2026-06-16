@@ -1100,6 +1100,19 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "citadel_core_schema",
     up: createCitadelCoreSchema,
   },
+  {
+    version: 112,
+    name: "cron_jobs_citadel_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "citadel_id", "TEXT");
+      if (tableExists(db, "cron_jobs")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_cron_jobs_citadel
+            ON cron_jobs(citadel_id, job_id);
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1528,6 +1541,7 @@ function createBaseSchema(db: DatabaseSync): void {
       context_from TEXT,
       last_run_output TEXT,
       last_run_id TEXT,
+      citadel_id TEXT,
       updated_at TEXT NOT NULL
     );
 
