@@ -1082,6 +1082,19 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "knowledge_chunks", "embedding_metadata_json", "TEXT");
     },
   },
+  {
+    version: 110,
+    name: "memory_items_workspace_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "memory_items", "workspace_id", "TEXT");
+      if (tableExists(db, "memory_items")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_memory_items_workspace
+            ON memory_items(workspace_id, status, updated_at DESC);
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -4582,13 +4595,16 @@ function createGapClosureExtensionSchema(db: DatabaseSync): void {
       status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      forgotten_at TEXT
+      forgotten_at TEXT,
+      workspace_id TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_status
       ON memory_items(namespace, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_items_pinned_updated
       ON memory_items(pinned DESC, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_items_workspace
+      ON memory_items(workspace_id, status, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS memory_change_history (
       change_id TEXT PRIMARY KEY,

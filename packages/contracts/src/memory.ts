@@ -570,6 +570,8 @@ export interface MemoryItemRecord {
   expiresAt?: string;
   status: MemoryItemStatus;
   lifecycleState: MemoryItemLifecycleState;
+  /** Citadel/workspace scope. Undefined means a global memory item (visible to every workspace). */
+  workspaceId?: string;
   createdAt: string;
   updatedAt: string;
   forgottenAt?: string;

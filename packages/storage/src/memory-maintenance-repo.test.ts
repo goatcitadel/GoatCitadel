@@ -655,3 +655,40 @@ describe("MemoryMaintenanceRepository", () => {
     assert.deepEqual(repo.listRecommendations("workspace-1"), []);
   });
 });
+
+describe("MemoryMaintenanceRepository workspace scoping", () => {
+  function seedMemoryItem(
+    db: ReturnType<typeof createDatabase>,
+    itemId: string,
+    workspaceId: string | null,
+  ): void {
+    const now = new Date().toISOString();
+    db.prepare(
+      `
+      INSERT INTO memory_items (
+        item_id, namespace, title, content, metadata_json, pinned,
+        ttl_override_seconds, expires_at, status, created_at, updated_at, workspace_id
+      ) VALUES (
+        @itemId, 'default', @itemId, 'content', '{}', 0,
+        NULL, NULL, 'active', @now, @now, @workspaceId
+      )
+    `,
+    ).run({ itemId, now, workspaceId });
+  }
+
+  it("returns only the requested workspace's items plus global items when scoped", () => {
+    const { repo, db } = createRepoWithDb();
+    seedMemoryItem(db, "mem-a", "workspace-a");
+    seedMemoryItem(db, "mem-b", "workspace-b");
+    seedMemoryItem(db, "mem-global", null);
+
+    const scoped = repo.listActiveMemoryItems(999, "workspace-a");
+    assert.deepEqual(
+      scoped.map((item) => item.itemId).sort(),
+      ["mem-a", "mem-global"],
+    );
+
+    const unscoped = repo.listActiveMemoryItems(999);
+    assert.equal(unscoped.length, 3);
+  });
+});
