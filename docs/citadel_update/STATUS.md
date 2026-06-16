@@ -63,22 +63,25 @@ memory scoped by `workspaceId`. We build *on top of* the existing services, not 
 Every commit: package suite + typecheck green before push. **Storage full suite 568 pass / 0 fail** (migrations v110–v115 + all repos). Gateway typecheck clean. Gateway citadel route suite 25 pass. Contracts citadel suites 19 pass. (Contracts has 2 **pre-existing** failures — `follow-on-parity.alignment`, `provider-templates` — untouched by this branch.)
 
 ## Commits
-40 commits on the branch. The early parallel-table commits for Council/Missions/Archive were
+44 commits on the branch. The early parallel-table commits for Council/Missions/Archive were
 reverted (`20380f087`) and rebuilt the reuse-correct way (see "Reuse correction"). Latest:
-`fdea79259` Mason LLM message step · `076048332` citadel/Mason UI API client.
+`fdea79259` Mason LLM message step · `076048332` UI API client · `6d973246b` Mason screen ·
+`ec3b80945` Citadel overview screen.
 Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
 
 ## Completed this session (2026-06-16)
 - **Mason LLM conversational layer (§9)** — `interpretSessionMessage` in `citadels-route-service.ts`: builds the interpret prompt (`buildMasonInterpretPrompt`), calls an injected `MasonInterpret`, **strict-parses** with `parseMasonInterpretResponse` (only well-typed known fields with valid enums survive — defense against model hallucination/injection), merges the patch into the session. Wired in composition to `gateway.llmService.chatCompletions`; `503 no_interpreter` / structured-answers fallback when unconfigured. Route `POST .../mason/sessions/:id/message`. Service + route + composition tests green (48 gateway tests). Commit `fdea79259`.
 - **UI data layer (§6)** — `packages/mission-control-shared/src/api/citadels.ts`: typed wrappers over `request()` for every citadel + Mason endpoint, barrel-exported via `client.ts`. Each path cross-checked against the registered routes; 10 wrapper tests assert path/method/body/id-encoding. Package typecheck clean. Commit `076048332`.
+- **Mason setup screen (§6/§9)** — `mission-control-next/.../library/CitadelMasonRoutePage.tsx`: the first Citadel React surface. Setup questions → session → freeform message (interpreted by the real model via the message endpoint) → captured answers → drafted Blueprint + review-before-activation summary. Registered as the experimental `library/citadel` route. App typecheck + lint clean; 4 component tests (incl. the freeform-message → interpreted-answers flow). Commit `6d973246b`.
+- **Citadel overview screen (§2/§20)** — `.../library/CitadelOverviewRoutePage.tsx`: reads the active workspace *as* a Citadel — Charter (purpose/kind/posture/goals/boundaries), Chambers (sealed/sensitivity markers), Gatehouse posture (risk, model policy, sharing, external-writes, ward count). 404 → "not a Citadel yet → open the Mason" (distinguished from real errors via `isApiRequestError`). Experimental `library/citadel-overview` route. Typecheck + lint clean; 3 component tests. Commit `ec3b80945`. **Core operator loop now exists: stage (Mason) + manage (overview).**
 
-## NOT done — the genuinely remaining surfaces (each needs a focused session)
-- **UI screens** (§6) — the React surfaces themselves (Charter editor, Mason wizard, Gatehouse/Wards panel, Council, Blueprint import/export) in `mission-control-next`. The **data layer now exists** (client above); the screens are a visual build that can't be verified headless. **Recommended next.**
-- **engine.ts enforcement surgery** — thread citadel **Wards** (`evaluateWards`) and **roles** (`roleCan`) into the policy engine that gates every privileged action, and `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower go live (#4 agent grants, #5 policy global-grant fallback live here too — see policy-engine `buildScopeCandidates`). **Security-critical: a subtle error opens a hole or bricks all actions — do not do unsupervised.**
+## NOT done — the genuinely remaining surfaces
+- **More UI management screens** (§6) — Wards/Gatehouse editor (the access-policy surface, §20), Council agent-assignments (§16), Blueprint import/export (§8). These follow the **now-proven pattern** (component + `react-test-renderer` test + experimental `library/*` route registration + `mc-next-*` styling); the two screens above are the working templates. Straightforward follow-on, not blocked.
+- **engine.ts enforcement surgery** — thread citadel **Wards** (`evaluateWards`) and **roles** (`roleCan`) into the policy engine that gates every privileged action, and `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower go live (#4 agent grants, #5 policy global-grant fallback live here too — see policy-engine `buildScopeCandidates`). **Security-critical: a subtle error opens a hole or bricks all actions. The reuse-audit + project memory already record this as a deliberate do-NOT-do-unsupervised decision — keep it that way; pair with the operator.**
 - **Vault hard crypto** (§13) — envelope crypto + key hierarchy. The MVP `sealValue`/`openValue` primitives exist; the full key hierarchy is **deferred per the product plan** (ship later).
 
 ## Suggested next session
-1. **UI screens** — consume the new `mission-control-shared` citadel client; start with the Mason wizard (questions → message/answers → review → draft) and the Charter editor.
-2. **engine.ts enforcement** (with a human in the loop) — Wards + roles into the policy engine; thread the scope into requests so #1/#2/Watchtower enforce end-to-end.
+1. **More management screens** — clone the Mason/Overview pattern for the Wards editor (listWards/addWard, deny-wins display), then Council and Blueprint import/export.
+2. **engine.ts enforcement** (with a human in the loop) — Wards + roles into the policy engine; thread the scope into requests so #1/#2/Watchtower enforce end-to-end. Drive it TDD with a "no citadel scope → behavior byte-identical to today" invariant test FIRST.
 
 Review: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
