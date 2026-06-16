@@ -9,7 +9,12 @@
 
 ## TL;DR
 
-The **structural MVP data model is complete** end-to-end (storage + gateway routes), fully tested and pushed, plus the standalone isolation-leak fixes. 20 feature commits. What remains is the *experiential* and *hard-crypto* spec — the **Mason** conversational agent, the **Vault** envelope encryption, the **mission-control UI**, sharing/Passages, model routing, and the consumer-wiring that flips the scoping mechanisms from "built" to "enforced." Those are large, multi-session, and several are big new surfaces (a conversational agent; an entire React UI; cryptography). They are **not** done.
+The **structural MVP data model is complete** end-to-end (contracts logic + storage + 34 gateway routes), fully tested and pushed, plus the standalone isolation-leak fixes. 40 commits. Since then two of the three large remaining surfaces have been **completed this session**:
+
+1. **The Mason's conversational layer (§9)** — `POST /api/v1/mason/sessions/:id/message` interprets a freeform message with the **real configured model** (`llmService.chatCompletions`), strictly parses the output (hallucinated/injected fields can't poison setup), and merges only valid answers. Degrades gracefully to the structured-answers path when no model is configured. End-to-end wired through composition.
+2. **The UI data layer (§6)** — typed citadel/Mason API client in `mission-control-shared` over the existing `request()` transport, covering all 22 citadel + Mason endpoints, barrel-exported for the React screens.
+
+What genuinely **remains** is two surfaces that each need a focused, human-in-the-loop session: the **mission-control React screens** themselves (visual build, can't be verified headless), and the **engine.ts request-path enforcement surgery** (threading citadel Wards/roles into the policy engine that gates *every* privileged action — security-critical, must not be done unsupervised). The **Vault** hard-crypto key hierarchy is deferred per the product plan (ship later).
 
 ---
 
@@ -57,22 +62,23 @@ memory scoped by `workspaceId`. We build *on top of* the existing services, not 
 ## Verification
 Every commit: package suite + typecheck green before push. **Storage full suite 568 pass / 0 fail** (migrations v110–v115 + all repos). Gateway typecheck clean. Gateway citadel route suite 25 pass. Contracts citadel suites 19 pass. (Contracts has 2 **pre-existing** failures — `follow-on-parity.alignment`, `provider-templates` — untouched by this branch.)
 
-## Commits (20 feature + docs)
-`54d834aa8` archive routes · `0b6eb344f` archive storage · `75265e75b` mission routes · `e9f32f021` mission storage · `26ab31f79` council routes · `f98b411d7` council storage · `6cc7765ce` watchtower scope · `b34855fc1` gatehouse · `40309778a` blueprints · `845a790d5` templates · `e530d84d1` citadel routes · `bdedc0408` citadel repo · `819197208` #1 memory · `19784b245` scope helpers · `31eb58d1f` #2 approvals · `1836381f9` #3 secrets · (+ docs).
+## Commits
+40 commits on the branch. The early parallel-table commits for Council/Missions/Archive were
+reverted (`20380f087`) and rebuilt the reuse-correct way (see "Reuse correction"). Latest:
+`fdea79259` Mason LLM message step · `076048332` citadel/Mason UI API client.
+Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
 
-## NOT done — the large remaining spec
-- **The Mason** (§9) — conversational setup agent (built on existing chat/agent infra). Large.
-- **Vault** (§13) — envelope crypto + key hierarchy. Genuinely net-new; defer per plan.
-- **UI** (§6) — Citadel list/overview/charter/chambers/council/missions/archive/Mason/blueprint surfaces in `mission-control-next`. Large new surface.
-- **Consumer wiring** — thread `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower enforce end-to-end. (#4 agent grants, #5 policy global-grant fallback also live here — see policy-engine `buildScopeCandidates`.)
-- **Council as scoped agent identities** (§16) — current Council is membership records; binding to real agents + grants is the #4 work.
-- **Missions as orchestration** (§17) — current Missions are records + state; wrapping the durable/orchestration engine (steps/checkpoints/evidence) remains.
-- **Archive ↔ memory** (§18) — current Archive is its own store; unifying with `memory-core` retrieval remains.
-- **Sharing/Passages** (§12), **model routing** (§14), **secrets/integrations per Citadel** (§15) — later.
+## Completed this session (2026-06-16)
+- **Mason LLM conversational layer (§9)** — `interpretSessionMessage` in `citadels-route-service.ts`: builds the interpret prompt (`buildMasonInterpretPrompt`), calls an injected `MasonInterpret`, **strict-parses** with `parseMasonInterpretResponse` (only well-typed known fields with valid enums survive — defense against model hallucination/injection), merges the patch into the session. Wired in composition to `gateway.llmService.chatCompletions`; `503 no_interpreter` / structured-answers fallback when unconfigured. Route `POST .../mason/sessions/:id/message`. Service + route + composition tests green (48 gateway tests). Commit `fdea79259`.
+- **UI data layer (§6)** — `packages/mission-control-shared/src/api/citadels.ts`: typed wrappers over `request()` for every citadel + Mason endpoint, barrel-exported via `client.ts`. Each path cross-checked against the registered routes; 10 wrapper tests assert path/method/body/id-encoding. Package typecheck clean. Commit `076048332`.
+
+## NOT done — the genuinely remaining surfaces (each needs a focused session)
+- **UI screens** (§6) — the React surfaces themselves (Charter editor, Mason wizard, Gatehouse/Wards panel, Council, Blueprint import/export) in `mission-control-next`. The **data layer now exists** (client above); the screens are a visual build that can't be verified headless. **Recommended next.**
+- **engine.ts enforcement surgery** — thread citadel **Wards** (`evaluateWards`) and **roles** (`roleCan`) into the policy engine that gates every privileged action, and `resolveCitadelScope(request)` into the approval-list callers + memory compose + cron scheduler so #1/#2/Watchtower go live (#4 agent grants, #5 policy global-grant fallback live here too — see policy-engine `buildScopeCandidates`). **Security-critical: a subtle error opens a hole or bricks all actions — do not do unsupervised.**
+- **Vault hard crypto** (§13) — envelope crypto + key hierarchy. The MVP `sealValue`/`openValue` primitives exist; the full key hierarchy is **deferred per the product plan** (ship later).
 
 ## Suggested next session
-1. **Consumer wiring** — biggest leverage: thread the scope into requests → #1/#2/Watchtower go live; then #4/#5 in the policy engine.
-2. **The Mason** as an MCP/skill that emits Blueprints (the export/validate/import plumbing already exists).
-3. **UI** — wire the gateway routes (all built) into mission-control-next surfaces.
+1. **UI screens** — consume the new `mission-control-shared` citadel client; start with the Mason wizard (questions → message/answers → review → draft) and the Charter editor.
+2. **engine.ts enforcement** (with a human in the loop) — Wards + roles into the policy engine; thread the scope into requests so #1/#2/Watchtower enforce end-to-end.
 
 Review: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
