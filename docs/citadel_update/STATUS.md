@@ -37,8 +37,8 @@ Self-contained, tested contracts modules (100 contracts citadel tests total) —
 - `citadel-vault.ts` — AES-256-GCM `sealValue`/`openValue`/`generateVaultKey` (Vault MVP, §13.9).
 - `citadel-model-routing.ts` — `routeModelForSensitivity` (data sensitivity → model decision, §14).
 - `citadel-wards.ts` — `WardEffect` + `evaluateWards` (deny-wins) + `wardMatchesAction` (§20.3/§11.3); **persisted + routed** (above).
-- `citadel-passages.ts` — `isPassageActive` + `filterPassageFields` (cross-Citadel bridge, §12.7).
-- `citadel-sharing.ts` — `roleCan` over 8 roles × capabilities (§12.4).
+- `citadel-passages.ts` — `isPassageActive` + `filterPassageFields` (cross-Citadel bridge, §12.7); **persisted + routed** (`citadel_passages` v115, `GET/POST/DELETE .../passages`).
+- `citadel-sharing.ts` — `roleCan` over 8 roles × capabilities (§12.4); **members persisted + routed** (`citadel_members` v116, `GET/POST/DELETE .../members`).
 - `citadel-automation.ts` — `AutomationRiskMode` + external-write/approval rules (§19.2).
 
 ### Reuse correction (2026-06-16)
