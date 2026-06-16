@@ -17,6 +17,9 @@ import type {
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
+  MasonAnswers,
+  MasonSession,
+  MasonSessionStatus,
   WardEffect,
 } from "@goatcitadel/contracts";
 import { randomUUID } from "node:crypto";
@@ -82,6 +85,14 @@ interface MemberRow {
   updated_at: string;
 }
 
+interface MasonSessionRow {
+  session_id: string;
+  answers_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -108,6 +119,9 @@ export class CitadelRepository {
   private readonly getMemberByPairStmt;
   private readonly listMembersStmt;
   private readonly deleteMemberStmt;
+  private readonly createMasonSessionStmt;
+  private readonly getMasonSessionStmt;
+  private readonly updateMasonSessionStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -196,6 +210,15 @@ export class CitadelRepository {
     this.deleteMemberStmt = db.prepare(
       "DELETE FROM citadel_members WHERE citadel_id = @citadelId AND subject_id = @subjectId",
     );
+    this.createMasonSessionStmt = db.prepare(`
+      INSERT INTO mason_sessions (session_id, answers_json, status, created_at, updated_at)
+      VALUES (@sessionId, '{}', 'collecting', @now, @now)
+    `);
+    this.getMasonSessionStmt = db.prepare("SELECT * FROM mason_sessions WHERE session_id = @sessionId");
+    this.updateMasonSessionStmt = db.prepare(`
+      UPDATE mason_sessions SET answers_json = @answersJson, status = @status, updated_at = @now
+      WHERE session_id = @sessionId
+    `);
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -380,6 +403,44 @@ export class CitadelRepository {
     const result = this.deleteMemberStmt.run({ citadelId, subjectId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  public createMasonSession(): MasonSession {
+    const sessionId = randomUUID();
+    const now = new Date().toISOString();
+    this.createMasonSessionStmt.run({ sessionId, now });
+    const session = this.getMasonSession(sessionId);
+    if (!session) {
+      throw new Error(`Failed to create mason session ${sessionId}`);
+    }
+    return session;
+  }
+
+  public getMasonSession(sessionId: string): MasonSession | undefined {
+    const row = this.getMasonSessionStmt.get({ sessionId }) as MasonSessionRow | undefined;
+    return row ? mapMasonSession(row) : undefined;
+  }
+
+  /** Merge a partial answer patch into the session's accumulated answers. */
+  public updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): MasonSession | undefined {
+    const existing = this.getMasonSession(sessionId);
+    if (!existing) {
+      return undefined;
+    }
+    const merged = { ...existing.answers, ...patch };
+    const now = new Date().toISOString();
+    this.updateMasonSessionStmt.run({ sessionId, answersJson: JSON.stringify(merged), status: existing.status, now });
+    return this.getMasonSession(sessionId);
+  }
+
+  public setMasonSessionStatus(sessionId: string, status: MasonSessionStatus): MasonSession | undefined {
+    const existing = this.getMasonSession(sessionId);
+    if (!existing) {
+      return undefined;
+    }
+    const now = new Date().toISOString();
+    this.updateMasonSessionStmt.run({ sessionId, answersJson: JSON.stringify(existing.answers), status, now });
+    return this.getMasonSession(sessionId);
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -448,6 +509,16 @@ function mapMember(row: MemberRow): CitadelMember {
     citadelId: row.citadel_id,
     subjectId: row.subject_id,
     role: row.role as CitadelRole,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapMasonSession(row: MasonSessionRow): MasonSession {
+  return {
+    sessionId: row.session_id,
+    answers: safeJsonParse<Partial<MasonAnswers>>(row.answers_json, {}),
+    status: row.status as MasonSessionStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

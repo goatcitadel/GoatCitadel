@@ -83,6 +83,26 @@ export interface MasonAnswers {
   preferLocalForSensitive?: boolean;
 }
 
+export type MasonSessionStatus = "collecting" | "drafted";
+
+/**
+ * A Mason setup session (§22.2). The conversational runtime accumulates the user's
+ * answers into `answers` across messages; once `kind` + `purpose` are present a
+ * Blueprint can be drafted. Holds no secrets — only structured setup answers.
+ */
+export interface MasonSession {
+  sessionId: string;
+  answers: Partial<MasonAnswers>;
+  status: MasonSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** True once the session has enough to draft a Blueprint (kind + purpose). */
+export function masonSessionCanDraft(session: MasonSession): boolean {
+  return typeof session.answers.kind === "string" && (session.answers.purpose ?? "").trim().length > 0;
+}
+
 /**
  * Deterministically draft a Blueprint from structured answers (the Mason's
  * generate-blueprint step, §9.4 / §22.2). Picks a starter template by kind,

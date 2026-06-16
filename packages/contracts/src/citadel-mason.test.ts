@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { Citadel, CitadelChamber, CitadelCharter } from "./citadels.js";
 import { CITADEL_BLUEPRINT_SCHEMA_VERSION, exportCitadelBlueprint, validateCitadelBlueprint } from "./citadel-blueprints.js";
-import { MASON_SETUP_QUESTIONS, draftBlueprintFromAnswers, generateBlueprintReviewSummary } from "./citadel-mason.js";
+import {
+  MASON_SETUP_QUESTIONS,
+  draftBlueprintFromAnswers,
+  generateBlueprintReviewSummary,
+  masonSessionCanDraft,
+} from "./citadel-mason.js";
 
 function sampleCitadel(): Citadel {
   const charter: CitadelCharter = {
@@ -73,5 +78,16 @@ describe("draftBlueprintFromAnswers", () => {
     const blueprint = draftBlueprintFromAnswers({ kind: "custom", purpose: "Something custom" });
     expect(blueprint.chambers.some((chamber) => chamber.name === "General")).toBe(true);
     expect(validateCitadelBlueprint(blueprint).ok).toBe(true);
+  });
+});
+
+describe("masonSessionCanDraft", () => {
+  const base = { sessionId: "s", status: "collecting" as const, createdAt: "t", updatedAt: "t" };
+
+  it("is true only once kind and purpose are present", () => {
+    expect(masonSessionCanDraft({ ...base, answers: {} })).toBe(false);
+    expect(masonSessionCanDraft({ ...base, answers: { kind: "company" } })).toBe(false);
+    expect(masonSessionCanDraft({ ...base, answers: { kind: "company", purpose: "   " } })).toBe(false);
+    expect(masonSessionCanDraft({ ...base, answers: { kind: "company", purpose: "Run it" } })).toBe(true);
   });
 });

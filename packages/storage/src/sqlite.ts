@@ -1188,6 +1188,24 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 117,
+    name: "mason_sessions_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mason_sessions (
+          session_id TEXT PRIMARY KEY,
+          answers_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'collecting',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mason_sessions_updated
+          ON mason_sessions(updated_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

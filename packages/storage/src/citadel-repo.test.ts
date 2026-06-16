@@ -187,4 +187,26 @@ describe("CitadelRepository", () => {
     );
     assert.equal(repo.removeMember("ws-1", "nope"), false);
   });
+
+  it("creates a mason session and accumulates answers across updates", () => {
+    const repo = createRepo();
+    const session = repo.createMasonSession();
+    assert.equal(session.status, "collecting");
+    assert.deepEqual(session.answers, {});
+
+    const afterKind = repo.updateMasonSessionAnswers(session.sessionId, { kind: "company" });
+    assert.equal(afterKind?.answers.kind, "company");
+
+    const afterPurpose = repo.updateMasonSessionAnswers(session.sessionId, { purpose: "Run the company" });
+    // Earlier answer is retained (merge, not replace).
+    assert.equal(afterPurpose?.answers.kind, "company");
+    assert.equal(afterPurpose?.answers.purpose, "Run the company");
+
+    const drafted = repo.setMasonSessionStatus(session.sessionId, "drafted");
+    assert.equal(drafted?.status, "drafted");
+    assert.equal(drafted?.answers.kind, "company");
+
+    assert.equal(repo.getMasonSession("nope"), undefined);
+    assert.equal(repo.updateMasonSessionAnswers("nope", { kind: "personal" }), undefined);
+  });
 });

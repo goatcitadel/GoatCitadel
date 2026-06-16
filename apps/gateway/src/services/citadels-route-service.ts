@@ -13,6 +13,7 @@ import type {
   CitadelMember,
   CitadelMemberInput,
   MasonAnswers,
+  MasonSession,
   CitadelPassage,
   CitadelPassageInput,
   CitadelTemplate,
@@ -26,6 +27,7 @@ import {
   CITADEL_TEMPLATES,
   draftBlueprintFromAnswers,
   evaluateWards,
+  masonSessionCanDraft,
   exportCitadelBlueprint,
   findCitadelTemplate,
   generateBlueprintReviewSummary,
@@ -43,6 +45,10 @@ export type MasonReviewResult =
 export type MasonStageResult =
   | { ok: false; errors: string[] }
   | { ok: true; citadel: Citadel; review: BlueprintReviewSummary };
+
+export type MasonDraftResult =
+  | { ok: false; reason: "not_found" | "incomplete" }
+  | { ok: true; blueprint: CitadelBlueprint };
 
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
@@ -65,6 +71,10 @@ export interface CitadelsRoutePort {
   upsertMember(input: CitadelMemberInput): CitadelMember;
   listMembers(citadelId: string): CitadelMember[];
   removeMember(citadelId: string, subjectId: string): boolean;
+  createMasonSession(): MasonSession;
+  getMasonSession(sessionId: string): MasonSession | undefined;
+  updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): MasonSession | undefined;
+  setMasonSessionStatus(sessionId: string, status: MasonSession["status"]): MasonSession | undefined;
 }
 
 export class CitadelsRouteService {
@@ -184,6 +194,33 @@ export class CitadelsRouteService {
   /** Deterministically draft a Blueprint from structured setup answers (§9.4). */
   public draftBlueprint(answers: MasonAnswers): CitadelBlueprint {
     return draftBlueprintFromAnswers(answers);
+  }
+
+  // --- Mason sessions (§22.2): accumulate answers, then draft. ---
+
+  public createMasonSession(): MasonSession {
+    return this.citadels.createMasonSession();
+  }
+
+  public getMasonSession(sessionId: string): MasonSession | undefined {
+    return this.citadels.getMasonSession(sessionId);
+  }
+
+  public updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): MasonSession | undefined {
+    return this.citadels.updateMasonSessionAnswers(sessionId, patch);
+  }
+
+  public draftFromSession(sessionId: string): MasonDraftResult {
+    const session = this.citadels.getMasonSession(sessionId);
+    if (!session) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (!masonSessionCanDraft(session)) {
+      return { ok: false, reason: "incomplete" };
+    }
+    const blueprint = draftBlueprintFromAnswers(session.answers as MasonAnswers);
+    this.citadels.setMasonSessionStatus(sessionId, "drafted");
+    return { ok: true, blueprint };
   }
 
   public reviewBlueprint(value: unknown): MasonReviewResult {

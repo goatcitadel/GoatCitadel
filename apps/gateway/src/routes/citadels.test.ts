@@ -537,4 +537,58 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(400);
     expect(draftBlueprint).not.toHaveBeenCalled();
   });
+
+  it("creates a mason session, accumulates answers, and drafts", async () => {
+    const createMasonSession = vi.fn(() => ({ sessionId: "s1", answers: {}, status: "collecting" }));
+    const updateMasonSessionAnswers = vi.fn((sessionId: string, patch: Record<string, unknown>) => ({
+      sessionId,
+      answers: patch,
+      status: "collecting",
+    }));
+    const getMasonSession = vi.fn(() => ({ sessionId: "s1", answers: { kind: "company", purpose: "x" }, status: "collecting" }));
+    const draftFromSession = vi.fn(() => ({ ok: true, blueprint: { schemaVersion: "goatcitadel.blueprint.v1" } }));
+    const built = buildApp({ createMasonSession, updateMasonSessionAnswers, getMasonSession, draftFromSession });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const create = await app.inject({ method: "POST", url: "/api/v1/mason/sessions" });
+    expect(create.statusCode).toBe(201);
+    expect(create.json()).toEqual({ sessionId: "s1", answers: {}, status: "collecting" });
+
+    const get = await app.inject({ method: "GET", url: "/api/v1/mason/sessions/s1" });
+    expect(get.statusCode).toBe(200);
+    expect(getMasonSession).toHaveBeenCalledWith("s1");
+
+    const answers = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/sessions/s1/answers",
+      payload: { kind: "company" },
+    });
+    expect(answers.statusCode).toBe(200);
+    expect(updateMasonSessionAnswers).toHaveBeenCalledWith("s1", { kind: "company" });
+
+    const draft = await app.inject({ method: "POST", url: "/api/v1/mason/sessions/s1/draft" });
+    expect(draft.statusCode).toBe(200);
+    expect(draftFromSession).toHaveBeenCalledWith("s1");
+  });
+
+  it("returns 400 drafting an incomplete mason session", async () => {
+    const draftFromSession = vi.fn(() => ({ ok: false, reason: "incomplete" }));
+    const built = buildApp({ draftFromSession });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/mason/sessions/s1/draft" });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 404 for a missing mason session", async () => {
+    const getMasonSession = vi.fn(() => undefined);
+    const built = buildApp({ getMasonSession });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/mason/sessions/nope" });
+    expect(response.statusCode).toBe(404);
+  });
 });

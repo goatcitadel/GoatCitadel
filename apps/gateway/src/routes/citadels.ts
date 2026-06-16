@@ -96,6 +96,12 @@ const masonAnswersSchema = z.object({
   preferLocalForSensitive: z.boolean().optional(),
 });
 
+const masonAnswersPatchSchema = masonAnswersSchema.partial();
+
+const sessionParamsSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -448,6 +454,70 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(citadels.draftBlueprint(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Mason sessions (§22.2): create -> accumulate answers -> draft.
+  fastify.post("/api/v1/mason/sessions", operatorOnly, async (request, reply) => {
+    try {
+      return reply.code(201).send(citadels.createMasonSession());
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/mason/sessions/:sessionId", operatorOnly, async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const session = citadels.getMasonSession(params.data.sessionId);
+      if (!session) {
+        return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
+      }
+      return reply.send(session);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mason/sessions/:sessionId/answers", operatorOnly, async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = masonAnswersPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const session = citadels.updateMasonSessionAnswers(params.data.sessionId, parsed.data);
+      if (!session) {
+        return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
+      }
+      return reply.send(session);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mason/sessions/:sessionId/draft", operatorOnly, async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const result = citadels.draftFromSession(params.data.sessionId);
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          return reply.code(404).send({ error: `Mason session ${params.data.sessionId} not found.` });
+        }
+        return reply.code(400).send({ error: "Session is missing required answers (kind and purpose)." });
+      }
+      return reply.send(result.blueprint);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
