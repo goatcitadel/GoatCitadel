@@ -322,4 +322,52 @@ describe("citadels routes", () => {
     const response = await app.inject({ method: "PATCH", url: "/api/v1/missions/m9", payload: { state: "running" } });
     expect(response.statusCode).toBe(404);
   });
+
+  it("lists and creates archive items with an optional chamber filter", async () => {
+    const listArchive = vi.fn(() => [{ itemId: "i1", title: "N1" }]);
+    const addArchiveItem = vi.fn((input: Record<string, unknown>) => ({ itemId: "i2", ...input }));
+    const built = buildApp({ listArchive, addArchiveItem });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/archive?chamberId=ch-1" });
+    expect(list.statusCode).toBe(200);
+    expect(listArchive).toHaveBeenCalledWith("ws-1", "ch-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/archive",
+      payload: { kind: "note", title: "N", body: "b" },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(addArchiveItem).toHaveBeenCalledWith(
+      expect.objectContaining({ citadelId: "ws-1", kind: "note", title: "N", body: "b" }),
+    );
+  });
+
+  it("rejects an archive item with an invalid kind", async () => {
+    const addArchiveItem = vi.fn();
+    const built = buildApp({ addArchiveItem });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/archive",
+      payload: { kind: "bogus", title: "N", body: "b" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(addArchiveItem).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing archive item", async () => {
+    const removeArchiveItem = vi.fn(() => false);
+    const built = buildApp({ removeArchiveItem });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/archive/i9" });
+    expect(response.statusCode).toBe(404);
+    expect(removeArchiveItem).toHaveBeenCalledWith("i9");
+  });
 });

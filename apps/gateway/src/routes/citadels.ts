@@ -87,6 +87,22 @@ const missionParamsSchema = z.object({
   missionId: z.string().min(1),
 });
 
+const archiveItemSchema = z.object({
+  kind: z.enum(["memory", "note", "decision", "artifact", "reference"]),
+  title: z.string().min(1),
+  body: z.string().min(1),
+  chamberId: z.string().min(1).optional(),
+});
+
+const archiveQuerySchema = z.object({
+  chamberId: z.string().min(1).optional(),
+});
+
+const archiveParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  itemId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -342,6 +358,55 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Mission ${params.data.missionId} not found.` });
       }
       return reply.send(mission);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/archive", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const query = archiveQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listArchive(params.data.citadelId, query.data.chamberId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/archive", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = archiveItemSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const item = citadels.addArchiveItem({ citadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(item);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/archive/:itemId", operatorOnly, async (request, reply) => {
+    const params = archiveParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removeArchiveItem(params.data.itemId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Archive item ${params.data.itemId} not found.` });
+      }
+      return reply.code(204).send();
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

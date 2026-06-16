@@ -1,5 +1,7 @@
 import type {
   Citadel,
+  CitadelArchiveItem,
+  CitadelArchiveItemInput,
   CitadelBlueprint,
   CitadelBlueprintValidationResult,
   CitadelChamber,
@@ -42,6 +44,9 @@ export interface CitadelsRoutePort {
   listMissions(citadelId: string): CitadelMission[];
   getMission(missionId: string): CitadelMission | undefined;
   updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined;
+  addArchiveItem(input: CitadelArchiveItemInput): CitadelArchiveItem;
+  listArchiveItems(citadelId: string, chamberId?: string): CitadelArchiveItem[];
+  removeArchiveItem(itemId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -129,5 +134,17 @@ export class CitadelsRouteService {
 
   public updateMissionState(missionId: string, state: CitadelMissionState): CitadelMission | undefined {
     return this.citadels.updateMissionState(missionId, state);
+  }
+
+  public listArchive(citadelId: string, chamberId?: string): CitadelArchiveItem[] {
+    return this.citadels.listArchiveItems(citadelId, chamberId);
+  }
+
+  public addArchiveItem(input: CitadelArchiveItemInput): CitadelArchiveItem {
+    return this.citadels.addArchiveItem(input);
+  }
+
+  public removeArchiveItem(itemId: string): boolean {
+    return this.citadels.removeArchiveItem(itemId);
   }
 }
