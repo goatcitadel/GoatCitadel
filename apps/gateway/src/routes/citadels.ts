@@ -458,4 +458,22 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  // The Mason's stage step: validate + stage a Citadel from a Blueprint, returning
+  // it with a review summary. Nothing is activated.
+  fastify.post("/api/v1/citadels/:citadelId/mason/stage", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const result = citadels.stageBlueprint(params.data.citadelId, request.body ?? {});
+      if (!result.ok) {
+        return reply.code(400).send({ error: { blueprint: result.errors } });
+      }
+      return reply.code(201).send({ citadel: result.citadel, review: result.review });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 };

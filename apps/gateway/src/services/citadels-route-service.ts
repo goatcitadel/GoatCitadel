@@ -38,6 +38,10 @@ export type MasonReviewResult =
   | { ok: false; errors: string[] }
   | { ok: true; review: BlueprintReviewSummary };
 
+export type MasonStageResult =
+  | { ok: false; errors: string[] }
+  | { ok: true; citadel: Citadel; review: BlueprintReviewSummary };
+
 /**
  * Minimal port over the Citadel persistence layer (satisfied structurally by the
  * storage CitadelRepository) so routes depend on behaviour, not the concrete repo.
@@ -181,6 +185,21 @@ export class CitadelsRouteService {
       return { ok: false, errors: validation.errors };
     }
     return { ok: true, review: generateBlueprintReviewSummary(value as CitadelBlueprint) };
+  }
+
+  /**
+   * The Mason's stage step (§9.4): validate the drafted Blueprint, stage the Citadel
+   * (Charter + Chambers), and return it alongside a review summary. Staging never
+   * connects accounts or opens Gates — the human does that afterwards.
+   */
+  public stageBlueprint(citadelId: string, value: unknown): MasonStageResult {
+    const validation = validateCitadelBlueprint(value);
+    if (!validation.ok) {
+      return { ok: false, errors: validation.errors };
+    }
+    const blueprint = value as CitadelBlueprint;
+    const citadel = applyCitadelBlueprint(this.citadels, citadelId, blueprint);
+    return { ok: true, citadel, review: generateBlueprintReviewSummary(blueprint) };
   }
 
   /**

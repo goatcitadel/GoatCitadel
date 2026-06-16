@@ -469,4 +469,37 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(400);
     expect(evaluateGatehouseAction).not.toHaveBeenCalled();
   });
+
+  it("stages a citadel from a blueprint via the Mason", async () => {
+    const stageBlueprint = vi.fn((citadelId: string) => ({
+      ok: true,
+      citadel: { citadelId, charter: {}, chambers: [] },
+      review: { name: "Co" },
+    }));
+    const built = buildApp({ stageBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/mason/stage",
+      payload: { schemaVersion: "goatcitadel.blueprint.v1" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      citadel: { citadelId: "ws-1", charter: {}, chambers: [] },
+      review: { name: "Co" },
+    });
+    expect(stageBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
+  });
+
+  it("rejects staging an invalid blueprint via the Mason", async () => {
+    const stageBlueprint = vi.fn(() => ({ ok: false, errors: ["bad"] }));
+    const built = buildApp({ stageBlueprint });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/mason/stage", payload: {} });
+    expect(response.statusCode).toBe(400);
+  });
 });
