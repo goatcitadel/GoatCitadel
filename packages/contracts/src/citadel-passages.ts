@@ -14,6 +14,16 @@ export interface CitadelPassage {
   allowedFields: string[];
   /** ISO-8601 instant; absent means the Passage never expires. */
   expiresAt?: string;
+  /** Set when the Passage is persisted. */
+  createdAt?: string;
+}
+
+export interface CitadelPassageInput {
+  sourceCitadelId: string;
+  sourceChamberId?: string;
+  destinationCitadelId: string;
+  allowedFields: string[];
+  expiresAt?: string;
 }
 
 /**

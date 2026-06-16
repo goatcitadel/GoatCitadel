@@ -141,4 +141,28 @@ describe("CitadelRepository", () => {
     assert.equal(repo.listWards("ws-1").length, 1);
     assert.equal(repo.removeWard("ws-1", "nope"), false);
   });
+
+  it("creates, lists, and removes passages originating from a citadel", () => {
+    const repo = createRepo();
+    const passage = repo.createPassage({
+      sourceCitadelId: "ws-1",
+      destinationCitadelId: "ws-2",
+      allowedFields: ["availability"],
+    });
+    repo.createPassage({
+      sourceCitadelId: "ws-1",
+      destinationCitadelId: "ws-3",
+      allowedFields: ["status"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    repo.createPassage({ sourceCitadelId: "ws-9", destinationCitadelId: "ws-2", allowedFields: ["x"] });
+
+    assert.deepEqual(passage.allowedFields, ["availability"]);
+    assert.equal(passage.destinationCitadelId, "ws-2");
+    assert.equal(repo.listPassages("ws-1").length, 2);
+
+    assert.equal(repo.removePassage("ws-1", passage.passageId), true);
+    assert.equal(repo.listPassages("ws-1").length, 1);
+    assert.equal(repo.removePassage("ws-1", "nope"), false);
+  });
 });

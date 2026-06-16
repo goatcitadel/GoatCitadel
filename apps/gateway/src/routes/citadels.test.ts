@@ -310,4 +310,52 @@ describe("citadels routes", () => {
     expect(response.statusCode).toBe(404);
     expect(removeWard).toHaveBeenCalledWith("ws-1", "w9");
   });
+
+  it("lists and creates passages for a citadel", async () => {
+    const listPassages = vi.fn(() => [{ passageId: "p1", destinationCitadelId: "ws-2" }]);
+    const createPassage = vi.fn((input: Record<string, unknown>) => ({ passageId: "p2", ...input }));
+    const built = buildApp({ listPassages, createPassage });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/passages" });
+    expect(list.statusCode).toBe(200);
+    expect(listPassages).toHaveBeenCalledWith("ws-1");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/passages",
+      payload: { destinationCitadelId: "ws-2", allowedFields: ["availability"] },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(createPassage).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceCitadelId: "ws-1", destinationCitadelId: "ws-2", allowedFields: ["availability"] }),
+    );
+  });
+
+  it("rejects a passage without allowedFields", async () => {
+    const createPassage = vi.fn();
+    const built = buildApp({ createPassage });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels/ws-1/passages",
+      payload: { destinationCitadelId: "ws-2" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(createPassage).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when removing a missing passage", async () => {
+    const removePassage = vi.fn(() => false);
+    const built = buildApp({ removePassage });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/passages/p9" });
+    expect(response.statusCode).toBe(404);
+    expect(removePassage).toHaveBeenCalledWith("ws-1", "p9");
+  });
 });

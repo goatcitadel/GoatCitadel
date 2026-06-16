@@ -1149,6 +1149,26 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 115,
+    name: "citadel_passages_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_passages (
+          passage_id TEXT PRIMARY KEY,
+          source_citadel_id TEXT NOT NULL,
+          source_chamber_id TEXT,
+          destination_citadel_id TEXT NOT NULL,
+          allowed_fields_json TEXT NOT NULL DEFAULT '[]',
+          expires_at TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_passages_source
+          ON citadel_passages(source_citadel_id, created_at ASC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

@@ -6,6 +6,8 @@ import type {
   CitadelCharterInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
+  CitadelPassage,
+  CitadelPassageInput,
   CitadelWardInput,
   CitadelWardRecord,
   ChamberSensitivity,
@@ -58,6 +60,16 @@ interface WardRow {
   created_at: string;
 }
 
+interface PassageRow {
+  passage_id: string;
+  source_citadel_id: string;
+  source_chamber_id: string | null;
+  destination_citadel_id: string;
+  allowed_fields_json: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
  * its Chambers. A Citadel is a workspace that has a Charter.
@@ -76,6 +88,10 @@ export class CitadelRepository {
   private readonly getWardStmt;
   private readonly listWardsStmt;
   private readonly deleteWardStmt;
+  private readonly createPassageStmt;
+  private readonly getPassageStmt;
+  private readonly listPassagesStmt;
+  private readonly deletePassageStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertCharterStmt = db.prepare(`
@@ -132,6 +148,22 @@ export class CitadelRepository {
       "SELECT * FROM citadel_wards WHERE citadel_id = @citadelId ORDER BY created_at ASC, ward_id ASC",
     );
     this.deleteWardStmt = db.prepare("DELETE FROM citadel_wards WHERE ward_id = @wardId AND citadel_id = @citadelId");
+    this.createPassageStmt = db.prepare(`
+      INSERT INTO citadel_passages (
+        passage_id, source_citadel_id, source_chamber_id, destination_citadel_id,
+        allowed_fields_json, expires_at, created_at
+      ) VALUES (
+        @passageId, @sourceCitadelId, @sourceChamberId, @destinationCitadelId,
+        @allowedFieldsJson, @expiresAt, @now
+      )
+    `);
+    this.getPassageStmt = db.prepare("SELECT * FROM citadel_passages WHERE passage_id = @passageId");
+    this.listPassagesStmt = db.prepare(
+      "SELECT * FROM citadel_passages WHERE source_citadel_id = @sourceCitadelId ORDER BY created_at ASC, passage_id ASC",
+    );
+    this.deletePassageStmt = db.prepare(
+      "DELETE FROM citadel_passages WHERE passage_id = @passageId AND source_citadel_id = @sourceCitadelId",
+    );
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -256,6 +288,36 @@ export class CitadelRepository {
     const result = this.deleteWardStmt.run({ citadelId, wardId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  public createPassage(input: CitadelPassageInput): CitadelPassage {
+    const passageId = randomUUID();
+    const now = new Date().toISOString();
+    this.createPassageStmt.run({
+      passageId,
+      sourceCitadelId: input.sourceCitadelId,
+      sourceChamberId: input.sourceChamberId ?? null,
+      destinationCitadelId: input.destinationCitadelId,
+      allowedFieldsJson: JSON.stringify(input.allowedFields ?? []),
+      expiresAt: input.expiresAt ?? null,
+      now,
+    });
+    const row = this.getPassageStmt.get({ passageId }) as PassageRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to persist passage ${passageId} from citadel ${input.sourceCitadelId}`);
+    }
+    return mapPassage(row);
+  }
+
+  /** List Passages originating FROM this Citadel. */
+  public listPassages(sourceCitadelId: string): CitadelPassage[] {
+    const rows = this.listPassagesStmt.all({ sourceCitadelId }) as PassageRow[];
+    return rows.map(mapPassage);
+  }
+
+  public removePassage(sourceCitadelId: string, passageId: string): boolean {
+    const result = this.deletePassageStmt.run({ sourceCitadelId, passageId });
+    return Number((result as { changes?: number }).changes ?? 0) > 0;
+  }
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -302,6 +364,18 @@ function mapWard(row: WardRow): CitadelWardRecord {
     name: row.name,
     actionPattern: row.action_pattern,
     effect: row.effect as WardEffect,
+    createdAt: row.created_at,
+  };
+}
+
+function mapPassage(row: PassageRow): CitadelPassage {
+  return {
+    passageId: row.passage_id,
+    sourceCitadelId: row.source_citadel_id,
+    sourceChamberId: row.source_chamber_id ?? undefined,
+    destinationCitadelId: row.destination_citadel_id,
+    allowedFields: safeJsonParse<string[]>(row.allowed_fields_json, []),
+    expiresAt: row.expires_at ?? undefined,
     createdAt: row.created_at,
   };
 }

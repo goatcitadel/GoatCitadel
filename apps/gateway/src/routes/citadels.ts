@@ -58,6 +58,18 @@ const wardParamsSchema = z.object({
   wardId: z.string().min(1),
 });
 
+const passageSchema = z.object({
+  destinationCitadelId: z.string().min(1),
+  allowedFields: z.array(z.string().min(1)),
+  sourceChamberId: z.string().min(1).optional(),
+  expiresAt: z.string().datetime().optional(),
+});
+
+const passageParamsSchema = z.object({
+  citadelId: z.string().min(1),
+  passageId: z.string().min(1),
+});
+
 export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
@@ -294,6 +306,52 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       const removed = citadels.removeWard(params.data.citadelId, params.data.wardId);
       if (!removed) {
         return reply.code(404).send({ error: `Ward ${params.data.wardId} not found.` });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Passages = explicit cross-Citadel sharing bridges originating from this Citadel.
+  fastify.get("/api/v1/citadels/:citadelId/passages", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({ items: citadels.listPassages(params.data.citadelId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/passages", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    const parsed = passageSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const passage = citadels.createPassage({ sourceCitadelId: params.data.citadelId, ...parsed.data });
+      return reply.code(201).send(passage);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/citadels/:citadelId/passages/:passageId", operatorOnly, async (request, reply) => {
+    const params = passageParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const removed = citadels.removePassage(params.data.citadelId, params.data.passageId);
+      if (!removed) {
+        return reply.code(404).send({ error: `Passage ${params.data.passageId} not found.` });
       }
       return reply.code(204).send();
     } catch (error) {

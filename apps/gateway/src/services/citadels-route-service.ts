@@ -9,6 +9,8 @@ import type {
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
+  CitadelPassage,
+  CitadelPassageInput,
   CitadelTemplate,
   CitadelWardInput,
   CitadelWardRecord,
@@ -40,6 +42,9 @@ export interface CitadelsRoutePort {
   addWard(input: CitadelWardInput): CitadelWardRecord;
   listWards(citadelId: string): CitadelWardRecord[];
   removeWard(citadelId: string, wardId: string): boolean;
+  createPassage(input: CitadelPassageInput): CitadelPassage;
+  listPassages(sourceCitadelId: string): CitadelPassage[];
+  removePassage(sourceCitadelId: string, passageId: string): boolean;
 }
 
 export class CitadelsRouteService {
@@ -124,5 +129,17 @@ export class CitadelsRouteService {
 
   public unassignAgent(citadelId: string, agentId: string): boolean {
     return this.citadels.unassignAgent(citadelId, agentId);
+  }
+
+  public listPassages(sourceCitadelId: string): CitadelPassage[] {
+    return this.citadels.listPassages(sourceCitadelId);
+  }
+
+  public createPassage(input: CitadelPassageInput): CitadelPassage {
+    return this.citadels.createPassage(input);
+  }
+
+  public removePassage(sourceCitadelId: string, passageId: string): boolean {
+    return this.citadels.removePassage(sourceCitadelId, passageId);
   }
 }
