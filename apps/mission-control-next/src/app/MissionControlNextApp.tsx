@@ -1157,6 +1157,19 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
             item.section === "curator",
         ),
       },
+      {
+        id: "library-citadel",
+        label: "Citadel",
+        items: items.filter(
+          (item) =>
+            item.section === "citadel-overview" ||
+            item.section === "citadel" ||
+            item.section === "citadel-wards" ||
+            item.section === "citadel-council" ||
+            item.section === "citadel-vault" ||
+            item.section === "citadel-blueprint",
+        ),
+      },
     ].filter((group) => group.items.length);
   }
 
