@@ -64,6 +64,7 @@ export function persistProviderApiKeyWithFallback(input: PersistProviderApiKeyIn
           `Secure keychain is unavailable on this host and writing the secret for provider ${input.providerId} ` +
             "to a plaintext .env file is disabled. Set GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK=1 " +
             "(or pass allowEnvFallback) to opt in to env-backed secrets.",
+          { cause: error },
         );
       }
     }

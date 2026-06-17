@@ -1,26 +1,26 @@
 {
-  "generatedAt": "2026-06-03T04:05:47.755Z",
-  "gatewayLineCount": 9129,
+  "generatedAt": "2026-06-17T14:09:34.358Z",
+  "gatewayLineCount": 9125,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
-      "lineCount": 15204,
-      "bytes": 693338
+      "lineCount": 11958,
+      "bytes": 492981
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
-      "lineCount": 9843,
-      "bytes": 406986
+      "lineCount": 9282,
+      "bytes": 359466
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 9129,
-      "bytes": 351932
+      "lineCount": 9125,
+      "bytes": 361529
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
       "lineCount": 5738,
-      "bytes": 211205
+      "bytes": 216942
     },
     {
       "path": "apps/gateway/src/services/capability-system-service.ts",
@@ -29,28 +29,28 @@
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
-      "lineCount": 3249,
-      "bytes": 117664
+      "lineCount": 3272,
+      "bytes": 118862
     },
     {
       "path": "apps/gateway/src/services/memory-lifecycle-service.ts",
-      "lineCount": 3202,
-      "bytes": 114840
+      "lineCount": 3207,
+      "bytes": 118195
     },
     {
       "path": "apps/gateway/src/services/skill-import-service.ts",
       "lineCount": 2771,
-      "bytes": 101671
+      "bytes": 104441
     },
     {
       "path": "apps/gateway/src/services/chat-proactive-service.ts",
       "lineCount": 2317,
-      "bytes": 80259
+      "bytes": 82575
     },
     {
       "path": "apps/gateway/src/services/chat-workbench-service.ts",
       "lineCount": 2198,
-      "bytes": 77016
+      "bytes": 79213
     }
   ],
   "gatewayPublicMethodCount": 256,
@@ -105,17 +105,17 @@
   "gatewayRouteCompositionVariadicAnyMethodCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumerCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumers": [],
-  "gatewayRouteCompositionPortMemberCount": 156,
+  "gatewayRouteCompositionPortMemberCount": 157,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 825,
+  "totalHostCallbacks": 822,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
     "apps/gateway/src/services/approval-lifecycle-service.ts": 68,
     "apps/gateway/src/services/channel-setup-helpers.ts": 1,
     "apps/gateway/src/services/channel-setup-service.ts": 34,
-    "apps/gateway/src/services/chat-agent-orchestrator.ts": 8,
+    "apps/gateway/src/services/chat-agent-orchestrator.ts": 5,
     "apps/gateway/src/services/chat-turn-dispatch-service.ts": 41,
     "apps/gateway/src/services/chat-turn-entry-service.ts": 85,
     "apps/gateway/src/services/chat-turn-helpers.ts": 1,
@@ -152,8 +152,8 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4
   },
   "settingsHostCallbackCount": 0,
-  "chatHostCallbackCount": 261,
-  "routeFacingServiceCount": 58,
+  "chatHostCallbackCount": 258,
+  "routeFacingServiceCount": 62,
   "routeFacingServiceFiles": [
     "apps/gateway/src/services/a2a-route-service.ts",
     "apps/gateway/src/services/addons-route-service.ts",
@@ -171,6 +171,7 @@
     "apps/gateway/src/services/chat-sessions-route-service.ts",
     "apps/gateway/src/services/chat-support-route-service.ts",
     "apps/gateway/src/services/chat-tools-route-service.ts",
+    "apps/gateway/src/services/citadels-route-service.ts",
     "apps/gateway/src/services/comms-route-service.ts",
     "apps/gateway/src/services/connectors-route-service.ts",
     "apps/gateway/src/services/costs-route-service.ts",
@@ -192,15 +193,18 @@
     "apps/gateway/src/services/knowledge-route-service.ts",
     "apps/gateway/src/services/llama-cpp-route-service.ts",
     "apps/gateway/src/services/llm-route-service.ts",
+    "apps/gateway/src/services/local-ai-route-service.ts",
     "apps/gateway/src/services/mcp-route-service.ts",
     "apps/gateway/src/services/media-route-service.ts",
     "apps/gateway/src/services/memory-route-service.ts",
     "apps/gateway/src/services/mesh-route-service.ts",
     "apps/gateway/src/services/mobile-route-service.ts",
+    "apps/gateway/src/services/model-comparison-route-service.ts",
     "apps/gateway/src/services/npu-route-service.ts",
     "apps/gateway/src/services/obsidian-route-service.ts",
     "apps/gateway/src/services/onboarding-route-service.ts",
     "apps/gateway/src/services/orchestration-route-service.ts",
+    "apps/gateway/src/services/personal-ops-route-service.ts",
     "apps/gateway/src/services/prompt-packs-route-service.ts",
     "apps/gateway/src/services/realtime-events-route-service.ts",
     "apps/gateway/src/services/runtime-lifecycle-route-service.ts",
