@@ -23,7 +23,7 @@ import type { McpServerRecord } from "@goatcitadel/contracts";
 import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
-import { ReleaseScopeBadge } from "../NativeRoutePageLayout";
+import { NativePageFrame } from "../NativeRoutePageLayout";
 import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
@@ -123,23 +123,22 @@ export function SettingsPageFrame({
   /** F-M11: renders an on-surface "Experimental" badge for experimental sections. */
   releaseStatus?: ReleaseSurfaceStatus;
 }) {
+  // Delegates to the canonical NativePageFrame so Settings shares one frame with
+  // the rest of the app (loading/error are handled separately by SettingsSectionShell,
+  // hence loading={false} error={null} here).
   return (
-    <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header" data-area="settings">
-        <div className="mc-next-directory-icon">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mc-next-directory-copy">
-          <p>{kicker}</p>
-          <div className="mc-next-directory-title-row">
-            <h1>{title}</h1>
-            <ReleaseScopeBadge status={releaseStatus} />
-          </div>
-          <span>{description}</span>
-        </div>
-      </header>
+    <NativePageFrame
+      icon={Icon}
+      area="settings"
+      kicker={kicker}
+      title={title}
+      description={description}
+      loading={false}
+      error={null}
+      releaseStatus={releaseStatus}
+    >
       {children}
-    </section>
+    </NativePageFrame>
   );
 }
 
