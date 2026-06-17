@@ -386,7 +386,11 @@ export const OfficeCanvas = memo(function OfficeCanvas(props: OfficeCanvasProps)
   const cameraFov = props.followSelection && selectedSeat ? 31 : props.focusMode ? 34 : 38;
 
   return (
-    <div className="office-webgl-stage office-webgl-stage-v5">
+    <div
+      className="office-webgl-stage office-webgl-stage-v5"
+      role="img"
+      aria-label="3D office floor visualizing agent activity and seating"
+    >
       <Canvas
         camera={{ position: cameraPosition, fov: cameraFov }}
         shadows

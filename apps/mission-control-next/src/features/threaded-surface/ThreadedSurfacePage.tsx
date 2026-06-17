@@ -316,6 +316,7 @@ export function ThreadedSurfacePage({
       <button
         type="button"
         className={`mc-next-threaded-scrim${railDrawerOpen ? " open" : ""}`}
+        aria-label="Dismiss session rail"
         aria-hidden={!railDrawerOpen}
         tabIndex={railDrawerOpen ? 0 : -1}
         onClick={() => input.onSessionRailOpenChange(false)}
@@ -503,6 +504,7 @@ export function ThreadedSurfacePage({
             ref={input.dropTargetProps.fileInputRef}
             type="file"
             multiple
+            aria-label="Upload files"
             className="mc-next-hidden-file"
             onChange={(event) => input.dropTargetProps.onUploadFiles(event.target.files)}
           />
