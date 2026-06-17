@@ -32,7 +32,7 @@ import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, FilterPillGroup, ModeBar } from "../primitives";
+import { EmptyState, FilterPillGroup, ModeBar, NativeSelectableList } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -532,11 +532,7 @@ export function ProjectsRoutePage({
             }))}
             onChange={(value) => setFilterView(value as ProjectFilterView)}
           />
-          <div
-            className="mc-next-settings-selectable-list is-compact is-scrollable"
-            data-native-scroll="true"
-            style={{ maxHeight: "min(62vh, 38rem)" }}
-          >
+          <NativeSelectableList density="compact" maxHeight="min(62vh, 38rem)">
             {visibleProjects.length ? (
               visibleProjects.map((project) => {
                 const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
@@ -646,7 +642,7 @@ export function ProjectsRoutePage({
                 ) : null}
               </>
             )}
-          </div>
+          </NativeSelectableList>
         </NativeCard>
 
         <NativeCard

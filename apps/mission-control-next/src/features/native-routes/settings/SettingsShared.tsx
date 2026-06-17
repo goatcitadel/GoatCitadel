@@ -23,7 +23,7 @@ import type { McpServerRecord } from "@goatcitadel/contracts";
 import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
-import { NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
 import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
@@ -89,7 +89,12 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
     return null;
   }
   return (
-    <SettingsPanel title="Some data could not load" subtitle="The rest of this settings page is still usable.">
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title="Some data could not load"
+      subtitle="The rest of this settings page is still usable."
+    >
       <SettingsActionList
         items={issues.map((issue) => ({
           label: issue.label,
@@ -103,7 +108,7 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
           Retry
         </button>
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -258,7 +263,9 @@ export function SettingsPosturePanel({
   ];
 
   return (
-    <SettingsPanel
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Active posture"
       subtitle="Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance."
     >
@@ -292,7 +299,7 @@ export function SettingsPosturePanel({
           onOpen={() => onNavigate("access")}
         />
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -338,65 +345,6 @@ function SettingsPostureCard({
   );
 }
 
-export function SettingsPanel({
-  title,
-  subtitle,
-  stats,
-  headerAccessory,
-  children,
-  compact = true,
-  scrollBody = false,
-  bodyMaxHeight,
-}: {
-  title: string;
-  subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
-  /**
-   * Optional element rendered in the panel head — used to surface the
-   * "Unsaved" indicator next to the section title. Sections opt in by
-   * combining `useFormDirty` with this slot.
-   */
-  headerAccessory?: ReactNode;
-  children: ReactNode;
-  compact?: boolean;
-  scrollBody?: boolean;
-  bodyMaxHeight?: string;
-}) {
-  return (
-    <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
-      <div className="mc-next-directory-card-head">
-        <div>
-          <div
-            className="mc-next-settings-panel-title-row"
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}
-          >
-            <h2>{title}</h2>
-            {headerAccessory}
-          </div>
-          <p>{subtitle}</p>
-        </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <div
-        className={`mc-next-settings-panel-body${scrollBody ? " is-scrollable" : ""}`}
-        data-native-scroll={scrollBody ? "true" : undefined}
-        style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
-      >
-        {children}
-      </div>
-    </article>
-  );
-}
-
 export function SettingsFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
@@ -412,20 +360,6 @@ export function SettingsField({ label, children, span = 1 }: { label: string; ch
 
 export function SettingsButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
-}
-
-export function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export function SettingsConfigSourceLegend() {
@@ -458,50 +392,6 @@ export function SettingsWizardSteps({
         </li>
       ))}
     </ol>
-  );
-}
-
-export function SettingsSelectableList({
-  items,
-  selectedId,
-  onSelect,
-  emptyLabel,
-  maxHeight = "min(56vh, 34rem)",
-  compact = true,
-}: {
-  items: Array<{ id: string; title: string; meta?: string; body?: string }>;
-  selectedId: string;
-  onSelect: (id: string) => void;
-  emptyLabel: string;
-  maxHeight?: string;
-  compact?: boolean;
-}) {
-  if (!items.length) {
-    return <SettingsEmptyState label={emptyLabel} />;
-  }
-  return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
   );
 }
 
