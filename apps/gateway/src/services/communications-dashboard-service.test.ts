@@ -128,6 +128,44 @@ describe("communications dashboard service", () => {
     expect(serialized).not.toContain("raw-client-secret");
   });
 
+  it("fetches inbox messages and calendar events concurrently", async () => {
+    const calls: string[] = [];
+    let releaseGmail = (): void => undefined;
+    let gmailStarted = (): void => undefined;
+    const gmailStartedPromise = new Promise<void>((resolve) => {
+      gmailStarted = resolve;
+    });
+    const gmailReleasePromise = new Promise<void>((resolve) => {
+      releaseGmail = resolve;
+    });
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      listIntegrationConnections: () => [createConnection()],
+      commsGmailRead: vi.fn(async () => {
+        calls.push("gmail:start");
+        gmailStarted();
+        await gmailReleasePromise;
+        calls.push("gmail:end");
+        return { items: [] };
+      }),
+      commsCalendarList: vi.fn(async () => {
+        calls.push("calendar:start");
+        calls.push("calendar:end");
+        return { items: [] };
+      }),
+    });
+
+    const dashboardPromise = service.getDashboard();
+    await gmailStartedPromise;
+    await Promise.resolve();
+    const calendarStartedBeforeGmailRelease = calls.includes("calendar:start");
+    releaseGmail();
+    await dashboardPromise;
+
+    expect(calendarStartedBeforeGmailRelease).toBe(true);
+    expect(calls.indexOf("calendar:start")).toBeLessThan(calls.indexOf("gmail:end"));
+  });
+
   it("marks send draft as approval required without invoking Gmail send", async () => {
     const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
     const service = createCommunicationsDashboardService({

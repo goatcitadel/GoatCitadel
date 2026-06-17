@@ -98,6 +98,70 @@ describe("RuntimeLifecycleExportService", () => {
     });
   });
 
+  it("fetches transcript and timeline concurrently when both are included", async () => {
+    const calls: string[] = [];
+    let transcriptStarted = (): void => undefined;
+    let releaseTranscript = (): void => undefined;
+    const transcriptStartedPromise = new Promise<void>((resolve) => {
+      transcriptStarted = resolve;
+    });
+    const transcriptReleasePromise = new Promise<void>((resolve) => {
+      releaseTranscript = resolve;
+    });
+    const service = new RuntimeLifecycleExportService({
+      getRuntimeLifecycle: vi.fn(async () => ({
+        query: {
+          sessionId: "session-1",
+        },
+        canonical: {
+          sessionId: "session-1",
+        },
+        linked: {
+          sessionIds: ["session-1"],
+          turnIds: [],
+          runIds: [],
+          proactiveRunIds: [],
+          approvalIds: [],
+          taskIds: [],
+          workspaceIds: [],
+        },
+        turns: [],
+        toolRuns: [],
+        executionPlans: [],
+        delegationRuns: [],
+        delegationSteps: [],
+        proactiveRuns: [],
+        approvalEffects: [],
+      })),
+      getTranscript: vi.fn(async () => {
+        calls.push("transcript:start");
+        transcriptStarted();
+        await transcriptReleasePromise;
+        calls.push("transcript:end");
+        return [];
+      }),
+      listSessionTimeline: vi.fn(async () => {
+        calls.push("timeline:start");
+        calls.push("timeline:end");
+        return [];
+      }),
+    });
+
+    const bundlePromise = service.exportBundle({
+      sessionId: "session-1",
+      includeTranscript: true,
+      includeTimeline: true,
+    });
+    await transcriptStartedPromise;
+    await Promise.resolve();
+    const timelineStartedBeforeTranscriptRelease = calls.includes("timeline:start");
+    releaseTranscript();
+    await bundlePromise;
+
+    expect(timelineStartedBeforeTranscriptRelease).toBe(true);
+    expect(calls.indexOf("timeline:start")).toBeLessThan(calls.indexOf("transcript:end"));
+  });
+
   it("attaches a shareable trust report when requested", async () => {
     const service = new RuntimeLifecycleExportService({
       getRuntimeLifecycle: vi.fn(async () => ({

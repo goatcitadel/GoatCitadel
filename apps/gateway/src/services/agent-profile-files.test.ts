@@ -79,6 +79,35 @@ describe("discoverProjectAgentProfiles", () => {
     expect(records[0]?.disabledReason).toContain("tools must include at least one string");
   });
 
+  it("keeps records in stable profile path order", async () => {
+    const root = await createTempProject();
+    await writeAgentProfile(
+      root,
+      "zeta.yaml",
+      ["profileId: zeta", "name: Zeta", "description: Last profile.", "tools: [fs.read]", "contextMode: isolated"].join(
+        "\n",
+      ),
+    );
+    await writeAgentProfile(
+      root,
+      "alpha.yaml",
+      [
+        "profileId: alpha",
+        "name: Alpha",
+        "description: First profile.",
+        "tools: [fs.read]",
+        "contextMode: isolated",
+      ].join("\n"),
+    );
+
+    const records = await discoverProjectAgentProfiles({ projectRoot: root });
+
+    expect(records.map((record) => record.path)).toEqual([
+      ".goatcitadel/agents/alpha.yaml",
+      ".goatcitadel/agents/zeta.yaml",
+    ]);
+  });
+
   it("returns an empty list when the project has no local agent directory", async () => {
     const root = await createTempProject();
 

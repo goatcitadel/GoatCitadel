@@ -55,8 +55,10 @@ export class CommunicationsDashboardService {
     const connections = this.listConnections();
     const mailAccounts = connections.flatMap((connection) => this.toMailAccount(connection, workspaceId));
     const calendarAccounts = connections.flatMap((connection) => this.toCalendarAccount(connection, workspaceId));
-    const messages = await this.listMessages(mailAccounts, query.inboxLimit ?? DEFAULT_INBOX_LIMIT);
-    const events = await this.listEvents(calendarAccounts, query.agendaLimit ?? DEFAULT_AGENDA_LIMIT);
+    const [messages, events] = await Promise.all([
+      this.listMessages(mailAccounts, query.inboxLimit ?? DEFAULT_INBOX_LIMIT),
+      this.listEvents(calendarAccounts, query.agendaLimit ?? DEFAULT_AGENDA_LIMIT),
+    ]);
     const contacts = this.listContacts(workspaceId, messages, connections);
 
     return {
