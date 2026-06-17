@@ -2,7 +2,7 @@ import type React from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeMetricGrid, NativeSelectableList } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
@@ -27,10 +27,10 @@ export function LibrarySectionShell({
         description={error}
         primaryAction={
           onRetry ? (
-            <button type="button" className="gc-button" onClick={() => onRetry()}>
+            <NativeButton variant="outline" onClick={() => onRetry()}>
               <RefreshCw className="h-4 w-4" />
               Retry
-            </button>
+            </NativeButton>
           ) : undefined
         }
       />
@@ -248,10 +248,10 @@ export function LibraryLoadWarnings({ issues, onRetry }: { issues: NativeLoadIss
       />
       {onRetry ? (
         <div className="mc-next-settings-actions">
-          <button type="button" className="mc-next-button-secondary" onClick={() => void onRetry()}>
+          <NativeButton variant="secondary" onClick={() => void onRetry()}>
             <RefreshCw className="h-4 w-4" />
             Retry
-          </button>
+          </NativeButton>
         </div>
       ) : null}
     </NativeCard>

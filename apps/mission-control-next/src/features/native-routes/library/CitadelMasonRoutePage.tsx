@@ -9,7 +9,7 @@ import {
   sendMasonMessage,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -168,15 +168,14 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
           ]}
           actions={
             session ? (
-              <button
-                type="button"
-                className="gc-button"
+              <NativeButton
+                variant="outline"
                 disabled={!canDraft || review.loading}
                 onClick={() => void draftAndReview()}
               >
                 <Sparkles className="h-4 w-4" />
                 {review.loading ? "Drafting…" : "Draft & review Blueprint"}
-              </button>
+              </NativeButton>
             ) : undefined
           }
         >
@@ -184,15 +183,14 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
           {!session ? (
             <div className="mc-next-mason-start">
               <p>Start a session and tell the Mason what this Citadel is for.</p>
-              <button
-                type="button"
-                className="mc-next-button"
+              <NativeButton
+                variant="default"
                 disabled={sessionState.busy}
                 onClick={() => void startSession()}
               >
                 <Hammer className="h-4 w-4" />
                 {sessionState.busy ? "Starting…" : "Start setup"}
-              </button>
+              </NativeButton>
             </div>
           ) : (
             <>
@@ -212,15 +210,14 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
                   onChange={(event) => setMessage(event.target.value)}
                 />
               </label>
-              <button
-                type="button"
-                className="mc-next-button"
+              <NativeButton
+                variant="default"
                 disabled={sessionState.busy || message.trim().length === 0}
                 onClick={() => void submitMessage()}
               >
                 <Send className="h-4 w-4" />
                 {sessionState.busy ? "Interpreting…" : "Send to the Mason"}
-              </button>
+              </NativeButton>
             </>
           )}
         </NativeCard>

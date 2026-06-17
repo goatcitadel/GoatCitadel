@@ -21,7 +21,7 @@ import {
   type SettingsSectionProps,
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeMetricGrid } from "../../primitives";
+import { NativeButton, NativeMetricGrid } from "../../primitives";
 
 type TrustPolicyDashboardStatus =
   | "ready"
@@ -125,10 +125,10 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             ]}
           />
           <SettingsButtonRow>
-            <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+            <NativeButton variant="secondary" onClick={() => void reload()}>
               <RefreshCw size={16} />
               Refresh snapshot
-            </button>
+            </NativeButton>
           </SettingsButtonRow>
         </NativeCard>
         <SettingsStack>

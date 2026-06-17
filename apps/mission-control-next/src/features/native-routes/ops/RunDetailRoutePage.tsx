@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
@@ -108,19 +108,18 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       ]}
       actions={
         <>
-          <button
-            type="button"
-            className="mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={() => void copyTraceExport()}
             disabled={!runId || exporting}
           >
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy trace export"}
-          </button>
-          <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+          </NativeButton>
+          <NativeButton variant="secondary" onClick={() => void reload()}>
             <RefreshCw className="h-4 w-4" />
             Refresh
-          </button>
+          </NativeButton>
         </>
       }
     >
@@ -250,9 +249,8 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
           </div>
           <p className="mc-next-approvals-summary">{detail.replayReason}</p>
           {detail.sessionId && detail.turnId && isStableSurface(detail.sourceSurface) ? (
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            <NativeButton
+              variant="secondary"
               onClick={() =>
                 navigate({
                   area: detail.sourceSurface as "chat" | "cowork" | "code",
@@ -265,7 +263,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
             >
               <GitBranch className="h-4 w-4" />
               Open source thread
-            </button>
+            </NativeButton>
           ) : null}
         </NativeCard>
       </NativeGrid>

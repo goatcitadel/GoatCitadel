@@ -10,7 +10,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { ChatMode } from "@goatcitadel/contracts";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { ProjectHomeMetric } from "./ProjectsRoutePage.components";
 import {
   SURFACES,
@@ -102,10 +102,10 @@ export function ProjectHomeBasePanel({
 
       <div className="mc-next-project-continue-row">
         {SURFACES.map((surface) => (
-          <button key={surface.mode} type="button" className="mc-next-button" onClick={() => onContinue(surface.mode)}>
+          <NativeButton key={surface.mode} onClick={() => onContinue(surface.mode)}>
             <MessageSquarePlus className="h-4 w-4" />
             {home.latestByMode[surface.mode] ? `Continue ${surface.label}` : `Start ${surface.label}`}
-          </button>
+          </NativeButton>
         ))}
       </div>
 

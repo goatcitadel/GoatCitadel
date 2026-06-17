@@ -24,7 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
+import { ThreePartChip, EmptyState, ErrorState, NativeButton, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -103,10 +103,10 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
         }))}
       />
       <div className="mc-next-settings-actions">
-        <button type="button" className="mc-next-button-secondary" onClick={() => void onRetry()}>
+        <NativeButton variant="secondary" onClick={() => void onRetry()}>
           <RefreshCw className="h-4 w-4" />
           Retry
-        </button>
+        </NativeButton>
       </div>
     </NativeCard>
   );
@@ -173,10 +173,10 @@ export function SettingsSectionShell({
         description={error}
         primaryAction={
           onRetry ? (
-            <button type="button" className="gc-button" onClick={() => onRetry()}>
+            <NativeButton variant="outline" onClick={() => onRetry()}>
               <RefreshCw className="h-4 w-4" />
               Retry
-            </button>
+            </NativeButton>
           ) : undefined
         }
       />
@@ -323,9 +323,9 @@ function SettingsPostureCard({
           <h3>{title}</h3>
           <span>{count} total</span>
         </div>
-        <button type="button" className="mc-next-button-secondary" onClick={onOpen}>
+        <NativeButton variant="secondary" onClick={onOpen}>
           Open
-        </button>
+        </NativeButton>
       </header>
       {rows.length > 0 ? (
         <ul className="mc-next-settings-posture-card-rows">
@@ -432,9 +432,9 @@ export function SettingsActionList({
             {item.meta ? <span>{item.meta}</span> : null}
           </div>
           {item.onClick ? (
-            <button type="button" className="mc-next-button-secondary" onClick={item.onClick}>
+            <NativeButton variant="secondary" onClick={item.onClick}>
               {item.actionLabel ?? "Open"}
-            </button>
+            </NativeButton>
           ) : item.actionLabel ? (
             <span className="mc-next-settings-chip">{item.actionLabel}</span>
           ) : null}

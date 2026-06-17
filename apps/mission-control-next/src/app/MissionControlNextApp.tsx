@@ -80,6 +80,7 @@ import { useShellStatus, type ShellStatusState } from "./use-shell-status";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
+import { NativeButton } from "@next/features/native-routes/primitives";
 
 type RailSection = {
   id: string;
@@ -333,16 +334,15 @@ export function MissionControlNextApp() {
         </div>
       ),
       actions: route.sessionId ? (
-        <button
-          type="button"
-          className="mc-next-button-secondary"
+        <NativeButton
+          variant="secondary"
           onClick={() => {
             void copyTrustReportForRoute(route);
           }}
         >
           <ShieldCheck size={14} />
           Copy trust report
-        </button>
+        </NativeButton>
       ) : null,
       body: (
         <div className="mc-next-inspector-stack">
@@ -607,24 +607,24 @@ export function MissionControlNextApp() {
                 <span>Search commands</span>
                 <kbd>Ctrl K</kbd>
               </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary mc-next-start-button"
+              <NativeButton
+                variant="secondary"
+                className="mc-next-start-button"
                 onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}
                 title="Open Start Here"
               >
                 <Rocket size={15} />
                 Start Here
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary mc-next-mode-toggle"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
+                className="mc-next-mode-toggle"
                 onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
                 title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
               >
                 <SlidersHorizontal size={15} />
                 {mode === "simple" ? "Guided" : "Expert"}
-              </button>
+              </NativeButton>
               <label className="mc-next-select-field">
                 <span>Workspace</span>
                 <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
@@ -696,14 +696,14 @@ export function MissionControlNextApp() {
                 {notificationPreferences.soundMode === "off" ? <VolumeX size={16} /> : <Volume2 size={16} />}
                 <span>{notificationPreferences.soundMode === "off" ? "Off" : "On"}</span>
               </button>
-              <button
-                type="button"
-                className="mc-next-button mc-next-button-secondary mc-next-wa-button"
+              <NativeButton
+                variant="secondary"
+                className="mc-next-wa-button"
                 onClick={() => setInspectorOpen((current) => !current)}
               >
                 {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
                 {inspectorOpen ? "Hide Context" : "Open Context"}
-              </button>
+              </NativeButton>
               <button
                 type="button"
                 className="mc-next-icon-button mc-next-theme-toggle"

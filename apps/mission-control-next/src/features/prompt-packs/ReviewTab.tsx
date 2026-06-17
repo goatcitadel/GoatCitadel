@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2, LoaderCircle, Sparkles } from "lucide-reac
 import type { PromptPackRunRecord } from "@goatcitadel/contracts";
 import { formatWeightedScore } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import type { ScoreDraft } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
+import { NativeButton } from "@next/features/native-routes/primitives";
 import { DIMENSION_ROWS } from "./PromptPacksWorkbenchPage.helpers";
 
 export interface ReviewTabProps {
@@ -126,9 +127,8 @@ export function ReviewTab({
           </label>
         </div>
         <div className="mc-pp-inline-actions wrap">
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             disabled={!v2UiEnabled}
             onClick={() =>
               onSetScoreDraft((current) => ({
@@ -142,25 +142,19 @@ export function ReviewTab({
             }
           >
             Fill pass defaults
-          </button>
-          <button
-            type="button"
-            className="mc-next-button"
-            disabled={!v2UiEnabled || savingScore || !selectedRun}
-            onClick={onSubmitScore}
-          >
+          </NativeButton>
+          <NativeButton disabled={!v2UiEnabled || savingScore || !selectedRun} onClick={onSubmitScore}>
             {savingScore ? <LoaderCircle size={16} className="mc-spin" /> : <CheckCircle2 size={16} />}
             Save review
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             disabled={!v2UiEnabled || autoScoring || !selectedRun || selectedRun.status !== "completed"}
             onClick={onAutoScoreSelected}
           >
             {autoScoring ? <LoaderCircle size={16} className="mc-spin" /> : <Sparkles size={16} />}
             Auto score this run
-          </button>
+          </NativeButton>
         </div>
         {selectedRun?.status === "failed" ? (
           <div className="mc-pp-alert warning">
