@@ -6,6 +6,7 @@ import {
   type TrustPolicyPosture,
   type TrustPolicySnapshot,
 } from "@goatcitadel/mission-control-shared/api/trust";
+import { StatusChip, type StatusChipTone } from "../../primitives";
 import {
   SettingsActionList,
   SettingsButtonRow,
@@ -339,12 +340,26 @@ function TrustPolicyEmptyState({ hasIssues }: { hasIssues: boolean }) {
   );
 }
 
+function toneForTrustPolicyStatus(status: TrustPolicyDashboardStatus): StatusChipTone {
+  switch (status) {
+    case "ready":
+      return "success";
+    case "blocked":
+    case "quarantined":
+      return "critical";
+    case "approval_required":
+      return "warning";
+    case "experimental":
+      return "default";
+    case "not_callable":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
+
 function TrustPolicyStatusBadge({ status }: { status: TrustPolicyDashboardStatus }) {
-  return (
-    <span className="mc-next-trust-policy-status" data-status={status}>
-      {labelForTrustPolicyStatus(status)}
-    </span>
-  );
+  return <StatusChip tone={toneForTrustPolicyStatus(status)}>{labelForTrustPolicyStatus(status)}</StatusChip>;
 }
 
 function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined): TrustPolicyMatrixRow[] {
