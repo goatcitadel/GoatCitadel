@@ -121,7 +121,7 @@
       "@webgpu/types": "link:vendor/webgpu-types-stub",
       "brace-expansion@^2.0.2": "2.0.3",
       "brace-expansion@^5.0.0": "5.0.6",
-      "dompurify": "3.4.0",
+      "dompurify": "3.4.10",
       "esbuild": "^0.28.1",
       "express-rate-limit@8.3.2>ip-address": "10.1.1",
       "fast-uri": "3.1.2",
@@ -131,7 +131,11 @@
       "qs": "6.15.2",
       "undici": "^6.24.1",
       "uuid": "14.0.0",
-      "ws@^8.0.0": "8.20.1"
+      "ws@^8.0.0": "8.21.0",
+      "@babel/core@^7.0.0": "7.29.6",
+      "js-yaml@^4.0.0": "4.2.0",
+      "protobufjs@^7.0.0": "7.6.3",
+      "vite@^6.0.0": "6.4.3"
     }
   },
   "devDependencies": {
