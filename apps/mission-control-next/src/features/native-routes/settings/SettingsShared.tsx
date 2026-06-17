@@ -24,7 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
+import { NativeSelectableList, ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -462,32 +462,16 @@ export function SettingsSelectableList({
   maxHeight?: string;
   compact?: boolean;
 }) {
-  if (!items.length) {
-    return <SettingsEmptyState label={emptyLabel} />;
-  }
+  // Delegates to the canonical NativeSelectableList primitive.
   return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
+    <NativeSelectableList
+      items={items}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      emptyLabel={emptyLabel}
+      maxHeight={maxHeight}
+      density={compact ? "compact" : "standard"}
+    />
   );
 }
 

@@ -2,7 +2,7 @@ import type React from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState } from "../primitives";
+import { EmptyState, ErrorState, NativeSelectableList } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
@@ -93,32 +93,16 @@ export function LibrarySelectableList({
   maxHeight?: string;
   compact?: boolean;
 }) {
-  if (!items.length) {
-    return <LibraryEmptyState label={emptyLabel} />;
-  }
+  // Delegates to the canonical NativeSelectableList primitive.
   return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
+    <NativeSelectableList
+      items={items}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      emptyLabel={emptyLabel}
+      maxHeight={maxHeight}
+      density={compact ? "compact" : "standard"}
+    />
   );
 }
 
