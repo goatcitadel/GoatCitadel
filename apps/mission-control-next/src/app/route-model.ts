@@ -563,6 +563,86 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ],
 };
 
+export interface RailGroup {
+  id: string;
+  label: string;
+  sections: NonNullable<AppRoute["section"]>[];
+}
+
+/**
+ * Single source of truth for rail grouping. Drives both the nav rail
+ * (buildRailSections) and breadcrumb derivation (routeKicker), so the two can
+ * never disagree. Areas absent here render as one ungrouped rail. Sections
+ * intentionally omitted from every group (settings "permissions"/"onboarding")
+ * stay reachable via deep link but are not surfaced in grouped navigation
+ * (H-13 ship punchlist: keeps the ongoing configuration surface scannable).
+ */
+export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
+  settings: [
+    { id: "settings-foundations", label: "Foundations", sections: ["general", "workspaces"] },
+    {
+      id: "settings-identity",
+      label: "Identity",
+      sections: ["access", "personalities", "providers", "local-ai", "trust-policy"],
+    },
+    { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
+    { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },
+  ],
+  library: [
+    {
+      id: "library-knowledge",
+      label: "Knowledge",
+      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
+    },
+    {
+      id: "library-assets",
+      label: "Assets",
+      sections: ["files", "artifacts", "communications", "prompt-packs", "curator"],
+    },
+    {
+      id: "library-citadel",
+      label: "Citadel",
+      sections: ["citadel-overview", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint"],
+    },
+  ],
+  ops: [
+    { id: "ops-observe", label: "Observe", sections: ["activity", "sessions", "schedules"] },
+    {
+      id: "ops-control",
+      label: "Operate",
+      sections: ["improvement", "notifications", "approvals", "costs", "quality", "runtime", "diagnostics", "kanban"],
+    },
+  ],
+};
+
+/** The rail group a section belongs to, or undefined when ungrouped. */
+export function railGroupForSection(area: PrimaryArea, section: AppRoute["section"]): RailGroup | undefined {
+  if (!section) {
+    return undefined;
+  }
+  return RAIL_GROUPS[area]?.find((group) => group.sections.includes(section));
+}
+
+/**
+ * Derives a page's breadcrumb kicker from the route registry so it always
+ * matches the nav rail: "Area · [Group ·] Section", with the section name taken
+ * verbatim from the rail item label. Grouped sections render three levels;
+ * ungrouped sections render two. Falls back to the area label for root/unknown.
+ */
+export function routeKicker(route: AppRoute): string {
+  const areaLabel = AREA_META[route.area].label;
+  const section = route.section;
+  if (!section) {
+    return areaLabel;
+  }
+  const sectionLabel = RAIL_ITEMS[route.area]?.find((item) => item.section === section)?.label;
+  if (!sectionLabel) {
+    return areaLabel;
+  }
+  const group = railGroupForSection(route.area, section);
+  return group ? `${areaLabel} · ${group.label} · ${sectionLabel}` : `${areaLabel} · ${sectionLabel}`;
+}
+
 export const ROUTE_RELEASE_SCOPE = [
   {
     area: "chat",

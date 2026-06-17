@@ -11,6 +11,7 @@ import {
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 interface QuestionsState {
@@ -55,7 +56,7 @@ function describeAnswers(answers: Partial<MasonAnswers>): Array<{ title: string;
  * step (freeform → model interpretation → merged answers) and the
  * review-before-activation summary. Staging never connects accounts or opens Gates.
  */
-export function CitadelMasonRoutePage({ activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRoutePagesProps) {
   const messageInputId = useId();
   const [questions, setQuestions] = useState<QuestionsState>({ loading: true, error: null, items: [] });
   const [sessionState, setSessionState] = useState<SessionState>({ session: null, busy: false, error: null });
@@ -136,7 +137,7 @@ export function CitadelMasonRoutePage({ activeWorkspaceName }: NativeRoutePagesP
     <NativePageFrame
       icon={Hammer}
       area="library"
-      kicker="Library · The Mason"
+      kicker={routeKicker(route)}
       title="The Mason"
       description={`Stage a Citadel for ${activeWorkspaceName} by answering the Mason — nothing is connected or activated until you review and confirm.`}
       loading={questions.loading}

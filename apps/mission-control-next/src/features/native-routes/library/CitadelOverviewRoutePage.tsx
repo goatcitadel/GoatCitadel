@@ -5,6 +5,7 @@ import { getCitadel, getCitadelGatehouse, isApiRequestError } from "@goatcitadel
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 type Gatehouse = CitadelGatehouseSummary & { wardCount: number };
@@ -29,7 +30,7 @@ function listSection(label: string, values: string[]): { title: string; body?: s
  * the active workspace *as* a Citadel — the workspace becomes a Citadel the moment
  * it has a Charter, so a workspace with none routes the operator to the Mason.
  */
-export function CitadelOverviewRoutePage({ activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
   const [state, setState] = useState<OverviewState>(INITIAL);
 
   useEffect(() => {
@@ -70,7 +71,7 @@ export function CitadelOverviewRoutePage({ activeWorkspaceId, activeWorkspaceNam
     <NativePageFrame
       icon={Castle}
       area="library"
-      kicker="Library · Citadel"
+      kicker={routeKicker(route)}
       title="Citadel"
       description={`How ${activeWorkspaceName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture.`}
       loading={state.loading}

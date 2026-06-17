@@ -11,6 +11,7 @@ import {
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 interface SecretsState {
@@ -40,7 +41,7 @@ function describeStoreError(error: unknown): string {
  * master key held in the OS keychain; the plaintext is never persisted. The list
  * shows names only — revealing a value is an explicit, per-secret action.
  */
-export function CitadelVaultRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const nameId = useId();
   const valueId = useId();
   const [secrets, setSecrets] = useState<SecretsState>({ loading: true, error: null, items: [] });
@@ -127,7 +128,7 @@ export function CitadelVaultRoutePage({ activeWorkspaceId, activeWorkspaceName }
     <NativePageFrame
       icon={KeyRound}
       area="library"
-      kicker="Library · Vault"
+      kicker={routeKicker(route)}
       title="Vault"
       description={`Secrets for ${activeWorkspaceName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
       loading={secrets.loading}

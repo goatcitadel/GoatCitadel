@@ -8,6 +8,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 const WARD_EFFECTS: WardEffect[] = [
@@ -40,7 +41,7 @@ const INITIAL_DRAFT: DraftState = { name: "", actionPattern: "", effect: "deny",
  * the most restrictive matching effect governs an action. This surface lists the
  * Citadel's Wards, adds new ones, and lets the operator test an action against them.
  */
-export function CitadelWardsRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const nameId = useId();
   const patternId = useId();
   const effectId = useId();
@@ -104,7 +105,7 @@ export function CitadelWardsRoutePage({ activeWorkspaceId, activeWorkspaceName }
     <NativePageFrame
       icon={ShieldCheck}
       area="library"
-      kicker="Library · Gatehouse Wards"
+      kicker={routeKicker(route)}
       title="Wards"
       description={`Access policy for ${activeWorkspaceName}. Wards are evaluated deny-wins — the most restrictive matching effect governs an action.`}
       loading={wards.loading}

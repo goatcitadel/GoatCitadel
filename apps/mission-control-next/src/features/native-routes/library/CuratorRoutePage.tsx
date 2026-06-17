@@ -3,7 +3,7 @@ import { Archive, RefreshCw, ShieldCheck } from "lucide-react";
 import type { CuratorSkillStatusItem, CuratorStatusResponse } from "@goatcitadel/contracts";
 import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { getRouteReleaseScope } from "@next/app/route-model";
+import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -96,7 +96,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
   return (
     <NativePageFrame
       icon={ShieldCheck}
-      kicker="Library"
+      kicker={routeKicker(route)}
       title="Skill Curator"
       description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
       loading={loading}

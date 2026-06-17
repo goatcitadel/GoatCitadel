@@ -4,6 +4,7 @@ import type { CitadelCouncilAssignment } from "@goatcitadel/contracts";
 import { listCitadelCouncil } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 interface CouncilState {
@@ -18,7 +19,7 @@ interface CouncilState {
  * an agent binds it to the Citadel, it does not duplicate the agent. Binding each
  * seat to a scoped grant ceiling is the policy-engine work tracked separately.
  */
-export function CitadelCouncilRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelCouncilRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [council, setCouncil] = useState<CouncilState>({ loading: true, error: null, items: [] });
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export function CitadelCouncilRoutePage({ activeWorkspaceId, activeWorkspaceName
     <NativePageFrame
       icon={Users}
       area="library"
-      kicker="Library · Council"
+      kicker={routeKicker(route)}
       title="Council"
       description={`Agents seated in the ${activeWorkspaceName} Citadel. Seats reference the agents this workspace already owns.`}
       loading={council.loading}

@@ -10,6 +10,7 @@ import {
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 interface ExportState {
@@ -42,7 +43,7 @@ function parseBlueprint(text: string): { blueprint: unknown } | { parseError: st
  * (schema + secret-scan) before applying, so a shared Blueprint can never smuggle
  * credentials or silently activate connections.
  */
-export function CitadelBlueprintRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const importId = useId();
   const [exportState, setExportState] = useState<ExportState>({ loading: true, error: null, staged: false, json: null });
   const [importText, setImportText] = useState("");
@@ -106,7 +107,7 @@ export function CitadelBlueprintRoutePage({ activeWorkspaceId, activeWorkspaceNa
     <NativePageFrame
       icon={Download}
       area="library"
-      kicker="Library · Blueprint"
+      kicker={routeKicker(route)}
       title="Blueprint"
       description={`Export ${activeWorkspaceName} as a portable, secret-free Blueprint, or import one. Imports are validated and secret-scanned before they apply.`}
       loading={exportState.loading}

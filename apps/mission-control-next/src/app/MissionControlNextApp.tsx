@@ -69,6 +69,7 @@ import {
   isRailItemActive,
   normalizeAppRoute,
   type AppRoute,
+  RAIL_GROUPS,
   type PrimaryArea,
   type RailItem,
 } from "./route-model";
@@ -1074,132 +1075,20 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
 }
 
 export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
-  if (area === "settings") {
-    /*
-     * H-13 (ship punchlist): Settings IA keeps one-time and overlap routes
-     * out of grouped rail navigation so the ongoing configuration surface
-     * stays scannable. Two leaves are intentionally NOT surfaced
-     * in any group:
-     *   - "permissions": semantic overlap with "access" — both are
-     *     authorization. Folded into Access in spirit; the route still
-     *     resolves for deep links + redirects.
-     *   - "onboarding" ("Start Here"): a one-time first-run flow rather
-     *     than ongoing settings; deserves its own discoverable entry point
-     *     elsewhere (W3.2 follow-up).
-     * Net distribution: Foundations(2) / Identity(4) / Surfaces(4) /
-     * Operations(3) = 13 with Trust & Policy promoted as an ongoing
-     * governance dashboard.
-     */
-    return [
-      {
-        id: "settings-foundations",
-        label: "Foundations",
-        items: items.filter((item) => item.section === "general" || item.section === "workspaces"),
-      },
-      {
-        id: "settings-identity",
-        label: "Identity",
-        items: items.filter(
-          (item) =>
-            item.section === "access" ||
-            item.section === "personalities" ||
-            item.section === "providers" ||
-            item.section === "local-ai" ||
-            item.section === "trust-policy",
-        ),
-      },
-      {
-        id: "settings-surfaces",
-        label: "Surfaces",
-        items: items.filter(
-          (item) =>
-            item.section === "channels" ||
-            item.section === "integrations" ||
-            item.section === "mcp" ||
-            item.section === "tools",
-        ),
-      },
-      {
-        id: "settings-operations",
-        label: "Operations",
-        items: items.filter(
-          (item) => item.section === "runtime" || item.section === "addons" || item.section === "budget",
-        ),
-      },
-    ].filter((group) => group.items.length);
+  // Grouping is data-driven from RAIL_GROUPS (route-model) so the nav rail and
+  // breadcrumb kickers (routeKicker) can never disagree. See RAIL_GROUPS for the
+  // H-13 rationale on intentionally-ungrouped settings leaves.
+  const groups = RAIL_GROUPS[area];
+  if (!groups) {
+    return [{ id: `${area}-primary`, items }];
   }
-
-  if (area === "library") {
-    return [
-      {
-        id: "library-knowledge",
-        label: "Knowledge",
-        items: items.filter(
-          (item) =>
-            item.section === "agents" ||
-            item.section === "skills" ||
-            item.section === "capabilities" ||
-            item.section === "memory" ||
-            item.section === "knowledge" ||
-            item.section === "notes",
-        ),
-      },
-      {
-        id: "library-assets",
-        label: "Assets",
-        items: items.filter(
-          (item) =>
-            item.section === "files" ||
-            item.section === "artifacts" ||
-            item.section === "communications" ||
-            item.section === "prompt-packs" ||
-            item.section === "curator",
-        ),
-      },
-      {
-        id: "library-citadel",
-        label: "Citadel",
-        items: items.filter(
-          (item) =>
-            item.section === "citadel-overview" ||
-            item.section === "citadel" ||
-            item.section === "citadel-wards" ||
-            item.section === "citadel-council" ||
-            item.section === "citadel-vault" ||
-            item.section === "citadel-blueprint",
-        ),
-      },
-    ].filter((group) => group.items.length);
-  }
-
-  if (area === "ops") {
-    return [
-      {
-        id: "ops-observe",
-        label: "Observe",
-        items: items.filter(
-          (item) => item.section === "activity" || item.section === "sessions" || item.section === "schedules",
-        ),
-      },
-      {
-        id: "ops-control",
-        label: "Operate",
-        items: items.filter(
-          (item) =>
-            item.section === "improvement" ||
-            item.section === "notifications" ||
-            item.section === "approvals" ||
-            item.section === "costs" ||
-            item.section === "quality" ||
-            item.section === "runtime" ||
-            item.section === "diagnostics" ||
-            item.section === "kanban",
-        ),
-      },
-    ].filter((group) => group.items.length);
-  }
-
-  return [{ id: `${area}-primary`, items }];
+  return groups
+    .map((group) => ({
+      id: group.id,
+      label: group.label,
+      items: items.filter((item) => item.section != null && group.sections.includes(item.section)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 function StatusPill({
