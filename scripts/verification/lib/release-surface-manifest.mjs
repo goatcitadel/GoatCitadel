@@ -265,7 +265,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "library-citadel-overview",
     href: "/library/citadel-overview",
-    readyText: "isn't a Citadel yet",
+    readyText: "Charter",
     expectedArea: "library",
     expectedSection: "citadel-overview",
     interaction: "open-inspector",

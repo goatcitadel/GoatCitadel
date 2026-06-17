@@ -5955,6 +5955,65 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
     createdAgents.push(response.body);
   }
 
+  // Stage the verification workspace AS a Citadel so the release-bearing Citadel
+  // surfaces render real governance content under the fixture. Without a Charter,
+  // getCitadel / getGatehouse / exportBlueprint return 404, which the browser logs
+  // as console errors and the visual-regression console-health gate rejects (the
+  // Overview and Blueprint routes fail to capture). Citadel state is read only by
+  // the Citadel routes, so staging here cannot drift any other route's baseline.
+  const citadelId = workspaceId;
+  assertOk(
+    await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/charter`, {
+      method: "PUT",
+      body: {
+        purpose: "Coordinate Mission Control verification work under explicit, reviewable governance.",
+        kind: "company",
+        goals: ["Keep operator work legible", "Prove governance surfaces render real content"],
+        boundaries: ["No external writes without approval", "Sensitive work stays sealed"],
+        successDefinition: ["Release-bearing Citadel surfaces are visually verified"],
+        riskPosture: "balanced",
+        modelPolicyDefault: "hybrid_guarded",
+      },
+    }),
+    "stage mission-control-next citadel charter",
+  );
+  for (const chamber of [
+    { name: "Operations", sensitivity: "internal" },
+    { name: "Finance", sensitivity: "secret", sealed: true },
+  ]) {
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/chambers`, {
+        method: "POST",
+        body: chamber,
+      }),
+      `create mission-control-next citadel chamber ${chamber.name}`,
+    );
+  }
+  for (const ward of [
+    { name: "Block destructive shell", actionPattern: "shell.*", effect: "deny" },
+    { name: "Approve external integration writes", actionPattern: "integration.write.*", effect: "require_approval" },
+  ]) {
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/wards`, {
+        method: "POST",
+        body: ward,
+      }),
+      `add mission-control-next citadel ward ${ward.name}`,
+    );
+  }
+  for (const councilAgent of createdAgents) {
+    if (!councilAgent?.agentId) {
+      continue;
+    }
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/council`, {
+        method: "POST",
+        body: { agentId: councilAgent.agentId },
+      }),
+      `seat mission-control-next citadel council agent ${councilAgent.agentId}`,
+    );
+  }
+
   const tasks = [];
   const taskSpecs = [
     {
