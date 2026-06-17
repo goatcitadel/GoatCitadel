@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import {
   getErrorMessage,
@@ -21,6 +21,7 @@ import {
   labelForBudgetMode,
   normalizeBudgetMode,
 } from "../../SettingsNativePage";
+import { ErrorState } from "../../primitives";
 
 export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const load = useCallback(() => fetchSettings(), []);
@@ -87,12 +88,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
 
   return (
     <>
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <ErrorState size="inline" description={error} /> : null}
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid>
         {data ? (

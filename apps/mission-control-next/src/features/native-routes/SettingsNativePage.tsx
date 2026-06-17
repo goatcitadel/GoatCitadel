@@ -195,7 +195,7 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getRouteReleaseScope, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { StatusChip } from "./primitives";
+import { ErrorState, StatusChip } from "./primitives";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -1107,12 +1107,7 @@ function DemoStartPanel({
       ]}
     >
       {notice ? <SettingsNotice notice={notice} /> : null}
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <ErrorState size="inline" description={error} /> : null}
       <SettingsWizardSteps
         steps={[
           {
