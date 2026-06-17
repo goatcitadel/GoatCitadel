@@ -11,10 +11,10 @@ import {
   SettingsFieldGrid,
   SettingsGrid,
   SettingsNotice,
-  SettingsPanel,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
+import { NativeCard } from "../../NativeRoutePageLayout";
 import {
   BUDGET_MODE_OPTIONS,
   describeBudgetMode,
@@ -65,7 +65,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   }
 
   const costEvidencePanel = (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Cost evidence"
       subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
     >
@@ -83,7 +83,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
           },
         ]}
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 
   return (
@@ -92,7 +92,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid>
         {data ? (
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Budget mode"
             subtitle="Set the default cost posture used by runtime settings and first-run defaults."
             stats={[
@@ -136,9 +136,9 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
                 Refresh
               </button>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         ) : (
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Budget mode unavailable"
             subtitle="Budget mode could not be loaded, but cost and provider evidence remain reachable."
           >
@@ -151,7 +151,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
                 Refresh
               </button>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         )}
         {costEvidencePanel}
       </SettingsGrid>

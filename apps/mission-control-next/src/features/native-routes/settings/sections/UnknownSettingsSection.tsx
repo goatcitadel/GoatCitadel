@@ -1,9 +1,12 @@
-import { SettingsActionList, SettingsGrid, SettingsPanel, type SettingsSectionProps } from "../SettingsShared";
+import { SettingsActionList, SettingsGrid, type SettingsSectionProps } from "../SettingsShared";
+import { NativeCard } from "../../NativeRoutePageLayout";
 
 export function UnknownSettingsSection({ section, route, navigate }: SettingsSectionProps) {
   return (
     <SettingsGrid>
-      <SettingsPanel
+      <NativeCard
+        density="compact"
+        className="mc-next-settings-panel"
         title="Unknown settings section"
         subtitle={`No settings section is registered for "${String(section)}".`}
       >
@@ -21,7 +24,7 @@ export function UnknownSettingsSection({ section, route, navigate }: SettingsSec
             },
           ]}
         />
-      </SettingsPanel>
+      </NativeCard>
     </SettingsGrid>
   );
 }
