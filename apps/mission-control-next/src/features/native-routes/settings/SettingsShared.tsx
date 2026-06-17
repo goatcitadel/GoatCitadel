@@ -24,14 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import {
-  NativeMetricGrid,
-  NativeSelectableList,
-  ThreePartChip,
-  EmptyState,
-  ErrorState,
-  type ChipTone,
-} from "../primitives";
+import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -96,7 +89,12 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
     return null;
   }
   return (
-    <SettingsPanel title="Some data could not load" subtitle="The rest of this settings page is still usable.">
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title="Some data could not load"
+      subtitle="The rest of this settings page is still usable."
+    >
       <SettingsActionList
         items={issues.map((issue) => ({
           label: issue.label,
@@ -110,7 +108,7 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
           Retry
         </button>
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -265,7 +263,9 @@ export function SettingsPosturePanel({
   ];
 
   return (
-    <SettingsPanel
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Active posture"
       subtitle="Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance."
     >
@@ -299,7 +299,7 @@ export function SettingsPosturePanel({
           onOpen={() => onNavigate("access")}
         />
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -345,51 +345,6 @@ function SettingsPostureCard({
   );
 }
 
-export function SettingsPanel({
-  title,
-  subtitle,
-  stats,
-  headerAccessory,
-  children,
-  compact = true,
-  scrollBody = false,
-  bodyMaxHeight,
-}: {
-  title: string;
-  subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
-  /**
-   * Optional element rendered in the panel head — used to surface the
-   * "Unsaved" indicator next to the section title. Sections opt in by
-   * combining `useFormDirty` with this slot.
-   */
-  headerAccessory?: ReactNode;
-  children: ReactNode;
-  compact?: boolean;
-  scrollBody?: boolean;
-  bodyMaxHeight?: string;
-}) {
-  // Delegates to the canonical NativeCard (like SettingsPageFrame → NativePageFrame)
-  // so Settings shares one card primitive with the rest of the app. The
-  // `mc-next-settings-panel` class is retained for the settings-specific
-  // `align-content` treatment; `headerAccessory` preserves the inline "Unsaved"
-  // indicator beside the section title.
-  return (
-    <NativeCard
-      title={title}
-      subtitle={subtitle}
-      stats={stats}
-      headerAccessory={headerAccessory}
-      density={compact ? "compact" : "standard"}
-      scrollBody={scrollBody}
-      bodyMaxHeight={bodyMaxHeight}
-      className="mc-next-settings-panel"
-    >
-      {children}
-    </NativeCard>
-  );
-}
-
 export function SettingsFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
@@ -405,11 +360,6 @@ export function SettingsField({ label, children, span = 1 }: { label: string; ch
 
 export function SettingsButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
-}
-
-export function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  // Delegates to the canonical NativeMetricGrid primitive.
-  return <NativeMetricGrid items={items} />;
 }
 
 export function SettingsConfigSourceLegend() {
@@ -442,34 +392,6 @@ export function SettingsWizardSteps({
         </li>
       ))}
     </ol>
-  );
-}
-
-export function SettingsSelectableList({
-  items,
-  selectedId,
-  onSelect,
-  emptyLabel,
-  maxHeight = "min(56vh, 34rem)",
-  compact = true,
-}: {
-  items: Array<{ id: string; title: string; meta?: string; body?: string }>;
-  selectedId: string;
-  onSelect: (id: string) => void;
-  emptyLabel: string;
-  maxHeight?: string;
-  compact?: boolean;
-}) {
-  // Delegates to the canonical NativeSelectableList primitive.
-  return (
-    <NativeSelectableList
-      items={items}
-      selectedId={selectedId}
-      onSelect={onSelect}
-      emptyLabel={emptyLabel}
-      maxHeight={maxHeight}
-      density={compact ? "compact" : "standard"}
-    />
   );
 }
 
