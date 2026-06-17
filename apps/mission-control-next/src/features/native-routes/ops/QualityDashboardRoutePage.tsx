@@ -18,7 +18,7 @@ import {
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, StatusChip } from "../primitives";
 import {
   formatBytes,
   formatDateTime,
@@ -307,7 +307,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
-      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
+      {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-quality-dashboard-grid">
         <NativeCard
           title="Quality gates"
@@ -569,7 +569,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {designQuality?.error ? (
-            <div className="mc-next-directory-alert">{designQuality.error}</div>
+            <ErrorState size="inline" description={designQuality.error} />
           ) : data?.designQuality?.warnings[0] ? (
             <div className="mc-next-runtime-notice tone-info">{data.designQuality.warnings[0]}</div>
           ) : null}

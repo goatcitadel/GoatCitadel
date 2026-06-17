@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { ClipboardCopy, Database, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, StatusChip } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryCodeBlock, LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
@@ -125,7 +125,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
-      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
+      {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-run-detail-grid">
         <NativeCard
           title="Request"
@@ -162,10 +162,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
             />
           )}
           {detail.memoryWarning ? (
-            <div className="mc-next-directory-alert">
-              <Database className="h-4 w-4" />
-              <span>{detail.memoryWarning}</span>
-            </div>
+            <ErrorState size="inline" tone="caution" description={detail.memoryWarning} />
           ) : null}
         </NativeCard>
 

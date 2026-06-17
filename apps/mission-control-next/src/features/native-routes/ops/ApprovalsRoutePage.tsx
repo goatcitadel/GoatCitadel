@@ -1,9 +1,9 @@
 /* eslint-disable max-lines */
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
+import { Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { EmptyState, StatusChip, ThreePartChip } from "../primitives";
+import { EmptyState, ErrorState, StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,
@@ -602,13 +602,11 @@ function ApprovalInspectorCard(props: {
       </div>
 
       {approval.explanationError ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <div className="mc-next-approvals-explainer-error">
-            <strong>Approval summary unavailable</strong>
-            <span>{formatApprovalExplanationError(approval.explanationError)}</span>
-          </div>
-        </div>
+        <ErrorState
+          size="inline"
+          title="Approval summary unavailable"
+          description={formatApprovalExplanationError(approval.explanationError)}
+        />
       ) : null}
 
       {approval.followUp && approval.followUp.status !== "none" ? (
