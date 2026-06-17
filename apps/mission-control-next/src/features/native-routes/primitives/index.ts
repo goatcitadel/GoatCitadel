@@ -30,3 +30,6 @@ export type { ErrorStateProps, ErrorStateSize, ErrorStateTone } from "./ErrorSta
 
 export { NativeSelectableList } from "./NativeSelectableList";
 export type { NativeSelectableListItem, NativeSelectableListProps } from "./NativeSelectableList";
+
+export { NativeMetricGrid } from "./NativeMetricGrid";
+export type { NativeMetricGridItem } from "./NativeMetricGrid";

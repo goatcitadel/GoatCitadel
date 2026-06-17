@@ -24,7 +24,14 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import { NativeSelectableList, ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
+import {
+  NativeMetricGrid,
+  NativeSelectableList,
+  ThreePartChip,
+  EmptyState,
+  ErrorState,
+  type ChipTone,
+} from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -401,17 +408,8 @@ export function SettingsButtonRow({ children }: { children: ReactNode }) {
 }
 
 export function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
+  // Delegates to the canonical NativeMetricGrid primitive.
+  return <NativeMetricGrid items={items} />;
 }
 
 export function SettingsConfigSourceLegend() {

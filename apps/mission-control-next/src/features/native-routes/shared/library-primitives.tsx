@@ -2,7 +2,7 @@ import type React from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeSelectableList } from "../primitives";
+import { EmptyState, ErrorState, NativeMetricGrid, NativeSelectableList } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
@@ -65,17 +65,8 @@ export function LibraryButtonRow({ children }: { children: React.ReactNode }) {
 }
 
 export function LibraryMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
+  // Delegates to the canonical NativeMetricGrid primitive.
+  return <NativeMetricGrid items={items} />;
 }
 
 export function LibrarySelectableList({
