@@ -60,7 +60,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- scripts/verification/baselines/visual; then
+          # Use `git status --porcelain` (not `git diff`) so first-time baselines for
+          # newly added routes are detected: `git diff` ignores untracked files, so a
+          # rebaseline that only creates brand-new PNGs would otherwise look like a no-op.
+          if [ -z "$(git status --porcelain -- scripts/verification/baselines/visual)" ]; then
             echo "No baseline changes produced; nothing to do."
             exit 0
           fi
