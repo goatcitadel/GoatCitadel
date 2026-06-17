@@ -559,6 +559,14 @@
   line-height: 1.16;
 }
 
+/* Inline title + accessory (e.g. Settings "Unsaved" indicator) beside the heading. */
+.mc-next-directory-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
 .mc-next-directory-card-head p {
   font-size: var(--text-2xs);
   line-height: 1.32;

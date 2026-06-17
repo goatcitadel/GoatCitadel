@@ -173,6 +173,7 @@ export function NativeCard({
   stats,
   children,
   actions,
+  headerAccessory,
   density = "standard",
   scrollBody = false,
   bodyMaxHeight,
@@ -183,6 +184,12 @@ export function NativeCard({
   stats?: Array<{ label: string; value: string }>;
   children: ReactNode;
   actions?: ReactNode;
+  /**
+   * Optional element rendered inline next to the title — used by Settings to
+   * surface the "Unsaved" indicator beside the section title. Kept distinct
+   * from `actions` (top-right) so the indicator stays adjacent to the heading.
+   */
+  headerAccessory?: ReactNode;
   density?: "standard" | "compact";
   scrollBody?: boolean;
   bodyMaxHeight?: string;
@@ -196,7 +203,14 @@ export function NativeCard({
     >
       <div className="mc-next-directory-card-head">
         <div>
-          <h2>{title}</h2>
+          {headerAccessory ? (
+            <div className="mc-next-directory-card-title-row">
+              <h2>{title}</h2>
+              {headerAccessory}
+            </div>
+          ) : (
+            <h2>{title}</h2>
+          )}
           <p>{subtitle}</p>
         </div>
         {stats?.length ? (

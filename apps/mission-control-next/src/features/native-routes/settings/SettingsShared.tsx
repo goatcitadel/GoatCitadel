@@ -23,7 +23,7 @@ import type { McpServerRecord } from "@goatcitadel/contracts";
 import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
-import { NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
 import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
@@ -362,38 +362,24 @@ export function SettingsPanel({
   scrollBody?: boolean;
   bodyMaxHeight?: string;
 }) {
+  // Delegates to the canonical NativeCard (like SettingsPageFrame → NativePageFrame)
+  // so Settings shares one card primitive with the rest of the app. The
+  // `mc-next-settings-panel` class is retained for the settings-specific
+  // `align-content` treatment; `headerAccessory` preserves the inline "Unsaved"
+  // indicator beside the section title.
   return (
-    <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
-      <div className="mc-next-directory-card-head">
-        <div>
-          <div
-            className="mc-next-settings-panel-title-row"
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}
-          >
-            <h2>{title}</h2>
-            {headerAccessory}
-          </div>
-          <p>{subtitle}</p>
-        </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <div
-        className={`mc-next-settings-panel-body${scrollBody ? " is-scrollable" : ""}`}
-        data-native-scroll={scrollBody ? "true" : undefined}
-        style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
-      >
-        {children}
-      </div>
-    </article>
+    <NativeCard
+      title={title}
+      subtitle={subtitle}
+      stats={stats}
+      headerAccessory={headerAccessory}
+      density={compact ? "compact" : "standard"}
+      scrollBody={scrollBody}
+      bodyMaxHeight={bodyMaxHeight}
+      className="mc-next-settings-panel"
+    >
+      {children}
+    </NativeCard>
   );
 }
 
