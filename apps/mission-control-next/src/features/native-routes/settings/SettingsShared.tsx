@@ -483,7 +483,13 @@ export function SettingsEmptyState({ label }: { label: string }) {
 }
 
 export function SettingsNotice({ notice }: { notice: Notice }) {
-  return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
+  // Error-toned notices use the shared ErrorState (role=alert); info/success/
+  // warning tones fold onto the app's consistent runtime-notice channel rather
+  // than the bespoke .mc-next-settings-notice class.
+  if (notice.tone === "error") {
+    return <ErrorState size="inline" description={notice.message} />;
+  }
+  return <div className={`mc-next-runtime-notice tone-${notice.tone}`}>{notice.message}</div>;
 }
 
 // ---------------------------------------------------------------------------

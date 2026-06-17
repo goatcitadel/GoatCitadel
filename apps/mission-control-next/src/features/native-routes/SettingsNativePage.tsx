@@ -193,7 +193,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { getRouteReleaseScope, type AppRoute } from "@next/app/route-model";
+import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ErrorState, NativeMetricGrid, NativeSelectableList, StatusChip } from "./primitives";
 import { NativeCard } from "./NativeRoutePageLayout";
@@ -324,7 +324,7 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
   return (
     <SettingsPageFrame
       icon={iconForSettingsSection(section)}
-      kicker={`Settings · ${labelForSettingsSection(section)}`}
+      kicker={routeKicker(normalizeAppRoute(props.route))}
       title={labelForSettingsSection(section)}
       description={descriptionForSettingsSection(section)}
       releaseStatus={getRouteReleaseScope(props.route).status}
