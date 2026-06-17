@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 import { Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { EmptyState, ErrorState, StatusChip, ThreePartChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,
@@ -158,14 +158,14 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         ]}
         actions={
           approvals.view === "pending" ? (
-            <button
-              type="button"
-              className="gc-button danger"
+            <NativeButton
+              variant="outline"
+              className="danger"
               disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
               onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
             >
               {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
-            </button>
+            </NativeButton>
           ) : null
         }
       >
@@ -577,17 +577,17 @@ function ApprovalInspectorCard(props: {
           ) : null}
           {approval.status === "pending" && !expired ? (
             <>
-              <button type="button" className="gc-button" disabled={resolvePending} onClick={onApprove}>
+              <NativeButton variant="outline" disabled={resolvePending} onClick={onApprove}>
                 Approve now
-              </button>
-              <button type="button" className="gc-button danger" disabled={resolvePending} onClick={onReject}>
+              </NativeButton>
+              <NativeButton variant="outline" className="danger" disabled={resolvePending} onClick={onReject}>
                 Reject
-              </button>
+              </NativeButton>
             </>
           ) : null}
-          <button type="button" className="gc-button subtle" onClick={onReplay}>
+          <NativeButton variant="outline" className="subtle" onClick={onReplay}>
             Load replay trail
-          </button>
+          </NativeButton>
           {liveLaneHref && onOpenLiveLane ? (
             <a href={liveLaneHref} className="mc-next-approvals-link-button" onClick={onOpenLiveLane}>
               Open live session
@@ -667,19 +667,19 @@ function ApprovalInspectorCard(props: {
             </div>
           </div>
           <div className="mc-next-approvals-inline-actions">
-            <button type="button" className="gc-button subtle" disabled={durableBusy} onClick={onLoadDurableStatus}>
+            <NativeButton variant="outline" className="subtle" disabled={durableBusy} onClick={onLoadDurableStatus}>
               <Waypoints className="h-4 w-4" />
               {durableBusy ? "Loading..." : "Load durable status"}
-            </button>
-            <button
-              type="button"
-              className="gc-button subtle"
+            </NativeButton>
+            <NativeButton
+              variant="outline"
+              className="subtle"
               disabled={durableBusy || durable?.status !== "paused"}
               onClick={onResumeCheckpoint}
             >
               <Play className="h-4 w-4" />
               Resume paused run
-            </button>
+            </NativeButton>
           </div>
           {durable ? (
             <ul className="mc-next-approvals-compact-list">
@@ -707,14 +707,14 @@ function ApprovalInspectorCard(props: {
               {traceMetadata.correlationId ? <li>correlation: {traceMetadata.correlationId}</li> : null}
             </ul>
             {traceMetadata.correlationId ? (
-              <button
-                type="button"
-                className="gc-button subtle"
+              <NativeButton
+                variant="outline"
+                className="subtle"
                 onClick={() => onLoadTracePreview(traceMetadata.correlationId)}
               >
                 <RefreshCw className="h-4 w-4" />
                 {tracePreview ? "Refresh trace detail" : "Load trace detail"}
-              </button>
+              </NativeButton>
             ) : null}
           </div>
         )}

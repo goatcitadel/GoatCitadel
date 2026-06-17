@@ -67,7 +67,15 @@ async function walk(dir, acc) {
         continue;
       }
       await walk(full, acc);
-    } else if (entry.isFile() && entry.name.endsWith(".tsx") && !isCanonicalButtonFile(full)) {
+    } else if (
+      entry.isFile() &&
+      entry.name.endsWith(".tsx") &&
+      // Test files reference these class strings in assertions/queries
+      // (e.g. findByProps({ className: "gc-button" })), not as raw call sites —
+      // and NativeButton still renders the class, so those assertions pass.
+      !entry.name.endsWith(".test.tsx") &&
+      !isCanonicalButtonFile(full)
+    ) {
       acc.push(full);
     }
   }

@@ -8,7 +8,7 @@ import {
   validateCitadelBlueprint,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -145,24 +145,22 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
             />
           </label>
           <div className="mc-next-blueprint-actions">
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               disabled={importText.trim().length === 0}
               onClick={() => void validate()}
             >
               <Check className="h-4 w-4" />
               Validate
-            </button>
-            <button
-              type="button"
-              className="gc-button"
+            </NativeButton>
+            <NativeButton
+              variant="outline"
               disabled={!canApply}
               onClick={() => void applyImport()}
             >
               <Upload className="h-4 w-4" />
               {importState.busy ? "Importing…" : "Import"}
-            </button>
+            </NativeButton>
           </div>
 
           {importState.error ? <p className="mc-next-mason-error">{importState.error}</p> : null}

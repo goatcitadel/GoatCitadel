@@ -20,7 +20,7 @@ import {
   rotateBrowserSessionGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, NativeButton, StatusChip } from "../primitives";
 import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import { routeKicker } from "@next/app/route-model";
@@ -187,10 +187,10 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
         { label: "Events", value: String(detail.events.length) },
       ]}
       actions={
-        <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+        <NativeButton variant="secondary" onClick={() => void reload()}>
           <RefreshCw className="h-4 w-4" />
           Refresh
-        </button>
+        </NativeButton>
       }
     >
       <LibraryLoadWarnings issues={[...(data?.issues ?? []), ...detail.issues]} onRetry={() => void reload()} />

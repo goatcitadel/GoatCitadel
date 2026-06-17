@@ -3,7 +3,7 @@ import { Castle, Hammer, Lock, Shield } from "lucide-react";
 import type { Citadel, CitadelGatehouseSummary } from "@goatcitadel/contracts";
 import { getCitadel, getCitadelGatehouse, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -82,14 +82,13 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
           title={`${activeWorkspaceName} isn't a Citadel yet`}
           description="A workspace becomes a Citadel once it has a Charter. The Mason can stage one for you — nothing is connected or activated until you confirm."
           primaryAction={
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               onClick={() => navigate({ area: "library", section: "citadel" })}
             >
               <Hammer className="h-4 w-4" />
               Open the Mason
-            </button>
+            </NativeButton>
           }
         />
       ) : (

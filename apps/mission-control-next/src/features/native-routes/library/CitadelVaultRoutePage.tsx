@@ -9,7 +9,7 @@ import {
   storeCitadelVaultSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -150,24 +150,24 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
                     <strong>{secret.secretName}</strong>
                     <div className="mc-next-vault-item-actions">
                       {revealed[secret.secretId] === undefined ? (
-                        <button type="button" className="mc-next-button" onClick={() => void reveal(secret.secretId)}>
+                        <NativeButton variant="default" onClick={() => void reveal(secret.secretId)}>
                           <Eye className="h-4 w-4" />
                           Reveal
-                        </button>
+                        </NativeButton>
                       ) : (
-                        <button type="button" className="mc-next-button" onClick={() => hide(secret.secretId)}>
+                        <NativeButton variant="default" onClick={() => hide(secret.secretId)}>
                           <EyeOff className="h-4 w-4" />
                           Hide
-                        </button>
+                        </NativeButton>
                       )}
-                      <button
-                        type="button"
-                        className="gc-button danger"
+                      <NativeButton
+                        variant="outline"
+                        className="danger"
                         onClick={() => void remove(secret.secretId)}
                         aria-label={`Delete ${secret.secretName}`}
                       >
                         <Trash2 className="h-4 w-4" />
-                      </button>
+                      </NativeButton>
                     </div>
                   </div>
                   {revealed[secret.secretId] !== undefined ? (
@@ -202,15 +202,14 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
               onChange={(event) => setDraft((current) => ({ ...current, value: event.target.value }))}
             />
           </label>
-          <button
-            type="button"
-            className="mc-next-button"
+          <NativeButton
+            variant="default"
             disabled={draft.busy || draft.name.trim().length === 0 || draft.value.length === 0}
             onClick={() => void store()}
           >
             <Lock className="h-4 w-4" />
             {draft.busy ? "Sealing…" : "Seal & store"}
-          </button>
+          </NativeButton>
         </NativeCard>
       </NativeGrid>
 

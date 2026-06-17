@@ -21,7 +21,7 @@ import {
   labelForBudgetMode,
   normalizeBudgetMode,
 } from "../../SettingsNativePage";
-import { ErrorState } from "../../primitives";
+import { ErrorState, NativeButton } from "../../primitives";
 
 export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const load = useCallback(() => fetchSettings(), []);
@@ -117,24 +117,22 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button"
+              <NativeButton
+                variant="default"
                 disabled={savingBudgetMode || budgetDraft === currentBudgetMode}
                 onClick={() => void saveBudgetMode()}
               >
                 <Save size={16} />
                 {savingBudgetMode ? "Saving..." : "Save budget mode"}
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
                 disabled={savingBudgetMode}
                 onClick={() => void reload()}
               >
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
         ) : (
@@ -146,10 +144,10 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
               Refresh the route to retry the settings read before changing the runtime budget posture.
             </p>
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+              <NativeButton variant="secondary" onClick={() => void reload()}>
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
         )}

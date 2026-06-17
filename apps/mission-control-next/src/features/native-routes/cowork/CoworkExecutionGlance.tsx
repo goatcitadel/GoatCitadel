@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Workflow } from "lucide-react";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard } from "../NativeRoutePageLayout";
+import { NativeButton } from "@next/features/native-routes/primitives";
 import { formatDateTime, formatTaskStatus, type CoworkTaskContinuationSummary } from "../shared/native-helpers";
 import { LibraryButtonRow } from "../shared/library-primitives";
 
@@ -79,24 +80,24 @@ export function CoworkExecutionGlance({
       ]}
     >
       <LibraryButtonRow>
-        <button type="button" className="mc-next-button" onClick={onContinue}>
+        <NativeButton variant="default" onClick={onContinue}>
           <Workflow className="h-4 w-4" />
           Continue Cowork
-        </button>
+        </NativeButton>
         {onOpenBlocker ? (
-          <button type="button" className="mc-next-button-secondary" onClick={onOpenBlocker}>
+          <NativeButton variant="secondary" onClick={onOpenBlocker}>
             <AlertTriangle className="h-4 w-4" />
             Open blocker
-          </button>
+          </NativeButton>
         ) : null}
-        <button type="button" className="mc-next-button-secondary" onClick={onOpenApprovals}>
+        <NativeButton variant="secondary" onClick={onOpenApprovals}>
           <CheckCircle2 className="h-4 w-4" />
           Review approvals
-        </button>
-        <button type="button" className="mc-next-button-secondary" onClick={onOpenBoard}>
+        </NativeButton>
+        <NativeButton variant="secondary" onClick={onOpenBoard}>
           <Workflow className="h-4 w-4" />
           Agent board
-        </button>
+        </NativeButton>
       </LibraryButtonRow>
       <section className="mc-next-cowork-execution-summary" aria-label="Cowork execution summary">
         <div>

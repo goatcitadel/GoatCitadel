@@ -3,7 +3,7 @@ import { ArrowRight, FlaskConical, RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
-import { EmptyState, ErrorState, type AreaSlug } from "./primitives";
+import { EmptyState, ErrorState, NativeButton, type AreaSlug } from "./primitives";
 
 /**
  * F-M11: on-surface "Experimental" badge for routes scoped `experimental` in
@@ -150,10 +150,10 @@ export function NativePageFrame({
           description={error}
           primaryAction={
             onRetry ? (
-              <button type="button" className="gc-button" onClick={onRetry}>
+              <NativeButton variant="outline" onClick={onRetry}>
                 <RefreshCw className="h-4 w-4" />
                 Retry
-              </button>
+              </NativeButton>
             ) : undefined
           }
         />

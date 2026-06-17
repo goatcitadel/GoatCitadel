@@ -7,6 +7,7 @@ import {
   listCitadelWards,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeButton } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -164,15 +165,14 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            className="mc-next-button"
+          <NativeButton
+            variant="default"
             disabled={draft.busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
             onClick={() => void addWard()}
           >
             <ShieldAlert className="h-4 w-4" />
             {draft.busy ? "Adding…" : "Add Ward"}
-          </button>
+          </NativeButton>
         </NativeCard>
 
         <NativeCard title="Test an action" subtitle="See which effect the current Wards would apply to an action.">
@@ -186,15 +186,14 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
               onChange={(event) => setProbe(event.target.value)}
             />
           </label>
-          <button
-            type="button"
-            className="mc-next-button"
+          <NativeButton
+            variant="default"
             disabled={probe.trim().length === 0}
             onClick={() => void evaluate()}
           >
             <Sparkles className="h-4 w-4" />
             Evaluate
-          </button>
+          </NativeButton>
           {probeResult ? (
             <p className="mc-next-ward-result">
               <strong>{probeResult.action}</strong> → {probeResult.effect}

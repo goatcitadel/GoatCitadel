@@ -14,6 +14,7 @@ import {
   type TestResultFilter,
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
+import { NativeButton } from "@next/features/native-routes/primitives";
 import {
   formatPromptPackExecutionStyle,
   resultCategoryClass,
@@ -72,9 +73,7 @@ export function PromptPackDetailHeader({
           </div>
           <h4>{selectedTest.title}</h4>
         </div>
-        <button
-          type="button"
-          className="mc-next-button"
+        <NativeButton
           onClick={onRunSelected}
           disabled={running && activeRun?.testId !== selectedTest.testId}
         >
@@ -84,20 +83,20 @@ export function PromptPackDetailHeader({
             <Play size={16} />
           )}
           Run selected
-        </button>
+        </NativeButton>
       </header>
 
       {selectedRunLink ? (
         <div className="mc-pp-detail-actions">
           {hasNavigate ? (
-            <button type="button" className="mc-next-button mc-next-button-secondary" onClick={onOpenSelectedRun}>
+            <NativeButton variant="secondary" onClick={onOpenSelectedRun}>
               Open run thread
-            </button>
+            </NativeButton>
           ) : null}
-          <button type="button" className="mc-next-button mc-next-button-secondary" onClick={onCopySelectedRunLink}>
+          <NativeButton variant="secondary" onClick={onCopySelectedRunLink}>
             <ClipboardCopy size={15} />
             Copy run link
-          </button>
+          </NativeButton>
         </div>
       ) : null}
 

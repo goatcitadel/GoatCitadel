@@ -3,6 +3,7 @@ import { RefreshCw, Scale, Waypoints } from "lucide-react";
 import type { ModelComparisonRun } from "@goatcitadel/contracts";
 import { judgeModelComparison, listModelComparisons } from "@goatcitadel/mission-control-shared/api/model-comparisons";
 import { NativeCard } from "../NativeRoutePageLayout";
+import { NativeButton } from "@next/features/native-routes/primitives";
 import type { NativeRoutePagesProps } from "../types";
 import {
   formatDateTime,
@@ -279,15 +280,14 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                   </LibraryField>
                 </LibraryFieldGrid>
                 <LibraryButtonRow>
-                  <button
-                    type="button"
-                    className="mc-next-button"
+                  <NativeButton
+                    variant="default"
                     disabled={saving || !selectedTestId}
                     onClick={() => void saveJudgment()}
                   >
                     <Scale className="h-4 w-4" />
                     Save judgment
-                  </button>
+                  </NativeButton>
                 </LibraryButtonRow>
                 <LibraryActionList
                   items={selectedComparison.judgments.map((judgment) => ({

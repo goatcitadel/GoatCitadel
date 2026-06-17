@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { PromptPackExportRecord } from "@goatcitadel/contracts";
 import { formatDateTime } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
+import { NativeButton } from "@next/features/native-routes/primitives";
 
 export interface AdvancedQualityOpsPanelProps {
   benchmarkTestCodes: string;
@@ -105,71 +106,52 @@ export function AdvancedQualityOpsPanel({
           />
         </label>
         <div className="mc-pp-inline-actions wrap">
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={onRunBenchmark}
             disabled={!selectedPackId || running || benchmarkPending}
           >
             {benchmarkPending ? <LoaderCircle size={16} className="mc-spin" /> : <FlaskConical size={16} />}
             Start benchmark
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             onClick={onStopBenchmark}
             disabled={!benchmarkActive || benchmarkStopping}
           >
             {benchmarkStopping ? <LoaderCircle size={16} className="mc-spin" /> : <RotateCcw size={16} />}
             Stop
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-ghost"
-            onClick={onRefreshBenchmark}
-            disabled={!benchmarkRunId}
-          >
+          </NativeButton>
+          <NativeButton variant="ghost" onClick={onRefreshBenchmark} disabled={!benchmarkRunId}>
             <RefreshCcw size={16} />
             Refresh benchmark
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             onClick={onRunRegression}
             disabled={!selectedPackId || running || regressionPending}
           >
             {regressionPending ? <LoaderCircle size={16} className="mc-spin" /> : <RotateCcw size={16} />}
             Replay regression
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-ghost"
-            onClick={onRefreshRegression}
-            disabled={!regressionRunId}
-          >
+          </NativeButton>
+          <NativeButton variant="ghost" onClick={onRefreshRegression} disabled={!regressionRunId}>
             <RefreshCcw size={16} />
             Refresh replay
-          </button>
+          </NativeButton>
         </div>
         <div className="mc-pp-inline-actions wrap">
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={onExportReport}
             disabled={!selectedPackId || exporting || running}
           >
             {exporting ? <LoaderCircle size={16} className="mc-spin" /> : <Download size={16} />}
             Export report
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-ghost"
-            onClick={onCopyExportPath}
-            disabled={!latestSavedLogPath}
-          >
+          </NativeButton>
+          <NativeButton variant="ghost" onClick={onCopyExportPath} disabled={!latestSavedLogPath}>
             <ClipboardCopy size={16} />
             Copy saved log path
-          </button>
+          </NativeButton>
         </div>
         <div className="mc-pp-reset-box">
           <div className="mc-pp-reset-options">
@@ -191,36 +173,25 @@ export function AdvancedQualityOpsPanel({
             </label>
           </div>
           {!confirmResetArmed ? (
-            <button
-              type="button"
-              className="mc-next-button mc-next-button-danger"
+            <NativeButton
+              variant="destructive"
               onClick={onArmResetConfirm}
               disabled={!selectedPackId || resetting}
             >
               <AlertTriangle size={16} />
               Reset pack
-            </button>
+            </NativeButton>
           ) : (
             <div className="mc-pp-reset-confirm">
               <p>Reset this pack now? This clears the selected history based on the toggles above.</p>
               <div className="mc-pp-inline-actions wrap">
-                <button
-                  type="button"
-                  className="mc-next-button mc-next-button-danger"
-                  onClick={onConfirmResetPack}
-                  disabled={resetting}
-                >
+                <NativeButton variant="destructive" onClick={onConfirmResetPack} disabled={resetting}>
                   {resetting ? <LoaderCircle size={16} className="mc-spin" /> : <AlertTriangle size={16} />}
                   Confirm reset
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button mc-next-button-ghost"
-                  onClick={onCancelResetConfirm}
-                  disabled={resetting}
-                >
+                </NativeButton>
+                <NativeButton variant="ghost" onClick={onCancelResetConfirm} disabled={resetting}>
                   Cancel
-                </button>
+                </NativeButton>
               </div>
             </div>
           )}

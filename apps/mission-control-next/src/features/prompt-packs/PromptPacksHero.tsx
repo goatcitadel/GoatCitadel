@@ -1,6 +1,7 @@
 import { AlertTriangle, BarChart3, CheckCircle2, LoaderCircle, Play, RefreshCcw, Sparkles } from "lucide-react";
 import { AssessmentThresholdBar } from "./PromptPacksWorkbenchPage.components";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
+import { NativeButton } from "@next/features/native-routes/primitives";
 
 export interface PromptPacksHeroProps {
   isOpsVariant: boolean;
@@ -89,42 +90,30 @@ export function PromptPacksHero({
           <p>{commandDetail}</p>
         </div>
         <div className="mc-pp-hero-actions">
-          <button
-            type="button"
-            className="mc-next-button"
-            onClick={onRunNext}
-            disabled={!selectedPackId || testsLength === 0 || running}
-          >
+          <NativeButton onClick={onRunNext} disabled={!selectedPackId || testsLength === 0 || running}>
             {activeRun?.mode === "next" ? <LoaderCircle size={16} className="mc-spin" /> : <Play size={16} />}
             Run next
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             onClick={onRunAll}
             disabled={!selectedPackId || testsLength === 0 || running || benchmarkActive}
           >
             {benchmarkActive ? <LoaderCircle size={16} className="mc-spin" /> : <Sparkles size={16} />}
             Run all
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-secondary"
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             onClick={onAutoScoreUnscored}
             disabled={!selectedPackId || unscoredCompletedCount === 0 || autoScoring || running}
           >
             {autoScoring ? <LoaderCircle size={16} className="mc-spin" /> : <BarChart3 size={16} />}
             Auto-score
-          </button>
-          <button
-            type="button"
-            className="mc-next-button mc-next-button-ghost"
-            onClick={onRefresh}
-            disabled={isRefreshing}
-          >
+          </NativeButton>
+          <NativeButton variant="ghost" onClick={onRefresh} disabled={isRefreshing}>
             {isRefreshing ? <LoaderCircle size={16} className="mc-spin" /> : <RefreshCcw size={16} />}
             Refresh
-          </button>
+          </NativeButton>
         </div>
       </section>
 

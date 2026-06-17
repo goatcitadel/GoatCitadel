@@ -1,4 +1,5 @@
 import { LoaderCircle, Upload } from "lucide-react";
+import { NativeButton } from "@next/features/native-routes/primitives";
 
 export interface ImportPackPanelProps {
   importText: string;
@@ -27,10 +28,10 @@ export function ImportPackPanel({ importText, importing, onSetImportText, onImpo
         />
       </label>
       <div className="mc-pp-inline-actions">
-        <button type="button" className="mc-next-button" onClick={onImport} disabled={importing}>
+        <NativeButton onClick={onImport} disabled={importing}>
           {importing ? <LoaderCircle size={16} className="mc-spin" /> : <Upload size={16} />}
           Import pack
-        </button>
+        </NativeButton>
       </div>
     </details>
   );

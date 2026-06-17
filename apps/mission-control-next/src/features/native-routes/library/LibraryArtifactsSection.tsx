@@ -3,6 +3,7 @@ import { FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard } from "../NativeRoutePageLayout";
+import { NativeButton } from "@next/features/native-routes/primitives";
 import type { NativeRoutePagesProps } from "../types";
 import {
   formatArtifactProvenance,
@@ -244,9 +245,8 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                   ]}
                 />
                 <LibraryButtonRow>
-                  <button
-                    type="button"
-                    className="mc-next-button"
+                  <NativeButton
+                    variant="default"
                     onClick={() =>
                       navigate({
                         area: selectedArtifact.sourceSurface,
@@ -260,10 +260,9 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                   >
                     <Workflow className="h-4 w-4" />
                     Open source thread
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       navigate({
                         area: "library",
@@ -276,11 +275,10 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                   >
                     <FileText className="h-4 w-4" />
                     Reopen artifact
-                  </button>
+                  </NativeButton>
                   {selectedArtifactRunId ? (
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       onClick={() =>
                         navigate({
                           area: "ops",
@@ -297,7 +295,7 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                     >
                       <Waypoints className="h-4 w-4" />
                       Open run detail
-                    </button>
+                    </NativeButton>
                   ) : null}
                 </LibraryButtonRow>
                 <LibraryCodeBlock label="Artifact provenance">
