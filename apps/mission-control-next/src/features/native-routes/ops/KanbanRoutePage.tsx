@@ -4,6 +4,7 @@ import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-s
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { getRouteReleaseScope } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
+import { EmptyState, StatusChip } from "../primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
 import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
@@ -17,6 +18,14 @@ const COLUMNS: Array<{ id: KanbanColumnId; label: string }> = [
 ];
 
 type BulkAction = "unblock" | "retry" | "close";
+
+const KANBAN_STATUS_CHIP_TONE = {
+  neutral: "neutral",
+  active: "live",
+  warning: "warning",
+  danger: "critical",
+  success: "success",
+} as const;
 
 export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const [runs, setRuns] = useState<AgenticRunListItem[] | null>(null);
@@ -196,7 +205,9 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
             />
           ))
         ) : (
-          <li className="mc-next-kanban-empty">No runs in this lane.</li>
+          <li className="mc-next-kanban-empty">
+            <EmptyState size="compact" title="No runs in this lane." />
+          </li>
         )}
       </ul>
     </section>
@@ -226,8 +237,10 @@ function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
         <span>{card.surfaceLabel}</span>
         <span>{card.updatedDisplay}</span>
       </div>
-      <span className={`mc-next-kanban-status tone-${card.statusTone}`}>
-        <Activity className="h-3 w-3" /> {card.statusLabel}
+      <span className="mc-next-kanban-status-chip">
+        <StatusChip tone={KANBAN_STATUS_CHIP_TONE[card.statusTone]} icon={<Activity className="h-3 w-3" />}>
+          {card.statusLabel}
+        </StatusChip>
       </span>
       {card.attentionReason ? <small>{card.attentionReason}</small> : null}
       {card.contextMode || card.profileId ? (
