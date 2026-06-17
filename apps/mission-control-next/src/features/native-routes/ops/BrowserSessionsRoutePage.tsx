@@ -23,6 +23,7 @@ import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRo
 import { EmptyState, StatusChip } from "../primitives";
 import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 type BrowserSessionFilter = BrowserSessionStatus | "all";
@@ -35,7 +36,7 @@ const GRANT_SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
 };
 const EMPTY_BROWSER_SESSIONS: BrowserSessionRecord[] = [];
 
-export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [filter, setFilter] = useState<BrowserSessionFilter>("active");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -174,7 +175,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
     <NativePageFrame
       area="ops"
       icon={ShieldCheck}
-      kicker="Ops · Sessions"
+      kicker={routeKicker(route)}
       title="Browser Sessions"
       description={`Govern in-memory browser session state, grants, and events for ${activeWorkspaceName}.`}
       loading={loading}

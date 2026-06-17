@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
 import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/client";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
-import { getRouteReleaseScope } from "@next/app/route-model";
+import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
@@ -139,7 +139,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   return (
     <NativePageFrame
       icon={LayoutDashboard}
-      kicker="Ops"
+      kicker={routeKicker(props.route)}
       title="Kanban"
       description="Agentic run board with stale-run detection, diagnostics, and bulk operator controls."
       loading={loading}

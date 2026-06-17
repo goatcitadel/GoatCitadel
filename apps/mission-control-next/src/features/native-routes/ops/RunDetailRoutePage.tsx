@@ -3,6 +3,7 @@ import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, ErrorState, StatusChip } from "../primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryCodeBlock, LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
@@ -94,7 +95,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
   return (
     <NativePageFrame
       area="ops"
-      kicker="Ops · Run detail"
+      kicker={routeKicker(route)}
       title={runId ? `Run ${runId}` : "Run detail"}
       description={`Operator-visible request, execution, evidence, and recovery posture for ${activeWorkspaceName}.`}
       loading={loading}

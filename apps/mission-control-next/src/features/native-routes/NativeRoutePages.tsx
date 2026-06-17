@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import type { AppRoute } from "@next/app/route-model";
+import { routeKicker, type AppRoute } from "@next/app/route-model";
 import { NativePageFrame } from "./NativeRoutePageLayout";
 import { CitadelBlueprintRoutePage } from "./library/CitadelBlueprintRoutePage";
 import { CitadelCouncilRoutePage } from "./library/CitadelCouncilRoutePage";
@@ -117,7 +117,7 @@ function LibraryNativePage(props: NativeRoutePagesProps) {
   return (
     <NativePageFrame
       area="library"
-      kicker={`Library · ${labelForLibrarySection(section)}`}
+      kicker={routeKicker(props.route)}
       title={labelForLibrarySection(section)}
       description={descriptionForLibrarySection(section, props.activeWorkspaceName)}
       loading={false}

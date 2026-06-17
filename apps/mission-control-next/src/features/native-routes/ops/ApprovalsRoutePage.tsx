@@ -12,7 +12,7 @@ import {
   isExpiredApproval,
 } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { useApprovalQueue } from "@goatcitadel/mission-control-shared/hooks/useApprovalQueue";
-import { buildAppHref, type AppRoute } from "@next/app/route-model";
+import { buildAppHref, routeKicker, type AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
@@ -145,7 +145,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
     <>
       <NativePageFrame
         area="ops"
-        kicker="Ops · Approvals"
+        kicker={routeKicker(route)}
         title="Approvals"
         description="Pending decisions, history, replay, and durable recovery in one operator view."
         loading={approvals.loading && !approvals.error}

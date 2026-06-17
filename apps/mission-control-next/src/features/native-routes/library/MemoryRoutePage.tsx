@@ -24,6 +24,7 @@ import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/h
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import {
   buildProvenanceCoverage,
@@ -350,7 +351,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   return (
     <NativePageFrame
       area="library"
-      kicker="Library · Memory"
+      kicker={routeKicker(route)}
       title="Memory"
       description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture."
       loading={memory.loading}

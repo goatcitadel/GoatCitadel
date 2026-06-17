@@ -640,7 +640,13 @@ export function routeKicker(route: AppRoute): string {
     return areaLabel;
   }
   const group = railGroupForSection(route.area, section);
-  return group ? `${areaLabel} · ${group.label} · ${sectionLabel}` : `${areaLabel} · ${sectionLabel}`;
+  // Collapse to "Area · Section" when the section's name equals its group's (e.g.
+  // the Knowledge section inside the Knowledge group) to avoid a redundant
+  // "Library · Knowledge · Knowledge".
+  if (group && group.label.toLowerCase() !== sectionLabel.toLowerCase()) {
+    return `${areaLabel} · ${group.label} · ${sectionLabel}`;
+  }
+  return `${areaLabel} · ${sectionLabel}`;
 }
 
 export const ROUTE_RELEASE_SCOPE = [

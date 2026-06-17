@@ -22,6 +22,7 @@ import {
 import type { DaemonControlHandoff } from "@goatcitadel/mission-control-shared/api/types";
 import {
   getRouteReleaseScope,
+  routeKicker,
   ROUTE_RELEASE_SCOPE,
   type AppRoute,
   type RouteReleaseScope,
@@ -1341,7 +1342,7 @@ export function RuntimeRoutePage({
   return (
     <NativePageFrame
       area="ops"
-      kicker={`Ops · ${labelForOpsSection(section)}`}
+      kicker={routeKicker({ ...route, section })}
       title={labelForOpsSection(section)}
       description={descriptionForOpsSection(section)}
       loading={runtime.loading}

@@ -28,6 +28,7 @@ import {
   type NativeLoadIssue,
 } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route }: NativeRoutePagesProps) {
@@ -275,7 +276,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     <NativePageFrame
       area="ops"
       icon={BarChart3}
-      kicker="Ops · Quality"
+      kicker={routeKicker(route)}
       title="Quality Dashboard"
       description={`Evaluation proof, prompt-pack gates, and export posture for ${activeWorkspaceName}.`}
       loading={loading}
