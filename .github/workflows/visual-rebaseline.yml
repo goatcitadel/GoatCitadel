@@ -55,46 +55,6 @@ jobs:
           GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS: ${{ inputs.variant_slugs }}
         run: pnpm verify:visual:rebaseline
 
-      # TEMP DIAGNOSTIC (docs-check-citadel): the rebaseline lane writes failure
-      # detail only to the on-runner artifacts dir, which is otherwise discarded.
-      # Surface it inline + upload it so capture failures are debuggable.
-      - name: Surface rebaseline diagnostics
-        if: always()
-        run: |
-          set +e
-          ROOT="$(ls -dt artifacts/verification/*/ 2>/dev/null | head -1)"
-          echo "ARTIFACT ROOT: ${ROOT:-<none>}"
-          if [ -z "${ROOT:-}" ]; then echo "no artifact root produced"; exit 0; fi
-          echo "=== directory tree (depth 2) ==="
-          find "$ROOT" -maxdepth 2 | sort
-          echo "=== route-ready-failure diagnostics (readyError + shell area/section) ==="
-          for f in "$ROOT"diagnostics/*route-ready-failure*.json; do
-            [ -e "$f" ] || continue
-            echo "----- $f -----"; cat "$f"; echo
-          done
-          echo "=== json files mentioning citadel / failed / console-or-page errors ==="
-          grep -rilE "library-citadel|\"status\":\s*\"failed\"|console errors|page errors" "$ROOT" --include=*.json | head -40
-          echo "=== contents of failed-scenario json (first 6KB each) ==="
-          for f in $(grep -rilE "\"status\":\s*\"failed\"|route ready wait timed out|console errors|page errors" "$ROOT" --include=*.json | head -20); do
-            echo "----- $f -----"; head -c 6000 "$f"; echo
-          done
-          echo "=== citadel console snapshots ==="
-          for f in "$ROOT"playwright/*citadel*.json; do
-            [ -e "$f" ] || continue
-            echo "----- $f -----"; head -c 5000 "$f"; echo
-          done
-          echo "=== diagnostics dump complete ==="
-          exit 0
-
-      - name: Upload rebaseline diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rebaseline-diagnostics
-          path: artifacts/verification
-          retention-days: 5
-          if-no-files-found: ignore
-
       - name: Open rebaseline PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
