@@ -5,6 +5,18 @@
   font-family: "Geist Variable", sans-serif;
   --mc-font-sans: "Geist Variable", sans-serif;
   --mc-font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  /* WebAwesome (themes/default.css) defines --wa-font-family-body/-heading/-code
+     inside @layer wa-theme and applies them to native headings via native.css.
+     Body text wins Geist because foundation sets html/body font-family unlayered,
+     but headings (h1-h6) and WebAwesome components had no unlayered app rule, so
+     they fell through to WebAwesome's "ui-sans-serif, system-ui" stack — rendering
+     in the OS font instead of Geist (visible mismatch + line-heights tuned for
+     Geist's compact metrics). Re-point the WebAwesome font tokens at the app
+     fonts here (unlayered :root beats the layered wa-theme definition regardless
+     of specificity) so every WebAwesome-driven surface stays on-brand. */
+  --wa-font-family-body: var(--mc-font-sans);
+  --wa-font-family-heading: var(--mc-font-sans);
+  --wa-font-family-code: var(--mc-font-mono);
   /* SYS-02: --mc-radius-* are deprecated aliases over the canonical --r-* scale
      (mission-control-next-tokens.css) so there is a single radius source of
      truth and the old --mc-radius-md 1rem vs --r-md 0.9rem drift cannot recur. */
