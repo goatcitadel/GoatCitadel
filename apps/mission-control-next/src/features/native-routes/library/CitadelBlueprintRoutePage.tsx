@@ -110,9 +110,7 @@ export function CitadelBlueprintRoutePage({ activeWorkspaceId, activeWorkspaceNa
       title="Blueprint"
       description={`Export ${activeWorkspaceName} as a portable, secret-free Blueprint, or import one. Imports are validated and secret-scanned before they apply.`}
       loading={exportState.loading}
-      error={exportState.error}
-      releaseStatus="experimental"
-    >
+      error={exportState.error}    >
       <NativeGrid>
         <NativeCard
           title="Export"

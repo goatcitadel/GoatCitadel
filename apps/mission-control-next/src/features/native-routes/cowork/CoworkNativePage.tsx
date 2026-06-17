@@ -877,8 +877,10 @@ function NativeLane({
                 <span>{item.priority}</span>
                 <span>{formatDateTime(item.updatedAt)}</span>
               </div>
-              <strong>{item.title}</strong>
-              <p>{item.description?.trim() || "No description yet."}</p>
+              <strong title={item.title}>{item.title}</strong>
+              <p title={item.description?.trim() || undefined}>
+                {item.description?.trim() || "No description yet."}
+              </p>
               <div className="mc-next-directory-lane-status">
                 <CheckCircle2 className="h-4 w-4" />
                 <span>{formatTaskStatus(item.status)}</span>

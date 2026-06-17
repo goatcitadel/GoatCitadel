@@ -48,9 +48,7 @@ export function CitadelCouncilRoutePage({ activeWorkspaceId, activeWorkspaceName
       title="Council"
       description={`Agents seated in the ${activeWorkspaceName} Citadel. Seats reference the agents this workspace already owns.`}
       loading={council.loading}
-      error={council.error}
-      releaseStatus="experimental"
-    >
+      error={council.error}    >
       <NativeGrid>
         <NativeCard
           title="Seated agents"

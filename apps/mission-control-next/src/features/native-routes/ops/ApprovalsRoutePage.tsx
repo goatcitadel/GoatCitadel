@@ -198,16 +198,6 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                   onClick={() => approvals.setView("recovery")}
                 />
               </div>
-              {approvals.view === "pending" ? (
-                <button
-                  type="button"
-                  className="gc-button danger"
-                  disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
-                  onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
-                >
-                  {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
-                </button>
-              ) : null}
             </div>
             <div className="mc-next-approvals-risk-strip">
               <StatusChip tone={approvals.pendingRiskCounts.safe > 0 ? "success" : "muted"}>

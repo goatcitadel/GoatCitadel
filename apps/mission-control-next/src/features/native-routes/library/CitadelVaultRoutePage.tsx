@@ -132,9 +132,7 @@ export function CitadelVaultRoutePage({ activeWorkspaceId, activeWorkspaceName }
       description={`Secrets for ${activeWorkspaceName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
       loading={secrets.loading}
       error={secrets.error}
-      onRetry={() => void load()}
-      releaseStatus="experimental"
-    >
+      onRetry={() => void load()}    >
       <NativeGrid>
         <NativeCard
           title="Stored secrets"

@@ -1068,7 +1068,6 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
   return (
     <section className="mc-next-route-fallback" aria-live="polite">
       <BlocksShuffleLoader label={`Loading ${label}`} />
-      <p>Loading {label}</p>
       <span>{description}</span>
     </section>
   );

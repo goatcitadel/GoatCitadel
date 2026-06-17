@@ -74,9 +74,7 @@ export function CitadelOverviewRoutePage({ activeWorkspaceId, activeWorkspaceNam
       title="Citadel"
       description={`How ${activeWorkspaceName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture.`}
       loading={state.loading}
-      error={state.error}
-      releaseStatus="experimental"
-    >
+      error={state.error}    >
       {!state.staged ? (
         <EmptyState
           icon={<Castle className="h-5 w-5" />}

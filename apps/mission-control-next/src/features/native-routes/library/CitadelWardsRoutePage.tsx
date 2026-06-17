@@ -108,9 +108,7 @@ export function CitadelWardsRoutePage({ activeWorkspaceId, activeWorkspaceName }
       title="Wards"
       description={`Access policy for ${activeWorkspaceName}. Wards are evaluated deny-wins — the most restrictive matching effect governs an action.`}
       loading={wards.loading}
-      error={wards.error}
-      releaseStatus="experimental"
-    >
+      error={wards.error}    >
       <NativeGrid>
         <NativeCard
           title="Active Wards"

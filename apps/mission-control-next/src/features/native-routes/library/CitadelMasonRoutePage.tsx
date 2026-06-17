@@ -140,9 +140,7 @@ export function CitadelMasonRoutePage({ activeWorkspaceName }: NativeRoutePagesP
       title="The Mason"
       description={`Stage a Citadel for ${activeWorkspaceName} by answering the Mason — nothing is connected or activated until you review and confirm.`}
       loading={questions.loading}
-      error={questions.error}
-      releaseStatus="experimental"
-    >
+      error={questions.error}    >
       <NativeGrid>
         <NativeCard
           title="Setup questions"
