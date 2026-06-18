@@ -24,6 +24,19 @@ export interface MediaPlaybackVariant {
   status?: "available" | "pending" | "unavailable";
 }
 
+export interface MediaPlaybackPoster {
+  source?: MediaPlaybackSource;
+  thumbnailRelPath?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  status: "available" | "pending" | "unavailable";
+}
+
+export interface ChatAttachmentPlaybackMetadata {
+  variants: MediaPlaybackVariant[];
+  poster?: MediaPlaybackPoster;
+}
+
 export interface MediaPlaybackTokenRequest {
   source: MediaPlaybackSource;
   variantId?: MediaPlaybackQuality;
@@ -80,4 +93,5 @@ export interface ChatAttachmentPreviewResponse {
   ocrText?: string;
   transcriptText?: string;
   analysisStatus: MediaJobStatus;
+  playback?: ChatAttachmentPlaybackMetadata;
 }

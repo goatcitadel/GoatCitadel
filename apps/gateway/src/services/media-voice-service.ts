@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import type {
   ChatAttachmentMediaType,
+  ChatAttachmentPlaybackMetadata,
   ChatAttachmentPreviewResponse,
   ChatAttachmentRecord,
   GoogleMeetCleanupResult,
@@ -77,6 +78,18 @@ interface MediaJobRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+interface MediaArtifactRow {
+  artifact_id: string;
+  job_id: string;
+  attachment_id: string | null;
+  kind: "thumbnail" | "ocr_text" | "transcript" | "analysis";
+  storage_rel_path: string | null;
+  text_preview: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  created_at: string;
 }
 
 interface DevDiagnosticInput {
@@ -192,6 +205,28 @@ function isMediaJobRow(value: unknown): value is MediaJobRow {
 
 function toMediaJobRows(value: unknown): MediaJobRow[] {
   return Array.isArray(value) ? value.filter(isMediaJobRow) : [];
+}
+
+function isMediaArtifactRow(value: unknown): value is MediaArtifactRow {
+  return (
+    isRecord(value) &&
+    typeof value.artifact_id === "string" &&
+    typeof value.job_id === "string" &&
+    (typeof value.attachment_id === "string" || value.attachment_id === null) &&
+    (value.kind === "thumbnail" ||
+      value.kind === "ocr_text" ||
+      value.kind === "transcript" ||
+      value.kind === "analysis") &&
+    (typeof value.storage_rel_path === "string" || value.storage_rel_path === null) &&
+    (typeof value.text_preview === "string" || value.text_preview === null) &&
+    (typeof value.mime_type === "string" || value.mime_type === null) &&
+    (typeof value.size_bytes === "number" || value.size_bytes === null) &&
+    typeof value.created_at === "string"
+  );
+}
+
+function toMediaArtifactRows(value: unknown): MediaArtifactRow[] {
+  return Array.isArray(value) ? value.filter(isMediaArtifactRow) : [];
 }
 
 export function detectAttachmentMediaType(mimeType: string): ChatAttachmentMediaType {
@@ -599,16 +634,18 @@ export class MediaVoiceService {
 
   public getChatAttachmentPreview(attachmentId: string): ChatAttachmentPreviewResponse {
     const record = this.deps.getChatAttachment(attachmentId);
+    const mediaType = record.mediaType ?? detectAttachmentMediaType(record.mimeType);
     return {
       attachmentId: record.attachmentId,
       fileName: record.fileName,
       mimeType: record.mimeType,
-      mediaType: record.mediaType ?? detectAttachmentMediaType(record.mimeType),
+      mediaType,
       thumbnailRelPath: record.thumbnailRelPath,
       extractPreview: record.extractPreview,
       ocrText: record.ocrText,
       transcriptText: record.transcriptText,
       analysisStatus: record.analysisStatus === "pending" ? "queued" : (record.analysisStatus ?? "queued"),
+      playback: this.buildAttachmentPlaybackMetadata(record, mediaType),
     };
   }
 
@@ -1264,6 +1301,66 @@ export class MediaVoiceService {
         return;
       }
       this.mediaPlaybackTokens.delete(oldestToken);
+    }
+  }
+
+  private buildAttachmentPlaybackMetadata(
+    record: ChatAttachmentRecord,
+    mediaType: ChatAttachmentMediaType,
+  ): ChatAttachmentPlaybackMetadata | undefined {
+    if (mediaType !== "audio" && mediaType !== "video") {
+      return undefined;
+    }
+    const artifacts = this.listMediaArtifactsForAttachment(record.attachmentId);
+    const thumbnailArtifact = artifacts.find((artifact) => artifact.kind === "thumbnail");
+    return {
+      variants: [
+        {
+          variantId: "original",
+          label: "Original upload",
+          source: {
+            kind: "chat_attachment",
+            attachmentId: record.attachmentId,
+          },
+          mimeType: record.mimeType,
+          sizeBytes: record.sizeBytes,
+          status: "available",
+        },
+      ],
+      poster:
+        thumbnailArtifact || record.thumbnailRelPath
+          ? {
+              source: thumbnailArtifact
+                ? {
+                    kind: "media_artifact" as const,
+                    artifactId: thumbnailArtifact.artifact_id,
+                  }
+                : undefined,
+              thumbnailRelPath: thumbnailArtifact?.storage_rel_path ?? record.thumbnailRelPath,
+              mimeType: thumbnailArtifact?.mime_type ?? undefined,
+              sizeBytes: thumbnailArtifact?.size_bytes ?? undefined,
+              status: "available",
+            }
+          : undefined,
+    };
+  }
+
+  private listMediaArtifactsForAttachment(attachmentId: string): MediaArtifactRow[] {
+    try {
+      const statement = this.deps.gatewaySql.prepare(
+        `
+      SELECT * FROM media_artifacts
+      WHERE attachment_id = ?
+      ORDER BY created_at DESC
+      LIMIT 20
+    `,
+      );
+      if (typeof statement.all !== "function") {
+        return [];
+      }
+      return toMediaArtifactRows(statement.all(attachmentId));
+    } catch {
+      return [];
     }
   }
 

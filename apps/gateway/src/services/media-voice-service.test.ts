@@ -151,6 +151,69 @@ describe("MediaVoiceService", () => {
     ).toThrow(/not available yet/i);
   });
 
+  it("includes playback variants and poster metadata for streamable attachment previews", () => {
+    const all = vi.fn(() => [
+      {
+        artifact_id: "artifact-thumb",
+        job_id: "job-1",
+        attachment_id: "video-1",
+        kind: "thumbnail",
+        storage_rel_path: "chat/default/media/video-1-poster.jpg",
+        text_preview: null,
+        mime_type: "image/jpeg",
+        size_bytes: 4096,
+        created_at: "2026-06-18T00:00:00.000Z",
+      },
+    ]);
+    const getChatAttachment = vi.fn(() => ({
+      attachmentId: "video-1",
+      sessionId: "session-1",
+      fileName: "clip.mp4",
+      mimeType: "video/mp4",
+      mediaType: "video",
+      sizeBytes: 1024 * 1024,
+      sha256: "hash",
+      storageRelPath: "chat/default/attachments/clip.mp4",
+      extractStatus: "unsupported",
+      analysisStatus: "ready",
+      createdAt: "2026-06-18T00:00:00.000Z",
+    }));
+    const service = new MediaVoiceService(
+      createDeps({
+        getChatAttachment,
+        gatewaySql: {
+          prepare: vi.fn(() => ({
+            all,
+          })),
+        } as never,
+      }),
+    );
+
+    expect(service.getChatAttachmentPreview("video-1")).toMatchObject({
+      mediaType: "video",
+      playback: {
+        variants: [
+          {
+            variantId: "original",
+            label: "Original upload",
+            source: { kind: "chat_attachment", attachmentId: "video-1" },
+            mimeType: "video/mp4",
+            sizeBytes: 1024 * 1024,
+            status: "available",
+          },
+        ],
+        poster: {
+          source: { kind: "media_artifact", artifactId: "artifact-thumb" },
+          thumbnailRelPath: "chat/default/media/video-1-poster.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 4096,
+          status: "available",
+        },
+      },
+    });
+    expect(all).toHaveBeenCalledWith("video-1");
+  });
+
   it("lists media jobs without binding unused parameters when no session filter is provided", () => {
     const all = vi.fn(() => []);
     const prepare = vi.fn((_sql: string) => ({
