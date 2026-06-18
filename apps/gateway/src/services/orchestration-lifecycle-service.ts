@@ -317,17 +317,23 @@ function persistPolicyGateEvent(
     approvalRequired?: boolean;
   },
 ): void {
-  persistRunEvent(host, run, "policy.checked", {
-    gate: input.gate,
-    trigger: input.trigger,
-    entityType: input.entityType,
-    entityId: input.entityId,
-    outcome: input.outcome,
-    phaseId: input.phaseId,
-    blockedReason: input.blockedReason,
-    patchKeys: input.patch ? Object.keys(input.patch).sort() : [],
-    approvalRequired: input.approvalRequired ?? false,
-  });
+  // Evidence writing is best-effort: a failure here must never alter the gate's own
+  // allow/block/approval outcome (e.g. mask the hook's blocked reason thrown by the caller).
+  try {
+    persistRunEvent(host, run, "policy.checked", {
+      gate: input.gate,
+      trigger: input.trigger,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      outcome: input.outcome,
+      phaseId: input.phaseId,
+      blockedReason: input.blockedReason,
+      patchKeys: input.patch ? Object.keys(input.patch).sort() : [],
+      approvalRequired: input.approvalRequired ?? false,
+    });
+  } catch {
+    // Policy evidence is observability only; swallow persistence errors so run control flow is unchanged.
+  }
 }
 
 function publishRunRealtime(
