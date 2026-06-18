@@ -397,6 +397,14 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(".mc-next-primary-nav {\n  display: inline-flex;");
     expect(css).toContain("overflow-x: auto;");
     expect(css).toContain(".mc-next-command-search {\n  order: -1;\n  flex: 1 1 18rem;\n  min-width: 9rem;");
+    // F1: lower-priority controls collapse into the overflow ⋯ More menu at the
+    // laptop breakpoint instead of clipping behind the topbar's `overflow: clip`.
+    expect(css).toContain(".mc-next-topbar-more-menu {");
+    expect(css).toContain("z-index: var(--z-dropdown);");
+    expect(css).toContain("@media (max-width: 1180px) {");
+    // Guardrail: the restored quick-glance status cluster (release scope /
+    // degraded-realtime / approvals) must never be silently re-hidden.
+    expect(css).not.toContain(".mc-next-topbar-status {\n  display: none;");
   });
 
   it("renders access-gate states and lets retry recover from preflight failures", async () => {
@@ -468,7 +476,9 @@ describe("MissionControlNextApp", () => {
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
-    expect(findButton(renderer, "Search commands").props["aria-label"]).toBe("Open command palette");
+    // F10: the Cmd/Ctrl+K trigger, its accessible name, and the dialog it opens
+    // all read "Command Palette" (visible label matches accessible name).
+    expect(findButton(renderer, "Command Palette").props["aria-label"]).toBe("Command Palette");
     expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
 
     await act(async () => {
@@ -711,7 +721,7 @@ describe("MissionControlNextApp", () => {
     const renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1&turnId=turn-1");
 
     await act(async () => {
-      findButton(renderer, "Search commands").props.onClick();
+      findButton(renderer, "Command Palette").props.onClick();
     });
 
     await act(async () => {

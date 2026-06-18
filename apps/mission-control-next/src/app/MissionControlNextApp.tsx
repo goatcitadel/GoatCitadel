@@ -10,6 +10,7 @@ import {
   LibraryBig,
   Menu,
   MoonStar,
+  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Rocket,
@@ -42,6 +43,7 @@ import {
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "@goatcitadel/mission-control-shared/state/effects-mode";
 import { type RealtimeTruthMode } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
@@ -51,6 +53,7 @@ import {
   preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
+import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -293,6 +296,12 @@ export function MissionControlNextApp() {
     () => describeRealtimeTruthUi(streamState, streamTruthMode),
     [streamState, streamTruthMode],
   );
+  // F1 (topbar density): below the laptop breakpoint the lower-priority topbar
+  // controls collapse into an overflow menu so the right cluster never clips
+  // behind `overflow: clip`. Mirrors the `@media (max-width: 1279px)` CSS tier so
+  // JS placement and the responsive stylesheet stay in lockstep. Falls back to
+  // the roomy inline layout when matchMedia is unavailable (SSR / test renderer).
+  const isCompactTopbar = useMediaQuery("(max-width: 1279px)");
   const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
@@ -478,6 +487,51 @@ export function MissionControlNextApp() {
     }
   }, [activeWorkspaceId, setActiveWorkspaceId]);
 
+  // F1: shared handlers so each inline topbar control and its overflow-menu
+  // counterpart stay behaviorally identical (one source of truth per action).
+  const handleOpenStartHere = useCallback(
+    () => navigate({ area: "settings", section: "onboarding", theme: route.theme }),
+    [navigate, route.theme],
+  );
+  const handleToggleMode = useCallback(() => setMode(mode === "simple" ? "advanced" : "simple"), [mode, setMode]);
+  const handleToggleNotificationSound = useCallback(
+    () => setNotificationSoundMode(notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off"),
+    [notificationPreferences.soundMode, setNotificationSoundMode, lastEnabledSoundModeRef],
+  );
+  const handleToggleTheme = useCallback(() => setTheme(theme === "dark" ? "light" : "dark"), [setTheme, theme]);
+  const soundEnabled = notificationPreferences.soundMode !== "off";
+  // F1: lower-priority controls that fold into the overflow menu at compact
+  // widths. Approvals, notifications, and the Context toggle stay inline at every
+  // width so operator-critical actions are always one click away.
+  const topbarOverflowItems: TopbarOverflowItem[] = [
+    {
+      id: "start-here",
+      label: "Start Here",
+      ariaLabel: "Open Start Here",
+      icon: <Rocket size={15} />,
+      onSelect: handleOpenStartHere,
+    },
+    {
+      id: "mode",
+      label: mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode",
+      icon: <SlidersHorizontal size={15} />,
+      onSelect: handleToggleMode,
+    },
+    {
+      id: "notification-sound",
+      label: soundEnabled ? "Disable notification sounds" : "Enable notification sounds",
+      icon: soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />,
+      active: soundEnabled,
+      onSelect: handleToggleNotificationSound,
+    },
+    {
+      id: "theme",
+      label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+      icon: theme === "dark" ? <SunMedium size={15} /> : <MoonStar size={15} />,
+      onSelect: handleToggleTheme,
+    },
+  ];
+
   useEffect(() => {
     const nextHref = coerceLegacyHrefToNext(window.location.href);
     if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}`) {
@@ -614,35 +668,44 @@ export function MissionControlNextApp() {
               </nav>
             </div>
             <div className="mc-next-topbar-right">
+              {/* F10: one name for Cmd/Ctrl+K. The trigger, its accessible name,
+                  and the dialog it opens all read "Command Palette" (the canonical
+                  name in shared copy), so the visible label matches the accessible
+                  name (WCAG 2.5.3) instead of the prior "Search commands" vs
+                  "Open command palette" split. */}
               <button
                 type="button"
                 className="mc-next-command-search"
                 onClick={() => setPaletteOpen(true)}
-                title="Search commands"
-                aria-label="Open command palette"
+                title="Command Palette"
+                aria-label="Command Palette"
               >
                 <Search size={15} />
-                <span>Search commands</span>
+                <span>Command Palette</span>
                 <kbd>Ctrl K</kbd>
               </button>
-              <NativeButton
-                variant="secondary"
-                className="mc-next-start-button"
-                onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}
-                title="Open Start Here"
-              >
-                <Rocket size={15} />
-                Start Here
-              </NativeButton>
-              <NativeButton
-                variant="secondary"
-                className="mc-next-mode-toggle"
-                onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
-                title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
-              >
-                <SlidersHorizontal size={15} />
-                {mode === "simple" ? "Guided" : "Expert"}
-              </NativeButton>
+              {!isCompactTopbar ? (
+                <>
+                  <NativeButton
+                    variant="secondary"
+                    className="mc-next-start-button"
+                    onClick={handleOpenStartHere}
+                    title="Open Start Here"
+                  >
+                    <Rocket size={15} />
+                    Start Here
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    className="mc-next-mode-toggle"
+                    onClick={handleToggleMode}
+                    title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
+                  >
+                    <SlidersHorizontal size={15} />
+                    {mode === "simple" ? "Guided" : "Expert"}
+                  </NativeButton>
+                </>
+              ) : null}
               <label className="mc-next-select-field">
                 <span>Workspace</span>
                 <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
@@ -668,7 +731,15 @@ export function MissionControlNextApp() {
                 >
                   {currentReleaseStatusLabel}
                 </span>
-                <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
+                {/* F2: realtime status lives canonically in the always-visible
+                    footer strip ("Live updates"). Surface the topbar badge only
+                    as the degraded/fallback escalation, so the healthy path shows
+                    the signal once instead of duplicating it in the same viewport. */}
+                {realtimeStatusCopy.degraded ? (
+                  <span className="mc-next-badge mc-next-realtime-badge" data-realtime="degraded">
+                    {realtimeStatusCopy.badge}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   className="mc-next-badge mc-next-badge-button"
@@ -689,31 +760,19 @@ export function MissionControlNextApp() {
                 <Bell size={16} />
                 <span>{operatorNotificationCount}</span>
               </button>
-              <button
-                type="button"
-                className={`mc-next-icon-button mc-next-audio-toggle${
-                  notificationPreferences.soundMode !== "off" ? " active" : ""
-                }`}
-                onClick={() =>
-                  setNotificationSoundMode(
-                    notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off",
-                  )
-                }
-                aria-pressed={notificationPreferences.soundMode !== "off"}
-                aria-label={
-                  notificationPreferences.soundMode === "off"
-                    ? "Enable notification sounds"
-                    : "Disable notification sounds"
-                }
-                title={
-                  notificationPreferences.soundMode === "off"
-                    ? "Enable notification sounds"
-                    : "Disable notification sounds"
-                }
-              >
-                {notificationPreferences.soundMode === "off" ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                <span>{notificationPreferences.soundMode === "off" ? "Off" : "On"}</span>
-              </button>
+              {!isCompactTopbar ? (
+                <button
+                  type="button"
+                  className={`mc-next-icon-button mc-next-audio-toggle${soundEnabled ? " active" : ""}`}
+                  onClick={handleToggleNotificationSound}
+                  aria-pressed={soundEnabled}
+                  aria-label={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
+                  title={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
+                >
+                  {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                  <span>{soundEnabled ? "On" : "Off"}</span>
+                </button>
+              ) : null}
               <NativeButton
                 variant="secondary"
                 className="mc-next-wa-button"
@@ -722,15 +781,18 @@ export function MissionControlNextApp() {
                 {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
                 {inspectorOpen ? "Hide Context" : "Open Context"}
               </NativeButton>
-              <button
-                type="button"
-                className="mc-next-icon-button mc-next-theme-toggle"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              >
-                {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
-              </button>
+              {!isCompactTopbar ? (
+                <button
+                  type="button"
+                  className="mc-next-icon-button mc-next-theme-toggle"
+                  onClick={handleToggleTheme}
+                  aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                  title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                >
+                  {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
+                </button>
+              ) : null}
+              {isCompactTopbar ? <TopbarOverflowMenu items={topbarOverflowItems} /> : null}
             </div>
           </header>
 

@@ -856,7 +856,12 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   border-radius: var(--r-sm);
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
   background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--mc-surface-1));
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 10%, transparent);
+  /* F7: an inset 3px left risk-rail (plus the existing 1px caution border + ring)
+     makes a pending decision read at a glance in the dense composer. The inset
+     shadow follows the border radius cleanly, unlike an asymmetric border-left. */
+  box-shadow:
+    inset 3px 0 0 color-mix(in oklab, var(--gc-risk-caution) 60%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 10%, transparent);
 }
 
 .mc-next-composer-blocking-prompt .chat-approval-header,
