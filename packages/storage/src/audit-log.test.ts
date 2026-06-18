@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { AuditLog, sanitizeForAudit } from "./audit-log.js";
 import { runWithRequestAttribution } from "./request-attribution.js";
@@ -248,6 +249,54 @@ describe("AuditLog", () => {
       lines.some((record) => record.action === "new"),
       true,
     );
+  });
+
+  it("serializes retention pruning with concurrent appends", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const filePath = path.join(root, "approvals.jsonl");
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", action: "old" }),
+        JSON.stringify({ timestamp: new Date().toISOString(), action: "recent" }),
+        "",
+      ].join("\n"),
+    );
+    process.env.GOAT_AUDIT_RETENTION_DAYS = "30";
+
+    const originalWriteFile = fsPromises.writeFile.bind(fsPromises);
+    let activePruneWrites = 0;
+    let maxActivePruneWrites = 0;
+    const writeFileMock = mock.method(
+      fsPromises,
+      "writeFile",
+      async (...args: Parameters<typeof fsPromises.writeFile>) => {
+        activePruneWrites += 1;
+        maxActivePruneWrites = Math.max(maxActivePruneWrites, activePruneWrites);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          await originalWriteFile(...args);
+        } finally {
+          activePruneWrites -= 1;
+        }
+      },
+    );
+
+    const log = new AuditLog(root);
+    const appendedActions = Array.from({ length: 25 }, (_, index) => `concurrent-${index}`);
+    await Promise.all(appendedActions.map((action) => log.append("approvals", { action })));
+
+    const records = await log.list("approvals");
+    const actions = records.map((record) => record.action);
+    assert.equal(maxActivePruneWrites, 1);
+    assert.equal(actions.includes("old"), false);
+    assert.equal(actions.includes("recent"), true);
+    for (const action of appendedActions) {
+      assert.equal(actions.includes(action), true, `missing ${action}`);
+    }
+    assert.equal(writeFileMock.mock.callCount(), 1);
   });
 
   it("handles retention no-file, no-op, malformed, and invalid configuration paths", async () => {

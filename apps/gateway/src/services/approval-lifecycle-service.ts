@@ -314,7 +314,7 @@ export async function resolveApprovalWithConsumedRemoteToken(
     });
   }
   const resolvedBy = input.resolvedBy?.trim() || `connector:${tokenRecord.connectorId}`;
-  void host.storage.audit.append("approvals", {
+  await host.storage.audit.append("approvals", {
     event: "approval.remote_token.consume",
     approvalId,
     connectorId: tokenRecord.connectorId,

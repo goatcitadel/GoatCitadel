@@ -713,21 +713,30 @@ describe("approval lifecycle service", () => {
 
   it("resolves remote-token approvals through the approval host with connector linkage", async () => {
     const host = createApprovalHarness();
-    host.resolveApproval.mockResolvedValue({
-      approval: {
-        ...host.storage.approvals.get("approval-1"),
-        status: "approved",
-      },
-      effects: [],
-      replay: {
-        approval: host.storage.approvals.get("approval-1"),
-        events: [],
-        pendingAction: undefined,
+    const callOrder: string[] = [];
+    host.storage.audit.append = vi.fn(async () => {
+      callOrder.push("audit-start");
+      await Promise.resolve();
+      callOrder.push("audit-finish");
+    });
+    host.resolveApproval.mockImplementation(async () => {
+      callOrder.push("resolve");
+      return {
+        approval: {
+          ...host.storage.approvals.get("approval-1"),
+          status: "approved",
+        },
         effects: [],
-      },
-      resolutionEffects: {
-        proactiveRunIds: [],
-      },
+        replay: {
+          approval: host.storage.approvals.get("approval-1"),
+          events: [],
+          pendingAction: undefined,
+          effects: [],
+        },
+        resolutionEffects: {
+          proactiveRunIds: [],
+        },
+      };
     });
 
     await resolveApprovalWithConsumedRemoteToken(
@@ -772,6 +781,7 @@ describe("approval lifecycle service", () => {
         resolvedBy: "connector:connector-1",
       }),
     );
+    expect(callOrder).toEqual(["audit-start", "audit-finish", "resolve"]);
   });
 
   it("rejects expired remote-token approvals before enqueueing effects", async () => {
