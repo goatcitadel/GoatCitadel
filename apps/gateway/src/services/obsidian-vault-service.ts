@@ -67,8 +67,8 @@ export class ObsidianVaultService {
       throw new Error("query is required");
     }
 
-    const vaultRoot = this.resolveVaultRoot(config);
-    const allowedRoots = resolveAllowedRoots(vaultRoot, config.allowedSubpaths);
+    const vaultRoot = await this.resolveVaultRootRealpath(config);
+    const allowedRoots = await resolveExistingAllowedRoots(vaultRoot, config.allowedSubpaths);
     const files = await this.collectMarkdownFiles(allowedRoots, 2000);
     const results: ObsidianSearchResult[] = [];
 
@@ -112,7 +112,7 @@ export class ObsidianVaultService {
   public async readNote(relativePath: string): Promise<{ relativePath: string; content: string }> {
     const config = this.getConfig();
     this.assertReadEnabled(config);
-    const fullPath = this.resolveNotePath(config, relativePath);
+    const fullPath = await this.resolveExistingNotePath(config, relativePath);
     const content = await fs.readFile(fullPath, "utf8");
     await this.recordOperation();
     return {
@@ -131,8 +131,7 @@ export class ObsidianVaultService {
     if (!block) {
       throw new Error("markdownBlock is required");
     }
-    const fullPath = this.resolveNotePath(config, relativePath);
-    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    const fullPath = await this.resolveWritableNotePath(config, relativePath);
     const appendedAt = new Date().toISOString();
     const payload = `\n\n${block}\n`;
     await fs.appendFile(fullPath, payload, "utf8");
@@ -220,8 +219,45 @@ export class ObsidianVaultService {
     return path.resolve(vaultPath);
   }
 
-  private resolveNotePath(config: ObsidianIntegrationConfig, relativePath: string): string {
-    const vaultRoot = this.resolveVaultRoot(config);
+  private async resolveVaultRootRealpath(config: ObsidianIntegrationConfig): Promise<string> {
+    return fs.realpath(this.resolveVaultRoot(config));
+  }
+
+  private async resolveExistingNotePath(config: ObsidianIntegrationConfig, relativePath: string): Promise<string> {
+    const { allowedRoots, fullPath } = await this.resolveLexicalNotePath(config, relativePath);
+    const realPath = await fs.realpath(fullPath);
+    if (!allowedRoots.some((allowedRoot) => isWithin(allowedRoot, realPath))) {
+      throw new Error("Path resolves outside configured Obsidian allowed subpaths.");
+    }
+    return realPath;
+  }
+
+  private async resolveWritableNotePath(config: ObsidianIntegrationConfig, relativePath: string): Promise<string> {
+    const { allowedRoots, fullPath } = await this.resolveLexicalNotePath(config, relativePath);
+    const parentPath = path.dirname(fullPath);
+    try {
+      await fs.mkdir(parentPath, { recursive: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+    const parentRealpath = await fs.realpath(parentPath);
+    if (!allowedRoots.some((allowedRoot) => isWithin(allowedRoot, parentRealpath))) {
+      throw new Error("Path resolves outside configured Obsidian allowed subpaths.");
+    }
+    const existingTargetRealpath = await realpathIfExists(fullPath);
+    if (existingTargetRealpath && !allowedRoots.some((allowedRoot) => isWithin(allowedRoot, existingTargetRealpath))) {
+      throw new Error("Path resolves outside configured Obsidian allowed subpaths.");
+    }
+    return fullPath;
+  }
+
+  private async resolveLexicalNotePath(
+    config: ObsidianIntegrationConfig,
+    relativePath: string,
+  ): Promise<{ allowedRoots: string[]; fullPath: string }> {
+    const vaultRoot = await this.resolveVaultRootRealpath(config);
     const normalizedRel = normalizeRelativePath(relativePath);
     if (!normalizedRel.toLowerCase().endsWith(".md")) {
       throw new Error("Only markdown note paths are allowed.");
@@ -234,7 +270,7 @@ export class ObsidianVaultService {
     if (!allowedRoots.some((allowedRoot) => isWithin(allowedRoot, fullPath))) {
       throw new Error("Path is outside configured Obsidian allowed subpaths.");
     }
-    return fullPath;
+    return { allowedRoots, fullPath };
   }
 
   private async refreshStatus(config: ObsidianIntegrationConfig): Promise<ObsidianStatusState> {
@@ -250,7 +286,7 @@ export class ObsidianVaultService {
       }
 
       try {
-        const stat = await fs.stat(path.resolve(config.vaultPath.trim()));
+        const stat = await fs.stat(await this.resolveVaultRootRealpath(config));
         if (!stat.isDirectory()) {
           return "Configured Obsidian vault path is not a directory.";
         }
@@ -344,6 +380,32 @@ function resolveAllowedRoots(vaultRoot: string, allowedSubpaths: string[]): stri
     roots.push(vaultRoot);
   }
   return roots;
+}
+
+async function resolveExistingAllowedRoots(vaultRoot: string, allowedSubpaths: string[]): Promise<string[]> {
+  const roots: string[] = [];
+  for (const root of resolveAllowedRoots(vaultRoot, allowedSubpaths)) {
+    try {
+      const realRoot = await fs.realpath(root);
+      if (isWithin(vaultRoot, realRoot)) {
+        roots.push(realRoot);
+      }
+    } catch {
+      // Missing allowed roots simply have no searchable markdown files yet.
+    }
+  }
+  return roots;
+}
+
+async function realpathIfExists(targetPath: string): Promise<string | undefined> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function isWithin(base: string, target: string): boolean {

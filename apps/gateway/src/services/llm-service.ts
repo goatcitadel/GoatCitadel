@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
-import { assertHostAllowed } from "@goatcitadel/policy-engine";
+import { assertExistingPathRealpathAllowed, assertHostAllowed } from "@goatcitadel/policy-engine";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -89,6 +89,10 @@ interface ModelDiscoveryResult {
 export interface LlmServiceOptions {
   networkAllowlist?: string[];
   enforceNetworkAllowlist?: boolean;
+  tlsPathPolicy?: {
+    writeJailRoots: string[];
+    readOnlyRoots: string[];
+  };
   secretStore?: SecretStoreService;
   openAICodexOAuthFetch?: typeof fetch;
   /**
@@ -169,6 +173,7 @@ export class LlmService {
   };
   private networkAllowlist: string[];
   private enforceNetworkAllowlist: boolean;
+  private readonly tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"];
   private activeProviderId: string;
   private activeModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
@@ -182,6 +187,7 @@ export class LlmService {
     this.openAICodexOAuth = new OpenAICodexOAuthService(this.secretStore, options.openAICodexOAuthFetch ?? fetch);
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
+    this.tlsPathPolicy = options.tlsPathPolicy;
     this.activeProviderId = "";
     this.activeModel = "";
 
@@ -1281,7 +1287,7 @@ export class LlmService {
       return cached;
     }
 
-    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env);
+    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env, this.tlsPathPolicy);
     if (!dispatcher) {
       return undefined;
     }
@@ -2082,15 +2088,17 @@ function createRequestDispatcher(
   targetUrl: URL,
   requestConfig: LlmProviderRequestConfig,
   env: NodeJS.ProcessEnv,
+  tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"],
 ): Dispatcher | undefined {
-  const tlsOptions = targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig.tls) : undefined;
+  const tlsOptions =
+    targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig.tls, tlsPathPolicy) : undefined;
   const proxy = requestConfig.proxy;
   if (proxy && !shouldBypassProxy(targetUrl.hostname, proxy.bypassHosts)) {
     const proxyHeaders = buildProxyRequestHeaders(proxy.auth, env);
     return new ProxyAgent({
       uri: proxy.url,
       headers: proxyHeaders,
-      proxyTls: buildRequestTlsOptions(proxy.tls),
+      proxyTls: buildRequestTlsOptions(proxy.tls, tlsPathPolicy),
       requestTls: tlsOptions,
     });
   }
@@ -2116,7 +2124,10 @@ function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProvid
   });
 }
 
-function buildRequestTlsOptions(tlsConfig: LlmProviderRequestTlsConfig | undefined): UndiciConnectOptions | undefined {
+function buildRequestTlsOptions(
+  tlsConfig: LlmProviderRequestTlsConfig | undefined,
+  tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"],
+): UndiciConnectOptions | undefined {
   if (!tlsConfig) {
     return undefined;
   }
@@ -2133,19 +2144,26 @@ function buildRequestTlsOptions(tlsConfig: LlmProviderRequestTlsConfig | undefin
     hasTlsOverride = true;
   }
   if (tlsConfig.caCertPath) {
-    connectOptions.ca = readFileSync(tlsConfig.caCertPath);
+    connectOptions.ca = readTlsFile(tlsConfig.caCertPath, tlsPathPolicy);
     hasTlsOverride = true;
   }
   if (tlsConfig.clientCertPath) {
-    connectOptions.cert = readFileSync(tlsConfig.clientCertPath);
+    connectOptions.cert = readTlsFile(tlsConfig.clientCertPath, tlsPathPolicy);
     hasTlsOverride = true;
   }
   if (tlsConfig.clientKeyPath) {
-    connectOptions.key = readFileSync(tlsConfig.clientKeyPath);
+    connectOptions.key = readTlsFile(tlsConfig.clientKeyPath, tlsPathPolicy);
     hasTlsOverride = true;
   }
 
   return hasTlsOverride ? connectOptions : undefined;
+}
+
+function readTlsFile(filePath: string, tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"]): Buffer {
+  if (tlsPathPolicy) {
+    assertExistingPathRealpathAllowed(filePath, tlsPathPolicy.writeJailRoots, tlsPathPolicy.readOnlyRoots);
+  }
+  return readFileSync(filePath);
 }
 
 function buildProxyRequestHeaders(

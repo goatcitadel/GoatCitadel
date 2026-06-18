@@ -75,7 +75,8 @@ describe("ChatProjectService", () => {
     const sourcePath = path.join(workspaceRoot, "Manual Project");
     await fsPromises.mkdir(sourcePath, { recursive: true });
     await fsPromises.writeFile(path.join(sourcePath, "README.md"), "hello");
-    const { service } = createService({ workspaceDir: "workspace" });
+    const sourceRealPath = await fsPromises.realpath(sourcePath);
+    const { service } = createService({ workspaceDir: "workspace", readOnlyRoots: [tempRoot] });
 
     const result = await service.importChatProject({
       workspaceId: " ws-a ",
@@ -97,7 +98,7 @@ describe("ChatProjectService", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "git",
       ["init", "-b", "main"],
-      expect.objectContaining({ cwd: sourcePath }),
+      expect.objectContaining({ cwd: sourceRealPath }),
       expect.any(Function),
     );
     expect(published.at(-1)?.payload).toMatchObject({
@@ -111,7 +112,7 @@ describe("ChatProjectService", () => {
     const sourcePath = path.join(tempRoot, "external source");
     await fsPromises.mkdir(sourcePath, { recursive: true });
     await fsPromises.writeFile(path.join(sourcePath, "file.txt"), "copied");
-    const { service } = createService({ workspaceDir: "workspace" });
+    const { service } = createService({ workspaceDir: "workspace", readOnlyRoots: [tempRoot] });
 
     const result = await service.importChatProject({
       workspaceId: "ws-a",
@@ -147,9 +148,11 @@ describe("ChatProjectService", () => {
   it("clones local git folders and github repos with collision-safe targets", async () => {
     const sourcePath = path.join(tempRoot, "source.git");
     await fsPromises.mkdir(path.join(sourcePath, ".git"), { recursive: true });
+    const sourceRealPath = await fsPromises.realpath(sourcePath);
     const workspaceRoot = path.join(tempRoot, "workspace");
     await fsPromises.mkdir(path.join(workspaceRoot, "imports", "shared-name"), { recursive: true });
-    const { service } = createService({ workspaceDir: "workspace" });
+    const workspaceRootRealPath = await fsPromises.realpath(workspaceRoot);
+    const { service } = createService({ workspaceDir: "workspace", readOnlyRoots: [tempRoot] });
 
     const localResult = await service.importChatProject({
       sourceType: "local_folder",
@@ -159,8 +162,8 @@ describe("ChatProjectService", () => {
     expect(localResult.materializedPath).toBe("imports/shared-name-2");
     expect(execFileMock).toHaveBeenCalledWith(
       "git",
-      ["clone", "--no-local", sourcePath, path.join(workspaceRoot, "imports", "shared-name-2")],
-      expect.objectContaining({ cwd: path.join(workspaceRoot, "imports") }),
+      ["clone", "--no-local", sourceRealPath, path.join(workspaceRootRealPath, "imports", "shared-name-2")],
+      expect.objectContaining({ cwd: path.join(workspaceRootRealPath, "imports") }),
       expect.any(Function),
     );
 
@@ -181,7 +184,7 @@ describe("ChatProjectService", () => {
         "https://github.com/example/goat-demo.git",
         expect.stringContaining("goat-demo"),
       ],
-      expect.objectContaining({ cwd: workspaceRoot }),
+      expect.objectContaining({ cwd: workspaceRootRealPath }),
       expect.any(Function),
     );
   });
@@ -208,6 +211,14 @@ describe("ChatProjectService", () => {
         sourcePath: path.join(tempRoot, "missing"),
       }),
     ).rejects.toThrow("Local folder does not exist");
+    const disallowedSource = path.join(tempRoot, "outside-read-root");
+    await fsPromises.mkdir(disallowedSource, { recursive: true });
+    await expect(
+      service.importChatProject({
+        sourceType: "local_folder",
+        sourcePath: disallowedSource,
+      }),
+    ).rejects.toThrow("Path is outside read allowlist");
 
     const result = await service.importChatProject({
       workspaceId: "ws-a",
@@ -224,7 +235,7 @@ describe("ChatProjectService", () => {
   });
 });
 
-function createService(input: { workspaceDir?: string } = {}): {
+function createService(input: { workspaceDir?: string; readOnlyRoots?: string[] } = {}): {
   service: ChatProjectService;
   storage: ChatProjectServiceContext["storage"];
   projects: ChatProjectRecord[];
@@ -291,6 +302,12 @@ function createService(input: { workspaceDir?: string } = {}): {
       config: {
         rootDir: tempRoot,
         assistant: { workspaceDir: input.workspaceDir ?? "workspace" },
+        toolPolicy: {
+          sandbox: {
+            writeJailRoots: [path.join(tempRoot, input.workspaceDir ?? "workspace")],
+            readOnlyRoots: input.readOnlyRoots ?? [],
+          },
+        },
       } as ChatProjectServiceContext["config"],
       normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default-workspace",
       publishRealtime: (channel, topic, payload) => {

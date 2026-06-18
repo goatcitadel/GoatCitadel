@@ -940,6 +940,10 @@ export class GatewayService {
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       enforceNetworkAllowlist: true,
+      tlsPathPolicy: {
+        writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
+        readOnlyRoots: config.toolPolicy.sandbox.readOnlyRoots,
+      },
       modelMetadataPath: path.join(config.rootDir, "config", "llm-model-metadata.json"),
       secretStore,
     });

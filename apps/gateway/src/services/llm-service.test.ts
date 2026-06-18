@@ -3486,6 +3486,57 @@ describe("LlmService", () => {
     expect(dispatcher).not.toBeInstanceOf(ProxyAgent);
   });
 
+  it("rejects TLS material paths outside configured read roots before fetching", async () => {
+    const allowedDir = mkdtempSync(join(tmpdir(), "llm-service-tls-allowed-"));
+    const disallowedDir = mkdtempSync(join(tmpdir(), "llm-service-tls-disallowed-"));
+    const caPath = join(disallowedDir, "ca.pem");
+    writeFileSync(caPath, "test-ca");
+
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4-mini",
+          request: {
+            tls: {
+              caCertPath: caPath,
+            },
+          },
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, {
+      networkAllowlist: ["api.openai.com"],
+      secretStore: createNoopSecretStore(),
+      tlsPathPolicy: {
+        writeJailRoots: [],
+        readOnlyRoots: [allowedDir],
+      },
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.chatCompletions({
+          providerId: "openai",
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ).rejects.toThrow(/outside read allowlist/i);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(allowedDir, { recursive: true, force: true });
+      rmSync(disallowedDir, { recursive: true, force: true });
+    }
+  });
+
   it("stores submitted provider keys in the secret store and clears plaintext runtime config", () => {
     const secretStore = createTrackedSecretStore({});
     const service = new LlmService(
