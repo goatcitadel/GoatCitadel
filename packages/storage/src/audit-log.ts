@@ -21,6 +21,8 @@ const SECRET_ARG_FLAG_PATTERN =
 export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
 export class AuditLog {
+  private readonly streamLocks = new Map<string, Promise<void>>();
+
   public constructor(private readonly auditDir: string) {}
 
   public async append(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
@@ -62,8 +64,10 @@ export class AuditLog {
           degraded: true,
         }) + "\n";
     }
-    await pruneAuditStreamIfNeeded(filePath);
-    await fs.appendFile(filePath, line, { encoding: "utf8" });
+    await this.runWithStreamLock(filePath, async () => {
+      await pruneAuditStreamIfNeeded(filePath);
+      await fs.appendFile(filePath, line, { encoding: "utf8" });
+    });
   }
 
   public async list(stream: AuditStream): Promise<Record<string, unknown>[]> {
@@ -92,6 +96,26 @@ export class AuditLog {
           return [];
         }
       });
+  }
+
+  private async runWithStreamLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.streamLocks.get(filePath) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const next = previous.catch(() => undefined).then(() => current);
+    this.streamLocks.set(filePath, next);
+
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.streamLocks.get(filePath) === next) {
+        this.streamLocks.delete(filePath);
+      }
+    }
   }
 }
 
