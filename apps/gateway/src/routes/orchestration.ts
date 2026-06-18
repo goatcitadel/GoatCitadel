@@ -260,6 +260,22 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/orchestration/runs/:runId/trace", operatorOnly, async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    try {
+      return reply.send(orchestration.getRunTrace(params.data.runId, query.data.workspaceId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/orchestration/runs/:runId/context", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const query = workspaceQuerySchema.safeParse(request.query);

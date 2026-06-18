@@ -1,5 +1,6 @@
 import type {
   OrchestrationPlan,
+  OrchestrationDecisionTrace,
   OrchestrationRun,
   OrchestrationRunPolicyContext,
   MemoryContextPack,
@@ -48,6 +49,7 @@ export interface OrchestrationRoutePort {
   ): Promise<unknown>;
   getRun(runId: string, workspaceId?: string): OrchestrationRun;
   listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[];
+  getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace;
   listRunContexts(runId: string): MemoryContextPack[];
 }
 
@@ -124,6 +126,10 @@ export class OrchestrationRouteService {
 
   public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
     return this.orchestration.listRunCheckpoints(runId, workspaceId);
+  }
+
+  public getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace {
+    return this.orchestration.getRunTrace(runId, workspaceId);
   }
 
   public listRunContexts(runId: string): MemoryContextPack[] {

@@ -251,6 +251,7 @@ export function composeRuntimeAdminRouteDependencies(
         gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd, workspaceId),
       getRun: (runId, workspaceId) => gateway.getRun(runId, workspaceId),
       listRunCheckpoints: (runId, workspaceId) => gateway.listRunCheckpoints(runId, workspaceId),
+      getRunTrace: (runId, workspaceId) => gateway.getRunTrace(runId, workspaceId),
       listRunContexts: (runId) => gateway.memoryLifecycleService.listRunContexts(runId),
     },
     promptPacks: gateway.promptPackService,

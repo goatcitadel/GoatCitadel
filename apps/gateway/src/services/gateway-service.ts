@@ -248,6 +248,7 @@ import type {
   NpuModelManifest,
   NpuRuntimeStatus,
   OperatorSummary,
+  OrchestrationDecisionTrace,
   OrchestrationPlan,
   OrchestrationRun,
   OrchestrationRunPolicyContext,
@@ -6662,6 +6663,10 @@ export class GatewayService {
 
   public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
     return orchestrationLifecycleService.listRunCheckpoints(this, runId, workspaceId);
+  }
+
+  public getRunTrace(runId: string, workspaceId?: string): OrchestrationDecisionTrace {
+    return orchestrationLifecycleService.getRunTrace(this, runId, workspaceId);
   }
 
   private getOrchestrationLifecycleRuntimeDeps(): orchestrationLifecycleService.OrchestrationLifecycleRuntimeDeps {

@@ -11,6 +11,7 @@ vi.mock("./orchestration-lifecycle-service.js", () => ({
   approvePhase: vi.fn(async () => ({ runId: "run-approved" })),
   getRun: vi.fn(() => ({ runId: "run-read" })),
   listRunCheckpoints: vi.fn(() => [{ checkpointId: "checkpoint-1" }]),
+  getRunTrace: vi.fn(() => ({ run: { runId: "run-read" }, decisions: [] })),
   executeDurableOrchestrationRun: vi.fn(async () => ({
     outcome: "completed",
     checkpointState: { ok: true },
@@ -72,6 +73,10 @@ describe("GatewayService orchestration facade delegation", () => {
     expect(GatewayService.prototype.listRunCheckpoints.call(gateway, "run-1", "workspace-1")).toEqual([
       { checkpointId: "checkpoint-1" },
     ]);
+    expect(GatewayService.prototype.getRunTrace.call(gateway, "run-1", "workspace-1")).toEqual({
+      run: { runId: "run-read" },
+      decisions: [],
+    });
 
     expect(orchestrationLifecycleService.approvePhase).toHaveBeenCalledWith(
       gateway,
@@ -83,6 +88,7 @@ describe("GatewayService orchestration facade delegation", () => {
     );
     expect(orchestrationLifecycleService.getRun).toHaveBeenCalledWith(gateway, "run-1", "workspace-1");
     expect(orchestrationLifecycleService.listRunCheckpoints).toHaveBeenCalledWith(gateway, "run-1", "workspace-1");
+    expect(orchestrationLifecycleService.getRunTrace).toHaveBeenCalledWith(gateway, "run-1", "workspace-1");
   });
 
   it("delegates durable orchestration execution with the extracted runtime services", async () => {

@@ -136,6 +136,7 @@ export interface GatewayRouteCompositionPort {
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
   getRun: RouteDependencyMethod<"orchestration", "getRun">;
+  getRunTrace: RouteDependencyMethod<"orchestration", "getRunTrace">;
   getSession: chatSessionService.ChatSessionDependencies["getSession"];
   getSessionSummary: RouteDependencyMethod<"sessionsList", "getSessionSummary">;
   getSkillActivationPolicy: RouteDependencyMethod<"skills", "getSkillActivationPolicy">;
@@ -336,6 +337,7 @@ export function createGatewayRouteCompositionPort(
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
     getRun: gateway.getRun.bind(gateway),
+    getRunTrace: gateway.getRunTrace.bind(gateway),
     getSession: gateway.getSession.bind(gateway),
     getSessionSummary: gateway.getSessionSummary.bind(gateway),
     getSkillActivationPolicy: gateway.getSkillActivationPolicy.bind(gateway),

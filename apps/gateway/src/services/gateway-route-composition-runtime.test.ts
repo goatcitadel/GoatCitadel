@@ -260,6 +260,7 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     });
     expect(deps.orchestration.getRun("run-1", "workspace-1")).toEqual({ runId: "run-1" });
     expect(deps.orchestration.listRunCheckpoints("run-1", "workspace-1")).toEqual([{ checkpointId: "cp-1" }]);
+    expect(deps.orchestration.getRunTrace("run-1", "workspace-1")).toEqual({ runId: "run-1", trace: true });
     expect(deps.orchestration.listRunContexts("run-1")).toEqual([{ contextId: "ctx-1" }]);
     expect(deps.promptPacks).toBe(gateway.promptPackService);
     expect(deps.modelComparisons.listComparisons(1)).toEqual({ items: [] });
@@ -328,6 +329,7 @@ function createGateway() {
     createChatSession: vi.fn((input: unknown) => ({ sessionId: "session-1", input })),
     createOrchestrationPlan: vi.fn((plan: unknown) => ({ planId: "plan-1", plan })),
     getRun: vi.fn((runId: string) => ({ runId })),
+    getRunTrace: vi.fn((runId: string) => ({ runId, trace: true })),
     getSessionSummary: vi.fn((sessionId: string) => ({ sessionId })),
     getTranscript: vi.fn(() => [{ role: "user" }]),
     ingestEvent: vi.fn(() => ({ ingested: true })),
