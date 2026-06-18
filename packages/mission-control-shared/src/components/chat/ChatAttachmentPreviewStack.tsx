@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  ChatMessageRecord,
+  ChatAttachmentPreviewResponse,
+  MediaPlaybackTokenRequest,
+} from "@goatcitadel/contracts";
 import { buildGatewayUrl, fetchChatAttachmentPreview, issueMediaPlaybackToken } from "../../api/client";
 import { ChatAttachmentActions, loadAttachmentBlob } from "./ChatAttachmentActions";
 import {
   getCurrentTavernMediaConnectionProfile,
   shouldDeferTavernInlineMedia,
   tavernMediaPreloadForProfile,
+  type TavernMediaConnectionProfile,
 } from "./media-playback-quality";
 
 const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
@@ -66,12 +71,36 @@ function summarizeExtraction(preview: ChatAttachmentPreviewResponse | null): str
 }
 
 type InlineMediaKind = "image" | "audio" | "video";
+type AttachmentPlaybackVariant = NonNullable<ChatAttachmentPreviewResponse["playback"]>["variants"][number];
 
 function pickInlineMediaKind(preview: ChatAttachmentPreviewResponse): InlineMediaKind | null {
   if (preview.mediaType === "image" || preview.mediaType === "audio" || preview.mediaType === "video") {
     return preview.mediaType;
   }
   return null;
+}
+
+function pickTavernPlaybackVariant(input: {
+  kind: InlineMediaKind;
+  playback?: ChatAttachmentPreviewResponse["playback"];
+  profile: TavernMediaConnectionProfile;
+}): AttachmentPlaybackVariant | null {
+  if (input.kind === "image") {
+    return null;
+  }
+  const findVariant = (variantId: AttachmentPlaybackVariant["variantId"]) =>
+    input.playback?.variants.find((variant) => {
+      return variant.variantId === variantId && (variant.status ?? "available") === "available";
+    }) ?? null;
+
+  if (input.kind === "audio") {
+    return findVariant("original");
+  }
+
+  if (input.profile === "data_saver" || input.profile === "constrained") {
+    return findVariant("data_saver") ?? findVariant("standard") ?? findVariant("original");
+  }
+  return findVariant("standard") ?? findVariant("original") ?? findVariant("data_saver");
 }
 
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
@@ -118,14 +147,29 @@ function ChatAttachmentInlineMedia({
   fileName,
   sizeBytes,
   shouldLoad,
+  playback,
 }: {
   kind: InlineMediaKind;
   attachmentId: string;
   fileName: string;
   sizeBytes: number;
   shouldLoad: boolean;
+  playback?: ChatAttachmentPreviewResponse["playback"];
 }) {
   const connectionProfile = useState(() => getCurrentTavernMediaConnectionProfile())[0];
+  const playbackTokenRequest = useMemo<MediaPlaybackTokenRequest | null>(() => {
+    if (kind === "image") {
+      return null;
+    }
+    const variant = pickTavernPlaybackVariant({ kind, playback, profile: connectionProfile });
+    return {
+      source: variant?.source ?? {
+        kind: "chat_attachment",
+        attachmentId,
+      },
+      variantId: variant?.variantId ?? "original",
+    };
+  }, [attachmentId, connectionProfile, kind, playback]);
   const shouldDeferForConnection =
     kind !== "image" && shouldDeferTavernInlineMedia({ kind, sizeBytes, profile: connectionProfile });
   const requiresManualActivation = kind === "image" ? sizeBytes > INLINE_MEDIA_MAX_BYTES : shouldDeferForConnection;
@@ -140,15 +184,10 @@ function ChatAttachmentInlineMedia({
     if (!shouldLoad || !activated) {
       return;
     }
-    if (kind !== "image" && !fallbackBlobRequested) {
+    if (playbackTokenRequest && !fallbackBlobRequested) {
       let cancelled = false;
       setObjectUrl(null);
-      void issueMediaPlaybackToken({
-        source: {
-          kind: "chat_attachment",
-          attachmentId,
-        },
-      })
+      void issueMediaPlaybackToken(playbackTokenRequest)
         .then((response) => {
           if (cancelled) return;
           setStreamUrl(buildGatewayUrl(response.contentPath));
@@ -187,7 +226,7 @@ function ChatAttachmentInlineMedia({
         setObjectUrl(null);
       }
     };
-  }, [activated, attachmentId, fallbackBlobRequested, fileName, kind, shouldLoad]);
+  }, [activated, attachmentId, fallbackBlobRequested, fileName, kind, playbackTokenRequest, shouldLoad]);
 
   const openLightbox = useCallback(() => setLightboxOpen(true), []);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
@@ -369,6 +408,7 @@ function ChatAttachmentPreviewCard({
             fileName={attachment.fileName}
             sizeBytes={attachment.sizeBytes}
             shouldLoad={shouldLoadPreview}
+            playback={preview?.playback}
           />
         </div>
       ) : null}

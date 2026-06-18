@@ -56,6 +56,7 @@ const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp
  */
 const FFMPEG_CONVERT_TIMEOUT_MS = 30_000;
 const WHISPER_TRANSCRIBE_TIMEOUT_MS = 120_000;
+const VIDEO_DERIVATIVE_TIMEOUT_MS = 120_000;
 const EXTERNAL_PROCESS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const MEDIA_PLAYBACK_TOKEN_TTL_MS = 2 * 60 * 1000;
 const MEDIA_PLAYBACK_TOKEN_MAX_RECORDS = 300;
@@ -84,7 +85,7 @@ interface MediaArtifactRow {
   artifact_id: string;
   job_id: string;
   attachment_id: string | null;
-  kind: "thumbnail" | "ocr_text" | "transcript" | "analysis";
+  kind: "thumbnail" | "video_variant" | "ocr_text" | "transcript" | "analysis";
   storage_rel_path: string | null;
   text_preview: string | null;
   mime_type: string | null;
@@ -214,6 +215,7 @@ function isMediaArtifactRow(value: unknown): value is MediaArtifactRow {
     typeof value.job_id === "string" &&
     (typeof value.attachment_id === "string" || value.attachment_id === null) &&
     (value.kind === "thumbnail" ||
+      value.kind === "video_variant" ||
       value.kind === "ocr_text" ||
       value.kind === "transcript" ||
       value.kind === "analysis") &&
@@ -227,6 +229,10 @@ function isMediaArtifactRow(value: unknown): value is MediaArtifactRow {
 
 function toMediaArtifactRows(value: unknown): MediaArtifactRow[] {
   return Array.isArray(value) ? value.filter(isMediaArtifactRow) : [];
+}
+
+function parseVideoVariantId(value: string | null): "standard" | "data_saver" | null {
+  return value === "standard" || value === "data_saver" ? value : null;
 }
 
 export function detectAttachmentMediaType(mimeType: string): ChatAttachmentMediaType {
@@ -552,6 +558,51 @@ async function normalizeAudioForWhisper(input: {
   return input.outputPath;
 }
 
+async function transcodeVideoDerivative(input: {
+  ffmpegPath: string;
+  inputPath: string;
+  outputPath: string;
+  kind: "poster" | "standard" | "data_saver";
+}): Promise<void> {
+  const args =
+    input.kind === "poster"
+      ? ["-y", "-i", input.inputPath, "-vf", "thumbnail,scale='min(1280,iw)':-2", "-frames:v", "1", input.outputPath]
+      : [
+          "-y",
+          "-i",
+          input.inputPath,
+          "-vf",
+          input.kind === "standard" ? "scale='min(1280,iw)':-2" : "scale='min(640,iw)':-2",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          input.kind === "standard" ? "26" : "32",
+          "-c:a",
+          "aac",
+          "-b:a",
+          input.kind === "standard" ? "128k" : "64k",
+          "-movflags",
+          "+faststart",
+          input.outputPath,
+        ];
+  try {
+    await execFileAsync(input.ffmpegPath, args, {
+      timeout: VIDEO_DERIVATIVE_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: EXTERNAL_PROCESS_MAX_BUFFER_BYTES,
+    });
+  } catch (error) {
+    if (isProcessTimeoutError(error)) {
+      throw new Error(`Video derivative ${input.kind} timed out after ${VIDEO_DERIVATIVE_TIMEOUT_MS}ms.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MediaVoiceService
 // ---------------------------------------------------------------------------
@@ -650,25 +701,47 @@ export class MediaVoiceService {
   }
 
   public issueMediaPlaybackToken(input: MediaPlaybackTokenRequest): MediaPlaybackTokenResponse {
-    const variantId = input.variantId ?? "original";
-    if (input.source.kind !== "chat_attachment") {
-      throw new Error("Media artifact playback tokens are not available yet.");
-    }
-    if (variantId !== "original") {
-      throw new Error(`Media playback variant is not available yet: ${variantId}`);
-    }
-    const attachment = this.deps.getChatAttachment(input.source.attachmentId);
-    const mediaType = attachment.mediaType ?? detectAttachmentMediaType(attachment.mimeType);
-    if (mediaType !== "audio" && mediaType !== "video") {
-      throw new Error(`Attachment ${attachment.attachmentId} is ${mediaType} and cannot be streamed as media.`);
+    let variantId: MediaPlaybackQuality = input.variantId ?? "original";
+    let source: MediaPlaybackSource;
+    let contentPath: string;
+    if (input.source.kind === "chat_attachment") {
+      if (variantId !== "original") {
+        throw new Error(`Media playback variant is not available for original attachment source: ${variantId}`);
+      }
+      const attachment = this.deps.getChatAttachment(input.source.attachmentId);
+      const mediaType = attachment.mediaType ?? detectAttachmentMediaType(attachment.mimeType);
+      if (mediaType !== "audio" && mediaType !== "video") {
+        throw new Error(`Attachment ${attachment.attachmentId} is ${mediaType} and cannot be streamed as media.`);
+      }
+      source = {
+        kind: "chat_attachment",
+        attachmentId: attachment.attachmentId,
+      };
+      contentPath = `/api/v1/chat/attachments/${encodeURIComponent(
+        attachment.attachmentId,
+      )}/content?disposition=inline&media_token=`;
+    } else {
+      const artifact = this.getMediaArtifactRow(input.source.artifactId);
+      if (artifact.kind !== "video_variant" && artifact.kind !== "thumbnail") {
+        throw new Error(`Media artifact ${artifact.artifact_id} is ${artifact.kind} and cannot be streamed as media.`);
+      }
+      const artifactVariantId = artifact.kind === "thumbnail" ? "poster" : parseVideoVariantId(artifact.text_preview);
+      if (!artifactVariantId) {
+        throw new Error(`Media artifact ${artifact.artifact_id} does not identify a playable media variant.`);
+      }
+      if (input.variantId && input.variantId !== artifactVariantId) {
+        throw new Error(`Media artifact ${artifact.artifact_id} is ${artifactVariantId}, not ${input.variantId}.`);
+      }
+      variantId = artifactVariantId;
+      source = {
+        kind: "media_artifact",
+        artifactId: artifact.artifact_id,
+      };
+      contentPath = `/api/v1/media/artifacts/${encodeURIComponent(artifact.artifact_id)}/content?media_token=`;
     }
     this.pruneMediaPlaybackTokens();
     const token = randomBytes(32).toString("base64url");
     const expiresAtMs = Date.now() + MEDIA_PLAYBACK_TOKEN_TTL_MS;
-    const source: MediaPlaybackSource = {
-      kind: "chat_attachment",
-      attachmentId: attachment.attachmentId,
-    };
     this.mediaPlaybackTokens.set(token, {
       token,
       source,
@@ -681,9 +754,7 @@ export class MediaVoiceService {
       expiresAt: new Date(expiresAtMs).toISOString(),
       source,
       variantId,
-      contentPath: `/api/v1/chat/attachments/${encodeURIComponent(
-        attachment.attachmentId,
-      )}/content?disposition=inline&media_token=${encodeURIComponent(token)}`,
+      contentPath: `${contentPath}${encodeURIComponent(token)}`,
     };
   }
 
@@ -698,7 +769,7 @@ export class MediaVoiceService {
       return false;
     }
     return (
-      record.variantId === (input.variantId ?? "original") &&
+      (input.variantId === undefined || record.variantId === input.variantId) &&
       record.source.kind === input.source.kind &&
       ((record.source.kind === "chat_attachment" &&
         input.source.kind === "chat_attachment" &&
@@ -707,6 +778,42 @@ export class MediaVoiceService {
           input.source.kind === "media_artifact" &&
           record.source.artifactId === input.source.artifactId))
     );
+  }
+
+  public async resolveMediaArtifactContent(artifactId: string): Promise<{
+    artifactId: string;
+    attachmentId?: string;
+    mimeType: string;
+    fullPath: string;
+    sizeBytes: number;
+  }> {
+    const artifact = this.getMediaArtifactRow(artifactId);
+    if (!artifact.storage_rel_path) {
+      throw new Error(`Media artifact ${artifactId} has no stored content.`);
+    }
+    if (!artifact.attachment_id) {
+      throw new Error(`Media artifact ${artifactId} is not linked to an attachment.`);
+    }
+    const attachment = this.deps.getChatAttachment(artifact.attachment_id);
+    const attachmentContent = await this.deps.readChatAttachmentContent(artifact.attachment_id);
+    if (path.posix.dirname(artifact.storage_rel_path) !== path.posix.dirname(attachment.storageRelPath)) {
+      throw new Error(`Media artifact ${artifactId} is outside the attachment media directory.`);
+    }
+    const fullPath = path.join(
+      path.dirname(attachmentContent.fullPath),
+      path.posix.basename(artifact.storage_rel_path),
+    );
+    const stat = await fs.stat(fullPath);
+    if (!stat.isFile()) {
+      throw new Error(`Media artifact ${artifactId} content is not a regular file.`);
+    }
+    return {
+      artifactId,
+      attachmentId: artifact.attachment_id,
+      mimeType: artifact.mime_type ?? "application/octet-stream",
+      fullPath,
+      sizeBytes: stat.size,
+    };
   }
 
   // ── Voice transcription ─────────────────────────────────────────────────
@@ -1313,6 +1420,7 @@ export class MediaVoiceService {
     }
     const artifacts = this.listMediaArtifactsForAttachment(record.attachmentId);
     const thumbnailArtifact = artifacts.find((artifact) => artifact.kind === "thumbnail");
+    const videoVariantArtifacts = artifacts.filter((artifact) => artifact.kind === "video_variant");
     return {
       variants: [
         {
@@ -1326,6 +1434,25 @@ export class MediaVoiceService {
           sizeBytes: record.sizeBytes,
           status: "available",
         },
+        ...videoVariantArtifacts.flatMap((artifact) => {
+          const variantId = parseVideoVariantId(artifact.text_preview);
+          if (!variantId) {
+            return [];
+          }
+          return [
+            {
+              variantId,
+              label: variantId === "standard" ? "Standard" : "Data saver",
+              source: {
+                kind: "media_artifact" as const,
+                artifactId: artifact.artifact_id,
+              },
+              mimeType: artifact.mime_type ?? "video/mp4",
+              sizeBytes: artifact.size_bytes ?? undefined,
+              status: "available" as const,
+            },
+          ];
+        }),
       ],
       poster:
         thumbnailArtifact || record.thumbnailRelPath
@@ -1362,6 +1489,21 @@ export class MediaVoiceService {
     } catch {
       return [];
     }
+  }
+
+  private getMediaArtifactRow(artifactId: string): MediaArtifactRow {
+    const candidate = this.deps.gatewaySql
+      .prepare(
+        `
+      SELECT * FROM media_artifacts
+      WHERE artifact_id = ?
+    `,
+      )
+      .get(artifactId);
+    if (!isMediaArtifactRow(candidate)) {
+      throw new Error(`Unknown media artifact: ${artifactId}`);
+    }
+    return candidate;
   }
 
   private processMediaJob(jobId: string): void {
@@ -1436,6 +1578,11 @@ export class MediaVoiceService {
     }
 
     const attachment = this.deps.storage.chatAttachments.get(attachmentId);
+    if (job.type === "video_derivatives") {
+      await this.runVideoDerivativeJob(job.jobId, attachment);
+      return;
+    }
+
     if (job.type === "audio_transcribe" || job.type === "video_transcribe") {
       const content = await this.deps.readChatAttachmentContent(attachmentId);
       const transcript = await this.transcribeAudioBytes(content.bytes, content.record.mimeType);
@@ -1531,6 +1678,153 @@ export class MediaVoiceService {
         ocrText: attachment.extractPreview ?? null,
         attachmentId,
       });
+  }
+
+  private async runVideoDerivativeJob(jobId: string, attachment: ChatAttachmentRecord): Promise<void> {
+    const mediaType = attachment.mediaType ?? detectAttachmentMediaType(attachment.mimeType);
+    if (mediaType !== "video") {
+      this.markMediaJobUnsupported(jobId, {
+        message: `Video derivatives require a video attachment, got ${mediaType}.`,
+      });
+      return;
+    }
+    const runtime = await getManagedVoiceRuntimeStatus(this.deps.storage.systemSettings);
+    const ffmpegPath = process.env.GOATCITADEL_FFMPEG_BIN?.trim() || runtime.ffmpegPath;
+    if (!ffmpegPath) {
+      this.markMediaJobUnsupported(jobId, {
+        message: "ffmpeg is not configured; original video playback remains available.",
+      });
+      return;
+    }
+    const content = await this.deps.readChatAttachmentContent(attachment.attachmentId);
+    const outputDir = path.dirname(content.fullPath);
+    const relDir = path.posix.dirname(attachment.storageRelPath);
+    const baseName = attachment.attachmentId;
+    const posterPath = path.join(outputDir, `${baseName}-poster.jpg`);
+    const standardPath = path.join(outputDir, `${baseName}-standard.mp4`);
+    const dataSaverPath = path.join(outputDir, `${baseName}-data-saver.mp4`);
+
+    await transcodeVideoDerivative({
+      ffmpegPath,
+      inputPath: content.fullPath,
+      outputPath: posterPath,
+      kind: "poster",
+    });
+    await transcodeVideoDerivative({
+      ffmpegPath,
+      inputPath: content.fullPath,
+      outputPath: standardPath,
+      kind: "standard",
+    });
+    await transcodeVideoDerivative({
+      ffmpegPath,
+      inputPath: content.fullPath,
+      outputPath: dataSaverPath,
+      kind: "data_saver",
+    });
+
+    const posterStat = await fs.stat(posterPath);
+    const standardStat = await fs.stat(standardPath);
+    const dataSaverStat = await fs.stat(dataSaverPath);
+    const posterArtifactId = this.insertMediaArtifact({
+      jobId,
+      attachmentId: attachment.attachmentId,
+      kind: "thumbnail",
+      storageRelPath: path.posix.join(relDir, path.basename(posterPath)),
+      mimeType: "image/jpeg",
+      sizeBytes: posterStat.size,
+    });
+    const standardArtifactId = this.insertMediaArtifact({
+      jobId,
+      attachmentId: attachment.attachmentId,
+      kind: "video_variant",
+      storageRelPath: path.posix.join(relDir, path.basename(standardPath)),
+      mimeType: "video/mp4",
+      sizeBytes: standardStat.size,
+      textPreview: "standard",
+    });
+    const dataSaverArtifactId = this.insertMediaArtifact({
+      jobId,
+      attachmentId: attachment.attachmentId,
+      kind: "video_variant",
+      storageRelPath: path.posix.join(relDir, path.basename(dataSaverPath)),
+      mimeType: "video/mp4",
+      sizeBytes: dataSaverStat.size,
+      textPreview: "data_saver",
+    });
+    const completedAt = new Date().toISOString();
+    this.deps.gatewaySql
+      .prepare(
+        `
+      UPDATE media_jobs
+      SET status = 'ready', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
+      WHERE job_id = @jobId
+    `,
+      )
+      .run({
+        outputJson: JSON.stringify({
+          posterArtifactId,
+          variants: [
+            { variantId: "standard", artifactId: standardArtifactId },
+            { variantId: "data_saver", artifactId: dataSaverArtifactId },
+          ],
+        }),
+        updatedAt: completedAt,
+        completedAt,
+        jobId,
+      });
+  }
+
+  private markMediaJobUnsupported(jobId: string, output: Record<string, unknown>): void {
+    const completedAt = new Date().toISOString();
+    this.deps.gatewaySql
+      .prepare(
+        `
+      UPDATE media_jobs
+      SET status = 'unsupported', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
+      WHERE job_id = @jobId
+    `,
+      )
+      .run({
+        outputJson: JSON.stringify(output),
+        updatedAt: completedAt,
+        completedAt,
+        jobId,
+      });
+  }
+
+  private insertMediaArtifact(input: {
+    jobId: string;
+    attachmentId: string;
+    kind: MediaArtifactRow["kind"];
+    storageRelPath: string;
+    mimeType: string;
+    sizeBytes: number;
+    textPreview?: string;
+  }): string {
+    const artifactId = randomUUID();
+    this.deps.gatewaySql
+      .prepare(
+        `
+      INSERT INTO media_artifacts (
+        artifact_id, job_id, attachment_id, kind, storage_rel_path, text_preview, mime_type, size_bytes, created_at
+      ) VALUES (
+        @artifactId, @jobId, @attachmentId, @kind, @storageRelPath, @textPreview, @mimeType, @sizeBytes, @createdAt
+      )
+    `,
+      )
+      .run({
+        artifactId,
+        jobId: input.jobId,
+        attachmentId: input.attachmentId,
+        kind: input.kind,
+        storageRelPath: input.storageRelPath,
+        textPreview: input.textPreview ?? null,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        createdAt: new Date().toISOString(),
+      });
+    return artifactId;
   }
 
   private async transcribeAudioBytes(

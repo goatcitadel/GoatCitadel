@@ -18,7 +18,7 @@ export interface ChatAttachmentHost {
   normalizeWorkspaceId(workspaceId?: string): string;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
   createMediaJob(input: {
-    type: "ocr" | "audio_transcribe" | "video_transcribe" | "analyze";
+    type: "ocr" | "audio_transcribe" | "video_transcribe" | "video_derivatives" | "analyze";
     sessionId: string;
     attachmentId: string;
   }): unknown;
@@ -88,18 +88,14 @@ export async function uploadChatAttachment(
     ocrText: mediaType === "text" ? extractPreview : undefined,
   });
   if (analysisStatus === "queued") {
-    deps.createMediaJob({
-      type:
-        mediaType === "image"
-          ? "ocr"
-          : mediaType === "audio"
-            ? "audio_transcribe"
-            : mediaType === "video"
-              ? "video_transcribe"
-              : "analyze",
-      sessionId: input.sessionId,
-      attachmentId,
-    });
+    const jobTypes = inferAttachmentMediaJobTypes(mediaType);
+    for (const type of jobTypes) {
+      deps.createMediaJob({
+        type,
+        sessionId: input.sessionId,
+        attachmentId,
+      });
+    }
   }
   deps.publishRealtime("chat_message", "chat", {
     type: "chat_attachment_uploaded",
@@ -109,6 +105,21 @@ export async function uploadChatAttachment(
     sizeBytes: bytes.length,
   });
   return created;
+}
+
+function inferAttachmentMediaJobTypes(
+  mediaType: ChatAttachmentMediaType,
+): Array<"ocr" | "audio_transcribe" | "video_transcribe" | "video_derivatives" | "analyze"> {
+  if (mediaType === "image") {
+    return ["ocr"];
+  }
+  if (mediaType === "audio") {
+    return ["audio_transcribe"];
+  }
+  if (mediaType === "video") {
+    return ["video_transcribe", "video_derivatives"];
+  }
+  return ["analyze"];
 }
 
 export function getChatAttachment(deps: ChatAttachmentHost, attachmentId: string): ChatAttachmentRecord {

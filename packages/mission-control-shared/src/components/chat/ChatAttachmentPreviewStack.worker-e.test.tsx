@@ -258,10 +258,80 @@ describe("ChatAttachmentPreviewStack", () => {
 
     expect(apiMocks.issueMediaPlaybackToken).toHaveBeenCalledWith({
       source: { kind: "chat_attachment", attachmentId: "video-1" },
+      variantId: "original",
     });
     expect(apiMocks.downloadChatAttachment).not.toHaveBeenCalled();
     expect(JSON.stringify(renderer.toJSON())).toContain(
       "http://localhost:8787/api/v1/chat/attachments/video-1/content?disposition=inline&media_token=video-token",
+    );
+  });
+
+  it("uses generated standard video variants when preview metadata exposes them", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        connection: {
+          effectiveType: "4g",
+          downlink: 12,
+        },
+      },
+    });
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        attachmentId: "video-variant",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        mediaType: "video",
+        playback: {
+          variants: [
+            {
+              variantId: "original",
+              label: "Original upload",
+              source: { kind: "chat_attachment", attachmentId: "video-variant" },
+              mimeType: "video/mp4",
+              sizeBytes: 42 * 1024 * 1024,
+              status: "available",
+            },
+            {
+              variantId: "standard",
+              label: "Standard",
+              source: { kind: "media_artifact", artifactId: "artifact-standard" },
+              mimeType: "video/mp4",
+              sizeBytes: 12 * 1024 * 1024,
+              status: "available",
+            },
+          ],
+        },
+      }),
+    );
+    apiMocks.issueMediaPlaybackToken.mockResolvedValueOnce({
+      token: "variant-token",
+      expiresAt: "2026-06-18T00:00:00.000Z",
+      source: { kind: "media_artifact", artifactId: "artifact-standard" },
+      variantId: "standard",
+      contentPath: "/api/v1/media/artifacts/artifact-standard/content?media_token=variant-token",
+    });
+
+    const renderer = await renderStack([
+      attachment({
+        attachmentId: "video-variant",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 42 * 1024 * 1024,
+      }),
+    ]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.issueMediaPlaybackToken).toHaveBeenCalledWith({
+      source: { kind: "media_artifact", artifactId: "artifact-standard" },
+      variantId: "standard",
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      "http://localhost:8787/api/v1/media/artifacts/artifact-standard/content?media_token=variant-token",
     );
   });
 

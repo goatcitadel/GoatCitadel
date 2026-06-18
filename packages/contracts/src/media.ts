@@ -1,4 +1,4 @@
-export type MediaJobType = "ocr" | "vision" | "audio_transcribe" | "video_transcribe" | "analyze";
+export type MediaJobType = "ocr" | "vision" | "audio_transcribe" | "video_transcribe" | "video_derivatives" | "analyze";
 export type MediaJobStatus = "queued" | "running" | "ready" | "failed" | "unsupported";
 export type MediaPlaybackQuality = "original" | "standard" | "data_saver" | "poster";
 
@@ -68,7 +68,7 @@ export interface MediaArtifactRecord {
   artifactId: string;
   jobId: string;
   attachmentId?: string;
-  kind: "thumbnail" | "ocr_text" | "transcript" | "analysis";
+  kind: "thumbnail" | "video_variant" | "ocr_text" | "transcript" | "analysis";
   storageRelPath?: string;
   textPreview?: string;
   mimeType?: string;

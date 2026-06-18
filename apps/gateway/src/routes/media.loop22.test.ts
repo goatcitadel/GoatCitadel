@@ -1,18 +1,27 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { mediaRoutes } from "./media.js";
 
 describe("media route tails", () => {
   let app: FastifyInstance | null = null;
+  const roots: string[] = [];
 
   afterEach(async () => {
     if (app) {
       await app.close();
       app = null;
     }
+    await Promise.all(roots.splice(0).map((rootDir) => fs.rm(rootDir, { recursive: true, force: true })));
   });
 
   it("preserves media route validation, success, and service failure responses", async () => {
+    const mediaRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-media-route-"));
+    roots.push(mediaRoot);
+    const artifactPath = path.join(mediaRoot, "artifact-standard.mp4");
+    await fs.writeFile(artifactPath, Buffer.from("0123456789"));
     const media = {
       createMediaJob: vi
         .fn()
@@ -40,6 +49,13 @@ describe("media route tails", () => {
           throw new Error("not playable");
         }),
       validateMediaPlaybackToken: vi.fn(() => true),
+      resolveMediaArtifactContent: vi.fn(async () => ({
+        artifactId: "artifact-1",
+        attachmentId: "att-1",
+        mimeType: "video/mp4",
+        fullPath: artifactPath,
+        sizeBytes: 10,
+      })),
       getChatAttachmentPreview: vi
         .fn()
         .mockReturnValueOnce({ attachmentId: "att-1", preview: "ready" })
@@ -110,6 +126,28 @@ describe("media route tails", () => {
     const listed = await app.inject({ method: "GET", url: "/api/v1/media/jobs?sessionId=session-1" });
     expect(listed.json()).toEqual({ items: [{ jobId: "job-1" }] });
     expect(media.listMediaJobs).toHaveBeenCalledWith("session-1");
+
+    const artifactContent = await app.inject({
+      method: "GET",
+      url: "/api/v1/media/artifacts/artifact-1/content?media_token=artifact-token",
+      headers: { range: "bytes=2-5" },
+    });
+    expect(artifactContent.statusCode).toBe(206);
+    expect(artifactContent.headers["content-range"]).toBe("bytes 2-5/10");
+    expect(artifactContent.headers["content-type"]).toBe("video/mp4");
+    expect(artifactContent.body).toBe("2345");
+    expect(media.validateMediaPlaybackToken).toHaveBeenCalledWith({
+      token: "artifact-token",
+      source: { kind: "media_artifact", artifactId: "artifact-1" },
+    });
+    expect(media.resolveMediaArtifactContent).toHaveBeenCalledWith("artifact-1");
+
+    media.validateMediaPlaybackToken.mockReturnValueOnce(false);
+    const artifactDenied = await app.inject({
+      method: "GET",
+      url: "/api/v1/media/artifacts/artifact-1/content?media_token=bad-token",
+    });
+    expect(artifactDenied.statusCode).toBe(401);
 
     const preview = await app.inject({ method: "GET", url: "/api/v1/chat/attachments/att-1/preview" });
     expect(preview.json()).toEqual({ attachmentId: "att-1", preview: "ready" });

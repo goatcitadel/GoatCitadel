@@ -102,7 +102,7 @@ describe("MediaVoiceService", () => {
     expect(() => service.getMediaJob("missing")).toThrow("Unknown media job: missing");
   });
 
-  it("issues short-lived playback tokens only for streamable chat attachments", () => {
+  it("issues short-lived playback tokens for streamable attachments and media artifacts", () => {
     const getChatAttachment = vi.fn((attachmentId: string) => ({
       attachmentId,
       sessionId: "session-1",
@@ -115,7 +115,27 @@ describe("MediaVoiceService", () => {
       extractStatus: "ready",
       createdAt: "2026-06-18T00:00:00.000Z",
     }));
-    const service = new MediaVoiceService(createDeps({ getChatAttachment }));
+    const getArtifact = vi.fn((artifactId: string) => ({
+      artifact_id: artifactId,
+      job_id: "job-1",
+      attachment_id: "video-1",
+      kind: "video_variant",
+      storage_rel_path: "chat/default/attachments/video-1-standard.mp4",
+      text_preview: "standard",
+      mime_type: "video/mp4",
+      size_bytes: 512,
+      created_at: "2026-06-18T00:00:00.000Z",
+    }));
+    const service = new MediaVoiceService(
+      createDeps({
+        getChatAttachment,
+        gatewaySql: {
+          prepare: vi.fn(() => ({
+            get: getArtifact,
+          })),
+        } as never,
+      }),
+    );
 
     const issued = service.issueMediaPlaybackToken({
       source: { kind: "chat_attachment", attachmentId: "audio-1" },
@@ -144,11 +164,29 @@ describe("MediaVoiceService", () => {
         source: { kind: "chat_attachment", attachmentId: "text-1" },
       }),
     ).toThrow(/cannot be streamed as media/i);
-    expect(() =>
-      service.issueMediaPlaybackToken({
+
+    const artifactIssued = service.issueMediaPlaybackToken({
+      source: { kind: "media_artifact", artifactId: "artifact-1" },
+      variantId: "standard",
+    });
+    expect(artifactIssued).toMatchObject({
+      source: { kind: "media_artifact", artifactId: "artifact-1" },
+      variantId: "standard",
+    });
+    expect(artifactIssued.contentPath).toContain("/api/v1/media/artifacts/artifact-1/content");
+    expect(
+      service.validateMediaPlaybackToken({
+        token: artifactIssued.token,
         source: { kind: "media_artifact", artifactId: "artifact-1" },
       }),
-    ).toThrow(/not available yet/i);
+    ).toBe(true);
+    expect(
+      service.validateMediaPlaybackToken({
+        token: artifactIssued.token,
+        source: { kind: "media_artifact", artifactId: "artifact-1" },
+        variantId: "data_saver",
+      }),
+    ).toBe(false);
   });
 
   it("includes playback variants and poster metadata for streamable attachment previews", () => {
@@ -162,6 +200,28 @@ describe("MediaVoiceService", () => {
         text_preview: null,
         mime_type: "image/jpeg",
         size_bytes: 4096,
+        created_at: "2026-06-18T00:00:00.000Z",
+      },
+      {
+        artifact_id: "artifact-standard",
+        job_id: "job-1",
+        attachment_id: "video-1",
+        kind: "video_variant",
+        storage_rel_path: "chat/default/media/video-1-standard.mp4",
+        text_preview: "standard",
+        mime_type: "video/mp4",
+        size_bytes: 524288,
+        created_at: "2026-06-18T00:00:00.000Z",
+      },
+      {
+        artifact_id: "artifact-data-saver",
+        job_id: "job-1",
+        attachment_id: "video-1",
+        kind: "video_variant",
+        storage_rel_path: "chat/default/media/video-1-data-saver.mp4",
+        text_preview: "data_saver",
+        mime_type: "video/mp4",
+        size_bytes: 131072,
         created_at: "2026-06-18T00:00:00.000Z",
       },
     ]);
@@ -199,6 +259,22 @@ describe("MediaVoiceService", () => {
             source: { kind: "chat_attachment", attachmentId: "video-1" },
             mimeType: "video/mp4",
             sizeBytes: 1024 * 1024,
+            status: "available",
+          },
+          {
+            variantId: "standard",
+            label: "Standard",
+            source: { kind: "media_artifact", artifactId: "artifact-standard" },
+            mimeType: "video/mp4",
+            sizeBytes: 524288,
+            status: "available",
+          },
+          {
+            variantId: "data_saver",
+            label: "Data saver",
+            source: { kind: "media_artifact", artifactId: "artifact-data-saver" },
+            mimeType: "video/mp4",
+            sizeBytes: 131072,
             status: "available",
           },
         ],
@@ -346,6 +422,95 @@ describe("MediaVoiceService", () => {
     });
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ status: "queued" }));
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ outputJson: expect.stringContaining("No attachment") }));
+  });
+
+  it("marks video derivative jobs unsupported when ffmpeg is unavailable", async () => {
+    const jobs = new Map<string, Record<string, unknown>>();
+    const run = vi.fn((params: Record<string, unknown>) => {
+      if ("jobType" in params) {
+        jobs.set(String(params.jobId), {
+          job_id: params.jobId,
+          session_id: params.sessionId,
+          attachment_id: params.attachmentId,
+          job_type: params.jobType,
+          status: params.status,
+          input_json: params.inputJson,
+          output_json: null,
+          error: null,
+          created_at: params.createdAt,
+          updated_at: params.updatedAt,
+          completed_at: null,
+        });
+        return;
+      }
+      const row = jobs.get(String(params.jobId));
+      if (!row) {
+        return;
+      }
+      if ("outputJson" in params) {
+        row.status = String(params.outputJson).includes("ffmpeg") ? "unsupported" : "ready";
+        row.output_json = params.outputJson;
+        row.updated_at = params.updatedAt;
+        row.completed_at = params.completedAt;
+        return;
+      }
+      if ("updatedAt" in params) {
+        row.status = "running";
+        row.updated_at = params.updatedAt;
+      }
+    });
+    const get = vi.fn((jobId: string) => jobs.get(jobId));
+    const backgroundTasks = new Set<Promise<unknown>>();
+    const readChatAttachmentContent = vi.fn();
+    const previousFfmpegPath = process.env.GOATCITADEL_FFMPEG_BIN;
+    delete process.env.GOATCITADEL_FFMPEG_BIN;
+    try {
+      const service = new MediaVoiceService(
+        createDeps({
+          backgroundTasks,
+          readChatAttachmentContent,
+          chatAttachmentGet: vi.fn(() => ({
+            attachmentId: "video-1",
+            sessionId: "session-1",
+            fileName: "clip.mp4",
+            mimeType: "video/mp4",
+            mediaType: "video",
+            sizeBytes: 1024,
+            sha256: "hash",
+            storageRelPath: "chat/default/attachments/video-1.mp4",
+            extractStatus: "unsupported",
+            createdAt: "2026-06-18T00:00:00.000Z",
+          })),
+          gatewaySql: {
+            prepare: vi.fn(() => ({
+              get,
+              run,
+            })),
+          } as never,
+        }),
+      );
+
+      const created = service.createMediaJob({
+        type: "video_derivatives",
+        sessionId: "session-1",
+        attachmentId: "video-1",
+      });
+      await Promise.allSettled([...backgroundTasks]);
+
+      expect(service.getMediaJob(created.jobId)).toMatchObject({
+        status: "unsupported",
+        outputJson: {
+          message: "ffmpeg is not configured; original video playback remains available.",
+        },
+      });
+      expect(readChatAttachmentContent).not.toHaveBeenCalled();
+    } finally {
+      if (previousFfmpegPath === undefined) {
+        delete process.env.GOATCITADEL_FFMPEG_BIN;
+      } else {
+        process.env.GOATCITADEL_FFMPEG_BIN = previousFfmpegPath;
+      }
+    }
   });
 
   it("starts and stops voice talk and wake sessions when the managed runtime is ready", async () => {
@@ -598,6 +763,8 @@ function createDeps(
     publishRealtime?: ReturnType<typeof vi.fn>;
     recordDevDiagnostic?: ReturnType<typeof vi.fn>;
     getChatAttachment?: ReturnType<typeof vi.fn>;
+    chatAttachmentGet?: ReturnType<typeof vi.fn>;
+    readChatAttachmentContent?: ReturnType<typeof vi.fn>;
     backgroundTasks?: Set<Promise<unknown>>;
     gatewaySql?: never;
     isClosing?: () => boolean;
@@ -608,14 +775,14 @@ function createDeps(
     storage: {
       systemSettings: overrides.systemSettings ?? createSystemSettings(),
       chatAttachments: {
-        get: vi.fn(),
+        get: overrides.chatAttachmentGet ?? vi.fn(),
       },
     },
     backgroundTasks: overrides.backgroundTasks ?? new Set(),
     isClosing: overrides.isClosing ?? (() => false),
     publishRealtime: overrides.publishRealtime ?? vi.fn(),
     recordDevDiagnostic: overrides.recordDevDiagnostic ?? vi.fn(),
-    readChatAttachmentContent: vi.fn(),
+    readChatAttachmentContent: overrides.readChatAttachmentContent ?? vi.fn(),
     getChatAttachment: overrides.getChatAttachment ?? vi.fn(),
   };
 }

@@ -25,10 +25,12 @@ async function createStorage(rootDir: string): Promise<Storage> {
 async function createHost(
   workspaceId = "workspace-a",
 ): Promise<{ host: ChatAttachmentHost; rootDir: string; storage: Storage }> {
-  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-chat-attachment-"));
+  const tempRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-chat-attachment-"));
+  const rootDir = await fs.realpath(tempRootDir);
   const workspaceDir = "workspace";
   const workspaceRoot = path.join(rootDir, workspaceDir);
   await fs.mkdir(workspaceRoot, { recursive: true });
+  const workspaceRealpath = await fs.realpath(workspaceRoot);
   const storage = await createStorage(rootDir);
   storage.sessions.upsert({
     sessionId: "sess-1",
@@ -55,7 +57,7 @@ async function createHost(
     },
     toolPolicy: {
       sandbox: {
-        writeJailRoots: [workspaceRoot],
+        writeJailRoots: [workspaceRealpath],
         readOnlyRoots: [],
       },
     },
@@ -178,10 +180,10 @@ describe("chat-attachment-service", () => {
   });
 
   it.each([
-    ["audio/mpeg", "audio_transcribe"],
-    ["video/mp4", "video_transcribe"],
-    ["application/octet-stream", "analyze"],
-  ])("queues the correct media job for %s uploads", async (mimeType, expectedJobType) => {
+    ["audio/mpeg", ["audio_transcribe"]],
+    ["video/mp4", ["video_transcribe", "video_derivatives"]],
+    ["application/octet-stream", ["analyze"]],
+  ])("queues the correct media jobs for %s uploads", async (mimeType, expectedJobTypes) => {
     const { host, rootDir, storage } = await createHost();
     roots.push(rootDir);
     storages.push(storage);
@@ -194,11 +196,14 @@ describe("chat-attachment-service", () => {
     });
 
     expect(uploaded.analysisStatus).toBe("queued");
-    expect(host.createMediaJob).toHaveBeenCalledWith({
-      type: expectedJobType,
-      sessionId: "sess-1",
-      attachmentId: uploaded.attachmentId,
-    });
+    expect(host.createMediaJob).toHaveBeenCalledTimes(expectedJobTypes.length);
+    for (const expectedJobType of expectedJobTypes) {
+      expect(host.createMediaJob).toHaveBeenCalledWith({
+        type: expectedJobType,
+        sessionId: "sess-1",
+        attachmentId: uploaded.attachmentId,
+      });
+    }
   });
 
   it("rejects empty payloads and cross-workspace project uploads before persistence", async () => {

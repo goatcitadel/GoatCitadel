@@ -6,6 +6,7 @@ export const mediaRouteMethods = [
   "getMediaJob",
   "issueMediaPlaybackToken",
   "listMediaJobs",
+  "resolveMediaArtifactContent",
   "validateMediaPlaybackToken",
 ] as const;
 
