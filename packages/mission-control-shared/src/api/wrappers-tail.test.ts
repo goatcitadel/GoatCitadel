@@ -301,6 +301,11 @@ describe("shared API wrapper tail coverage", () => {
     });
 
     await expectCall(system.createMediaJob({ kind: "image" } as never), "/api/v1/media/jobs", { method: "POST" });
+    await expectCall(
+      system.issueMediaPlaybackToken({ source: { kind: "chat_attachment", attachmentId: "att/1" } }),
+      "/api/v1/media/playback-token",
+      { method: "POST" },
+    );
     await expectCall(system.fetchMediaJob("job/1"), "/api/v1/media/jobs/job%2F1");
     await expectCall(system.fetchMediaJobs("session/1"), "/api/v1/media/jobs?sessionId=session%2F1");
     await expectCall(system.fetchMediaJobs(), "/api/v1/media/jobs");

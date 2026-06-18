@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
-import { fetchChatAttachmentPreview } from "../../api/client";
+import { buildGatewayUrl, fetchChatAttachmentPreview, issueMediaPlaybackToken } from "../../api/client";
 import { ChatAttachmentActions, loadAttachmentBlob } from "./ChatAttachmentActions";
+import {
+  getCurrentTavernMediaConnectionProfile,
+  shouldDeferTavernInlineMedia,
+  tavernMediaPreloadForProfile,
+} from "./media-playback-quality";
 
 const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
 const ATTACHMENT_PREVIEW_CACHE_MAX_ENTRIES = 80;
@@ -120,8 +125,13 @@ function ChatAttachmentInlineMedia({
   sizeBytes: number;
   shouldLoad: boolean;
 }) {
-  const exceedsSizeCap = sizeBytes > INLINE_MEDIA_MAX_BYTES;
-  const [activated, setActivated] = useState(!exceedsSizeCap);
+  const connectionProfile = useState(() => getCurrentTavernMediaConnectionProfile())[0];
+  const shouldDeferForConnection =
+    kind !== "image" && shouldDeferTavernInlineMedia({ kind, sizeBytes, profile: connectionProfile });
+  const requiresManualActivation = kind === "image" ? sizeBytes > INLINE_MEDIA_MAX_BYTES : shouldDeferForConnection;
+  const [activated, setActivated] = useState(!requiresManualActivation);
+  const [fallbackBlobRequested, setFallbackBlobRequested] = useState(false);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -130,8 +140,32 @@ function ChatAttachmentInlineMedia({
     if (!shouldLoad || !activated) {
       return;
     }
+    if (kind !== "image" && !fallbackBlobRequested) {
+      let cancelled = false;
+      setObjectUrl(null);
+      void issueMediaPlaybackToken({
+        source: {
+          kind: "chat_attachment",
+          attachmentId,
+        },
+      })
+        .then((response) => {
+          if (cancelled) return;
+          setStreamUrl(buildGatewayUrl(response.contentPath));
+          setError(null);
+        })
+        .catch((nextError) => {
+          if (cancelled) return;
+          setStreamUrl(null);
+          setError((nextError as Error).message);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     let cancelled = false;
     let createdUrl: string | null = null;
+    setStreamUrl(null);
     loadAttachmentBlob({ attachmentId, fallbackFileName: fileName })
       .then(({ blob }) => {
         if (cancelled) return;
@@ -153,10 +187,15 @@ function ChatAttachmentInlineMedia({
         setObjectUrl(null);
       }
     };
-  }, [activated, attachmentId, fileName, shouldLoad]);
+  }, [activated, attachmentId, fallbackBlobRequested, fileName, kind, shouldLoad]);
 
   const openLightbox = useCallback(() => setLightboxOpen(true), []);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
+  const requestFallbackBlob = useCallback(() => {
+    setFallbackBlobRequested(true);
+    setActivated(true);
+    setError(null);
+  }, []);
 
   if (!activated) {
     const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(1);
@@ -167,11 +206,21 @@ function ChatAttachmentInlineMedia({
     );
   }
 
-  if (error) {
-    return <p className="mc-next-attachment-inline-error">Inline preview unavailable: {error}</p>;
+  if (error && !objectUrl && !streamUrl) {
+    return (
+      <>
+        <p className="mc-next-attachment-inline-error">Inline preview unavailable: {error}</p>
+        {kind !== "image" && !fallbackBlobRequested ? (
+          <button type="button" className="mc-next-attachment-inline-fallback" onClick={requestFallbackBlob}>
+            Load {kind} preview ({(sizeBytes / (1024 * 1024)).toFixed(1)} MB)
+          </button>
+        ) : null}
+      </>
+    );
   }
 
-  if (!objectUrl) {
+  const mediaSrc = streamUrl ?? objectUrl;
+  if (!mediaSrc) {
     return null;
   }
 
@@ -185,28 +234,33 @@ function ChatAttachmentInlineMedia({
           onClick={openLightbox}
         >
           <img
-            src={objectUrl}
+            src={mediaSrc}
             alt={fileName}
             className="mc-next-attachment-inline-image"
             loading="lazy"
             decoding="async"
           />
         </button>
-        {lightboxOpen ? <ImageLightbox src={objectUrl} alt={fileName} onClose={closeLightbox} /> : null}
+        {lightboxOpen ? <ImageLightbox src={mediaSrc} alt={fileName} onClose={closeLightbox} /> : null}
       </>
     );
   }
 
   if (kind === "audio") {
     return (
-      <audio className="mc-next-attachment-inline-audio" controls preload="metadata" src={objectUrl}>
+      <audio className="mc-next-attachment-inline-audio" controls preload="metadata" src={mediaSrc}>
         Your browser does not support inline audio playback.
       </audio>
     );
   }
 
   return (
-    <video className="mc-next-attachment-inline-video" controls preload="metadata" src={objectUrl}>
+    <video
+      className="mc-next-attachment-inline-video"
+      controls
+      preload={tavernMediaPreloadForProfile({ kind: "video", profile: connectionProfile })}
+      src={mediaSrc}
+    >
       Your browser does not support inline video playback.
     </video>
   );

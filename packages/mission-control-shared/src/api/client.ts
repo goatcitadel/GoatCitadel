@@ -877,6 +877,7 @@ export {
   fetchSystemVitals,
   fetchTimelineSummary,
   listBackups,
+  issueMediaPlaybackToken,
   pruneRetention,
   runCheaper,
   updateRetentionPolicy,

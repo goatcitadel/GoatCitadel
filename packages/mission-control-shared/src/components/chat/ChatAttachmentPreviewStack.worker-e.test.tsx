@@ -5,14 +5,20 @@ import type { ChatAttachmentPreviewResponse, ChatMessageRecord } from "@goatcita
 import { ChatAttachmentPreviewStack, resetAttachmentPreviewStateForTests } from "./ChatAttachmentPreviewStack";
 
 const apiMocks = vi.hoisted(() => ({
+  buildGatewayUrl: vi.fn((path: string) => `http://localhost:8787${path}`),
   fetchChatAttachmentPreview: vi.fn(),
   downloadChatAttachment: vi.fn(),
+  issueMediaPlaybackToken: vi.fn(),
 }));
 
 vi.mock("../../api/client", () => ({
+  buildGatewayUrl: apiMocks.buildGatewayUrl,
   fetchChatAttachmentPreview: apiMocks.fetchChatAttachmentPreview,
   downloadChatAttachment: apiMocks.downloadChatAttachment,
+  issueMediaPlaybackToken: apiMocks.issueMediaPlaybackToken,
 }));
+
+const originalNavigator = globalThis.navigator;
 
 function attachment(patch: Partial<NonNullable<ChatMessageRecord["attachments"]>[number]> = {}) {
   return {
@@ -52,12 +58,29 @@ function hasText(renderer: ReactTestRenderer, text: string): boolean {
 describe("ChatAttachmentPreviewStack", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: undefined,
+    });
     resetAttachmentPreviewStateForTests();
+    apiMocks.buildGatewayUrl.mockClear();
     apiMocks.fetchChatAttachmentPreview.mockReset();
     apiMocks.downloadChatAttachment.mockReset();
+    apiMocks.issueMediaPlaybackToken.mockReset();
+    apiMocks.issueMediaPlaybackToken.mockResolvedValue({
+      token: "media-token",
+      expiresAt: "2026-06-18T00:00:00.000Z",
+      source: { kind: "chat_attachment", attachmentId: "attachment-1" },
+      variantId: "original",
+      contentPath: "/api/v1/chat/attachments/attachment-1/content?disposition=inline&media_token=media-token",
+    });
   });
 
   afterEach(() => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
     vi.unstubAllGlobals();
   });
 
@@ -191,5 +214,92 @@ describe("ChatAttachmentPreviewStack", () => {
       await Promise.resolve();
     });
     expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledWith("eager-preview");
+  });
+
+  it("uses tokenized streaming URLs for inline video without downloading the full blob first", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        connection: {
+          effectiveType: "4g",
+          downlink: 15,
+        },
+      },
+    });
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        attachmentId: "video-1",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        mediaType: "video",
+      }),
+    );
+    apiMocks.issueMediaPlaybackToken.mockResolvedValueOnce({
+      token: "video-token",
+      expiresAt: "2026-06-18T00:00:00.000Z",
+      source: { kind: "chat_attachment", attachmentId: "video-1" },
+      variantId: "original",
+      contentPath: "/api/v1/chat/attachments/video-1/content?disposition=inline&media_token=video-token",
+    });
+
+    const renderer = await renderStack([
+      attachment({
+        attachmentId: "video-1",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 42 * 1024 * 1024,
+      }),
+    ]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.issueMediaPlaybackToken).toHaveBeenCalledWith({
+      source: { kind: "chat_attachment", attachmentId: "video-1" },
+    });
+    expect(apiMocks.downloadChatAttachment).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      "http://localhost:8787/api/v1/chat/attachments/video-1/content?disposition=inline&media_token=video-token",
+    );
+  });
+
+  it("defers inline video on data-saver connections until the operator loads it", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        connection: {
+          saveData: true,
+          effectiveType: "4g",
+        },
+      },
+    });
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        attachmentId: "video-2",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        mediaType: "video",
+      }),
+    );
+
+    const renderer = await renderStack([
+      attachment({
+        attachmentId: "video-2",
+        fileName: "clip.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 30 * 1024 * 1024,
+      }),
+    ]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(hasText(renderer, "Load ")).toBe(true);
+    expect(hasText(renderer, "video")).toBe(true);
+    expect(hasText(renderer, "preview")).toBe(true);
+    expect(apiMocks.issueMediaPlaybackToken).not.toHaveBeenCalled();
   });
 });

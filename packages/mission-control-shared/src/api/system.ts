@@ -4,6 +4,8 @@ import type {
   BackupVerifyResponse,
   MediaCreateJobRequest,
   MediaJobRecord,
+  MediaPlaybackTokenRequest,
+  MediaPlaybackTokenResponse,
   RetentionPolicy,
   RetentionPruneResult,
 } from "@goatcitadel/contracts";
@@ -19,6 +21,13 @@ import { request } from "./client-core.js";
 
 export async function createMediaJob(input: MediaCreateJobRequest): Promise<MediaJobRecord> {
   return request<MediaJobRecord>("/api/v1/media/jobs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function issueMediaPlaybackToken(input: MediaPlaybackTokenRequest): Promise<MediaPlaybackTokenResponse> {
+  return request<MediaPlaybackTokenResponse>("/api/v1/media/playback-token", {
     method: "POST",
     body: JSON.stringify(input),
   });
