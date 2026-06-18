@@ -35,9 +35,10 @@ export class RuntimeLifecycleExportService {
     const lifecycle = await this.host.getRuntimeLifecycle(toRuntimeLifecycleQuery(input));
     const sessionId = lifecycle.canonical.sessionId ?? lifecycle.session?.sessionId;
 
-    const transcript = includeTranscript && sessionId ? await this.host.getTranscript(sessionId) : undefined;
-    const timeline =
-      includeTimeline && sessionId ? await this.host.listSessionTimeline(sessionId, timelineLimit) : undefined;
+    const [transcript, timeline] = await Promise.all([
+      includeTranscript && sessionId ? this.host.getTranscript(sessionId) : undefined,
+      includeTimeline && sessionId ? this.host.listSessionTimeline(sessionId, timelineLimit) : undefined,
+    ]);
 
     const bundle: RuntimeLifecycleExportBundle = {
       ...lifecycle,

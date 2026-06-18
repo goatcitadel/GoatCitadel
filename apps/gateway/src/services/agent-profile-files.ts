@@ -38,11 +38,7 @@ export async function discoverProjectAgentProfiles(input: {
     .map((entry) => path.join(agentsDir, entry.name))
     .sort((left, right) => left.localeCompare(right));
 
-  const records: ProjectAgentProfileFileRecord[] = [];
-  for (const profilePath of profilePaths) {
-    records.push(await readProjectAgentProfile(profilePath, input.projectRoot));
-  }
-  return records;
+  return Promise.all(profilePaths.map((profilePath) => readProjectAgentProfile(profilePath, input.projectRoot)));
 }
 
 export async function readProjectAgentProfile(
