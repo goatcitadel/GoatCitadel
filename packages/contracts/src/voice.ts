@@ -4,6 +4,7 @@ export type VoiceProvider = "whisper.cpp" | "faster-whisper" | "cloud-fallback" 
 export type VoiceModelLanguageScope = "english" | "multilingual";
 export type VoiceRuntimeInstallSource = "managed" | "env_override" | "manual";
 export type VoiceRuntimeReadiness = "ready" | "missing" | "broken";
+export type VoiceTransportReadiness = "ready" | "degraded" | "unavailable";
 export type RealtimeVoiceProvider = "openai-realtime" | "local-transcription";
 export type GoogleMeetSessionState =
   | "blocked"
@@ -136,6 +137,38 @@ export interface VoiceWakeStatus {
   updatedAt: string;
 }
 
+export interface TavernAudioCaptureDefaults {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
+
+export const TAVERN_AUDIO_CAPTURE_DEFAULTS: TavernAudioCaptureDefaults = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+export interface VoiceTransportStatus {
+  playback: {
+    state: VoiceTransportReadiness;
+    updatedAt: string;
+    message?: string;
+  };
+  capture: {
+    state: VoiceTransportReadiness;
+    updatedAt: string;
+    constraints: TavernAudioCaptureDefaults;
+    message?: string;
+  };
+  transcription: {
+    state: VoiceTransportReadiness;
+    provider: VoiceProvider;
+    updatedAt: string;
+    message?: string;
+  };
+}
+
 export interface VoiceStatus {
   stt: {
     state: VoiceRuntimeState;
@@ -152,6 +185,7 @@ export interface VoiceStatus {
     updatedAt: string;
   };
   wake: VoiceWakeStatus;
+  transport?: VoiceTransportStatus;
 }
 
 export interface VoiceModelCatalogEntry {

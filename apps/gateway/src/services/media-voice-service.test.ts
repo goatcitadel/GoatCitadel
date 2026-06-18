@@ -356,6 +356,76 @@ describe("MediaVoiceService", () => {
     expect(all).toHaveBeenCalledWith(8);
   });
 
+  it("reports voice playback, capture, and transcription transport readiness", async () => {
+    const service = new MediaVoiceService(createDeps());
+
+    const status = await service.getVoiceStatus();
+
+    expect(status.transport).toMatchObject({
+      playback: {
+        state: "ready",
+      },
+      capture: {
+        state: "degraded",
+        constraints: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      },
+      transcription: {
+        provider: "whisper.cpp",
+      },
+    });
+    expect(["ready", "degraded", "unavailable"]).toContain(status.transport?.transcription.state);
+  });
+
+  it("does not let stale transcription errors override a repaired voice runtime", async () => {
+    const systemSettings = createSystemSettings();
+    systemSettings.set("voice_status_v1", {
+      state: "error",
+      provider: "whisper.cpp",
+      runtimeReady: false,
+      lastError: "Previous transcription failed.",
+      updatedAt: "2026-06-18T00:00:00.000Z",
+    });
+    const service = new MediaVoiceService(createDeps({ systemSettings }));
+    const env = {
+      GOATCITADEL_WHISPER_CPP_BIN: process.env.GOATCITADEL_WHISPER_CPP_BIN,
+      GOATCITADEL_WHISPER_CPP_MODEL_PATH: process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH,
+      GOATCITADEL_FFMPEG_BIN: process.env.GOATCITADEL_FFMPEG_BIN,
+    };
+    process.env.GOATCITADEL_WHISPER_CPP_BIN = process.execPath;
+    process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH = process.execPath;
+    process.env.GOATCITADEL_FFMPEG_BIN = process.execPath;
+    try {
+      const status = await service.getVoiceStatus();
+
+      expect(status.stt.state).toBe("error");
+      expect(status.stt.runtimeReady).toBe(true);
+      expect(status.transport?.transcription).toMatchObject({
+        state: "ready",
+        message: "Local transcription runtime is ready. Last transcription error: Previous transcription failed.",
+      });
+    } finally {
+      if (env.GOATCITADEL_WHISPER_CPP_BIN === undefined) {
+        delete process.env.GOATCITADEL_WHISPER_CPP_BIN;
+      } else {
+        process.env.GOATCITADEL_WHISPER_CPP_BIN = env.GOATCITADEL_WHISPER_CPP_BIN;
+      }
+      if (env.GOATCITADEL_WHISPER_CPP_MODEL_PATH === undefined) {
+        delete process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH;
+      } else {
+        process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH = env.GOATCITADEL_WHISPER_CPP_MODEL_PATH;
+      }
+      if (env.GOATCITADEL_FFMPEG_BIN === undefined) {
+        delete process.env.GOATCITADEL_FFMPEG_BIN;
+      } else {
+        process.env.GOATCITADEL_FFMPEG_BIN = env.GOATCITADEL_FFMPEG_BIN;
+      }
+    }
+  });
+
   it("creates queued media jobs and completes no-attachment jobs in the background queue", async () => {
     const jobs = new Map<string, Record<string, unknown>>();
     const run = vi.fn((params: Record<string, unknown>) => {

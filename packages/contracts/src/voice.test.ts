@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  TAVERN_AUDIO_CAPTURE_DEFAULTS,
   buildVoiceOperatorGuidance,
   buildVoiceRecoveryActions,
   type VoiceRuntimeStatus,
@@ -56,6 +57,14 @@ function createVoiceRuntime(overrides?: Partial<VoiceRuntimeStatus>): VoiceRunti
 }
 
 describe("voice operator helpers", () => {
+  it("defines conservative Tavern audio capture defaults", () => {
+    expect(TAVERN_AUDIO_CAPTURE_DEFAULTS).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+  });
+
   it("prioritizes runtime repair when the managed runtime is missing", () => {
     expect(
       buildVoiceRecoveryActions(

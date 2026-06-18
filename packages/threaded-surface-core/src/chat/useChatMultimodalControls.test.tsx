@@ -226,6 +226,30 @@ describe("useChatMultimodalControls", () => {
     expect(speechSynthesis.speak).toHaveBeenCalledTimes(1);
   });
 
+  it("uses voice transport readiness when the gateway reports it", async () => {
+    apiMocks.fetchVoiceStatus.mockResolvedValue({
+      talk: { activeSessionId: null },
+      transport: {
+        transcription: {
+          state: "degraded",
+          provider: "whisper.cpp",
+          updatedAt: "2026-06-18T00:00:00.000Z",
+          message: "Local transcription runtime needs attention.",
+        },
+      },
+    });
+    apiMocks.fetchVoiceRuntimeStatus.mockResolvedValue({ readiness: "ready", selectedModelId: "whisper-local" });
+
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.controls.voiceInputAvailable).toBe(false);
+    expect(latest!.controls.voiceStatusLabel).toBe("Voice transport degraded");
+    expect(latest!.controls.voiceUnavailableReason).toBe("Local transcription runtime needs attention.");
+  });
+
   it("starts and stops push-to-talk while refreshing voice status", async () => {
     const activeStatus = { talk: { activeSessionId: "talk-1" } };
     apiMocks.fetchVoiceStatus

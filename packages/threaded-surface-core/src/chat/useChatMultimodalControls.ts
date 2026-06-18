@@ -268,7 +268,9 @@ export function useChatMultimodalControls(input: {
     typeof window !== "undefined" &&
     typeof window.speechSynthesis !== "undefined" &&
     typeof window.SpeechSynthesisUtterance !== "undefined";
-  const voiceReady = voiceRuntime?.readiness === "ready";
+  const voiceTransportState = voiceStatus?.transport?.transcription.state;
+  const voiceTransportMessage = voiceStatus?.transport?.transcription.message;
+  const voiceReady = voiceTransportState ? voiceTransportState === "ready" : voiceRuntime?.readiness === "ready";
   const voiceInputAvailable = voiceReady && activeProvider?.capabilities?.voiceInput !== false;
   const voiceOutputAvailable = supportsSpeechSynthesis && activeProvider?.capabilities?.voiceOutput !== false;
   const imageGenerationAvailable = Boolean(primaryImageRoute);
@@ -278,20 +280,33 @@ export function useChatMultimodalControls(input: {
       ? `${primaryImageRoute.label} with ${googleFallbackImageRoute.label} fallback`
       : primaryImageRoute.label
     : null;
-  const voiceStatusLabel = voiceStatus?.talk.activeSessionId
-    ? "Talk mode live"
-    : voiceReady
-      ? voiceRuntime?.selectedModelId
-        ? `Voice ready · ${voiceRuntime.selectedModelId}`
-        : "Voice runtime ready"
-      : voiceRuntime?.readiness === "broken"
-        ? "Voice runtime needs repair"
-        : "Voice runtime unavailable";
-  const voiceUnavailableReason = voiceInputAvailable
-    ? null
-    : voiceRuntime?.readiness === "broken"
-      ? "Voice runtime is installed but incomplete. Repair it in Configure > Runtime."
-      : "Voice runtime is not ready yet. Install a local voice model in Configure > Runtime.";
+  const voiceStatusLabel = (() => {
+    if (voiceStatus?.talk.activeSessionId) {
+      return "Talk mode live";
+    }
+    if (voiceTransportState === "degraded") {
+      return "Voice transport degraded";
+    }
+    if (voiceTransportState === "unavailable") {
+      return "Voice transport unavailable";
+    }
+    if (voiceReady) {
+      return voiceRuntime?.selectedModelId ? `Voice ready · ${voiceRuntime.selectedModelId}` : "Voice runtime ready";
+    }
+    return voiceRuntime?.readiness === "broken" ? "Voice runtime needs repair" : "Voice runtime unavailable";
+  })();
+  const voiceUnavailableReason = (() => {
+    if (voiceInputAvailable) {
+      return null;
+    }
+    if (voiceTransportState === "degraded" || voiceTransportState === "unavailable") {
+      return voiceTransportMessage ?? "Voice transport is not ready yet. Check Configure > Runtime.";
+    }
+    if (voiceRuntime?.readiness === "broken") {
+      return "Voice runtime is installed but incomplete. Repair it in Configure > Runtime.";
+    }
+    return "Voice runtime is not ready yet. Install a local voice model in Configure > Runtime.";
+  })();
 
   const refreshVoiceState = useCallback(async () => {
     try {

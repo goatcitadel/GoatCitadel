@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { TAVERN_AUDIO_CAPTURE_DEFAULTS } from "@goatcitadel/contracts";
 import type {
   ChatAttachmentMediaType,
   ChatAttachmentPlaybackMetadata,
@@ -233,6 +234,43 @@ function toMediaArtifactRows(value: unknown): MediaArtifactRow[] {
 
 function parseVideoVariantId(value: string | null): "standard" | "data_saver" | null {
   return value === "standard" || value === "data_saver" ? value : null;
+}
+
+function buildVoiceTransportStatus(input: {
+  runtime: VoiceRuntimeStatus;
+  stt: VoiceStatus["stt"];
+  now: string;
+}): VoiceStatus["transport"] {
+  const transcriptionState =
+    input.runtime.readiness === "ready" ? "ready" : input.runtime.readiness === "broken" ? "degraded" : "unavailable";
+  const transcriptionMessage =
+    transcriptionState === "ready"
+      ? input.stt.state === "error" && input.stt.lastError
+        ? `Local transcription runtime is ready. Last transcription error: ${input.stt.lastError}`
+        : "Local transcription runtime is ready for uploaded audio and voice capture."
+      : transcriptionState === "degraded"
+        ? (input.stt.lastError ?? input.runtime.lastError ?? "Local transcription runtime needs attention.")
+        : "Local transcription runtime is not configured yet.";
+  return {
+    playback: {
+      state: "ready",
+      updatedAt: input.now,
+      message: "Uploaded audio previews use tokenized range streaming.",
+    },
+    capture: {
+      state: "degraded",
+      updatedAt: input.now,
+      constraints: TAVERN_AUDIO_CAPTURE_DEFAULTS,
+      message:
+        "Browser capture constraints are defined; device support and microphone permission are checked client-side.",
+    },
+    transcription: {
+      state: transcriptionState,
+      provider: input.stt.provider,
+      updatedAt: input.now,
+      message: transcriptionMessage,
+    },
+  };
 }
 
 export function detectAttachmentMediaType(mimeType: string): ChatAttachmentMediaType {
@@ -879,6 +917,11 @@ export class MediaVoiceService {
       },
       talk: talkRecord,
       wake,
+      transport: buildVoiceTransportStatus({
+        runtime,
+        stt,
+        now,
+      }),
     };
   }
 
