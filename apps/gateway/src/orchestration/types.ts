@@ -13,6 +13,7 @@ import type {
   ChatSessionPrefsRecord,
   ChatTurnTraceRecord,
   LlmRuntimeConfig,
+  OrchestrationPromptReference,
 } from "@goatcitadel/contracts";
 
 export type OrchestrationRole =
@@ -113,6 +114,7 @@ export interface OrchestrationStepExecutionResult {
   failureGuidance?: string;
   degradedHandoffStepIds?: string[];
   repairedFromStepId?: string;
+  prompt?: OrchestrationPromptReference;
   childRunId?: string;
   durableRunId?: string;
   childSessionId?: string;

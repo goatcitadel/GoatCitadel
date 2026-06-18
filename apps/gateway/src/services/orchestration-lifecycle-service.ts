@@ -1128,6 +1128,7 @@ export async function executeDurableOrchestrationRun(
       outputTokens: execution.outputTokens,
       citations: execution.citations,
       artifacts: execution.artifacts,
+      prompt: execution.prompt,
       error: unsupportedWaitError ?? execution.error,
     };
     persistRunEvent(
@@ -1594,9 +1595,27 @@ function buildHarvestedWaitingExecution(
     outputTokens: asNumber(waitingPhase.outputTokens),
     citations: Array.isArray(waitingPhase.citations) ? (waitingPhase.citations as unknown[]) : undefined,
     artifacts: Array.isArray(waitingPhase.artifacts) ? (waitingPhase.artifacts as unknown[]) : undefined,
+    prompt: asPromptReference(waitingPhase.prompt),
     error: failed
       ? (childRun.lastError ?? `Child phase durable run ${childRunId} ended as ${childRun.status}.`)
       : undefined,
+  };
+}
+
+function asPromptReference(value: unknown): OrchestrationPhaseExecutionResult["prompt"] {
+  const record = asRecord(value);
+  if (
+    !record ||
+    typeof record.promptId !== "string" ||
+    typeof record.promptVersion !== "string" ||
+    typeof record.promptHash !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    promptId: record.promptId,
+    promptVersion: record.promptVersion,
+    promptHash: record.promptHash,
   };
 }
 

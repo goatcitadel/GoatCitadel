@@ -3,6 +3,7 @@ import type { DurableRunStatus } from "./durable.js";
 import type { ThreadKnowledgeCitationRecord } from "./knowledge.js";
 import type { MemoryCitationProvenance } from "./memory.js";
 import type { MobileContextEnvelope } from "./mobile.js";
+import type { OrchestrationPromptReference } from "./orchestration.js";
 import type { SkillSourceProvider } from "./skills.js";
 
 export type ChatProjectLifecycleStatus = "active" | "archived";
@@ -1070,6 +1071,7 @@ export interface ChatOrchestrationStepSummary {
   summary?: string;
   error?: string;
   degradedHandoffStepIds?: string[];
+  prompt?: OrchestrationPromptReference;
 }
 
 export interface ChatOrchestrationSummary {

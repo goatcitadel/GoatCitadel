@@ -51,7 +51,14 @@ export interface OrchestrationPhaseExecutionResult {
   outputTokens?: number;
   citations?: unknown[];
   artifacts?: unknown[];
+  prompt?: OrchestrationPromptReference;
   error?: string;
+}
+
+export interface OrchestrationPromptReference {
+  promptId: string;
+  promptVersion: string;
+  promptHash: string;
 }
 
 /**
