@@ -102,7 +102,11 @@ function createFakeChild(options: FakeChildOptions = {}): {
 }
 
 /** A fake taskkill process so we can drive its error/exit lifecycle. */
-function createFakeKiller(): { killer: ChildProcess; emitError: (error: Error) => void } {
+function createFakeKiller(): {
+  killer: ChildProcess;
+  emitError: (error: Error) => void;
+  emitClose: (code: number | null, signal?: NodeJS.Signals | null) => void;
+} {
   const emitter = new EventEmitter();
   const killer = {
     on: (event: string, listener: (...args: unknown[]) => void) => emitter.on(event, listener),
@@ -110,6 +114,7 @@ function createFakeKiller(): { killer: ChildProcess; emitError: (error: Error) =
   return {
     killer,
     emitError: (error: Error) => emitter.emit("error", error),
+    emitClose: (code: number | null, signal: NodeJS.Signals | null = null) => emitter.emit("close", code, signal),
   };
 }
 
@@ -200,6 +205,18 @@ describe("mcp runtime child termination (INFRA-001)", () => {
 
     terminateChild(child, TEST_SERVER);
     emitError(new Error("ENOENT taskkill"));
+
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to child.kill when taskkill exits non-zero on win32", () => {
+    setPlatform("win32");
+    const { killer, emitClose } = createFakeKiller();
+    spawnMock.mockReturnValue(killer);
+    const { child, kill } = createFakeChild({ pid: 9182 });
+
+    terminateChild(child, TEST_SERVER);
+    emitClose(5);
 
     expect(kill).toHaveBeenCalledTimes(1);
   });

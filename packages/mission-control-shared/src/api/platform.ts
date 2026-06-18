@@ -347,8 +347,16 @@ export async function fetchOrchestrationRun(runId: string): Promise<Orchestratio
   return request<OrchestrationRun>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function fetchOrchestrationRunTrace(runId: string): Promise<OrchestrationDecisionTrace> {
-  return request<OrchestrationDecisionTrace>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/trace`);
+export async function fetchOrchestrationRunTrace(
+  runId: string,
+  input: { workspaceId?: string } = {},
+): Promise<OrchestrationDecisionTrace> {
+  const query = new URLSearchParams();
+  if (input.workspaceId?.trim()) {
+    query.set("workspaceId", input.workspaceId.trim());
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<OrchestrationDecisionTrace>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/trace${suffix}`);
 }
 
 export async function fetchOrchestrationRunCheckpoints(

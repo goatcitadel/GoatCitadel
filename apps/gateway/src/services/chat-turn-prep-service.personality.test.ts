@@ -642,6 +642,25 @@ describe("prepareAgentChatTurn personality overlay", () => {
     });
   });
 
+  it("records trace truth when the orchestration router keeps live-data chat on the tool-backed path", async () => {
+    const harness = createHost("chat");
+    const prepared = createPreparedTurnForOrchestration({
+      planningMode: "off",
+      content: "What is the weather today in Seattle?",
+    });
+
+    await expect(resolvePreparedTurnOrchestration(harness.host, prepared as never)).resolves.toBeUndefined();
+
+    expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
+    expect(prepared.modelRouterDecision).toMatchObject({
+      selectedEngine: "web_research",
+      orchestration: {
+        decision: "bypassed",
+      },
+    });
+    expect(prepared.modelRouterDecision.orchestration?.reason).toContain("tool-backed or live-data");
+  });
+
   it("maps orchestration summary status and step evidence for running, failed, partial, and advisory outcomes", () => {
     const routeDecision = createPlan({ steps: [] }).routeDecision;
     expect(

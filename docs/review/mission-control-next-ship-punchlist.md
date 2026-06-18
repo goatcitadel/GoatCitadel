@@ -153,6 +153,7 @@ These can ship with owner sign-off + post-ship date per ship-bar rubric.
 - 14 hex + 41 rgba hardcoded outside tokens (Track C)
 - Cowork hierarchy: nine panels stacked without primary anchor (per r4-ux + screenshot evidence)
 - CC-001 notifications missing auto-dismiss/animation (r4-ux/Track A still-broken)
+- Wire `scripts/check-mission-control-next-buttons.mjs` into the normal validation path (`check:buttons` or `docs:check`) so raw `mc-next-button` / `mc-next-button-secondary` / `gc-button` usages cannot drift back after the NativeButton migration.
 
 ---
 

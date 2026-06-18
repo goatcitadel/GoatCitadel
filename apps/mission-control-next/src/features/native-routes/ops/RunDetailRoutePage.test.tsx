@@ -328,9 +328,11 @@ describe("RunDetailRoutePage", () => {
       ],
     });
 
-    const text = await renderText("orch-run-1");
+    const text = await renderText("orch-run-1", "workspace-ops");
 
-    expect(runTraceHarness.fetchOrchestrationRunTrace).toHaveBeenCalledWith("orch-run-1");
+    expect(runTraceHarness.fetchOrchestrationRunTrace).toHaveBeenCalledWith("orch-run-1", {
+      workspaceId: "workspace-ops",
+    });
     expect(text).toContain("Orchestration decisions");
     expect(text).toContain("policy_checked");
     expect(text).toContain("pre_phase");
@@ -442,13 +444,13 @@ describe("RunDetailRoutePage", () => {
   });
 });
 
-async function renderText(runId: string): Promise<string> {
+async function renderText(runId: string, workspaceId = "default"): Promise<string> {
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(
       <RunDetailRoutePage
         route={{ area: "ops", section: "sessions", view: "run-detail", runId, theme: "ops" } as any}
-        activeWorkspaceId="default"
+        activeWorkspaceId={workspaceId}
         activeWorkspaceName="Default"
         pendingApprovals={0}
         navigate={vi.fn()}

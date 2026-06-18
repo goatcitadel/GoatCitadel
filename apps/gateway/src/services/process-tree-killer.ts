@@ -81,13 +81,34 @@ function terminateWindowsChildTree(child: ChildProcess, options: TerminateProces
       windowsHide: true,
       stdio: "ignore",
     });
+    let fallbackUsed = false;
+    const fallbackToChildKill = (message: string, context: Record<string, unknown>) => {
+      if (fallbackUsed) {
+        return;
+      }
+      fallbackUsed = true;
+      options.logger?.warn(message, context);
+      killChildBestEffort(child);
+    };
     killer.on("error", (error) => {
-      options.logger?.warn(`${options.label} taskkill failed; falling back to child.kill`, {
+      fallbackToChildKill(`${options.label} taskkill failed; falling back to child.kill`, {
         ...options.context,
         pid,
         err: error.message,
       });
-      killChildBestEffort(child);
+    });
+    killer.on("close", (code, signal) => {
+      if ((typeof code === "number" && code !== 0) || signal) {
+        fallbackToChildKill(
+          `${options.label} taskkill exited before terminating process tree; falling back to child.kill`,
+          {
+            ...options.context,
+            pid,
+            exitCode: code,
+            signal,
+          },
+        );
+      }
     });
   } catch (error) {
     options.logger?.warn(`${options.label} taskkill could not be spawned; falling back to child.kill`, {

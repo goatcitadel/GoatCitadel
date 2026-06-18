@@ -612,16 +612,24 @@ export async function resolvePreparedTurnOrchestration(
     decision: prepared.modelRouterDecision,
     advisoryOnly,
   });
-  prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-    decision: modelRouterBypass.bypass ? "bypassed" : "allowed",
-    reason: modelRouterBypass.reason,
-  });
   if (modelRouterBypass.bypass) {
+    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+      decision: "bypassed",
+      reason: modelRouterBypass.reason,
+    });
     return undefined;
   }
   if (!advisoryOnly && !shouldUseModeOrchestration(routerInput)) {
+    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+      decision: "bypassed",
+      reason: "orchestration router suppressed a separate plan because the chat path is tool-backed or live-data handled directly",
+    });
     return undefined;
   }
+  prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+    decision: "allowed",
+    reason: modelRouterBypass.reason,
+  });
   const templatePlan = applyApprovedSpecialistsToPlan(host, prepared, buildOrchestrationPlan(routerInput));
   const executionPlanDraft = await generatePreparedExecutionPlanDraft(
     host,

@@ -56,7 +56,7 @@ interface RunDetailModel {
   raw: unknown;
 }
 
-export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
   const runId = route.runId?.trim();
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -73,13 +73,15 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       fetchObserveRunTrace(runId).then((value) => value as unknown as RunTracePayload),
       buildEmptyRunTrace(runId),
     );
-    const orchestrationTrace = await fetchOrchestrationRunTrace(runId).catch(() => null);
+    const orchestrationTrace = await fetchOrchestrationRunTrace(runId, { workspaceId: activeWorkspaceId }).catch(
+      () => null,
+    );
     return {
       issues: nativeLoadIssues([trace]),
       trace: trace.data,
       orchestrationTrace,
     };
-  }, [runId]);
+  }, [activeWorkspaceId, runId]);
   const detail = buildRunDetailModel(
     data?.trace ?? buildEmptyRunTrace(runId ?? "unknown"),
     runId ?? "unknown",
