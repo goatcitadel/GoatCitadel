@@ -302,6 +302,34 @@ function persistRunEvent(
   host.storage.orchestration.appendRunEvent(run.runId, event, payload);
 }
 
+function persistPolicyGateEvent(
+  host: OrchestrationLifecycleHost,
+  run: OrchestrationRun,
+  input: {
+    gate: "pre_input" | "pre_phase" | "pre_tool" | "post_tool" | "pre_output";
+    trigger: HookTrigger;
+    entityType: string;
+    entityId: string;
+    outcome: "allowed" | "blocked" | "approval_required";
+    phaseId?: string;
+    blockedReason?: string;
+    patch?: Record<string, unknown>;
+    approvalRequired?: boolean;
+  },
+): void {
+  persistRunEvent(host, run, "policy.checked", {
+    gate: input.gate,
+    trigger: input.trigger,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    outcome: input.outcome,
+    phaseId: input.phaseId,
+    blockedReason: input.blockedReason,
+    patchKeys: input.patch ? Object.keys(input.patch).sort() : [],
+    approvalRequired: input.approvalRequired ?? false,
+  });
+}
+
 function publishRunRealtime(
   host: OrchestrationLifecycleHost,
   plan: OrchestrationPlan,
@@ -605,6 +633,15 @@ async function queueOrchestrationRun(
       ...next,
     }),
   });
+  persistPolicyGateEvent(host, run, {
+    gate: "pre_input",
+    trigger: "orchestration.run.before",
+    entityType: "orchestration_run",
+    entityId: run.runId,
+    outcome: runBeforeHook.blockedBy ? "blocked" : "allowed",
+    blockedReason: runBeforeHook.blockedBy?.reason,
+    patch: runBeforeHook.patch,
+  });
   if (runBeforeHook.blockedBy) {
     throw new Error(runBeforeHook.blockedBy.reason);
   }
@@ -692,6 +729,17 @@ export async function approvePhase(
       ...next,
     }),
   });
+  persistPolicyGateEvent(host, run, {
+    gate: "pre_phase",
+    trigger: "orchestration.phase.before",
+    entityType: "orchestration_phase",
+    entityId: `${runId}:${phaseId}`,
+    outcome: phaseBeforeHook.blockedBy ? "blocked" : "allowed",
+    phaseId,
+    blockedReason: phaseBeforeHook.blockedBy?.reason,
+    patch: phaseBeforeHook.patch,
+    approvalRequired: true,
+  });
   if (phaseBeforeHook.blockedBy) {
     throw new Error(phaseBeforeHook.blockedBy.reason);
   }
@@ -746,6 +794,15 @@ export async function approvePhase(
     approvedBy,
     phaseId,
     resumeRequested: true,
+  });
+  persistPolicyGateEvent(host, persisted, {
+    gate: "pre_output",
+    trigger: "orchestration.phase.after",
+    entityType: "orchestration_phase",
+    entityId: `${runId}:${phaseId}`,
+    outcome: "allowed",
+    phaseId,
+    approvalRequired: true,
   });
   publishRunRealtime(host, plan, persisted, { event: "phase_approved", approvedBy });
 

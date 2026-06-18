@@ -589,6 +589,54 @@ describe("orchestration-lifecycle-service", () => {
     expect(runtime.worktrees.allocate).not.toHaveBeenCalled();
     expect(host.resumeDurableRun).toHaveBeenCalledWith("durable-active", "orchestration");
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-active");
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-active",
+      "policy.checked",
+      expect.objectContaining({
+        gate: "pre_input",
+        trigger: "orchestration.run.before",
+        outcome: "allowed",
+        patchKeys: [],
+      }),
+    );
+  });
+
+  it("records blocked run policy gates before surfacing hook failures", async () => {
+    const activeRun: OrchestrationRun = {
+      ...buildRun(),
+      runId: "run-blocked",
+      durableRunId: "durable-blocked",
+      executionState: "worktree_ready",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-blocked",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          findActiveRunByPlan: vi.fn(() => activeRun),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({ blockedBy: { reason: "policy denied" } })),
+        enqueueAfterHooks: vi.fn(),
+      },
+    });
+    const runtime = createRuntimeDeps();
+
+    await expect(runOrchestrationPlan(host, runtime, "plan-1")).rejects.toThrow("policy denied");
+
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-blocked",
+      "policy.checked",
+      expect.objectContaining({
+        gate: "pre_input",
+        outcome: "blocked",
+        blockedReason: "policy denied",
+      }),
+    );
+    expect(host.resumeDurableRun).not.toHaveBeenCalled();
   });
 
   it("marks orchestration runs failed when worktree allocation fails", async () => {
@@ -664,6 +712,28 @@ describe("orchestration-lifecycle-service", () => {
       expect.objectContaining({
         trigger: "orchestration.phase.after",
         entityId: "run-1:phase-1",
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "policy.checked",
+      expect.objectContaining({
+        gate: "pre_phase",
+        trigger: "orchestration.phase.before",
+        phaseId: "phase-1",
+        outcome: "allowed",
+        approvalRequired: true,
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "policy.checked",
+      expect.objectContaining({
+        gate: "pre_output",
+        trigger: "orchestration.phase.after",
+        phaseId: "phase-1",
+        outcome: "allowed",
+        approvalRequired: true,
       }),
     );
     expect(host.publishRealtime).toHaveBeenCalledWith(
