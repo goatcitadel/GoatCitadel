@@ -351,16 +351,20 @@ export async function dispatchInboundWebhookMessage(
     });
   }
   if (!inboundAccess.allowed) {
+    const hasEmptyAllowlist = inboundAccess.reason === "allowlist_empty";
+    const hasInvalidConfig = inboundAccess.reason === "invalid_config";
     integrationWebhooks.recordDevDiagnostic?.({
       level: "warn",
       category: "channels",
-      event:
-        inboundAccess.reason === "allowlist_empty"
-          ? "channel.inbound_allowlist_empty"
+      event: hasEmptyAllowlist
+        ? "channel.inbound_allowlist_empty"
+        : hasInvalidConfig
+          ? "channel.inbound_access_invalid_config"
           : "channel.sender_not_allowlisted",
-      message:
-        inboundAccess.reason === "allowlist_empty"
-          ? "Dropped an inbound channel message because allowlist mode is enabled with no permitted senders."
+      message: hasEmptyAllowlist
+        ? "Dropped an inbound channel message because allowlist mode is enabled with no permitted senders."
+        : hasInvalidConfig
+          ? "Dropped an inbound channel message because its inbound access config is malformed."
           : "Dropped an inbound channel message because the sender is not on the connection allowlist.",
       context: {
         channel: options.channel,

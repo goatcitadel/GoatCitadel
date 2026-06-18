@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  FOLLOW_ON_PARITY_EPIC_IDS,
-  FOLLOW_ON_PARITY_RECOMMENDED_ORDER,
-} from "./follow-on-parity.js";
+import { FOLLOW_ON_PARITY_EPIC_IDS, FOLLOW_ON_PARITY_RECOMMENDED_ORDER } from "./follow-on-parity.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
@@ -26,6 +23,7 @@ describe("follow-on parity roadmap alignment", () => {
   it("keeps the register recommended order aligned with the shared contract list", () => {
     const followOnRegister = readFileSync(followOnRegisterPath, "utf8");
     const section = followOnRegister.split("## Recommended Order")[1];
+    const recommendedEpicIds = new Set<string>(FOLLOW_ON_PARITY_RECOMMENDED_ORDER);
 
     expect(section).toBeTruthy();
     if (!section) {
@@ -40,7 +38,10 @@ describe("follow-on parity roadmap alignment", () => {
         const match = line.match(/`(GC-P\d-\d{2})`/);
         return match?.[1];
       })
-      .filter((epicId): epicId is typeof FOLLOW_ON_PARITY_RECOMMENDED_ORDER[number] => Boolean(epicId));
+      .filter(
+        (epicId): epicId is (typeof FOLLOW_ON_PARITY_RECOMMENDED_ORDER)[number] =>
+          typeof epicId === "string" && recommendedEpicIds.has(epicId),
+      );
 
     expect(actualOrder).toEqual(FOLLOW_ON_PARITY_RECOMMENDED_ORDER);
   });

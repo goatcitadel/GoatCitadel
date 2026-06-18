@@ -963,21 +963,19 @@ describe("PromptPacksWorkbenchPage", () => {
 
     expect(readNodeText(opsRenderer.root)).toContain("New runs request anthropic/claude-opus-5.");
 
-    const rowRunButton = opsRenderer.root
-      .findAllByType("button")
-      .find((node) => {
-        if (!String(node.props.className).includes("mc-pp-run-button")) {
-          return false;
-        }
-        // NativeButton wraps the host <button>, so climb past the primitive to the
-        // nearest row carrying a TEST-0x marker, then confirm it is the TEST-02 row
-        // (an unbounded "includes TEST-02" climb would match a multi-row container).
-        let row: ReactTestInstance | null = node.parent;
-        while (row && !/TEST-0\d/.test(readNodeText(row))) {
-          row = row.parent;
-        }
-        return row !== null && readNodeText(row).includes("TEST-02");
-      });
+    const rowRunButton = opsRenderer.root.findAllByType("button").find((node) => {
+      if (!String(node.props.className).includes("mc-pp-run-button")) {
+        return false;
+      }
+      // NativeButton wraps the host button, so climb past the primitive to the
+      // nearest row carrying a TEST-0x marker, then confirm it is the TEST-02 row
+      // (an unbounded "includes TEST-02" climb would match a multi-row container).
+      let row: ReactTestInstance | null = node.parent;
+      while (row && !/TEST-0\d/.test(readNodeText(row))) {
+        row = row.parent;
+      }
+      return row !== null && readNodeText(row).includes("TEST-02");
+    });
     expect(rowRunButton).toBeTruthy();
 
     promptPackMocks.runPromptPackTest.mockClear();

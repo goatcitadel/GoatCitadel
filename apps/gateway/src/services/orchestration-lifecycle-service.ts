@@ -332,7 +332,7 @@ function persistPolicyGateEvent(
       approvalRequired: input.approvalRequired ?? false,
     });
   } catch {
-    // Policy evidence is observability only; swallow persistence errors so run control flow is unchanged.
+    // Best-effort policy evidence is observability only; swallow persistence errors so run control flow is unchanged.
   }
 }
 

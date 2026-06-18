@@ -91,6 +91,45 @@ describe("integration webhook security routes", () => {
     );
   });
 
+  it("drops generic inbound before ingest when stored inbound access config is malformed", async () => {
+    const ingestChannelMessage = vi.fn();
+    const recordDevDiagnostic = vi.fn();
+    app = buildApp({
+      ingestChannelMessage,
+      recordDevDiagnostic,
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allow_list",
+          allowedSenders: ["user-owner"],
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const response = await signedInboundRequest("discord", {
+      eventId: "evt-invalid-config",
+      account: connectionId,
+      actorId: "user-intruder",
+      content: "hello",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      accepted: true,
+      ignored: true,
+      reason: "invalid_config",
+      inboundAccess: {
+        mode: "allowlist",
+        reason: "invalid_config",
+      },
+    });
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_access_invalid_config", category: "channels" }),
+    );
+  });
+
   it("rejects generic inbound when the HMAC signature is missing or invalid", async () => {
     const ingestChannelMessage = vi.fn();
     app = buildApp({

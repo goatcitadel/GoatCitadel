@@ -1280,8 +1280,10 @@ function registerRealtimeCursorFlushListeners(): void {
     return;
   }
   realtimeCursorFlushListenersRegistered = true;
-  window.addEventListener("pagehide", flushRealtimeCursor);
-  if (typeof document === "undefined") {
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("pagehide", flushRealtimeCursor);
+  }
+  if (typeof document === "undefined" || typeof document.addEventListener !== "function") {
     return;
   }
   document.addEventListener("visibilitychange", () => {

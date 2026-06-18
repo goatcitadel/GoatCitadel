@@ -41,22 +41,23 @@ const VARIANT_CLASS: Record<NativeButtonVariant, string> = {
 
 export type NativeButtonProps = React.ComponentPropsWithoutRef<"button"> & {
   variant?: NativeButtonVariant;
-  /** Render the single child element (Radix Slot) instead of a `<button>` — e.g. an `<a>`. */
+  /** Render the single child element (Radix Slot) instead of a native button, e.g. an anchor. */
   asChild?: boolean;
 };
 
-export const NativeButton = React.forwardRef<HTMLButtonElement, NativeButtonProps>(
-  function NativeButton({ variant = "default", asChild = false, className, type, ...props }, ref) {
-    const Comp = asChild ? Slot : "button";
-    return (
-      <Comp
-        ref={ref}
-        data-variant={variant}
-        className={clsx(VARIANT_CLASS[variant], className)}
-        // Only a real <button> gets a default type; an asChild element supplies its own.
-        {...(asChild ? {} : { type: type ?? "button" })}
-        {...props}
-      />
-    );
-  },
-);
+export const NativeButton = React.forwardRef<HTMLButtonElement, NativeButtonProps>(function NativeButton(
+  { variant = "default", asChild = false, className, type, ...props },
+  ref,
+) {
+  const Comp = asChild ? Slot : "button";
+  return (
+    <Comp
+      ref={ref}
+      data-variant={variant}
+      className={clsx(VARIANT_CLASS[variant], className)}
+      // Only a native button gets a default type; an asChild element supplies its own.
+      {...(asChild ? {} : { type: type ?? "button" })}
+      {...props}
+    />
+  );
+});

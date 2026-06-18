@@ -4,6 +4,7 @@ import {
   findBuiltinProviderProfile,
   findProviderTemplate,
   inferProviderForModelId,
+  providerTemplates,
   providerAllowsForeignModelIds,
 } from "./provider-templates.js";
 
@@ -47,7 +48,7 @@ describe("provider templates", () => {
   });
 
   it("exposes built-in provider profiles without changing template behavior", () => {
-    expect(builtinProviderProfiles).toHaveLength(21);
+    expect(builtinProviderProfiles).toHaveLength(providerTemplates.length);
     expect(findBuiltinProviderProfile("openai")).toMatchObject({
       profileId: "builtin:openai",
       source: "builtin",

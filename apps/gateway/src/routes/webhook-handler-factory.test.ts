@@ -387,6 +387,52 @@ describe("webhook-handler-factory contract behavior", () => {
     );
   });
 
+  it("drops inbound messages before ingest when stored inbound access config is malformed", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const gateway = {
+      ingestChannelMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
+      recordDevDiagnostic,
+    };
+
+    const result = await dispatchInboundWebhookMessage(gateway as any, {
+      channel: "slack",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "slack:event-invalid-config",
+      eventType: "message",
+      bindingTarget: "C1",
+      inboundAccessConfig: { inboundAccessMode: "allow_list", allowedSenders: ["U-OWNER"] },
+      message: {
+        eventId: "event-invalid-config",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "C1",
+        actorId: "U-Intruder",
+        content: "hello",
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        ignored: true,
+        reason: "invalid_config",
+        inboundAccess: {
+          mode: "allowlist",
+          reason: "invalid_config",
+        },
+      }),
+    );
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_access_invalid_config", category: "channels" }),
+    );
+  });
+
   it("allows a listed sender through the allowlist using a case-insensitive trimmed match", async () => {
     const gateway = {
       ingestChannelMessage: vi.fn(async () => ({

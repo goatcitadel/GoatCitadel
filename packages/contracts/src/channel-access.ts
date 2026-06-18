@@ -41,6 +41,7 @@ export const ChannelInboundAccessConfigSchema = z
 export type ChannelInboundAccessConfig = z.infer<typeof ChannelInboundAccessConfigSchema>;
 export type ChannelInboundAccessMode = NonNullable<ChannelInboundAccessConfig["inboundAccessMode"]>;
 export type ChannelInboundAccessReason =
+  | "invalid_config"
   | "allowlist_match"
   | "allowlist_empty"
   | "sender_not_allowlisted"
@@ -60,7 +61,8 @@ export interface ChannelInboundAccessDecision {
  * Normalize a raw `allowedSenders` value (from an untrusted connection config
  * bag) into a clean, comparable allowlist: trims each entry, lowercases it,
  * drops blanks, and de-duplicates. Non-array / non-string-bearing inputs yield
- * an empty list, which the matcher treats as default-allow.
+ * an empty list; the full evaluator decides whether that means legacy-open or
+ * an explicitly empty allowlist.
  */
 export function resolveAllowedSenders(config: Record<string, unknown> | undefined): readonly string[] {
   const raw = config?.allowedSenders;
@@ -108,11 +110,21 @@ export function evaluateChannelInboundAccess(input: {
   actorId?: string;
   allowedSenders?: readonly string[];
 }): ChannelInboundAccessDecision {
-  const parsed = ChannelInboundAccessConfigSchema.safeParse(input.config ?? {});
-  const config = parsed.success ? parsed.data : {};
+  const rawConfig = input.config ?? {};
+  const parsed = ChannelInboundAccessConfigSchema.safeParse(rawConfig);
+  const config = parsed.success ? parsed.data : rawConfig;
   const allowedSenders = input.allowedSenders ?? resolveAllowedSenders(config);
   const candidate = input.actorId?.trim().toLowerCase();
   const configuredMode = readInboundAccessMode(config);
+
+  if (!parsed.success && hasInboundAccessFields(rawConfig)) {
+    return {
+      allowed: false,
+      mode: "allowlist",
+      reason: "invalid_config",
+      allowedSenders,
+    };
+  }
 
   if (configuredMode === "open_legacy") {
     return {
@@ -165,4 +177,11 @@ export function evaluateChannelInboundAccess(input: {
 function readInboundAccessMode(config: Record<string, unknown>): ChannelInboundAccessMode | undefined {
   const value = config.inboundAccessMode;
   return value === "allowlist" || value === "open_legacy" ? value : undefined;
+}
+
+function hasInboundAccessFields(config: Record<string, unknown>): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(config, "inboundAccessMode") ||
+    Object.prototype.hasOwnProperty.call(config, "allowedSenders")
+  );
 }

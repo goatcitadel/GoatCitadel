@@ -119,6 +119,28 @@ describe("connectors routes", () => {
       url: `/api/v1/connectors/enrollments/${enrollmentId}/health`,
     });
     expect(activeHealth.json()).toMatchObject({ status: "active", callable: true, blockers: [] });
+
+    const replayInvalidCompletion = await app.inject({
+      method: "POST",
+      url: `/api/v1/connectors/enrollments/${enrollmentId}/complete`,
+      payload: { signatureBase64: "not-valid" },
+    });
+    expect(replayInvalidCompletion.json()).toMatchObject({ status: "active" });
+    expect(replayInvalidCompletion.json().lastError).toBeUndefined();
+
+    const replayValidCompletion = await app.inject({
+      method: "POST",
+      url: `/api/v1/connectors/enrollments/${enrollmentId}/complete`,
+      payload: { signatureBase64 },
+    });
+    expect(replayValidCompletion.json()).toMatchObject({ status: "active" });
+    expect(replayValidCompletion.json().lastError).toBeUndefined();
+
+    const activeHealthAfterReplay = await app.inject({
+      method: "POST",
+      url: `/api/v1/connectors/enrollments/${enrollmentId}/health`,
+    });
+    expect(activeHealthAfterReplay.json()).toMatchObject({ status: "active", callable: true, blockers: [] });
   });
 
   it("expires unsigned connector challenges before completion", async () => {

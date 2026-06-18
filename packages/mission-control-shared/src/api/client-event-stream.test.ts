@@ -158,6 +158,7 @@ describe("client event stream", () => {
     });
     source.onmessage?.({ data: "{bad json" });
     expect(events).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(250);
     expect(window.localStorage.getItem("goatcitadel.events.cursor.v1")).toBe("7");
 
     source.emit("replay-gap", { oldestCursor: 10 });

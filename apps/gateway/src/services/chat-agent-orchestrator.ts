@@ -2065,12 +2065,21 @@ export class ChatAgentOrchestrator {
           const toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
           const toolCallProtocolIssues = inspectToolCallProtocolIssues(message, toolSchema.modelToCanonical);
           if (toolCallProtocolIssues.length > 0) {
+            const repairableIncompleteToolCall =
+              completionOutcome.status !== "complete" &&
+              toolCallProtocolIssues.every((issue) => issue.kind === "malformed_arguments");
             assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
             completionState = {
               ...completionState,
               status: "interrupted",
             };
-            finalFailure ??= buildChatTurnFailureRecord("unknown", assistantContent, "retry_narrower");
+            finalFailure ??= buildChatTurnFailureRecord(
+              "unknown",
+              repairableIncompleteToolCall
+                ? "The provider stopped before tool calls were fully assembled, so the tool phase was not executed."
+                : assistantContent,
+              repairableIncompleteToolCall ? "continue_from_partial" : "retry_narrower",
+            );
             break;
           }
           if (completionOutcome.status !== "complete" && toolCalls.length > 0) {

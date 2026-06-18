@@ -122,16 +122,20 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       if (!inboundAccess.allowed) {
+        const hasEmptyAllowlist = inboundAccess.reason === "allowlist_empty";
+        const hasInvalidConfig = inboundAccess.reason === "invalid_config";
         fastify.services.integrationWebhooks.recordDevDiagnostic?.({
           level: "warn",
           category: "channels",
-          event:
-            inboundAccess.reason === "allowlist_empty"
-              ? "channel.inbound_allowlist_empty"
+          event: hasEmptyAllowlist
+            ? "channel.inbound_allowlist_empty"
+            : hasInvalidConfig
+              ? "channel.inbound_access_invalid_config"
               : "channel.sender_not_allowlisted",
-          message:
-            inboundAccess.reason === "allowlist_empty"
-              ? "Dropped an inbound generic channel message because allowlist mode is enabled with no permitted senders."
+          message: hasEmptyAllowlist
+            ? "Dropped an inbound generic channel message because allowlist mode is enabled with no permitted senders."
+            : hasInvalidConfig
+              ? "Dropped an inbound generic channel message because its inbound access config is malformed."
               : "Dropped an inbound generic channel message because the sender is not on the connection allowlist.",
           context: {
             channel: params.data.channel,
