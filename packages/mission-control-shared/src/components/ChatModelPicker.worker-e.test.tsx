@@ -171,4 +171,30 @@ describe("ChatModelPicker", () => {
     expect(findText(rendered, "voice in · image gen")).toBe(true);
     expect(findText(rendered, "ready via live")).toBe(true);
   });
+
+  it("surfaces model probe warnings and stale catalog metadata", () => {
+    const renderer = create(
+      <ChatModelPicker
+        providers={[
+          {
+            providerId: "custom",
+            label: "Custom gateway",
+            models: ["custom-model"],
+            modelProbeState: "error",
+            modelProbeSource: "error_fallback",
+            modelProbeWarning: "401 Unauthorized",
+            modelRefreshStatus: "stale",
+          },
+        ]}
+        providerId="custom"
+        model="custom-model"
+        onChangeProvider={vi.fn()}
+        onChangeModel={vi.fn()}
+      />,
+    );
+
+    const rendered = renderer.toJSON();
+    expect(findText(rendered, "401 Unauthorized")).toBe(true);
+    expect(findText(rendered, "error via fallback after probe error · stale catalog")).toBe(true);
+  });
 });

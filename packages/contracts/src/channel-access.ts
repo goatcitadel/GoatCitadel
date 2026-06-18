@@ -5,12 +5,11 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 //
 // A per-connection sender allowlist for inbound channel messages (Slack,
-// WhatsApp, LINE, Nextcloud Talk, Telegram, Discord, ...). It is OPT-IN: an
-// unset or empty `allowedSenders` list allows every sender, preserving the
-// behavior of every existing install. When the list is non-empty, only the
-// listed sender identities (the inbound `actorId`) may start or continue an
-// agent session; all other senders are dropped before a session is bound or a
-// turn is dispatched.
+// WhatsApp, LINE, Nextcloud Talk, Telegram, Discord, ...). New connections
+// should set `inboundAccessMode: "allowlist"`, where an empty allowlist denies
+// inbound messages. Existing installs that do not have the mode keep the
+// legacy-open posture so upgrades do not strand operators, but callers get a
+// diagnostic warning they can surface in Settings/Ops.
 //
 // Matching is intentionally forgiving: entries and the inbound actor id are
 // trimmed and compared case-insensitively so operators do not have to worry
@@ -25,16 +24,37 @@ import { z } from "zod";
 export const ChannelInboundAccessConfigSchema = z
   .object({
     /**
+     * Explicit inbound trust posture for the connection. `allowlist` is the
+     * safe default for new connections. `open_legacy` preserves the old
+     * default-open behavior and should be shown as migration debt.
+     */
+    inboundAccessMode: z.enum(["allowlist", "open_legacy"]).optional(),
+    /**
      * Opt-in allowlist of sender identities permitted to open/continue a
-     * session on this connection. Unset or empty means "allow all senders"
-     * (default-allow). Entries are matched against the inbound `actorId`
-     * (trimmed, case-insensitive).
+     * session on this connection. Entries are matched against the inbound
+     * `actorId` (trimmed, case-insensitive).
      */
     allowedSenders: z.array(z.string()).optional(),
   })
   .passthrough();
 
 export type ChannelInboundAccessConfig = z.infer<typeof ChannelInboundAccessConfigSchema>;
+export type ChannelInboundAccessMode = NonNullable<ChannelInboundAccessConfig["inboundAccessMode"]>;
+export type ChannelInboundAccessReason =
+  | "allowlist_match"
+  | "allowlist_empty"
+  | "sender_not_allowlisted"
+  | "missing_actor"
+  | "legacy_open_unset"
+  | "legacy_open_explicit";
+
+export interface ChannelInboundAccessDecision {
+  allowed: boolean;
+  mode: ChannelInboundAccessMode;
+  reason: ChannelInboundAccessReason;
+  allowedSenders: readonly string[];
+  legacyWarning?: string;
+}
 
 /**
  * Normalize a raw `allowedSenders` value (from an untrusted connection config
@@ -77,4 +97,72 @@ export function isSenderAllowed(allowedSenders: readonly string[], actorId: stri
     return false;
   }
   return allowedSenders.includes(candidate);
+}
+
+/**
+ * Resolve the full inbound trust decision for a channel message. This is the
+ * migration-aware gate new callers should use instead of `isSenderAllowed`.
+ */
+export function evaluateChannelInboundAccess(input: {
+  config?: Record<string, unknown>;
+  actorId?: string;
+  allowedSenders?: readonly string[];
+}): ChannelInboundAccessDecision {
+  const parsed = ChannelInboundAccessConfigSchema.safeParse(input.config ?? {});
+  const config = parsed.success ? parsed.data : {};
+  const allowedSenders = input.allowedSenders ?? resolveAllowedSenders(config);
+  const candidate = input.actorId?.trim().toLowerCase();
+  const configuredMode = readInboundAccessMode(config);
+
+  if (configuredMode === "open_legacy") {
+    return {
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_explicit",
+      allowedSenders,
+      legacyWarning: "Connection explicitly permits all inbound senders through open_legacy mode.",
+    };
+  }
+
+  if (!configuredMode && allowedSenders.length === 0) {
+    return {
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_unset",
+      allowedSenders,
+      legacyWarning:
+        "Connection has no inboundAccessMode and no allowedSenders, so it is using legacy default-open inbound access.",
+    };
+  }
+
+  if (allowedSenders.length === 0) {
+    return {
+      allowed: false,
+      mode: "allowlist",
+      reason: "allowlist_empty",
+      allowedSenders,
+    };
+  }
+
+  if (!candidate) {
+    return {
+      allowed: false,
+      mode: "allowlist",
+      reason: "missing_actor",
+      allowedSenders,
+    };
+  }
+
+  const allowed = allowedSenders.includes(candidate);
+  return {
+    allowed,
+    mode: "allowlist",
+    reason: allowed ? "allowlist_match" : "sender_not_allowlisted",
+    allowedSenders,
+  };
+}
+
+function readInboundAccessMode(config: Record<string, unknown>): ChannelInboundAccessMode | undefined {
+  const value = config.inboundAccessMode;
+  return value === "allowlist" || value === "open_legacy" ? value : undefined;
 }

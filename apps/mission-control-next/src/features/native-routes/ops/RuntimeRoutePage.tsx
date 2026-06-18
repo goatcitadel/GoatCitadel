@@ -14,12 +14,24 @@ import {
   exportN8nWorkflowTemplate,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
-import { EmptyState, ErrorState, NativeButton, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
+import {
+  EmptyState,
+  ErrorState,
+  NativeButton,
+  StatusChip,
+  ThreePartChip,
+  type ChipTone,
+  type StatusChipTone,
+} from "../primitives";
 import {
   useOpsRuntimeSnapshot,
   type RuntimeSnapshotSourceStatus,
 } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
-import type { DaemonControlHandoff } from "@goatcitadel/mission-control-shared/api/types";
+import type {
+  DaemonControlHandoff,
+  DaemonRepairAction,
+  DaemonRuntimeDiagnostic,
+} from "@goatcitadel/mission-control-shared/api/types";
 import {
   getRouteReleaseScope,
   routeKicker,
@@ -300,6 +312,8 @@ export function RuntimeRoutePage({
     const daemonUptime = daemonRuntimeUnavailable
       ? "unavailable"
       : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus.uptimeSeconds ?? 0);
+    const daemonDiagnostics = readDaemonRuntimeDiagnostics(data);
+    const daemonRepairActions = readDaemonRepairActions(data);
     const latestBackup = data.health?.backups.latest;
     const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
     const memoryUsed = healthSourceUnavailable
@@ -869,6 +883,9 @@ export function RuntimeRoutePage({
                 <DaemonControlHandoffPanel handoff={daemonHandoff} />
               ) : !daemonControllable && data.daemon?.controlMessage ? (
                 <EmptyState size="compact" title={data.daemon.controlMessage} />
+              ) : null}
+              {daemonDiagnostics.length > 0 || daemonRepairActions.length > 0 ? (
+                <DaemonRecoveryPanel diagnostics={daemonDiagnostics} repairActions={daemonRepairActions} />
               ) : null}
               <div className="mc-next-runtime-actions">
                 <NativeButton
@@ -1701,6 +1718,68 @@ function DaemonControlHandoffPanel({ handoff }: { handoff: DaemonControlHandoff 
   );
 }
 
+function DaemonRecoveryPanel({
+  diagnostics,
+  repairActions,
+}: {
+  diagnostics: DaemonRuntimeDiagnostic[];
+  repairActions: DaemonRepairAction[];
+}) {
+  const visibleDiagnostics = diagnostics.slice(0, 4);
+  const visibleActions = repairActions.slice(0, 3);
+  return (
+    <div className="mc-next-runtime-handoff" role="note" aria-label="Gateway recovery diagnostics">
+      <div className="mc-next-runtime-handoff-heading">
+        <span>Recovery diagnostics</span>
+        <strong>Gateway startup and process ownership</strong>
+        <p>Repair actions are operator handoffs; unknown processes require owner proof before cleanup.</p>
+      </div>
+      <div className="mc-next-runtime-chip-row">
+        {visibleDiagnostics.map((item) => (
+          <StatusChip key={item.id} tone={toneForDaemonDiagnostic(item.severity)} title={item.detail}>
+            {item.title}
+          </StatusChip>
+        ))}
+      </div>
+      {visibleActions.length > 0 ? (
+        <div className="mc-next-runtime-handoff-commands" aria-label="Gateway repair actions">
+          {visibleActions.map((item) => (
+            <div key={item.id} className="mc-next-runtime-handoff-command">
+              <span>{item.label}</span>
+              {item.command ? <code>{item.command}</code> : null}
+              <p>
+                {item.description} {item.requiresOwnerProof ? "Owner proof required." : "No process kill required."}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function readDaemonRuntimeDiagnostics(data: OpsRuntimeData): DaemonRuntimeDiagnostic[] {
+  return data.daemon?.diagnostics ?? data.health?.daemonStatus.diagnostics ?? [];
+}
+
+function readDaemonRepairActions(data: OpsRuntimeData): DaemonRepairAction[] {
+  return data.daemon?.repairActions ?? data.health?.daemonStatus.repairActions ?? [];
+}
+
+function toneForDaemonDiagnostic(severity: DaemonRuntimeDiagnostic["severity"]): StatusChipTone {
+  switch (severity) {
+    case "critical":
+      return "critical";
+    case "warn":
+      return "warning";
+    case "pass":
+      return "success";
+    case "info":
+    default:
+      return "muted";
+  }
+}
+
 function toneForReviewLane(status: ReviewReadinessSummary["lanes"][number]["status"]) {
   if (status === "current") {
     return "success";
@@ -1786,7 +1865,10 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
 }
 
 export function humanizeEventLabel(value: string): string {
-  const words = value.split(/[_.\s]+/).filter(Boolean).join(" ");
+  const words = value
+    .split(/[_.\s]+/)
+    .filter(Boolean)
+    .join(" ");
   return words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 }
 

@@ -188,6 +188,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
         providerMessageId: record.providerMessageId,
         error: record.error,
         fallbackReason: record.fallbackReason,
+        deliveryDiagnostics: record.deliveryDiagnostics,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       }));

@@ -884,10 +884,41 @@ describe("CapabilitySystemService", () => {
       result: expect.objectContaining({
         runId: run.runId,
         status: "completed",
+        trustedCodeWriteVerification: expect.objectContaining({
+          mode: "trusted_code_artifact_hash_check",
+          claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox",
+          artifacts: expect.arrayContaining([
+            expect.objectContaining({
+              artifactKind: "source",
+              expectedSha256: run.codeHash,
+              actualSha256: run.codeHash,
+              verified: true,
+            }),
+            expect.objectContaining({
+              artifactKind: "wrapper_manifest",
+              expectedSha256: run.wrapperManifestArtifact.sha256,
+              verified: true,
+            }),
+            expect.objectContaining({
+              artifactKind: "policy_snapshot",
+              expectedSha256: run.policySnapshotArtifact.sha256,
+              verified: true,
+            }),
+          ]),
+          notes: expect.arrayContaining([expect.stringContaining("Does not claim hostile-code sandboxing")]),
+        }),
       }),
     });
     expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
       status: "completed",
+      trustedCodeWriteVerification: expect.objectContaining({
+        claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox",
+      }),
+      result: expect.objectContaining({
+        trustedCodeWriteVerification: expect.objectContaining({
+          mode: "trusted_code_artifact_hash_check",
+        }),
+      }),
     });
   });
 
@@ -3840,6 +3871,7 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           stderrPreview: input.stderrPreview,
           stdoutTruncated: input.stdoutTruncated,
           stderrTruncated: input.stderrTruncated,
+          trustedCodeWriteVerification: input.trustedCodeWriteVerification,
           result: input.result,
           error: input.error,
           errorCode: input.errorCode,

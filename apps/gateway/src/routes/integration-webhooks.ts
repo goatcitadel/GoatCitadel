@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import { registerLineWebhookRoutes } from "./integration-webhooks-line-routes.js";
 import { registerNextcloudTalkWebhookRoutes } from "./integration-webhooks-nextcloud-talk-routes.js";
 import { registerSlackWebhookRoutes } from "./integration-webhooks-slack-routes.js";
@@ -98,6 +99,59 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
       }
       if (parsed.data.account !== params.data.connectionId) {
         return reply.code(400).send({ error: "Inbound account must match integration connection" });
+      }
+
+      const inboundAccess = evaluateChannelInboundAccess({
+        config: connection.config,
+        actorId: parsed.data.actorId,
+      });
+      if (inboundAccess.legacyWarning) {
+        fastify.services.integrationWebhooks.recordDevDiagnostic?.({
+          level: "warn",
+          category: "channels",
+          event: "channel.inbound_access_legacy_open",
+          message: inboundAccess.legacyWarning,
+          context: {
+            channel: params.data.channel,
+            connectionId: params.data.connectionId,
+            actorId: parsed.data.actorId,
+            eventType: "generic-channel",
+            mode: inboundAccess.mode,
+            reason: inboundAccess.reason,
+          },
+        });
+      }
+      if (!inboundAccess.allowed) {
+        fastify.services.integrationWebhooks.recordDevDiagnostic?.({
+          level: "warn",
+          category: "channels",
+          event:
+            inboundAccess.reason === "allowlist_empty"
+              ? "channel.inbound_allowlist_empty"
+              : "channel.sender_not_allowlisted",
+          message:
+            inboundAccess.reason === "allowlist_empty"
+              ? "Dropped an inbound generic channel message because allowlist mode is enabled with no permitted senders."
+              : "Dropped an inbound generic channel message because the sender is not on the connection allowlist.",
+          context: {
+            channel: params.data.channel,
+            connectionId: params.data.connectionId,
+            actorId: parsed.data.actorId,
+            eventType: "generic-channel",
+            mode: inboundAccess.mode,
+            reason: inboundAccess.reason,
+            allowedSenderCount: inboundAccess.allowedSenders.length,
+          },
+        });
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          reason: inboundAccess.reason,
+          inboundAccess: {
+            mode: inboundAccess.mode,
+            reason: inboundAccess.reason,
+          },
+        });
       }
 
       try {

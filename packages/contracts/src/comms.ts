@@ -115,6 +115,26 @@ export interface ChannelActivityResult {
 
 export type ChannelDeliveryStatus = "sent" | "retrying" | "degraded" | "blocked" | "not_available";
 
+export type ChannelDeliveryChunkingMode = "none" | "unicode_safe";
+
+export interface ChannelDeliveryChunkPartDiagnostic {
+  partIndex: number;
+  codePointLength: number;
+  utf16Length: number;
+}
+
+export interface ChannelDeliveryChunkingDiagnostics {
+  mode: ChannelDeliveryChunkingMode;
+  originalCodePointLength: number;
+  partCount: number;
+  maxPartUtf16Length: number;
+  parts: ChannelDeliveryChunkPartDiagnostic[];
+}
+
+export interface ChannelDeliveryDiagnostics {
+  chunking?: ChannelDeliveryChunkingDiagnostics;
+}
+
 export interface GmailSendInput {
   connectionId: string;
   to: string[];
@@ -171,6 +191,7 @@ export interface CommsSendResult {
   target: string;
   error?: string;
   fallbackReason?: string;
+  deliveryDiagnostics?: ChannelDeliveryDiagnostics;
   createdAt: string;
   updatedAt: string;
 }

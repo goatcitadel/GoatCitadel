@@ -25,6 +25,10 @@ describe("DaemonRouteService", () => {
         lastCommandAt: "2026-05-14T11:59:00.000Z",
         supported: false,
         controllable: false,
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ id: "gateway_process_current", severity: "pass" }),
+          expect.objectContaining({ id: "requested_state_stopped_but_running", severity: "warn" }),
+        ]),
       }),
     );
     expect(service.getDaemonStatus().controlMessage).toContain("external service manager");
@@ -38,6 +42,99 @@ describe("DaemonRouteService", () => {
           expect.objectContaining({ command: "pnpm dev:gateway" }),
         ]),
       }),
+    );
+  });
+
+  it("surfaces stale PID and port-holder repair metadata without auto-killing unknown processes", () => {
+    const settings = fakeSettings();
+    settings.set("daemon_state_v1", {
+      state: "running",
+      lastPid: 9001,
+      port: 4317,
+      lastCommandAt: "2026-05-14T11:59:00.000Z",
+    });
+    const service = createDaemonRouteService({
+      systemSettings: settings,
+      runtime: {
+        pid: 42,
+        uptimeSeconds: 5,
+        host: "test-host",
+        platform: "win32",
+        env: {},
+        isProcessAlive: vi.fn(() => false),
+      },
+    });
+
+    const status = service.getDaemonStatus();
+
+    expect(status.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "daemon_stale_pid_record",
+          severity: "warn",
+          evidence: expect.objectContaining({ persistedPid: 9001, currentPid: 42, alive: false }),
+        }),
+        expect.objectContaining({
+          id: "gateway_port_inspection",
+          evidence: expect.objectContaining({
+            port: 4317,
+            command: expect.stringContaining("Get-NetTCPConnection"),
+          }),
+        }),
+      ]),
+    );
+    expect(status.repairActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "refresh_stale_daemon_pid_record",
+          autoRunAllowed: false,
+          requiresOwnerProof: false,
+        }),
+        expect.objectContaining({
+          id: "inspect_gateway_port_holder",
+          command: expect.stringContaining("Get-NetTCPConnection"),
+          autoRunAllowed: false,
+          requiresOwnerProof: true,
+        }),
+      ]),
+    );
+  });
+
+  it("requires owner proof before touching a persisted PID that is still alive", () => {
+    const settings = fakeSettings();
+    settings.set("daemon_state_v1", { state: "running", pid: 7777 });
+    const service = createDaemonRouteService({
+      systemSettings: settings,
+      runtime: {
+        pid: 42,
+        uptimeSeconds: 5,
+        host: "test-host",
+        platform: "linux",
+        env: { GATEWAY_PORT: "3001" },
+        isProcessAlive: vi.fn(() => true),
+      },
+    });
+
+    const status = service.getDaemonStatus();
+
+    expect(status.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "daemon_persisted_pid_alive",
+          detail: expect.stringContaining("unknown"),
+          evidence: expect.objectContaining({ persistedPid: 7777, alive: true }),
+        }),
+      ]),
+    );
+    expect(status.repairActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "inspect_persisted_daemon_pid",
+          command: "ps -o pid,ppid,comm,args -p 7777",
+          autoRunAllowed: false,
+          requiresOwnerProof: true,
+        }),
+      ]),
     );
   });
 

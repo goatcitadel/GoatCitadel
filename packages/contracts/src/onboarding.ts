@@ -11,11 +11,33 @@ export interface OnboardingChecklistItem {
   detail?: string;
 }
 
+export type OnboardingFirstRunChecklistItemId =
+  | "provider_or_local_runtime"
+  | "first_chat"
+  | "first_cowork"
+  | "first_code"
+  | "run_detail";
+
+export interface OnboardingFirstRunProofRef {
+  kind: "route" | "verification_lane" | "runtime_evidence";
+  label: string;
+  ref: string;
+}
+
+export interface OnboardingFirstRunChecklistItem {
+  id: OnboardingFirstRunChecklistItemId;
+  label: string;
+  status: OnboardingChecklistStatus;
+  detail: string;
+  proofRefs: OnboardingFirstRunProofRef[];
+}
+
 export interface OnboardingState {
   completed: boolean;
   completedAt?: string;
   completedBy?: string;
   checklist: OnboardingChecklistItem[];
+  firstRunChecklist?: OnboardingFirstRunChecklistItem[];
   settings: {
     toolApprovalMode: ToolApprovalMode;
     defaultToolProfile: string;

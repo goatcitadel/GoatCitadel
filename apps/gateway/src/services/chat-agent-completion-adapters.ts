@@ -8,6 +8,20 @@ export interface ParsedToolCall {
   readonly rawArguments: string;
 }
 
+export type ToolCallProtocolIssueKind =
+  | "missing_function"
+  | "missing_name"
+  | "unsupported_name"
+  | "malformed_arguments"
+  | "non_object_arguments";
+
+export interface ToolCallProtocolIssue {
+  readonly id: string;
+  readonly kind: ToolCallProtocolIssueKind;
+  readonly rawName?: string;
+  readonly detail: string;
+}
+
 interface CompletionStreamToolCallState {
   id?: string;
   type?: string;
@@ -61,6 +75,75 @@ export function readToolCalls(
     return out;
   }
   return parseSerializedToolCalls(extractMessageContent(message), modelToCanonical);
+}
+
+export function inspectToolCallProtocolIssues(
+  message: Record<string, unknown>,
+  modelToCanonical: Map<string, string> = new Map<string, string>(),
+): ToolCallProtocolIssue[] {
+  const raw = message.tool_calls;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const issues: ToolCallProtocolIssue[] = [];
+  for (const value of raw) {
+    const toolCall = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const id = typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id : `tool-${randomUUID()}`;
+    const fn =
+      toolCall.function && typeof toolCall.function === "object"
+        ? (toolCall.function as Record<string, unknown>)
+        : undefined;
+    if (!fn) {
+      issues.push({
+        id,
+        kind: "missing_function",
+        detail: "Provider emitted a tool call without a function payload.",
+      });
+      continue;
+    }
+    const rawToolName = typeof fn.name === "string" ? fn.name.trim() : "";
+    if (!rawToolName) {
+      issues.push({
+        id,
+        kind: "missing_name",
+        detail: "Provider emitted a tool call with an empty function name.",
+      });
+      continue;
+    }
+    const toolName = resolveAllowedModelToolCallName(rawToolName, modelToCanonical);
+    if (!toolName) {
+      issues.push({
+        id,
+        kind: "unsupported_name",
+        rawName: rawToolName,
+        detail: `Provider requested unsupported or inactive tool ${JSON.stringify(rawToolName)}.`,
+      });
+    }
+
+    const rawArgs = fn.arguments;
+    if (typeof rawArgs !== "string" || !rawArgs.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(rawArgs) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        issues.push({
+          id,
+          kind: "non_object_arguments",
+          rawName: rawToolName,
+          detail: `Provider tool call ${JSON.stringify(rawToolName)} supplied non-object arguments.`,
+        });
+      }
+    } catch {
+      issues.push({
+        id,
+        kind: "malformed_arguments",
+        rawName: rawToolName,
+        detail: `Provider tool call ${JSON.stringify(rawToolName)} supplied malformed JSON arguments.`,
+      });
+    }
+  }
+  return issues;
 }
 
 export function parseSerializedToolCalls(content: string, modelToCanonical: Map<string, string>): ParsedToolCall[] {

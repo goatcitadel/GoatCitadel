@@ -1,4 +1,5 @@
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
+import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type {
   ChannelProbeReport,
   ConnectorDiagnosticReport,
@@ -22,6 +23,8 @@ import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
+
+const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
 
 export interface IntegrationDiagnosticsPort {
   readonly config: {
@@ -131,7 +134,8 @@ export function buildIntegrationConnectionChecks(
     checks.push({
       key: "global_allowlist_wildcard",
       status: "warn",
-      message: "Global network allowlist contains '*'. This enables outbound connections to all public hosts, but local/private addresses remain protected by sandbox guards.",
+      message:
+        "Global network allowlist contains '*'. This enables outbound connections to all public hosts, but local/private addresses remain protected by sandbox guards.",
     });
   }
 
@@ -151,6 +155,7 @@ export function buildIntegrationConnectionChecks(
     });
     if (channelCapabilities) {
       checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
+      checks.push(...buildChannelInboundAccessDiagnosticChecks(connection.key, config, channelCapabilities));
     }
     switch (connection.key) {
       case "slack":
@@ -430,6 +435,46 @@ export function buildIntegrationConnectionChecks(
   }
 
   return checks;
+}
+
+function buildChannelInboundAccessDiagnosticChecks(
+  channelKey: string,
+  config: Record<string, unknown>,
+  channelCapabilities: ReturnType<typeof describeChannelCapabilities>,
+): ConnectorDiagnosticReport["checks"] {
+  if (!GENERIC_ALLOWLIST_INBOUND_CHANNELS.has(channelKey)) {
+    return [];
+  }
+  if (!channelCapabilities.inboundModes.some((mode) => mode !== "none")) {
+    return [];
+  }
+  const decision = evaluateChannelInboundAccess({ config });
+  if (decision.legacyWarning) {
+    return [
+      {
+        key: "inbound_access_legacy_open",
+        status: "warn",
+        message: decision.legacyWarning,
+      },
+    ];
+  }
+  if (decision.mode === "allowlist" && decision.allowedSenders.length === 0) {
+    return [
+      {
+        key: "inbound_access_allowlist_empty",
+        status: "warn",
+        message:
+          "Inbound allowlist mode is enabled, but no allowedSenders are configured. Inbound messages will be dropped until a sender is added.",
+      },
+    ];
+  }
+  return [
+    {
+      key: "inbound_access",
+      status: "pass",
+      message: `Inbound allowlist mode is active with ${decision.allowedSenders.length} permitted sender${decision.allowedSenders.length === 1 ? "" : "s"}.`,
+    },
+  ];
 }
 
 export async function runIntegrationConnectionLiveChecks(

@@ -313,6 +313,31 @@ export interface CodeModeAiderAdapterResultEnvelope {
   };
 }
 
+export type CodeModeTrustedCodeWriteVerificationArtifactKind =
+  | "source"
+  | "wrapper_manifest"
+  | "policy_snapshot"
+  | "stdout"
+  | "stderr";
+
+export interface CodeModeTrustedCodeWriteVerificationArtifact {
+  artifactKind: CodeModeTrustedCodeWriteVerificationArtifactKind;
+  artifactId: string;
+  relPath: string;
+  expectedSha256: string;
+  actualSha256: string;
+  verified: boolean;
+  bytes?: number;
+}
+
+export interface CodeModeTrustedCodeWriteVerification {
+  mode: "trusted_code_artifact_hash_check";
+  claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox";
+  verifiedAt: string;
+  artifacts: CodeModeTrustedCodeWriteVerificationArtifact[];
+  notes: string[];
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
@@ -345,6 +370,7 @@ export interface CodeModeRunRecord {
   stderrPreview?: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  trustedCodeWriteVerification?: CodeModeTrustedCodeWriteVerification;
   result?: Record<string, unknown>;
   error?: string;
   errorCode?: string;

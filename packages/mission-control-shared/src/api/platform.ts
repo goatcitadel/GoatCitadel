@@ -55,7 +55,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type {
   LlmChatCompletionResponse,
-  DaemonControlHandoff,
+  DaemonStatusResponse,
   MeshLeaseRecord,
   MeshNodeRecord,
   MeshReplicationOffsetRecord,
@@ -664,32 +664,8 @@ export async function fetchLlamaCppAdvisor(input: LlamaCppAdvisorRequest): Promi
   });
 }
 
-export async function fetchDaemonStatus(): Promise<{
-  running: boolean;
-  pid: number;
-  uptimeSeconds: number;
-  host: string;
-  state: "running" | "stopped";
-  lastCommandAt?: string;
-  requestedState?: "running" | "stopped";
-  supported: boolean;
-  controllable: boolean;
-  controlMessage: string;
-  controlHandoff?: DaemonControlHandoff;
-}> {
-  return request<{
-    running: boolean;
-    pid: number;
-    uptimeSeconds: number;
-    host: string;
-    state: "running" | "stopped";
-    lastCommandAt?: string;
-    requestedState?: "running" | "stopped";
-    supported: boolean;
-    controllable: boolean;
-    controlMessage: string;
-    controlHandoff?: DaemonControlHandoff;
-  }>("/api/v1/daemon/status");
+export async function fetchDaemonStatus(): Promise<DaemonStatusResponse> {
+  return request<DaemonStatusResponse>("/api/v1/daemon/status");
 }
 
 export async function startDaemon(): Promise<{

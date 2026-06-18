@@ -506,6 +506,18 @@ const mocks = vi.hoisted(() => ({
         detail: "Gateway is reachable.",
       },
     ],
+    firstRunChecklist: [
+      {
+        id: "provider_or_local_runtime",
+        label: "Provider or local runtime setup",
+        status: "complete",
+        detail: "OpenAI is ready with gpt-5.4-mini.",
+        proofRefs: [
+          { kind: "route", label: "Providers", ref: "/settings/providers" },
+          { kind: "verification_lane", label: "Install verification", ref: "scripts/verify-install.mjs" },
+        ],
+      },
+    ],
     settings: {
       defaultToolProfile: "standard",
       budgetMode: "balanced",
@@ -1221,6 +1233,18 @@ beforeEach(async () => {
         label: "Runtime ready",
         status: "complete",
         detail: "Gateway is reachable.",
+      },
+    ],
+    firstRunChecklist: [
+      {
+        id: "provider_or_local_runtime",
+        label: "Provider or local runtime setup",
+        status: "complete",
+        detail: "OpenAI is ready with gpt-5.4-mini.",
+        proofRefs: [
+          { kind: "route", label: "Providers", ref: "/settings/providers" },
+          { kind: "verification_lane", label: "Install verification", ref: "scripts/verify-install.mjs" },
+        ],
       },
     ],
     settings: {
@@ -2347,6 +2371,8 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Ecosystem proof lanes");
     expect(text).toContain("Voice Wake / Talk Mode");
     expect(text).toContain("Provider configured");
+    expect(text).toContain("Provider or local runtime setup");
+    expect(text).toContain("Install verification");
     expect(text).toContain("Apply first-run defaults");
     expect(text).toContain("Tool profile");
     expect(text).toContain("Balanced default for normal local work");
@@ -2420,6 +2446,7 @@ describe("SettingsNativePage providers", () => {
         { id: "llm", label: "Provider configured", status: "needs_input", detail: "Select an active provider." },
         { id: "runtime", label: "Runtime ready", status: "complete", detail: "Gateway is reachable." },
       ],
+      firstRunChecklist: [],
       settings: {
         defaultToolProfile: "standard",
         budgetMode: "balanced",

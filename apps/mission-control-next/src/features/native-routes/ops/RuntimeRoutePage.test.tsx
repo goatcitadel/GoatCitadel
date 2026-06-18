@@ -181,6 +181,14 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                       supported: true,
                       controllable: true,
                       controlMessage: "ok",
+                      diagnostics: [
+                        {
+                          id: "gateway_process_current",
+                          title: "Current Gateway process is observable",
+                          severity: "pass",
+                          detail: "Gateway is serving Mission Control from PID 42.",
+                        },
+                      ],
                     },
                     daemonLogs: { items: [] },
                     costs: {
@@ -246,6 +254,25 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                     supported: true,
                     controllable: true,
                     controlMessage: "ok",
+                    diagnostics: [
+                      {
+                        id: "daemon_stale_pid_record",
+                        title: "Persisted daemon PID is stale",
+                        severity: "warn",
+                        detail: "A saved daemon PID differs from the current Gateway process.",
+                      },
+                    ],
+                    repairActions: [
+                      {
+                        id: "inspect_gateway_port_holder",
+                        label: "Inspect Gateway port holder",
+                        severity: "info",
+                        description: "Show the process currently holding the configured Gateway port.",
+                        command: "Get-NetTCPConnection -LocalPort 3001",
+                        autoRunAllowed: false,
+                        requiresOwnerProof: true,
+                      },
+                    ],
                   }
                 : runtimeSnapshotOverrides.daemon,
             backups: [],
@@ -411,6 +438,9 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Daemon running");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
+    expect(markup).toContain("Recovery diagnostics");
+    expect(markup).toContain("Persisted daemon PID is stale");
+    expect(markup).toContain("Inspect Gateway port holder");
     expect(markup).toContain("LLM runtime efficiency");
     expect(markup).toContain("Local engine fit");
     expect(markup).toContain("Eval evidence");

@@ -131,6 +131,7 @@ import type {
   CalendarListQuery,
   ChannelActivityInput,
   ChannelActivityResult,
+  ChannelDeliveryDiagnostics,
   ChannelReactInput,
   ChannelReplyInput,
   ChannelSendInput,
@@ -6349,12 +6350,12 @@ export class GatewayService {
 
   public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
     const connection = this.storage.integrationConnections.get(input.connectionId);
-    const idempotencyKey = buildChannelDeliveryIdempotencyKey(input);
+    const idempotencyKey = buildChannelDeliveryIdempotencyKey(input, connection.key);
     const queued = this.channelDeliveryRuntimeService.enqueue({
       connectionId: input.connectionId,
       channelKey: connection.key,
       target: input.target,
-      payload: buildChannelDeliveryPayload(input),
+      payload: buildChannelDeliveryPayload(input, connection.key),
       idempotencyKey,
     });
     this.scheduleChannelDeliveryDrain();
@@ -6371,6 +6372,7 @@ export class GatewayService {
       target: queued.target,
       ...(queued.providerMessageId ? { providerMessageId: queued.providerMessageId } : {}),
       ...(queued.error ? { error: queued.error, fallbackReason: queued.fallbackReason ?? queued.error } : {}),
+      ...(queued.deliveryDiagnostics ? { deliveryDiagnostics: queued.deliveryDiagnostics } : {}),
       createdAt: queued.createdAt,
       updatedAt: queued.updatedAt,
       ...(queued.nextAttemptAt ? { nextAttemptAt: queued.nextAttemptAt } : {}),
@@ -6427,6 +6429,7 @@ export class GatewayService {
         providerMessageId: record.providerMessageId,
         error: record.error,
         fallbackReason: record.fallbackReason,
+        deliveryDiagnostics: record.deliveryDiagnostics,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       });
@@ -6453,17 +6456,52 @@ export class GatewayService {
 
   private async sendQueuedChannelDelivery(
     input: ChannelDeliveryRuntimeSendInput,
-  ): Promise<{ providerMessageId?: string }> {
-    const result = await commsSendImpl(this.buildCommsHost(), channelDeliveryPayloadToSendInput(input));
-    const unwrapped = extractCommsSendResult(result);
-    if (unwrapped.status === "failed") {
-      throw new Error(
-        readOptionalString(unwrapped.error) ??
-          readOptionalString(unwrapped.fallbackReason) ??
-          "Channel delivery failed.",
-      );
+  ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
+    const baseInput = channelDeliveryPayloadToSendInput(input);
+    const messageParts = readChannelDeliveryMessageParts(input.payload);
+    if (messageParts.length <= 1) {
+      const result = await commsSendImpl(this.buildCommsHost(), baseInput);
+      const unwrapped = extractCommsSendResult(result);
+      if (unwrapped.status === "failed") {
+        throw new Error(
+          readOptionalString(unwrapped.error) ??
+            readOptionalString(unwrapped.fallbackReason) ??
+            "Channel delivery failed.",
+        );
+      }
+      return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
     }
-    return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
+
+    let providerMessageId: string | undefined;
+    for (let index = 0; index < messageParts.length; index += 1) {
+      const result = await commsSendImpl(this.buildCommsHost(), {
+        ...baseInput,
+        message: messageParts[index] ?? "",
+        attachments: index === 0 ? baseInput.attachments : undefined,
+        attachmentIds: index === 0 ? baseInput.attachmentIds : undefined,
+        interactiveActions: index === messageParts.length - 1 ? baseInput.interactiveActions : undefined,
+        replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
+        replyToPartIndex: index,
+      });
+      const unwrapped = extractCommsSendResult(result);
+      if (unwrapped.status === "failed") {
+        const reason =
+          readOptionalString(unwrapped.error) ??
+          readOptionalString(unwrapped.fallbackReason) ??
+          "Channel delivery chunk failed.";
+        throw new Error(
+          index > 0
+            ? `partial_channel_delivery_sent: ${index} of ${messageParts.length} chunks were sent before failure; manual retry required. ${reason}`
+            : reason,
+        );
+      }
+      providerMessageId = readOptionalString(unwrapped.providerMessageId) ?? providerMessageId;
+    }
+
+    return {
+      providerMessageId,
+      deliveryDiagnostics: readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
+    };
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -8960,12 +8998,27 @@ function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload
   return { ...payload };
 }
 
-function buildChannelDeliveryPayload(input: ChannelSendInput): Record<string, unknown> {
+const CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT = 3_900;
+const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
+  discord: 1_900,
+  telegram: 3_900,
+  whatsapp: 3_500,
+  line: 4_500,
+  "nextcloud-talk": 3_900,
+  slack: 32_000,
+};
+
+function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");
+  const chunkLimit = getChannelDeliveryChunkLimit(channelKey);
+  const messageParts = splitChannelOutboundMessage(sanitized.message, chunkLimit);
+  const deliveryDiagnostics = buildChannelDeliveryDiagnostics(sanitized.message, messageParts, chunkLimit);
   return {
     connectionId: input.connectionId,
     target: input.target,
-    message: sanitized.message,
+    message: messageParts[0] ?? "",
+    messageParts: messageParts.length > 1 ? messageParts : undefined,
+    deliveryDiagnostics,
     attachments: input.attachments,
     attachmentIds: input.attachmentIds,
     interactiveActions: input.interactiveActions,
@@ -8984,6 +9037,65 @@ function buildChannelDeliveryPayload(input: ChannelSendInput): Record<string, un
     permissionProfileId: input.permissionProfileId,
     localOperatorOverrideId: input.localOperatorOverrideId,
     surface: input.surface,
+  };
+}
+
+function getChannelDeliveryChunkLimit(channelKey: string): number {
+  return CHANNEL_DELIVERY_CHUNK_LIMITS[channelKey.toLowerCase()] ?? CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT;
+}
+
+function splitChannelOutboundMessage(message: string, maxPartUtf16Length: number): string[] {
+  if (!message) {
+    return [""];
+  }
+  if (message.length <= maxPartUtf16Length) {
+    return [message];
+  }
+  const parts = splitUnicodeGraphemes(message);
+  const chunks: string[] = [];
+  let current = "";
+  for (const part of parts) {
+    if (current && current.length + part.length > maxPartUtf16Length) {
+      chunks.push(current);
+      current = "";
+    }
+    current += part;
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function splitUnicodeGraphemes(message: string): string[] {
+  const SegmenterCtor = Intl.Segmenter;
+  if (typeof SegmenterCtor === "function") {
+    const segmenter = new SegmenterCtor(undefined, { granularity: "grapheme" });
+    return [...segmenter.segment(message)].map((item) => item.segment);
+  }
+  return Array.from(message);
+}
+
+function buildChannelDeliveryDiagnostics(
+  message: string,
+  messageParts: string[],
+  maxPartUtf16Length: number,
+): ChannelDeliveryDiagnostics | undefined {
+  if (messageParts.length <= 1) {
+    return undefined;
+  }
+  return {
+    chunking: {
+      mode: "unicode_safe",
+      originalCodePointLength: splitUnicodeGraphemes(message).length,
+      partCount: messageParts.length,
+      maxPartUtf16Length,
+      parts: messageParts.map((part, index) => ({
+        partIndex: index,
+        codePointLength: splitUnicodeGraphemes(part).length,
+        utf16Length: part.length,
+      })),
+    },
   };
 }
 
@@ -9018,6 +9130,20 @@ function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInpu
       typeof payload.localOperatorOverrideId === "string" ? payload.localOperatorOverrideId : undefined,
     surface: readPermissionSurface(payload.surface),
   };
+}
+
+function readChannelDeliveryMessageParts(payload: Record<string, unknown>): string[] {
+  if (!Array.isArray(payload.messageParts)) {
+    return [];
+  }
+  return payload.messageParts.filter((item): item is string => typeof item === "string");
+}
+
+function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnostics | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return value as ChannelDeliveryDiagnostics;
 }
 
 function readPermissionSurface(value: unknown): ChannelSendInput["surface"] | undefined {
@@ -9059,7 +9185,7 @@ function hasExplicitNonLoopbackAllowedOrigin(rawOrigins: string | undefined): bo
     });
 }
 
-function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput): string | undefined {
+function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput, channelKey: string): string | undefined {
   const explicit = (input as ChannelSendInput & { idempotencyKey?: string }).idempotencyKey?.trim();
   if (explicit) {
     return explicit;
@@ -9069,13 +9195,13 @@ function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput): string | u
   }
   if (input.sessionId?.trim() && input.replyToMessageId?.trim()) {
     const hash = createHash("sha256")
-      .update(JSON.stringify(buildChannelDeliveryPayload(input)))
+      .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))
       .digest("hex");
     return `channel-delivery:session:${input.sessionId.trim()}:${input.replyToMessageId.trim()}:${hash}`;
   }
   if (input.taskId?.trim()) {
     const hash = createHash("sha256")
-      .update(JSON.stringify(buildChannelDeliveryPayload(input)))
+      .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))
       .digest("hex");
     return `channel-delivery:task:${input.taskId.trim()}:${hash}`;
   }

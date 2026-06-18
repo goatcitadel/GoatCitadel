@@ -182,6 +182,8 @@ export class IntegrationChannelService {
   }
 }
 
+const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
+
 export function listIntegrationConnections(
   deps: IntegrationChannelPort,
   kind?: IntegrationKind,
@@ -328,6 +330,7 @@ export function createIntegrationConnection(
 
   const created = deps.storage.integrationConnections.create({
     ...input,
+    config: applyChannelInboundAccessDefaults(catalog.kind, catalog.key, input.config),
     catalogId: catalog.catalogId,
     kind: catalog.kind,
     key: catalog.key,
@@ -354,7 +357,14 @@ export function updateIntegrationConnection(
   connectionId: string,
   input: IntegrationConnectionUpdateInput,
 ): IntegrationConnection {
-  const updated = deps.storage.integrationConnections.update(connectionId, input);
+  const current = deps.storage.integrationConnections.get(connectionId);
+  const updated = deps.storage.integrationConnections.update(connectionId, {
+    ...input,
+    config:
+      input.config && current
+        ? applyChannelInboundAccessDefaults(current.kind, current.key, input.config, current.config)
+        : input.config,
+  });
   deps.publishRealtime("system", "integrations", {
     type: "integration_connection_updated",
     connectionId: updated.connectionId,
@@ -364,6 +374,33 @@ export function updateIntegrationConnection(
   });
   void deps.syncDiscordRuntime();
   return updated;
+}
+
+function applyChannelInboundAccessDefaults(
+  kind: IntegrationKind,
+  key: string,
+  config: Record<string, unknown> | undefined,
+  existingConfig?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!config) {
+    return config;
+  }
+  if (config.inboundAccessMode !== undefined) {
+    return config;
+  }
+  if (typeof existingConfig?.inboundAccessMode === "string") {
+    return {
+      ...config,
+      inboundAccessMode: existingConfig.inboundAccessMode,
+    };
+  }
+  if (kind !== "channel" || !GENERIC_ALLOWLIST_INBOUND_CHANNELS.has(key)) {
+    return config;
+  }
+  return {
+    ...config,
+    inboundAccessMode: "allowlist",
+  };
 }
 
 export function deleteIntegrationConnection(deps: IntegrationChannelPort, connectionId: string): boolean {

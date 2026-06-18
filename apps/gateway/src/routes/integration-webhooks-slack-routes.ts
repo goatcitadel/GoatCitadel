@@ -4,7 +4,6 @@ import {
   normalizeSlackWebhookPayload,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
-import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { readConfigSecret } from "./integration-webhooks-shared.js";
 import { asString } from "../services/webhook-json-helpers.js";
 import {
@@ -95,7 +94,7 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
-          allowedSenders: resolveAllowedSenders(connection.config),
+          inboundAccessConfig: connection.config,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

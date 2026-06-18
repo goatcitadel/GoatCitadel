@@ -33,6 +33,7 @@ import type {
   CodeModeRunRequest,
   CodeModeRunListOptions,
   CodeModeRunExecutionBackendRef,
+  CodeModeTrustedCodeWriteVerification,
   LoadedSkill,
   PendingApprovalAction,
   SkillLifecycleRecord,
@@ -1427,6 +1428,21 @@ export class CapabilitySystemService {
       }
 
       const finishedAt = new Date().toISOString();
+      const trustedCodeWriteVerification = buildTrustedCodeWriteVerification({
+        verifiedAt: finishedAt,
+        source: { artifact: finalRun.codeArtifact, expectedSha256: finalRun.codeHash, content: source },
+        wrapperManifest: {
+          artifact: finalRun.wrapperManifestArtifact,
+          content: wrapperManifestRaw,
+        },
+        policySnapshot: {
+          artifact: finalRun.policySnapshotArtifact,
+          content: policySnapshotRaw,
+        },
+        stdout: stdoutArtifact ? { artifact: stdoutArtifact, content: execution.stdout.text } : undefined,
+        stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
+      });
+      const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
       const terminalRun = this.options.storage.codeModeRuns.finishExecutionClaim({
         ...finalRun,
         status: execution.failed ? "failed" : "completed",
@@ -1437,7 +1453,8 @@ export class CapabilitySystemService {
         stderrPreview: toPreview(execution.stderr.text),
         stdoutTruncated: execution.stdout.truncated,
         stderrTruncated: execution.stderr.truncated,
-        result: execution.result,
+        trustedCodeWriteVerification,
+        result: executionResult,
         error: execution.error,
         errorCode: execution.errorCode,
         errorDetails: execution.errorDetails,
@@ -1499,6 +1516,7 @@ export class CapabilitySystemService {
           error: finalRun.error,
           errorCode: finalRun.errorCode,
           errorDetails: finalRun.errorDetails,
+          trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
           sandbox,
         },
       );
@@ -1511,6 +1529,7 @@ export class CapabilitySystemService {
           runId: finalRun.runId,
           status: finalRun.status,
           codeHash: finalRun.codeHash,
+          trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
           ...(finalRun.error ? { error: finalRun.error } : {}),
           ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
           ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
@@ -3082,6 +3101,65 @@ function resolveManagedRoot(rootDir: string, configuredPath: string): string {
 
 function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function buildTrustedCodeWriteVerification(input: {
+  verifiedAt: string;
+  source: TrustedCodeVerificationArtifactInput;
+  wrapperManifest: TrustedCodeVerificationArtifactInput;
+  policySnapshot: TrustedCodeVerificationArtifactInput;
+  stdout?: Omit<TrustedCodeVerificationArtifactInput, "expectedSha256">;
+  stderr?: Omit<TrustedCodeVerificationArtifactInput, "expectedSha256">;
+}): CodeModeTrustedCodeWriteVerification {
+  return {
+    mode: "trusted_code_artifact_hash_check",
+    claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox",
+    verifiedAt: input.verifiedAt,
+    artifacts: [
+      trustedCodeVerificationArtifact("source", input.source),
+      trustedCodeVerificationArtifact("wrapper_manifest", input.wrapperManifest),
+      trustedCodeVerificationArtifact("policy_snapshot", input.policySnapshot),
+      ...(input.stdout ? [trustedCodeVerificationArtifact("stdout", input.stdout)] : []),
+      ...(input.stderr ? [trustedCodeVerificationArtifact("stderr", input.stderr)] : []),
+    ],
+    notes: [
+      "Verifies managed artifact bytes and hashes used by trusted-code execution.",
+      "Does not claim hostile-code sandboxing or remove approval, policy, or path-jail requirements.",
+    ],
+  };
+}
+
+type TrustedCodeVerificationArtifactInput = {
+  artifact: CapabilityArtifactRecord;
+  content: string;
+  expectedSha256?: string;
+};
+
+function trustedCodeVerificationArtifact(
+  artifactKind: CodeModeTrustedCodeWriteVerification["artifacts"][number]["artifactKind"],
+  input: TrustedCodeVerificationArtifactInput,
+): CodeModeTrustedCodeWriteVerification["artifacts"][number] {
+  const actualSha256 = sha256Text(input.content);
+  const expectedSha256 = input.expectedSha256 ?? input.artifact.sha256;
+  return {
+    artifactKind,
+    artifactId: input.artifact.artifactId,
+    relPath: input.artifact.relPath,
+    expectedSha256,
+    actualSha256,
+    verified: actualSha256 === expectedSha256 && actualSha256 === input.artifact.sha256,
+    bytes: input.artifact.bytes,
+  };
+}
+
+function attachTrustedCodeWriteVerification(
+  result: Record<string, unknown> | undefined,
+  evidence: CodeModeTrustedCodeWriteVerification,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(result) ? result : {}),
+    trustedCodeWriteVerification: evidence,
+  };
 }
 
 function assertJsonValueHash(value: unknown, expectedSha256: string, label: string): void {

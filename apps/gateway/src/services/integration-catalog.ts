@@ -33,6 +33,22 @@ function localBridgeSchema(
   };
 }
 
+function inboundAccessFields(): IntegrationFieldSchema[] {
+  return [
+    select("inboundAccessMode", "Inbound Access Mode", ["allowlist", "open_legacy"], "allowlist", {
+      advanced: true,
+      description:
+        "Controls who can start inbound channel sessions. New connections default to allowlist; open_legacy preserves old default-open behavior.",
+    }),
+    json("allowedSenders", "Allowed Senders JSON", {
+      advanced: true,
+      defaultValue: "[]",
+      description:
+        'Sender actor ids permitted when allowlist mode is active. Example: ["U123", "operator@example.com"]',
+    }),
+  ];
+}
+
 const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
@@ -115,6 +131,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         secretRef: true,
         advanced: true,
       }),
+      ...inboundAccessFields(),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -315,6 +332,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "+15551234567",
         required: true,
       }),
+      ...inboundAccessFields(),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -415,6 +433,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         description:
           "Fallback room for manual sends and approval delivery. Regular inbound replies use the originating conversation automatically.",
       }),
+      ...inboundAccessFields(),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -439,6 +458,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "userId, groupId, or roomId",
         required: true,
       }),
+      ...inboundAccessFields(),
       bool("enabled", "Enabled", true),
     ],
   },

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ChannelInboundAccessConfigSchema, isSenderAllowed, resolveAllowedSenders } from "./channel-access.js";
+import {
+  ChannelInboundAccessConfigSchema,
+  evaluateChannelInboundAccess,
+  isSenderAllowed,
+  resolveAllowedSenders,
+} from "./channel-access.js";
 
 describe("ChannelInboundAccessConfigSchema", () => {
   it("treats allowedSenders as optional (opt-in, default unset)", () => {
@@ -9,11 +14,22 @@ describe("ChannelInboundAccessConfigSchema", () => {
 
   it("accepts a populated allowlist and preserves unrelated config via passthrough", () => {
     const result = ChannelInboundAccessConfigSchema.parse({
+      inboundAccessMode: "allowlist",
       allowedSenders: ["U123", "u456"],
       slackBotUserId: "BOT",
     });
+    expect(result.inboundAccessMode).toBe("allowlist");
     expect(result.allowedSenders).toEqual(["U123", "u456"]);
     expect((result as Record<string, unknown>).slackBotUserId).toBe("BOT");
+  });
+
+  it("accepts explicit legacy-open mode for migration compatibility", () => {
+    const result = ChannelInboundAccessConfigSchema.parse({ inboundAccessMode: "open_legacy" });
+    expect(result.inboundAccessMode).toBe("open_legacy");
+  });
+
+  it("rejects unknown inbound access modes", () => {
+    expect(() => ChannelInboundAccessConfigSchema.parse({ inboundAccessMode: "open" })).toThrow();
   });
 
   it("rejects a non-string entry in allowedSenders", () => {
@@ -56,5 +72,71 @@ describe("isSenderAllowed", () => {
     const allow = resolveAllowedSenders({ allowedSenders: ["U-Owner"] });
     expect(isSenderAllowed(allow, "")).toBe(false);
     expect(isSenderAllowed(allow, undefined)).toBe(false);
+  });
+});
+
+describe("evaluateChannelInboundAccess", () => {
+  it("preserves legacy-open behavior for old configs but returns migration evidence", () => {
+    expect(evaluateChannelInboundAccess({ config: {}, actorId: "anyone" })).toEqual({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_unset",
+      allowedSenders: [],
+      legacyWarning:
+        "Connection has no inboundAccessMode and no allowedSenders, so it is using legacy default-open inbound access.",
+    });
+  });
+
+  it("denies empty allowlists when the connection explicitly opts into allowlist mode", () => {
+    expect(evaluateChannelInboundAccess({ config: { inboundAccessMode: "allowlist" }, actorId: "U-Owner" })).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "allowlist_empty",
+      allowedSenders: [],
+    });
+  });
+
+  it("uses allowlist mode when old configs already contain allowed senders", () => {
+    expect(evaluateChannelInboundAccess({ config: { allowedSenders: ["U-Owner"] }, actorId: "u-owner" })).toEqual({
+      allowed: true,
+      mode: "allowlist",
+      reason: "allowlist_match",
+      allowedSenders: ["u-owner"],
+    });
+  });
+
+  it("rejects missing or unlisted actors under allowlist mode", () => {
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner"] },
+        actorId: undefined,
+      }),
+    ).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "missing_actor",
+      allowedSenders: ["u-owner"],
+    });
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner"] },
+        actorId: "U-Intruder",
+      }),
+    ).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "sender_not_allowlisted",
+      allowedSenders: ["u-owner"],
+    });
+  });
+
+  it("allows explicit open_legacy mode and marks it as migration debt", () => {
+    expect(evaluateChannelInboundAccess({ config: { inboundAccessMode: "open_legacy" } })).toEqual({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_explicit",
+      allowedSenders: [],
+      legacyWarning: "Connection explicitly permits all inbound senders through open_legacy mode.",
+    });
   });
 });

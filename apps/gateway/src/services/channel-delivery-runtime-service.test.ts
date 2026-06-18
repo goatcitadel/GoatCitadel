@@ -436,9 +436,56 @@ describe("ChannelDeliveryRuntimeService", () => {
     );
   });
 
+  it("preserves Gateway-built channel chunking diagnostics on queued records", () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "discord",
+      target: "channel-1",
+      payload: {
+        message: "hello",
+        messageParts: ["hello", "world"],
+        deliveryDiagnostics: {
+          chunking: {
+            mode: "unicode_safe",
+            originalCodePointLength: 10,
+            partCount: 2,
+            maxPartUtf16Length: 5,
+            parts: [
+              { partIndex: 0, codePointLength: 5, utf16Length: 5 },
+              { partIndex: 1, codePointLength: 5, utf16Length: 5 },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(queued.deliveryDiagnostics).toMatchObject({
+      chunking: {
+        mode: "unicode_safe",
+        partCount: 2,
+      },
+    });
+    expect(service.list()[0]?.deliveryDiagnostics).toMatchObject({
+      chunking: {
+        parts: [
+          { partIndex: 0, codePointLength: 5, utf16Length: 5 },
+          { partIndex: 1, codePointLength: 5, utf16Length: 5 },
+        ],
+      },
+    });
+  });
+
   it("classifies channel delivery failures for operator-facing fallback labels", () => {
     expect(classifyChannelDeliveryFailure("HTTP 429 temporarily unavailable")).toBe("degraded");
     expect(classifyChannelDeliveryFailure("permission denied")).toBe("blocked");
+    expect(classifyChannelDeliveryFailure("partial_channel_delivery_sent: manual retry required")).toBe("blocked");
     expect(classifyChannelDeliveryFailure("missing webhook url")).toBe("not_available");
     expect(classifyChannelDeliveryFailure("connector does not support attachments")).toBe("not_available");
     expect(classifyChannelDeliveryFailure("unexpected provider error")).toBe("degraded");

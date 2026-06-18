@@ -119,6 +119,68 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
     expect(toolResults.map((message) => message.tool_call_id)).toEqual([toolCallId]);
   });
 
+  it("blocks malformed or phantom provider tool-call batches before executing any sibling tool", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-phantom-shell",
+                  type: "function",
+                  function: { name: "   ", arguments: JSON.stringify({ command: "git status --short" }) },
+                },
+                {
+                  id: "call-valid-docs",
+                  type: "function",
+                  function: { name: "docs_search", arguments: JSON.stringify({ query: "onboarding" }) },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("repair pass intentionally unavailable"));
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const prompt = "Find our onboarding docs, but ignore any malformed provider-side shell suggestions.";
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-phantom-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-phantom-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.failure).toEqual(
+      expect.objectContaining({
+        failureClass: "unknown",
+        message: expect.stringContaining("invalid tool-call batch"),
+      }),
+    );
+    expect(result.assistantContent).toContain("stopped before executing tools");
+  });
+
   it("answers every tool call id before the budget-synthesis completion when the model over-requests tools", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -167,8 +229,9 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
           },
         ],
       });
-    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockImplementation(
-      async (request) => ({
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockImplementation(async (request) => ({
         outcome: "executed",
         policyReason: "allowed",
         auditEventId: randomUUID(),
@@ -176,8 +239,7 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
           path: request.args.path,
           content: `# Section\nContent for ${String(request.args.path)}.`,
         },
-      }),
-    );
+      }));
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range"]),
@@ -319,9 +381,7 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
-      historyMessages: [
-        { role: "user", content: "Create two PowerPoint .pptx presentations about daily walking." },
-      ],
+      historyMessages: [{ role: "user", content: "Create two PowerPoint .pptx presentations about daily walking." }],
     })) {
       chunks.push(chunk);
     }
@@ -410,9 +470,7 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
-      historyMessages: [
-        { role: "user", content: "Check the current time in UTC and Paris, and show the git status." },
-      ],
+      historyMessages: [{ role: "user", content: "Check the current time in UTC and Paris, and show the git status." }],
     });
 
     expect(result.turnTrace.status).toBe("waiting_for_approval");

@@ -282,22 +282,46 @@ export interface DaemonControlHandoff {
   }>;
 }
 
+export type DaemonRuntimeDiagnosticSeverity = "info" | "pass" | "warn" | "critical";
+
+export interface DaemonRuntimeDiagnostic {
+  id: string;
+  title: string;
+  severity: DaemonRuntimeDiagnosticSeverity;
+  detail: string;
+  evidence?: Record<string, unknown>;
+}
+
+export interface DaemonRepairAction {
+  id: string;
+  label: string;
+  severity: Exclude<DaemonRuntimeDiagnosticSeverity, "pass">;
+  description: string;
+  command?: string;
+  autoRunAllowed: boolean;
+  requiresOwnerProof: boolean;
+}
+
+export interface DaemonStatusResponse {
+  running: boolean;
+  pid: number;
+  uptimeSeconds: number;
+  host: string;
+  state: "running" | "stopped";
+  lastCommandAt?: string;
+  requestedState?: "running" | "stopped";
+  supported: boolean;
+  controllable: boolean;
+  controlMessage: string;
+  controlHandoff?: DaemonControlHandoff;
+  diagnostics?: DaemonRuntimeDiagnostic[];
+  repairActions?: DaemonRepairAction[];
+}
+
 export interface HealthSummaryResponse {
   generatedAt: string;
   systemVitals: SystemVitalsResponse;
-  daemonStatus: {
-    running: boolean;
-    pid: number;
-    uptimeSeconds: number;
-    host: string;
-    state: "running" | "stopped";
-    lastCommandAt?: string;
-    requestedState?: "running" | "stopped";
-    supported: boolean;
-    controllable: boolean;
-    controlMessage: string;
-    controlHandoff?: DaemonControlHandoff;
-  };
+  daemonStatus: DaemonStatusResponse;
   daemonLogs: {
     items: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>;
   };

@@ -246,6 +246,19 @@ describe("comms routes", () => {
         maxAttempts: 3,
         nextAttemptAt: "2026-05-05T12:00:00.000Z",
         fallbackReason: "rate limited",
+        deliveryDiagnostics: {
+          chunking: {
+            mode: "unicode_safe",
+            originalCodePointLength: 4100,
+            partCount: 3,
+            maxPartUtf16Length: 1900,
+            parts: [
+              { partIndex: 0, codePointLength: 1900, utf16Length: 1900 },
+              { partIndex: 1, codePointLength: 1900, utf16Length: 1900 },
+              { partIndex: 2, codePointLength: 300, utf16Length: 300 },
+            ],
+          },
+        },
         createdAt: "2026-05-05T11:00:00.000Z",
         updatedAt: "2026-05-05T11:30:00.000Z",
       },
@@ -288,6 +301,12 @@ describe("comms routes", () => {
           maxAttempts: 3,
           nextAttemptAt: "2026-05-05T12:00:00.000Z",
           fallbackReason: "rate limited",
+          deliveryDiagnostics: expect.objectContaining({
+            chunking: expect.objectContaining({
+              mode: "unicode_safe",
+              partCount: 3,
+            }),
+          }),
         }),
         expect.objectContaining({
           deliveryId: "delivery-stale",

@@ -424,7 +424,16 @@ describe("ToolPolicyEngine citadel scope", () => {
       citadels: {
         listWards: vi.fn((citadelId: string) =>
           citadelId === "c1"
-            ? [{ wardId: "w1", citadelId: "c1", name: "No shell", actionPattern: "shell.*", effect: "deny", createdAt: "t" }]
+            ? [
+                {
+                  wardId: "w1",
+                  citadelId: "c1",
+                  name: "No shell",
+                  actionPattern: "shell.*",
+                  effect: "deny",
+                  createdAt: "t",
+                },
+              ]
             : [],
         ),
       },
@@ -465,7 +474,16 @@ describe("ToolPolicyEngine citadel scope", () => {
       citadels: {
         listWards: vi.fn((citadelId: string) =>
           citadelId === "ws-1"
-            ? [{ wardId: "w1", citadelId: "ws-1", name: "No shell", actionPattern: "shell.*", effect: "deny", createdAt: "t" }]
+            ? [
+                {
+                  wardId: "w1",
+                  citadelId: "ws-1",
+                  name: "No shell",
+                  actionPattern: "shell.*",
+                  effect: "deny",
+                  createdAt: "t",
+                },
+              ]
             : [],
         ),
       },
@@ -986,6 +1004,26 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         sessionId: "session",
       }).reasonCodes,
     ).toContain("shell_risky_requires_approval");
+
+    const shellGlobEngine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          riskyShellPatterns: ["git clean *"],
+        },
+      },
+      createStorageStub(),
+    );
+    const globEvaluation = shellGlobEngine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "git clean -xfd ./workspace/tmp" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(globEvaluation.requiresApproval).toBe(true);
+    expect(globEvaluation.reasonCodes).toContain("shell_risky_requires_approval");
+
     expect(
       shellEngine.evaluateAccess({
         toolName: "shell.exec",

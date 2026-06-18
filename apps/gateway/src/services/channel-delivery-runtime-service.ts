@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ChannelDeliveryStatus, CommsSendResult } from "@goatcitadel/contracts";
+import type { ChannelDeliveryDiagnostics, ChannelDeliveryStatus, CommsSendResult } from "@goatcitadel/contracts";
 
 export type ChannelDeliveryRuntimeStatus = "queued" | "running" | "retrying" | "sent" | "failed" | "stale";
 
@@ -19,6 +19,7 @@ export interface ChannelDeliveryRuntimeRecord {
   providerMessageId?: string;
   error?: string;
   fallbackReason?: string;
+  deliveryDiagnostics?: ChannelDeliveryDiagnostics;
   createdAt: string;
   updatedAt: string;
 }
@@ -49,6 +50,7 @@ export interface ChannelDeliveryRuntimeRepository {
     baseBackoffMs?: number;
     maxBackoffMs?: number;
     staleReason?: string;
+    deliveryDiagnostics?: ChannelDeliveryDiagnostics;
   };
   findByIdempotencyKey?(idempotencyKey: string):
     | (CommsSendResult & {
@@ -63,6 +65,7 @@ export interface ChannelDeliveryRuntimeRepository {
         baseBackoffMs?: number;
         maxBackoffMs?: number;
         staleReason?: string;
+        deliveryDiagnostics?: ChannelDeliveryDiagnostics;
       })
     | undefined;
   listDue?(
@@ -81,6 +84,7 @@ export interface ChannelDeliveryRuntimeRepository {
       baseBackoffMs?: number;
       maxBackoffMs?: number;
       staleReason?: string;
+      deliveryDiagnostics?: ChannelDeliveryDiagnostics;
     }
   >;
   markAttempt?(deliveryId: string, attempts: number, updatedAt?: string): void;
@@ -117,6 +121,8 @@ export interface ChannelDeliveryRuntimeSendInput extends ChannelDeliveryRuntimeR
 
 export interface ChannelDeliveryRuntimeSendResult {
   providerMessageId?: string;
+  providerMessageIds?: string[];
+  deliveryDiagnostics?: ChannelDeliveryDiagnostics;
 }
 
 interface QueuedRuntimeDelivery {
@@ -193,6 +199,7 @@ export class ChannelDeliveryRuntimeService {
       attempts: queued.attempts ?? 0,
       maxAttempts: Math.max(1, input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
       nextAttemptAt: queued.nextAttemptAt,
+      deliveryDiagnostics: queued.deliveryDiagnostics ?? readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
       createdAt: queued.createdAt,
       updatedAt: queued.updatedAt,
     };
@@ -292,6 +299,7 @@ export class ChannelDeliveryRuntimeService {
       providerMessageId: persisted.providerMessageId,
       error: persisted.error,
       fallbackReason: persisted.fallbackReason,
+      deliveryDiagnostics: persisted.deliveryDiagnostics ?? readDeliveryDiagnostics(payload.deliveryDiagnostics),
       createdAt: persisted.createdAt,
       updatedAt: persisted.updatedAt,
     };
@@ -326,6 +334,7 @@ export class ChannelDeliveryRuntimeService {
       delivery.record.status = "sent";
       delivery.record.deliveryStatus = "sent";
       delivery.record.providerMessageId = result.providerMessageId;
+      delivery.record.deliveryDiagnostics = result.deliveryDiagnostics ?? delivery.record.deliveryDiagnostics;
       delivery.record.error = undefined;
       delivery.record.fallbackReason = undefined;
       delivery.record.nextAttemptAt = undefined;
@@ -401,8 +410,8 @@ export function classifyChannelDeliveryFailure(message: string): ChannelDelivery
     return "degraded";
   }
   if (
-    ["allowlist", "blocked", "unsafe", "forbidden", "unauthorized", "permission"].some((term) =>
-      normalized.includes(term),
+    ["allowlist", "blocked", "unsafe", "forbidden", "unauthorized", "permission", "manual retry required"].some(
+      (term) => normalized.includes(term),
     )
   ) {
     return "blocked";
@@ -460,6 +469,13 @@ function sortValue(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => [key, sortValue(entry)]),
   );
+}
+
+function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnostics | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return value as ChannelDeliveryDiagnostics;
 }
 
 function copyRecord(record: ChannelDeliveryRuntimeRecord): ChannelDeliveryRuntimeRecord {

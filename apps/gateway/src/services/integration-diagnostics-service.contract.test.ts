@@ -463,6 +463,61 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(missingRuntimeInput).toEqual({ checks: [] });
   });
 
+  it("surfaces inbound access migration posture for generic webhook channels", () => {
+    const host = createPort();
+
+    const legacyChecks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("slack", "channel", {
+        botToken: "slack-token",
+        signingSecret: "slack-secret",
+      }),
+    );
+    const emptyAllowlistChecks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("line", "channel", {
+        channelAccessToken: "line-token",
+        channelSecret: "line-secret",
+        inboundAccessMode: "allowlist",
+      }),
+    );
+    const configuredAllowlistChecks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("nextcloud-talk", "channel", {
+        baseUrl: "https://cloud.example.test",
+        token: "talk-token",
+        defaultRoomId: "ops",
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["operator"],
+      }),
+    );
+
+    expect(legacyChecks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "inbound_access_legacy_open",
+          status: "warn",
+        }),
+      ]),
+    );
+    expect(emptyAllowlistChecks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "inbound_access_allowlist_empty",
+          status: "warn",
+        }),
+      ]),
+    );
+    expect(configuredAllowlistChecks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "inbound_access",
+          status: "pass",
+        }),
+      ]),
+    );
+  });
+
   it("resolves Zalo User bridge authorization from explicit, bearer, and basic config sources", async () => {
     const host = createPort();
     const connection = createIntegrationConnection("zalouser", "channel", {

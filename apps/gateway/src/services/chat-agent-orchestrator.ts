@@ -55,7 +55,9 @@ import {
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
   extractMessageContent,
+  inspectToolCallProtocolIssues,
   readToolCalls,
+  type ToolCallProtocolIssue,
   toProviderToolFunctionName,
 } from "./chat-agent-completion-adapters.js";
 import {
@@ -2061,6 +2063,16 @@ export class ChatAgentOrchestrator {
           // turns every call must reach the policy layer so disallowed use is
           // denied visibly (and judged), not hidden from the trace.
           const toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
+          const toolCallProtocolIssues = inspectToolCallProtocolIssues(message, toolSchema.modelToCanonical);
+          if (toolCallProtocolIssues.length > 0) {
+            assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
+            completionState = {
+              ...completionState,
+              status: "interrupted",
+            };
+            finalFailure ??= buildChatTurnFailureRecord("unknown", assistantContent, "retry_narrower");
+            break;
+          }
           if (completionOutcome.status !== "complete" && toolCalls.length > 0) {
             if (
               !promptLabSynthesisOnly &&
@@ -4728,6 +4740,25 @@ function hasIncompleteToolCalls(message: Record<string, unknown>): boolean {
       return true;
     }
   });
+}
+
+function buildToolCallProtocolFailureMessage(issues: ToolCallProtocolIssue[]): string {
+  const firstIssue = issues[0];
+  const issueSummary = issues
+    .slice(0, 3)
+    .map((issue) => {
+      const rawName = issue.rawName ? ` (${issue.rawName})` : "";
+      return `${issue.kind}${rawName}`;
+    })
+    .join(", ");
+  return [
+    "The provider returned an invalid tool-call batch, so GoatCitadel stopped before executing tools.",
+    firstIssue?.detail ?? "Tool-call protocol validation failed.",
+    issueSummary ? `Detected: ${issueSummary}.` : undefined,
+    "Retry with a narrower request or switch providers if this repeats.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function finalizeTurnCompletionState(input: {

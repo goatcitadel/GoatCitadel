@@ -437,7 +437,12 @@ function LocalAiSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid>
-        <NativeCard density="compact" className="mc-next-settings-panel" title="Hardware readiness" subtitle="Read-only local scan and runtime detection.">
+        <NativeCard
+          density="compact"
+          className="mc-next-settings-panel"
+          title="Hardware readiness"
+          subtitle="Read-only local scan and runtime detection."
+        >
           <NativeMetricGrid
             items={[
               {
@@ -469,7 +474,9 @@ function LocalAiSection(_props: SettingsSectionProps) {
           />
         </NativeCard>
         <SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Model fit"
             subtitle="Conservative recommendations; no download starts without approval."
           >
@@ -492,7 +499,12 @@ function LocalAiSection(_props: SettingsSectionProps) {
               </button>
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel" title="Jobs and endpoints" subtitle="Side-effectful work remains approval-gated.">
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Jobs and endpoints"
+            subtitle="Side-effectful work remains approval-gated."
+          >
             <NativeMetricGrid
               items={[
                 { label: "Downloads", value: String(data?.readiness?.downloads.length ?? 0) },
@@ -551,7 +563,9 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Mission Control posture"
             subtitle="Core defaults and system posture at a glance."
             stats={[
@@ -597,7 +611,9 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
             workspaces={data.workspaces}
             onNavigate={(section) => navigate({ area: "settings", section, theme: route.theme })}
           />
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Setup path"
             subtitle="Begin with the configuration that unlocks useful work; keep deep controls available after that."
           >
@@ -621,7 +637,9 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               ]}
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Quick routes"
             subtitle="Jump straight into the settings surfaces that actually change behavior."
           >
@@ -695,7 +713,9 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               ]}
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Notifications and sounds"
             subtitle="Choose how GoatCitadel asks for attention when work completes, blocks, or waits on approval."
             stats={[
@@ -886,7 +906,9 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
           <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <EcosystemProofLanePanel route={route} navigate={navigate} />
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="First-run setup"
             subtitle="Configured readiness for the first trustworthy send."
             stats={[
@@ -902,6 +924,19 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 state: item.status === "complete" ? "complete" : item.status === "optional" ? "pending" : "active",
               }))}
             />
+            {data.firstRunChecklist?.length ? (
+              <SettingsActionList
+                items={data.firstRunChecklist.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.detail,
+                  meta: item.proofRefs.map((ref) => ref.label).join(" · "),
+                  actionLabel:
+                    item.status === "complete" ? "Ready" : item.status === "optional" ? "Optional" : "Do next",
+                }))}
+                maxHeight=""
+              />
+            ) : null}
             <SettingsActionList
               items={[
                 {
@@ -923,7 +958,9 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
               ]}
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Apply first-run defaults"
             subtitle="Set the minimum runtime defaults without duplicating advanced setup."
           >
@@ -1093,7 +1130,9 @@ function DemoStartPanel({
   const workspaceLabel = data?.workspace?.name ?? "Not created";
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Start Here"
       subtitle="Create a safe local demo workspace with sample Chat, Cowork, Code, and memory data."
       stats={[
@@ -1168,7 +1207,9 @@ function FirstOutcomePathPanel({
   const pathState = deriveFirstRunGovernedJobState(onboarding, demoState, firstRunEvidence);
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="First trusted outcome"
       subtitle="Follow one path from provider readiness to a proof-backed Chat, Cowork, or Code result."
       stats={[
@@ -1214,7 +1255,9 @@ function ProviderSmokeEvidencePanel({
   const nextItem = items.find((item) => item.state !== "complete") ?? items.at(-1);
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Provider smoke evidence"
       subtitle="Configured providers are not release proof until a live smoke lane records pass/fail evidence."
       stats={[
@@ -1269,7 +1312,9 @@ function SetupCenterPanel({
   const needsInputCount = items.filter((item) => item.state === "active").length;
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Setup Center"
       subtitle="One checklist for providers, local runtimes, channels, tools, database posture, and packaging readiness."
       stats={[
@@ -1321,7 +1366,9 @@ function EcosystemProofLanePanel({
   const items = deriveEcosystemProofLaneItems();
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Ecosystem proof lanes"
       subtitle="Follow-on setup order for ecosystem claims; blocked lanes stay explicit until a named proof lane passes."
       stats={[
@@ -1512,7 +1559,9 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
       </p>
       {data ? (
         <SettingsGrid variant="detail-wide">
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Personality catalog"
             subtitle="Built-in presets, custom overlays, and the global Chat default."
             scrollBody
@@ -1554,7 +1603,9 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
               maxHeight="min(48vh, 28rem)"
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={
               editorMode === "new" ? "New custom personality" : (selectedPersonality?.label ?? "Personality editor")
             }
@@ -2745,7 +2796,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid variant="detail-wide">
-        <NativeCard density="compact" className="mc-next-settings-panel"
+        <NativeCard
+          density="compact"
+          className="mc-next-settings-panel"
           title="Providers & Models"
           subtitle="Available providers, probe posture, and current catalog coverage."
           scrollBody
@@ -2790,7 +2843,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           />
         </NativeCard>
         <SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Active routing"
             subtitle="Change the provider/model pair Mission Control uses by default."
           >
@@ -2846,7 +2901,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
             stats={[
@@ -2905,7 +2962,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="OpenAI Codex ChatGPT login"
             subtitle="Connect the OpenAI Codex provider through ChatGPT OAuth. No API key needed."
             stats={[
@@ -3051,7 +3110,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               ) : null}
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedProvider?.label ?? "Provider detail"}
             subtitle="Credential posture, probe state, and read-only runtime trust signals."
           >
@@ -3211,7 +3272,12 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
             )}
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel" title="Provider editor" subtitle={editorHint}>
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Provider editor"
+            subtitle={editorHint}
+          >
             <SettingsFieldGrid>
               <SettingsField label="Provider id">
                 <input
@@ -3535,7 +3601,9 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Gateway access"
               subtitle="Change auth mode, loopback behavior, and optional credentials."
               stats={[
@@ -3627,7 +3695,12 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 <SettingsCodeBlock label="Install token preview">{installToken}</SettingsCodeBlock>
               ) : null}
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Current posture" subtitle="Readable auth state instead of a recycled general page.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Current posture"
+              subtitle="Readable auth state instead of a recycled general page."
+            >
               <NativeMetricGrid
                 items={[
                   {
@@ -3651,7 +3724,9 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 ]}
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Desktop/mobile continuity"
               subtitle="Trusted devices, desktop runtime state, and companion handoff boundaries."
               stats={[
@@ -3674,7 +3749,9 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
               />
             </NativeCard>
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Approved devices"
             subtitle="View and revoke device grants that can access the gateway."
             stats={[{ label: "Grants", value: String(data.grants.length) }]}
@@ -3885,7 +3962,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
           {data.llamaModelsWarning ? (
             <SettingsNotice notice={{ tone: "info", message: data.llamaModelsWarning }} />
           ) : null}
-          <NativeCard density="compact" className="mc-next-settings-panel" title="Runtime posture" subtitle="Providers, local runtimes, and attached systems.">
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Runtime posture"
+            subtitle="Providers, local runtimes, and attached systems."
+          >
             <NativeMetricGrid
               items={[
                 {
@@ -3912,7 +3994,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
             />
           </NativeCard>
           <SettingsGrid variant="balanced">
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Gateway daemon" subtitle="Control the background runtime serving Mission Control.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Gateway daemon"
+              subtitle="Control the background runtime serving Mission Control."
+            >
               <NativeMetricGrid
                 items={[
                   {
@@ -3957,7 +4044,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
               ) : null}
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel" title="llama.cpp runtime" subtitle="Configure and control the local llama.cpp runtime.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="llama.cpp runtime"
+              subtitle="Configure and control the local llama.cpp runtime."
+            >
               <SettingsFieldGrid>
                 <SettingsField label="Base URL">
                   <input
@@ -4093,7 +4185,9 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 ]}
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Local acceleration"
               subtitle="NPU sidecar support is retired from the shipped 1.0 runtime."
             >
@@ -4140,7 +4234,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 ]}
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Voice runtime" subtitle="Install or activate the local voice transcription runtime.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Voice runtime"
+              subtitle="Install or activate the local voice transcription runtime."
+            >
               <NativeMetricGrid
                 items={[
                   {
@@ -4332,7 +4431,12 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
       />
       <SettingsGrid variant="detail-wide">
         <SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel" title="Create workspace" subtitle="Add a new workspace before digging through the directory.">
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Create workspace"
+            subtitle="Add a new workspace before digging through the directory."
+          >
             <SettingsFieldGrid>
               <SettingsField label="Name">
                 <input
@@ -4363,7 +4467,9 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
               </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Workspace directory"
             subtitle="Switch between active and archived workspaces, then edit the selected one."
             scrollBody
@@ -4396,7 +4502,9 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
             />
           </NativeCard>
         </SettingsStack>
-        <NativeCard density="compact" className="mc-next-settings-panel"
+        <NativeCard
+          density="compact"
+          className="mc-next-settings-panel"
           title={selectedWorkspace?.name ?? "Workspace editor"}
           subtitle="Rename, describe, archive, restore, or make the selected workspace active."
         >
@@ -4743,7 +4851,12 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Create connection" subtitle="Create a new integration connection from the catalog.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Create connection"
+              subtitle="Create a new integration connection from the catalog."
+            >
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
                   <select
@@ -4812,7 +4925,9 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 </NativeButton>
               </SettingsButtonRow>
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Connected integrations"
               subtitle="Review live connections and jump into the selected one."
               scrollBody
@@ -4854,7 +4969,9 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
             />
             <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedConnection?.label ?? "Integration catalog"}
             subtitle={
               selectedConnection
@@ -5085,7 +5202,9 @@ function OperatorActionResultPanel({ result }: { result: IntegrationActionInvoke
 function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
   const warningCount = plugins.reduce((count, plugin) => count + (plugin.trustWarnings?.length ?? 0), 0);
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Plugin trust"
       subtitle="Installed plugin source, integrity, readiness, and dashboard theme truth."
       stats={[
@@ -5152,7 +5271,9 @@ function ExternalSideEffectLedgerPanel({
   const health = summary ?? buildExternalSideEffectFallbackSummary(runs);
 
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="External side effects"
       subtitle="Read-only ledger for integration writebacks that crossed, or prepared to cross, an external boundary."
       stats={[
@@ -5418,7 +5539,9 @@ function GoogleMeetStatusPanel({
   sessions: GoogleMeetSessionRecord[];
 }) {
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Google Meet voice"
       subtitle="Realtime meeting voice remains blocked until OAuth, provider, browser, audio, and user-start prerequisites pass."
       stats={[
@@ -5746,7 +5869,9 @@ function ChannelsSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Channel definitions"
               subtitle="Available guided setup definitions for supported channel integrations."
               scrollBody
@@ -5800,7 +5925,9 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 maxHeight="min(34vh, 18rem)"
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Drafts"
               subtitle="Saved setup drafts, readiness checks, trial sends, and finalization."
             >
@@ -5820,7 +5947,9 @@ function ChannelsSection(_props: SettingsSectionProps) {
               />
             </NativeCard>
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"}
             subtitle="Edit the draft payload, then check readiness, send a trial message, and finalize it."
           >
@@ -6074,7 +6203,9 @@ function McpSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="MCP servers"
               subtitle="Connected and disconnected MCP servers available to the operator."
               scrollBody
@@ -6100,7 +6231,9 @@ function McpSection(_props: SettingsSectionProps) {
                 maxHeight="min(38vh, 22rem)"
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Create MCP server"
               subtitle="Set up a local stdio MCP server or use a runtime-supported template."
             >
@@ -6186,7 +6319,9 @@ function McpSection(_props: SettingsSectionProps) {
                 />
               ) : null}
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Server mode preview"
               subtitle="Operator-authenticated export posture for agents that may call GoatCitadel in the future."
             >
@@ -6226,7 +6361,9 @@ function McpSection(_props: SettingsSectionProps) {
                 emptyLabel="No callable capability descriptors are exported."
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Remote MCP preview"
               subtitle="Read-only posture for http/sse MCP records, runtime support, auth, trust, and invocation state."
             >
@@ -6287,7 +6424,9 @@ function McpSection(_props: SettingsSectionProps) {
               />
             </NativeCard>
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedServer?.label ?? "Server detail"}
             subtitle="Edit, connect, diagnose, or delete the selected MCP server."
             scrollBody
@@ -6806,7 +6945,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Permission profiles"
             subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
             stats={[
@@ -6828,7 +6969,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
             />
           </NativeCard>
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title={selectedProfile?.label ?? "Profile"}
               subtitle={selectedProfile ? describePermissionProfile(selectedProfile) : "Select a profile to activate."}
               stats={[
@@ -6912,7 +7055,12 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               )}
             </NativeCard>
             {selectedProfile && !selectedProfile.builtin ? (
-              <NativeCard density="compact" className="mc-next-settings-panel" title="Edit custom profile" subtitle="Update or archive the selected profile.">
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Edit custom profile"
+                subtitle="Update or archive the selected profile."
+              >
                 <PermissionProfileDraftFields
                   draft={profileEditDraft}
                   bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
@@ -6933,7 +7081,12 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </SettingsButtonRow>
               </NativeCard>
             ) : null}
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Custom profile" subtitle="Create a workspace-scoped profile for your own workflow.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Custom profile"
+              subtitle="Create a workspace-scoped profile for your own workflow."
+            >
               <PermissionProfileDraftFields
                 draft={profileDraft}
                 bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
@@ -6947,7 +7100,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               </SettingsButtonRow>
             </NativeCard>
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Active defaults"
             subtitle="Effective profile and temporary local override state by surface."
           >
@@ -6965,7 +7120,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               emptyLabel="No effective profile state returned."
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Local Operator Override"
             subtitle={
               isRemoteHardened
@@ -7073,7 +7230,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Autonomous activation grants"
             subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
             stats={[
@@ -7362,7 +7521,9 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Global tool prompt mode"
             subtitle="Base prompt behavior for otherwise-allowed tools when no active permission profile overrides it."
             stats={[
@@ -7408,7 +7569,9 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
             </SettingsButtonRow>
           </NativeCard>
           <SettingsStack>
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="Tool catalog"
               subtitle="Review the full catalog instead of a tiny first-page slice."
               scrollBody
@@ -7439,7 +7602,12 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 maxHeight="min(48vh, 28rem)"
               />
             </NativeCard>
-            <NativeCard density="compact" className="mc-next-settings-panel" title="Create tool grant" subtitle="Create a scoped policy grant for the selected tool.">
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Create tool grant"
+              subtitle="Create a scoped policy grant for the selected tool."
+            >
               <SettingsFieldGrid>
                 <SettingsField label="Tool pattern">
                   <input
@@ -7524,7 +7692,9 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               </SettingsButtonRow>
             </NativeCard>
           </SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedTool?.toolName ?? "Tool detail"}
             subtitle="Selected catalog entry and tool grants."
             scrollBody
@@ -7937,7 +8107,9 @@ function AddonsSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           {productPosture ? (
-            <NativeCard density="compact" className="mc-next-settings-panel"
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
               title="1.0 add-on posture"
               subtitle="Experimental local extensions with operator-reviewed install and launch controls."
               stats={productPosture.stats}
@@ -7955,7 +8127,9 @@ function AddonsSection(_props: SettingsSectionProps) {
               />
             </NativeCard>
           ) : null}
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Add-on catalog"
             subtitle="Experimental add-on runtimes and their current local install posture."
             scrollBody
@@ -7986,7 +8160,9 @@ function AddonsSection(_props: SettingsSectionProps) {
               maxHeight="min(42vh, 24rem)"
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title={selectedAddon?.label ?? "Add-on detail"}
             subtitle="Operator-reviewed lifecycle controls for the selected local add-on."
             scrollBody
@@ -8129,7 +8305,9 @@ function AddonsSection(_props: SettingsSectionProps) {
               <SettingsEmptyState label="Choose an add-on from the catalog." />
             )}
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Capability packs"
             subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
             scrollBody
@@ -8265,7 +8443,9 @@ function AddonsSection(_props: SettingsSectionProps) {
               maxHeight=""
             />
           </NativeCard>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Portable pack"
             subtitle="Local-file manifests are staged for review; skills and add-ons are not auto-enabled."
             scrollBody
@@ -8353,7 +8533,12 @@ function AddonsSection(_props: SettingsSectionProps) {
 
 function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
   return (
-    <NativeCard density="compact" className="mc-next-settings-panel" title="Diagnostics" subtitle={`Status: ${report.status}`}>
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title="Diagnostics"
+      subtitle={`Status: ${report.status}`}
+    >
       <SettingsActionList
         items={report.checks.map((check) => ({
           label: check.key,

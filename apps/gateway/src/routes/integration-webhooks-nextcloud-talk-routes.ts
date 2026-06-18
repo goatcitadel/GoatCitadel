@@ -4,7 +4,6 @@ import {
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "../services/nextcloud-talk-webhook.js";
-import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { resolveNextcloudTalkSecret } from "./integration-webhooks-shared.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
@@ -109,7 +108,7 @@ export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): vo
           idempotencyKey: deriveNextcloudTalkWebhookIdempotencyKey(connectionId, rawBody, parsed.eventId),
           eventType: parsed.eventType,
           bindingTarget: parsed.room,
-          allowedSenders: resolveAllowedSenders(connection.config),
+          inboundAccessConfig: connection.config,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

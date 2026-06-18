@@ -377,6 +377,133 @@ describe("GatewayService loop 27 large service coverage", () => {
     ).toEqual(["runtime-1", "persisted-1"]);
   });
 
+  it("queues unicode-safe channel chunks with delivery diagnostics", async () => {
+    const enqueue = vi.fn((input: Record<string, any>) => ({
+      channelKey: input.channelKey,
+      connectionId: input.connectionId,
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryDiagnostics: input.payload.deliveryDiagnostics,
+      deliveryId: "delivery-chunked",
+      deliveryStatus: "retrying",
+      maxAttempts: 3,
+      status: "queued",
+      target: input.target,
+      updatedAt: "2026-05-15T00:00:00.000Z",
+    }));
+    const { gateway } = createGatewayHarness({
+      channelDeliveryRuntimeService: {
+        drainDue: vi.fn(async () => []),
+        enqueue,
+        list: vi.fn(() => []),
+      },
+      storage: {
+        integrationConnections: {
+          get: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
+        },
+      },
+    });
+
+    const message = `${"🙂".repeat(1_000)}tail`;
+    const result = await GatewayService.prototype.commsSend.call(gateway, {
+      connectionId: "conn-1",
+      message,
+      target: "channel-1",
+    } as never);
+
+    const queuedPayload = enqueue.mock.calls[0]?.[0].payload as Record<string, unknown>;
+    expect(queuedPayload.messageParts).toHaveLength(2);
+    expect((queuedPayload.messageParts as string[])[0]).toHaveLength(1_900);
+    expect([...((queuedPayload.messageParts as string[])[0] ?? "")]).toHaveLength(950);
+    expect(queuedPayload.deliveryDiagnostics).toMatchObject({
+      chunking: {
+        mode: "unicode_safe",
+        maxPartUtf16Length: 1900,
+        partCount: 2,
+      },
+    });
+    expect(result).toMatchObject({
+      deliveryId: "delivery-chunked",
+      deliveryDiagnostics: expect.objectContaining({
+        chunking: expect.objectContaining({ partCount: 2 }),
+      }),
+    });
+  });
+
+  it("sends chunked channel deliveries without duplicating attachments or interactive actions", async () => {
+    const sentArgs: Array<Record<string, unknown>> = [];
+    const invokeAndUnwrap = vi.fn(async (request: { args: Record<string, unknown> }) => {
+      sentArgs.push(request.args);
+      return {
+        channelKey: "discord",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        deliveryId: `part-${sentArgs.length}`,
+        providerMessageId: `provider-${sentArgs.length}`,
+        status: "sent",
+        target: "channel-1",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      };
+    });
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    Object.assign(gateway, {
+      buildCommsHost: vi.fn(() => ({
+        emitChannelActivity: vi.fn(),
+        emitDiscordTyping: vi.fn(),
+        emitTelegramTyping: vi.fn(),
+        getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
+        invokeAndUnwrap,
+        readChatAttachmentContent: vi.fn(),
+      })),
+    });
+    const sendQueuedChannelDelivery = (
+      GatewayService.prototype as unknown as {
+        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+      }
+    ).sendQueuedChannelDelivery;
+
+    const result = await sendQueuedChannelDelivery.call(gateway, {
+      attempts: 1,
+      channelKey: "discord",
+      connectionId: "conn-1",
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryId: "delivery-1",
+      maxAttempts: 3,
+      payload: {
+        attachments: [{ title: "Evidence", url: "https://example.test/evidence.txt" }],
+        connectionId: "conn-1",
+        deliveryDiagnostics: { chunking: { mode: "unicode_safe", partCount: 2 } },
+        interactiveActions: {
+          platform: "discord",
+          buttons: [{ label: "Approve", callbackData: "approve:token" }],
+        },
+        message: "part one",
+        messageParts: ["part one", "part two"],
+        target: "channel-1",
+      },
+      status: "running",
+      target: "channel-1",
+      updatedAt: "2026-05-15T00:00:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      providerMessageId: "provider-2",
+      deliveryDiagnostics: expect.objectContaining({ chunking: expect.objectContaining({ partCount: 2 }) }),
+    });
+    expect(sentArgs).toHaveLength(2);
+    expect(sentArgs[0]).toMatchObject({
+      message: "part one",
+      attachments: [expect.objectContaining({ title: "Evidence" })],
+      replyToPartIndex: 0,
+    });
+    expect(sentArgs[0]?.interactiveActions).toBeUndefined();
+    expect(sentArgs[1]).toMatchObject({
+      message: "part two",
+      interactiveActions: expect.objectContaining({ platform: "discord" }),
+      replyToMessageId: "provider-1",
+      replyToPartIndex: 1,
+    });
+    expect(sentArgs[1]?.attachments).toBeUndefined();
+  });
+
   it("creates internal tool grants, respects deny-wins, and reports failed tool payloads precisely", async () => {
     const createdGrant = vi.fn();
     const publishRealtime = vi.fn();

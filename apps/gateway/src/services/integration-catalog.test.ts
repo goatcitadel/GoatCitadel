@@ -79,6 +79,28 @@ describe("integration-catalog", () => {
     });
   });
 
+  it("exposes inbound access controls for sender-allowlisted webhook channels", () => {
+    for (const catalogId of ["channel.slack", "channel.whatsapp", "channel.nextcloud-talk", "channel.line"]) {
+      const form = getIntegrationFormSchema(catalogId);
+      expect(form?.fields).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "inboundAccessMode",
+            type: "select",
+            defaultValue: "allowlist",
+            advanced: true,
+          }),
+          expect.objectContaining({
+            key: "allowedSenders",
+            type: "json",
+            defaultValue: "[]",
+            advanced: true,
+          }),
+        ]),
+      );
+    }
+  });
+
   it("exposes a LINE channel secret field in the guided setup form", () => {
     const lineForm = getIntegrationFormSchema("channel.line");
     const channelSecretField = lineForm?.fields.find((field) => field.key === "channelSecretEnv");

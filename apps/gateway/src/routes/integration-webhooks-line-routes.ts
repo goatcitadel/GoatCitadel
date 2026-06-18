@@ -4,7 +4,6 @@ import {
   normalizeLineWebhookPayload,
   verifyLineWebhookSignature,
 } from "../services/line-webhook.js";
-import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { resolveLineChannelSecret } from "./integration-webhooks-shared.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
@@ -75,7 +74,7 @@ export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveLineWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
-          allowedSenders: resolveAllowedSenders(connection.config),
+          inboundAccessConfig: connection.config,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

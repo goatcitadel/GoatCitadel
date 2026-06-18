@@ -4,6 +4,7 @@ import {
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
   extractStructuredTextContent,
+  inspectToolCallProtocolIssues,
   parseSerializedToolCalls,
   readToolCalls,
   resolveAllowedModelToolCallName,
@@ -102,6 +103,45 @@ describe("chat-agent-completion-adapters edge cases", () => {
     expect(toProviderToolFunctionName("browser/search", existing)).toBe("browser_search_3");
     expect(toProviderToolFunctionName("123", existing)).toBe("tool_123");
     expect(toProviderToolFunctionName("!!!", existing)).toBe("tool_fn");
+  });
+
+  it("reports invalid provider tool-call protocol without treating phantom tools as callable", () => {
+    const canonical = new Map([
+      ["browser_search", "browser.search"],
+      ["browser.search", "browser.search"],
+    ]);
+
+    const issues = inspectToolCallProtocolIssues(
+      {
+        tool_calls: [
+          { id: "missing-function" },
+          { id: "empty-name", function: { name: "   ", arguments: "{}" } },
+          { id: "unsupported", function: { name: "shell_exec", arguments: "{}" } },
+          { id: "bad-json", function: { name: "browser_search", arguments: "{bad-json" } },
+          { id: "array-args", function: { name: "browser_search", arguments: "[]" } },
+        ],
+      },
+      canonical,
+    );
+
+    expect(issues.map((issue) => issue.kind)).toEqual([
+      "missing_function",
+      "missing_name",
+      "unsupported_name",
+      "malformed_arguments",
+      "non_object_arguments",
+    ]);
+    expect(issues.find((issue) => issue.kind === "unsupported_name")).toEqual(
+      expect.objectContaining({ rawName: "shell_exec" }),
+    );
+    expect(
+      readToolCalls(
+        {
+          tool_calls: [{ id: "unsupported", function: { name: "shell_exec", arguments: "{}" } }],
+        },
+        canonical,
+      ),
+    ).toEqual([]);
   });
 
   it("extracts structured text variants and aggregates streaming deltas with tool calls", () => {

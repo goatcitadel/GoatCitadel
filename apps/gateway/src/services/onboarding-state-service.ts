@@ -3,6 +3,7 @@ import type {
   AuthRuntimeSettings,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
+  OnboardingFirstRunChecklistItem,
   OnboardingState,
   OnboardingStartupState,
   RealtimeEvent,
@@ -152,6 +153,13 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     completedAt: runtime.onboardingMarker.completedAt,
     completedBy: runtime.onboardingMarker.completedBy,
     checklist,
+    firstRunChecklist: buildFirstRunChecklist({
+      providerReady: llmReady,
+      runtimeReady,
+      activeProviderLabel: activeProvider?.label ?? llm.activeProviderId,
+      activeModel: llm.activeModel,
+      localRuntimeReady: Boolean(activeProvider && isProviderLikelyLocal(activeProvider.baseUrl)),
+    }),
     settings: {
       toolApprovalMode,
       defaultToolProfile,
@@ -224,6 +232,78 @@ export function markOnboardingComplete(runtime: OnboardingStateHost, completedBy
     completedBy: runtime.onboardingMarker.completedBy,
   });
   return getOnboardingState(runtime);
+}
+
+function buildFirstRunChecklist(input: {
+  providerReady: boolean;
+  runtimeReady: boolean;
+  localRuntimeReady: boolean;
+  activeProviderLabel: string;
+  activeModel: string;
+}): OnboardingFirstRunChecklistItem[] {
+  const providerDetail = input.providerReady
+    ? `${input.activeProviderLabel || "Provider"} is ready with ${input.activeModel || "the selected model"}.`
+    : "Configure a provider key or local OpenAI-compatible runtime before cloud-backed sends.";
+  const setupStatus = input.providerReady || input.localRuntimeReady ? "complete" : "needs_input";
+  const taskStatus = input.runtimeReady ? "needs_input" : "optional";
+  return [
+    {
+      id: "provider_or_local_runtime",
+      label: "Provider or local runtime setup",
+      status: setupStatus,
+      detail: providerDetail,
+      proofRefs: [
+        { kind: "route", label: "Providers", ref: "/settings/providers" },
+        { kind: "route", label: "Runtime", ref: "/settings/runtime" },
+        { kind: "verification_lane", label: "Install verification", ref: "scripts/verify-install.mjs" },
+      ],
+    },
+    {
+      id: "first_chat",
+      label: "First Chat",
+      status: input.providerReady ? "needs_input" : "optional",
+      detail: input.providerReady
+        ? "Send a low-risk Chat message and confirm model, cost, latency, and runtime status are inspectable."
+        : "Use the safe demo path until provider or local runtime setup is complete.",
+      proofRefs: [
+        { kind: "route", label: "Chat", ref: "/chat" },
+        { kind: "runtime_evidence", label: "Chat turn trace", ref: "chat.turn_trace" },
+      ],
+    },
+    {
+      id: "first_cowork",
+      label: "First Cowork task",
+      status: taskStatus,
+      detail:
+        "Run one supervised Cowork task so approvals, checkpoints, durable state, and delegation truth can be inspected.",
+      proofRefs: [
+        { kind: "route", label: "Cowork", ref: "/cowork" },
+        { kind: "runtime_evidence", label: "Durable run", ref: "durable.run" },
+      ],
+    },
+    {
+      id: "first_code",
+      label: "First Code task",
+      status: taskStatus,
+      detail:
+        "Run one governed Code task with explicit approval and retained artifacts; this remains trusted-code execution, not hostile-code sandboxing proof.",
+      proofRefs: [
+        { kind: "route", label: "Code", ref: "/code" },
+        { kind: "runtime_evidence", label: "Code artifact trace", ref: "code_mode.artifact" },
+      ],
+    },
+    {
+      id: "run_detail",
+      label: "Run Detail inspection",
+      status: "needs_input",
+      detail:
+        "Open Run Detail after the first governed task and confirm tools, approvals, artifacts, and failures match runtime truth.",
+      proofRefs: [
+        { kind: "route", label: "Run Detail", ref: "/ops/run-detail" },
+        { kind: "runtime_evidence", label: "Runtime lifecycle export", ref: "runtime.lifecycle.export.v1" },
+      ],
+    },
+  ];
 }
 
 function isAuthConfiguredForMode(auth: RuntimeSettings["auth"]): boolean {

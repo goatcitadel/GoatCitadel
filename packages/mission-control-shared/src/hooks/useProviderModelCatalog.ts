@@ -79,12 +79,16 @@ function getValidProviderModelCacheEntry(
   cache: Map<string, ProviderModelCacheEntry>,
   providerId: string,
   now: number,
+  options: { allowStale?: boolean } = {},
 ): ProviderModelCacheEntry | undefined {
   const cached = cache.get(providerId);
   if (!cached) {
     return undefined;
   }
   if (cached.expiresAt <= now) {
+    if (options.allowStale) {
+      return cached;
+    }
     cache.delete(providerId);
     return undefined;
   }
@@ -97,7 +101,7 @@ function buildProviderCatalog(
   now: number,
 ): ProviderModelCatalogOption[] {
   return config.providers.map((provider) => {
-    const cached = getValidProviderModelCacheEntry(cache, provider.providerId, now);
+    const cached = getValidProviderModelCacheEntry(cache, provider.providerId, now, { allowStale: true });
     const template = findProviderTemplate(provider.providerId);
     const activeContext =
       provider.providerId === config.activeProviderId

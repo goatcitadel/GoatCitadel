@@ -343,6 +343,50 @@ describe("webhook-handler-factory contract behavior", () => {
     );
   });
 
+  it("drops inbound messages when allowlist mode is enabled before senders are configured", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const gateway = {
+      ingestChannelMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
+      recordDevDiagnostic,
+    };
+
+    const result = await dispatchInboundWebhookMessage(gateway as any, {
+      channel: "slack",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "slack:event-empty-allowlist",
+      eventType: "message",
+      bindingTarget: "C1",
+      inboundAccessConfig: { inboundAccessMode: "allowlist" },
+      message: {
+        eventId: "event-empty-allowlist",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "C1",
+        actorId: "U-Owner",
+        content: "hello",
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        ignored: true,
+        reason: "allowlist_empty",
+        inboundAccess: {
+          mode: "allowlist",
+          reason: "allowlist_empty",
+        },
+      }),
+    );
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_allowlist_empty", category: "channels" }),
+    );
+  });
+
   it("allows a listed sender through the allowlist using a case-insensitive trimmed match", async () => {
     const gateway = {
       ingestChannelMessage: vi.fn(async () => ({
@@ -376,7 +420,7 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("treats an empty/unset allowlist as default-allow for every sender", async () => {
+  it("treats an empty/unset allowlist as legacy-open for old connections and records migration evidence", async () => {
     const gateway = {
       ingestChannelMessage: vi.fn(async () => ({
         deduped: false,
@@ -406,6 +450,9 @@ describe("webhook-handler-factory contract behavior", () => {
 
     expect(result.replied).toBe(true);
     expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_access_legacy_open", category: "channels" }),
+    );
   });
 
   it("binds the chat session and replies only when the inbound webhook event is new", async () => {

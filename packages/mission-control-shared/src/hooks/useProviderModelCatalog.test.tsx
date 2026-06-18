@@ -246,6 +246,32 @@ describe("useProviderModelCatalog", () => {
     hook.renderer.unmount();
   });
 
+  it("keeps expired model catalog entries visible as stale evidence until refreshed", async () => {
+    const hook = await renderCatalog();
+
+    await act(async () => {
+      await expect(hook.result.loadModelsForProvider("openai")).resolves.toEqual(["gpt-remote", "gpt-extra"]);
+    });
+    expect(hook.result.providers.find((item) => item.providerId === "openai")).toMatchObject({
+      modelRefreshStatus: "fresh",
+      modelProbeState: "ready",
+    });
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    await act(async () => {
+      await hook.result.reload();
+    });
+
+    expect(hook.result.providers.find((item) => item.providerId === "openai")).toMatchObject({
+      modelRefreshStatus: "stale",
+      modelProbeState: "ready",
+      models: expect.arrayContaining(["gpt-remote", "gpt-extra"]),
+    });
+    expect(hook.result.getCachedModels("openai")).toEqual([]);
+
+    hook.renderer.unmount();
+  });
+
   it("records negative cache entries on model load failures and reload errors", async () => {
     apiMocks.fetchLlmConfig.mockRejectedValueOnce(new Error("config failed"));
     const hook = await renderCatalog();

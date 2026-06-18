@@ -10,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { terminateProcessTree } from "./process-tree-killer.js";
 
 const log = logger.child("mcp-runtime");
 
@@ -611,78 +612,16 @@ function attachChildStdinErrorHandler(child: ChildProcess, server: McpServerReco
  *   signal the child directly rather than guessing at a process group.
  */
 function terminateChild(child: ChildProcess, server: McpServerRecord): void {
-  const pid = child.pid;
-  if (typeof pid !== "number" || child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  if (process.platform === "win32") {
-    terminateWindowsChildTree(child, server, pid);
-    return;
-  }
-
-  sendPosixSignal(child, pid, "SIGTERM");
-
-  let killTimer: NodeJS.Timeout | undefined = setTimeout(() => {
-    killTimer = undefined;
-    if (child.exitCode === null && child.signalCode === null) {
-      sendPosixSignal(child, pid, "SIGKILL");
-    }
-  }, MCP_TERMINATE_GRACE_MS);
-  killTimer.unref?.();
-
-  child.once("exit", () => {
-    if (killTimer) {
-      clearTimeout(killTimer);
-      killTimer = undefined;
-    }
-  });
-}
-
-function sendPosixSignal(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
-  try {
-    child.kill(signal);
-  } catch (error) {
-    log.warn("MCP child signal failed", {
-      pid,
-      signal,
-      err: (error as Error).message,
-    });
-  }
-}
-
-function terminateWindowsChildTree(child: ChildProcess, server: McpServerRecord, pid: number): void {
-  try {
-    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.on("error", (error) => {
-      log.warn("MCP taskkill failed; falling back to child.kill", {
-        serverId: server.serverId,
-        label: server.label,
-        pid,
-        err: error.message,
-      });
-      try {
-        child.kill();
-      } catch {
-        // Best effort; the child may already be gone.
-      }
-    });
-  } catch (error) {
-    log.warn("MCP taskkill could not be spawned; falling back to child.kill", {
+  terminateProcessTree({
+    child,
+    label: "MCP child",
+    context: {
       serverId: server.serverId,
       label: server.label,
-      pid,
-      err: (error as Error).message,
-    });
-    try {
-      child.kill();
-    } catch {
-      // Best effort; the child may already be gone.
-    }
-  }
+    },
+    logger: log,
+    graceMs: MCP_TERMINATE_GRACE_MS,
+  });
 }
 
 async function withStdioMcpClient<T>(

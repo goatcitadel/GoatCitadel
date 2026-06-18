@@ -20,8 +20,10 @@ describe("integration webhook security routes", () => {
       deduped: false,
       session: { sessionId: "sess-1" },
     }));
+    const recordDevDiagnostic = vi.fn();
     app = buildApp({
       ingestChannelMessage,
+      recordDevDiagnostic,
       getIntegrationConnection: vi.fn(() => buildConnection("discord")),
     });
     await app.register(integrationWebhookRoutes);
@@ -44,6 +46,48 @@ describe("integration webhook security routes", () => {
         actorId: "user-1",
         content: "hello",
       }),
+    );
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_access_legacy_open", category: "channels" }),
+    );
+  });
+
+  it("drops generic inbound before ingest when allowlist mode has no configured senders", async () => {
+    const ingestChannelMessage = vi.fn();
+    const recordDevDiagnostic = vi.fn();
+    app = buildApp({
+      ingestChannelMessage,
+      recordDevDiagnostic,
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allowlist",
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const payload = {
+      eventId: "evt-denied",
+      account: connectionId,
+      actorId: "user-1",
+      content: "hello",
+    };
+    const response = await signedInboundRequest("discord", payload);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      accepted: true,
+      ignored: true,
+      reason: "allowlist_empty",
+      inboundAccess: {
+        mode: "allowlist",
+        reason: "allowlist_empty",
+      },
+    });
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.inbound_allowlist_empty", category: "channels" }),
     );
   });
 
@@ -171,15 +215,13 @@ describe("integration webhook security routes", () => {
     });
   }
 
-  function buildConnection(channel: string) {
+  function buildConnection(channel: string, config: Record<string, unknown> = { inboundSecret: "generic-secret" }) {
     return {
       connectionId,
       key: channel,
       enabled: true,
       status: "connected" as const,
-      config: {
-        inboundSecret: "generic-secret",
-      },
+      config,
     };
   }
 

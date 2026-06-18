@@ -22,6 +22,8 @@ export interface ChatModelProviderOption {
   modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
   modelProbeSource?: "live" | "template_fallback" | "error_fallback";
   modelProbeCheckedAt?: string;
+  modelProbeWarning?: string;
+  modelRefreshStatus?: "fresh" | "stale" | "not_checked" | "error";
 }
 
 function formatHostLabel(baseUrl?: string): string | null {
@@ -82,6 +84,14 @@ const PROBE_SOURCE_LABELS: Record<string, string> = {
   error_fallback: "fallback after probe error",
 };
 
+function formatProbeCheckedAt(value?: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "last check unavailable" : `checked ${parsed.toLocaleString()}`;
+}
+
 function buildProviderMetadata(
   activeProvider: ChatModelProviderOption | undefined,
   model?: string,
@@ -95,8 +105,15 @@ function buildProviderMetadata(
   const probeSourceLabel = activeProvider.modelProbeSource
     ? (PROBE_SOURCE_LABELS[activeProvider.modelProbeSource] ?? activeProvider.modelProbeSource)
     : null;
+  const probeCheckedAt = formatProbeCheckedAt(activeProvider.modelProbeCheckedAt);
   const probe = activeProvider.modelProbeState
-    ? `${activeProvider.modelProbeState}${probeSourceLabel ? ` via ${probeSourceLabel}` : ""}`
+    ? [
+        `${activeProvider.modelProbeState}${probeSourceLabel ? ` via ${probeSourceLabel}` : ""}`,
+        activeProvider.modelRefreshStatus === "stale" ? "stale catalog" : null,
+        probeCheckedAt,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" · ")
     : null;
   return [
     { label: "Runtime", value: activeProvider.isLocalRuntime ? "Local" : "Cloud" },
@@ -158,7 +175,11 @@ export function ChatModelPicker({
     ? "No provider selected yet. Connect a provider in Configure, then choose a model."
     : modelLoading
       ? `Loading models for ${activeProvider?.label ?? "provider"}...`
-      : (activeProvider?.availabilityHint ??
+      : (activeProvider.modelProbeWarning ??
+        (activeProvider.modelRefreshStatus === "stale"
+          ? "Model catalog is stale. Refresh models before routing."
+          : null) ??
+        activeProvider?.availabilityHint ??
         (models.length === 0 ? `No models available for ${activeProvider?.label ?? "this provider"} yet.` : null));
   const metadata = buildProviderMetadata(activeProvider, modelLoading ? undefined : (model ?? models[0]));
 
