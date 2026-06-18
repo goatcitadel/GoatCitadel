@@ -74,6 +74,69 @@ function formatCostSource(value: ChatUsageCostSource | undefined): string {
   }
 }
 
+function formatDecisionKind(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatDecisionSignals(
+  signals: NonNullable<ChatTurnTraceRecord["decisionTrace"]>[number]["signals"],
+): string | null {
+  if (signals.length === 0) {
+    return null;
+  }
+  return signals
+    .map((signal) => {
+      const value = signal.value === undefined || signal.value === null ? null : String(signal.value);
+      const weight = signal.weight ? ` (${signal.weight})` : "";
+      return `${signal.source}:${signal.key}${value ? `=${value}` : ""}${weight}`;
+    })
+    .join("; ");
+}
+
+function formatDecisionAlternatives(
+  alternatives: NonNullable<ChatTurnTraceRecord["decisionTrace"]>[number]["alternatives"],
+): string | null {
+  if (alternatives.length === 0) {
+    return null;
+  }
+  return alternatives
+    .map((alternative) => {
+      const blockedBy = alternative.blockedBy ? ` blocked by ${alternative.blockedBy}` : "";
+      return `${alternative.label} (${alternative.outcome}${blockedBy}): ${alternative.reasonNotChosen}`;
+    })
+    .join("; ");
+}
+
+function formatDecisionLinks(decision: NonNullable<ChatTurnTraceRecord["decisionTrace"]>[number]): string | null {
+  const entries: string[] = [];
+  const push = (label: string, value: string | undefined) => {
+    if (value) {
+      entries.push(`${label}: ${value}`);
+    }
+  };
+  push("session", decision.scope.sessionId);
+  push("turn", decision.scope.turnId);
+  push("run", decision.scope.runId);
+  push("plan", decision.scope.planId);
+  push("step", decision.scope.stepId);
+  push("tool", decision.scope.toolRunId);
+  push("approval", decision.scope.approvalId);
+  push("task", decision.scope.taskId);
+  push("durable", decision.scope.durableRunId);
+  for (const ref of decision.evidenceRefs) {
+    const label = ref.label ? `${ref.refType} ${ref.label}` : ref.refType;
+    const rendered = `${label}: ${ref.refId}`;
+    if (!entries.includes(rendered)) {
+      entries.push(rendered);
+    }
+  }
+  return entries.length > 0 ? entries.join(" · ") : null;
+}
+
 function summarizeTraceRouting(trace: ChatTurnTraceRecord): {
   requestedLabel: string | null;
   effectiveLabel: string | null;
@@ -183,6 +246,29 @@ export function ChatTraceCard({
                 ))}
               </ul>
             </div>
+          ) : null}
+          {trace.decisionTrace?.length ? (
+            <details className="chat-trace-section chat-decision-trace">
+              <summary>Decision Trace ({trace.decisionTrace.length})</summary>
+              <ul className="chat-trace-list">
+                {trace.decisionTrace.map((decision) => {
+                  const alternatives = formatDecisionAlternatives(decision.alternatives);
+                  const signals = formatDecisionSignals(decision.signals);
+                  const links = formatDecisionLinks(decision);
+                  return (
+                    <li key={decision.decisionId}>
+                      <span>{formatDecisionKind(decision.kind)}</span>
+                      <span>{formatTime(decision.createdAt)}</span>
+                      <p>Chosen action: {decision.selected}</p>
+                      <p>Rationale: {decision.rationale}</p>
+                      {alternatives ? <p>Alternatives considered: {alternatives}</p> : null}
+                      {signals ? <p>Signals: {signals}</p> : null}
+                      {links ? <p>Links: {links}</p> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
           ) : null}
           {trace.executionPlan ? (
             <div className="chat-trace-section">

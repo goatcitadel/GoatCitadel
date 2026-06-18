@@ -69,6 +69,7 @@ function composeSessionPreparation(
   | "normalizeWorkspaceId"
   | "patchSessionAutonomyPrefs"
   | "prepareAgentChatTurn"
+  | "recordRuntimeDecision"
   | "resolveRuntimeGuidance"
   | "resolveThreadKnowledgeContext"
   | "routeFromSession"
@@ -89,6 +90,7 @@ function composeSessionPreparation(
     normalizeWorkspaceId: (workspaceId) => source.normalizeWorkspaceId(workspaceId),
     patchSessionAutonomyPrefs: (sessionId, input) => source.patchSessionAutonomyPrefs(sessionId, input),
     prepareAgentChatTurn: (sessionId, input, options) => source.prepareAgentChatTurn(sessionId, input, options),
+    recordRuntimeDecision: source.recordRuntimeDecision ? (input) => source.recordRuntimeDecision?.(input) : undefined,
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
     resolveThreadKnowledgeContext: (sessionId, query) => source.resolveThreadKnowledgeContext(sessionId, query),
     routeFromSession: (session) => source.routeFromSession(session),

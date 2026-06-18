@@ -269,6 +269,7 @@ import type {
   OrchestrationRunPolicyContext,
   PendingApprovalAction,
   RealtimeEvent,
+  RuntimeDecisionTraceAppendInput,
   RuntimeLifecycleResponse,
   RetentionPolicy,
   RetentionPruneResult,
@@ -485,6 +486,7 @@ import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import {
   ChatTurnExecutionRegistry,
@@ -778,6 +780,7 @@ export class GatewayService {
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
   private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
+  private readonly runtimeDecisionRecorder: RuntimeDecisionRecorder;
   private readonly continuationGateService: ContinuationGateService;
   private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
@@ -856,6 +859,10 @@ export class GatewayService {
       resolveDevDiagnosticsVerbose(),
       resolveDevDiagnosticsBufferSize(process.env.GOATCITADEL_DEV_DIAGNOSTICS_GATEWAY_BUFFER),
     );
+    this.runtimeDecisionRecorder = new RuntimeDecisionRecorder({
+      runtimeDecisionTraces: this.storage.runtimeDecisionTraces,
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    });
 
     this.backupRetentionService = new BackupRetentionService({
       storage: this.storage,
@@ -1362,6 +1369,7 @@ export class GatewayService {
       listChatSessionProactiveRuns: (sessionId, limit) =>
         this.chatProactiveService.listChatSessionProactiveRuns(sessionId, limit),
       listApprovalEffects: (approvalId) => this.approvalEffectsService.listByApproval(approvalId),
+      listRuntimeDecisionTraces: (query) => this.storage.runtimeDecisionTraces.list(query),
     });
     this.improvementService = new ImprovementService(serviceCtx, {
       createApproval: (input) => this.createApproval(input),
@@ -1578,7 +1586,7 @@ export class GatewayService {
       storage: this.storage,
       durableRunService: this.durableRunService,
       getSession: (sessionId) => this.getSession(sessionId),
-      loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
+      loadChatTurnSessionState: (sessionId, options) => this.loadChatTurnSessionState(sessionId, options),
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -1664,6 +1672,7 @@ export class GatewayService {
         this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId);
       },
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
+      recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -1784,6 +1793,37 @@ export class GatewayService {
 
   public recordDevDiagnostic(input: Parameters<GatewayDevDiagnosticsService["record"]>[0]): void {
     this.devDiagnostics.record(input);
+  }
+
+  public recordRuntimeDecision(input: RuntimeDecisionTraceAppendInput): void {
+    this.runtimeDecisionRecorder.record(input);
+  }
+
+  private buildApprovalDecisionScope(approval: ApprovalRequest): RuntimeDecisionTraceAppendInput["scope"] {
+    const linkage = approval.linkage;
+    return {
+      ...(linkage?.workspaceId ? { workspaceId: linkage.workspaceId } : {}),
+      ...(linkage?.sessionId ? { sessionId: linkage.sessionId } : {}),
+      ...(linkage?.turnId ? { turnId: linkage.turnId } : {}),
+      ...(linkage?.runId ? { runId: linkage.runId } : {}),
+      ...(linkage?.durableRunId ? { durableRunId: linkage.durableRunId } : {}),
+      ...(linkage?.taskId ? { taskId: linkage.taskId } : {}),
+      approvalId: approval.approvalId,
+    };
+  }
+
+  private buildApprovalDecisionEvidenceRefs(
+    approval: ApprovalRequest,
+  ): NonNullable<RuntimeDecisionTraceAppendInput["evidenceRefs"]> {
+    const linkage = approval.linkage;
+    return [
+      { refType: "approval", refId: approval.approvalId, label: approval.kind },
+      ...(linkage?.sessionId ? [{ refType: "session" as const, refId: linkage.sessionId }] : []),
+      ...(linkage?.turnId ? [{ refType: "turn" as const, refId: linkage.turnId }] : []),
+      ...(linkage?.runId ? [{ refType: "run" as const, refId: linkage.runId }] : []),
+      ...(linkage?.durableRunId ? [{ refType: "durable_run" as const, refId: linkage.durableRunId }] : []),
+      ...(linkage?.taskId ? [{ refType: "task" as const, refId: linkage.taskId }] : []),
+    ];
   }
 
   public attachDevDiagnosticsLogger(logger: {
@@ -2185,7 +2225,10 @@ export class GatewayService {
     }
   }
 
-  public async loadChatTurnSessionState(sessionId: string): Promise<{
+  public async loadChatTurnSessionState(
+    sessionId: string,
+    options: { includeDecisionTrace?: boolean } = {},
+  ): Promise<{
     traces: ChatTurnTraceRecord[];
     tracesById: Map<string, ChatTurnTraceRecord>;
     turnLineageById: Map<string, { turnId: string; parentTurnId?: string }>;
@@ -2223,7 +2266,11 @@ export class GatewayService {
       .map((turnId) => rawTraceById.get(turnId))
       .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
     const hydratedVisibleTracesById = new Map(
-      chatTurnTraceHydration.hydrateChatTurnTraces(this, visibleRawTraces).map((trace) => [trace.turnId, trace]),
+      chatTurnTraceHydration
+        .hydrateChatTurnTraces(this, visibleRawTraces, {
+          includeDecisionTrace: options.includeDecisionTrace === true,
+        })
+        .map((trace) => [trace.turnId, trace]),
     );
     const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
     const messageIds = visibleRawTraces.flatMap((trace) => [
@@ -3239,8 +3286,12 @@ export class GatewayService {
     }
   }
 
-  public createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord {
-    return chatTurnTraceHydration.createHydratedChatTurnTrace(this, turnId, trace);
+  public createHydratedChatTurnTrace(
+    turnId: string,
+    trace: ChatTurnTraceRecord,
+    options?: chatTurnTraceHydration.ChatTurnTraceHydrationOptions,
+  ): ChatTurnTraceRecord {
+    return chatTurnTraceHydration.createHydratedChatTurnTrace(this, turnId, trace, options);
   }
 
   public markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord {
@@ -5467,7 +5518,43 @@ export class GatewayService {
   }
 
   public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    return this.approvalRuntime.createApproval(input);
+    const approval = await this.approvalRuntime.createApproval(input);
+    this.recordRuntimeDecision({
+      kind: "approval_requested",
+      scope: this.buildApprovalDecisionScope(approval),
+      selected: `Requested ${approval.kind} approval`,
+      rationale: "Runtime policy required an operator-visible approval before continuing the linked action.",
+      alternatives: [
+        {
+          label: "Continue without approval",
+          outcome: "blocked",
+          reasonNotChosen: "Approval policy requires explicit operator resolution for this risk posture.",
+          blockedBy: "approval policy",
+        },
+      ],
+      signals: [
+        {
+          source: "approval",
+          key: "kind",
+          value: approval.kind,
+          weight: "strong",
+        },
+        {
+          source: "policy",
+          key: "riskLevel",
+          value: approval.riskLevel,
+          weight: approval.riskLevel === "danger" || approval.riskLevel === "nuclear" ? "blocking" : "strong",
+        },
+        {
+          source: "approval",
+          key: "status",
+          value: approval.status,
+          weight: "informational",
+        },
+      ],
+      evidenceRefs: this.buildApprovalDecisionEvidenceRefs(approval),
+    });
+    return approval;
   }
 
   public createApprovalRemoteActionToken(
@@ -5604,7 +5691,67 @@ export class GatewayService {
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
   ): ApprovalEffectRecord[] {
-    return this.approvalEffectsService.enqueueResolutionEffects(approval, input);
+    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input);
+    this.recordRuntimeDecision({
+      kind: "approval_resolved",
+      scope: this.buildApprovalDecisionScope(approval),
+      selected: `Approval ${input.decision}`,
+      rationale:
+        input.resolutionNote ?? `Operator ${input.resolvedBy} resolved ${approval.kind} with ${input.decision}.`,
+      signals: [
+        {
+          source: "approval",
+          key: "decision",
+          value: input.decision,
+          weight: "strong",
+        },
+        {
+          source: "approval",
+          key: "effectCount",
+          value: effects.length,
+          weight: "informational",
+        },
+      ],
+      evidenceRefs: this.buildApprovalDecisionEvidenceRefs(approval),
+    });
+    const resumeEffects = effects.filter(
+      (effect) =>
+        effect.effectKind === "approval_wait_wake" ||
+        effect.effectKind === "proactive_run_wake" ||
+        effect.effectKind === "orchestration_parent_wake" ||
+        effect.effectKind === "linked_chat_turn_wake",
+    );
+    if (resumeEffects.length > 0) {
+      this.recordRuntimeDecision({
+        kind: "runtime_resumed",
+        scope: this.buildApprovalDecisionScope(approval),
+        selected: "Queued approval resume effects",
+        rationale: "Approval resolution cleared a runtime wait condition and queued linked work to resume.",
+        signals: [
+          {
+            source: "approval",
+            key: "resumeEffectCount",
+            value: resumeEffects.length,
+            weight: "strong",
+          },
+          {
+            source: "durable",
+            key: "targetIds",
+            value: resumeEffects.map((effect) => effect.targetId).join(", "),
+            weight: "informational",
+          },
+        ],
+        evidenceRefs: [
+          ...this.buildApprovalDecisionEvidenceRefs(approval),
+          ...resumeEffects.map((effect) => ({
+            refType: effect.targetKind === "durable_run" ? ("durable_run" as const) : ("event" as const),
+            refId: effect.targetId,
+            label: effect.effectKind,
+          })),
+        ],
+      });
+    }
+    return effects;
   }
 
   /** @internal */ public primeApprovalLifecycle(
@@ -7760,8 +7907,12 @@ export class GatewayService {
     );
   }
 
-  private listHydratedChatTurnTraces(sessionId: string, limit = 200): ChatTurnTraceRecord[] {
-    return chatTurnTraceHydration.listHydratedChatTurnTraces(this, sessionId, limit);
+  private listHydratedChatTurnTraces(
+    sessionId: string,
+    limit = 200,
+    options?: chatTurnTraceHydration.ChatTurnTraceHydrationOptions,
+  ): ChatTurnTraceRecord[] {
+    return chatTurnTraceHydration.listHydratedChatTurnTraces(this, sessionId, limit, options);
   }
 
   private resolveChatActiveLeafTurnId(sessionId: string, traces: ChatTurnTraceRecord[]): string | undefined {

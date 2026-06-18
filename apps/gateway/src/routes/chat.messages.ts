@@ -14,6 +14,13 @@ const listMessagesSchema = z.object({
   cursor: z.string().optional(),
 });
 
+const chatThreadQuerySchema = z.object({
+  includeDecisionTrace: z
+    .enum(["true", "false", "1", "0"])
+    .transform((value) => value === "true" || value === "1")
+    .optional(),
+});
+
 const routeDecisionSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
   turnId: z.string().optional(),
@@ -230,8 +237,16 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const query = chatThreadQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
     try {
-      return reply.send(await fastify.services.chatMessages.getChatThread(params.data.sessionId));
+      return reply.send(
+        await fastify.services.chatMessages.getChatThread(params.data.sessionId, {
+          includeDecisionTrace: query.data.includeDecisionTrace === true,
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

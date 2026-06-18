@@ -96,6 +96,7 @@ import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
 import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
+import { RuntimeDecisionTraceRepository } from "./runtime-decision-trace-repo.js";
 export {
   PersonalOpsInMemoryRepository,
   PersonalOpsStorageRepository,
@@ -215,6 +216,7 @@ export class Storage {
   public readonly externalSideEffectRuns: ExternalSideEffectRunRepository;
   public readonly a2aTaskBindings: A2ATaskBindingRepository;
   public readonly a2aTaskPushConfigs: A2ATaskPushConfigRepository;
+  public readonly runtimeDecisionTraces: RuntimeDecisionTraceRepository;
   public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
@@ -325,6 +327,7 @@ export class Storage {
     this.externalSideEffectRuns = new ExternalSideEffectRunRepository(this.db);
     this.a2aTaskBindings = new A2ATaskBindingRepository(this.db);
     this.a2aTaskPushConfigs = new A2ATaskPushConfigRepository(this.db);
+    this.runtimeDecisionTraces = new RuntimeDecisionTraceRepository(this.db);
   }
 
   public close(): void {
@@ -472,6 +475,7 @@ export class Storage {
         "transcript_outbox",
         "chat_inline_approvals",
         "chat_stream_events",
+        "runtime_decision_traces",
         "chat_thread_knowledge_attachments",
         "chat_generated_artifacts",
         "chat_tool_artifacts",
@@ -633,6 +637,7 @@ export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
 export * from "./external-side-effect-run-repo.js";
+export * from "./runtime-decision-trace-repo.js";
 export * from "./skill-evaluation-run-repo.js";
 export { loadAndSanitize } from "./load-and-sanitize.js";
 export type { QuarantineEntry, SafeParse, SafeParseResult } from "./load-and-sanitize.js";

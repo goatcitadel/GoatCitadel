@@ -59,6 +59,7 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "chat_session_meta", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_messages", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_turn_traces", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "runtime_decision_traces", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_tool_runs", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_inline_approvals", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "research_runs", "session_id = 'sess-1'"), 0);
@@ -97,6 +98,7 @@ describe("Storage.deleteChatSessionData", () => {
 
     assert.equal(countRows(storage, "sessions", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "chat_messages", "session_id = 'sess-2'"), 1);
+    assert.equal(countRows(storage, "runtime_decision_traces", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "chat_generated_artifacts", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "chat_thread_knowledge_attachments", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "knowledge_documents", "namespace = 'chat-session:sess-2:knowledge'"), 1);
@@ -240,6 +242,19 @@ function seedChatSession(storage: Storage, sessionId: string): void {
     ],
     createdAt: now,
     updatedAt: now,
+  });
+  storage.runtimeDecisionTraces.append({
+    decisionId: `decision-${sessionId}`,
+    kind: "chat_turn_prepared",
+    scope: {
+      workspaceId: "default",
+      sessionId,
+      turnId: `turn-${sessionId}`,
+      planId: `plan-${sessionId}`,
+    },
+    selected: "Prepared chat turn",
+    rationale: "Session deletion cleanup should remove session-scoped decision traces.",
+    createdAt: now,
   });
   storage.chatConversationSummaries.upsert({
     sessionId,

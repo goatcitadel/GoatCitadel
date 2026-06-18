@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ApprovalRequest,
   ChatDelegationRunRecord,
@@ -80,6 +80,7 @@ function createHost(overrides: Partial<RuntimeLifecycleReadHost> = {}): RuntimeL
       }) as unknown as SessionSummary,
     listChatSessionProactiveRuns: () => [],
     listApprovalEffects: () => [],
+    listRuntimeDecisionTraces: () => [],
     ...overrides,
   };
 }
@@ -441,5 +442,75 @@ describe("RuntimeLifecycleReadService", () => {
     });
     expect(response.linked.runIds).toEqual(expect.arrayContaining(["run-approval", "run-turn", "run-plan"]));
     expect(response.approvalWaitDurableRun?.runId).toBe("run-wait");
+  });
+
+  it("loads linked decision traces from the runtime trace spine", async () => {
+    const listRuntimeDecisionTraces = vi.fn((query) => {
+      if ("sessionId" in query && query.sessionId === "session-1") {
+        return [
+          {
+            decisionId: "decision-session",
+            kind: "chat_turn_prepared",
+            scope: { sessionId: "session-1", turnId: "turn-1" },
+            selected: "Prepared chat turn",
+            rationale: "Session-scoped turn preparation was recorded.",
+            alternatives: [],
+            signals: [],
+            evidenceRefs: [],
+            createdAt: "2026-04-12T00:00:01.000Z",
+          },
+        ];
+      }
+      if ("runId" in query && query.runId === "run-turn") {
+        return [
+          {
+            decisionId: "decision-run",
+            kind: "durable_checkpoint",
+            scope: { sessionId: "session-1", turnId: "turn-1", runId: "run-turn" },
+            selected: "Resume durable checkpoint",
+            rationale: "A durable checkpoint changed the runtime posture.",
+            alternatives: [],
+            signals: [],
+            evidenceRefs: [],
+            createdAt: "2026-04-12T00:00:02.000Z",
+          },
+          {
+            decisionId: "decision-session",
+            kind: "chat_turn_prepared",
+            scope: { sessionId: "session-1", turnId: "turn-1" },
+            selected: "Prepared chat turn",
+            rationale: "Duplicate from session query should be deduped.",
+            alternatives: [],
+            signals: [],
+            evidenceRefs: [],
+            createdAt: "2026-04-12T00:00:01.000Z",
+          },
+        ];
+      }
+      return [];
+    });
+    const service = new RuntimeLifecycleReadService(
+      createHost({
+        getTurnTrace: (turnId) =>
+          ({
+            turnId,
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: "completed",
+            mode: "chat",
+            startedAt: "2026-04-12T00:00:00.000Z",
+            durable: { runId: "run-turn" },
+            toolRuns: [],
+          }) as unknown as ChatTurnTraceRecord,
+        listRuntimeDecisionTraces,
+      }),
+    );
+
+    const response = await service.getRuntimeLifecycle({ turnId: "turn-1" });
+
+    expect(response.decisionTrace?.map((item) => item.decisionId)).toEqual(["decision-session", "decision-run"]);
+    expect(listRuntimeDecisionTraces).toHaveBeenCalledWith({ sessionId: "session-1", limit: 300 });
+    expect(listRuntimeDecisionTraces).toHaveBeenCalledWith({ turnId: "turn-1", limit: 200 });
+    expect(listRuntimeDecisionTraces).toHaveBeenCalledWith({ runId: "run-turn", limit: 200 });
   });
 });

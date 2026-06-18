@@ -1820,4 +1820,37 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_mason_sessions_updated ON mason_sessions(updated_at);
     `,
   },
+  {
+    version: 64,
+    name: "runtime_decision_traces_schema",
+    sql: `
+      CREATE TABLE IF NOT EXISTS runtime_decision_traces (
+        decision_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        workspace_id TEXT,
+        session_id TEXT,
+        turn_id TEXT,
+        run_id TEXT,
+        plan_id TEXT,
+        step_id TEXT,
+        tool_run_id TEXT,
+        approval_id TEXT,
+        task_id TEXT,
+        durable_run_id TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_session_turn
+        ON runtime_decision_traces(session_id, turn_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_run
+        ON runtime_decision_traces(run_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_plan
+        ON runtime_decision_traces(plan_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_approval
+        ON runtime_decision_traces(approval_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_created
+        ON runtime_decision_traces(created_at ASC);
+    `,
+  },
 ];

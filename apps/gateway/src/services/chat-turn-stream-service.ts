@@ -23,6 +23,7 @@ import type {
   ChatToolRunRecord,
   ChatStreamUsageRecord,
   ChatTurnTraceRecord,
+  RuntimeDecisionTraceAppendInput,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
@@ -111,6 +112,7 @@ export interface ChatTurnStreamHost
     };
     context?: Record<string, unknown>;
   }): void;
+  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
   buildChatOrchestrationSummary(input: {
     runId: string;
     objective: string;
@@ -194,6 +196,110 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
   return orderedToolRuns;
 }
 
+function recordRuntimeDecision(host: ChatTurnStreamHost, input: RuntimeDecisionTraceAppendInput): void {
+  try {
+    host.recordRuntimeDecision?.(input);
+  } catch {
+    // Best-effort decision tracing is non-fatal and must not affect chat turn execution.
+  }
+}
+
+function recordStepRuntimeDecisions(
+  host: ChatTurnStreamHost,
+  prepared: PreparedAgentChatTurn,
+  input: {
+    runId: string;
+    planId: string;
+    step: OrchestrationStepExecutionResult;
+    childToolRuns: ChatToolRunRecord[];
+  },
+): void {
+  for (const toolRun of input.childToolRuns) {
+    const kind = resolveToolDecisionKind(toolRun);
+    if (!kind) {
+      continue;
+    }
+    recordRuntimeDecision(host, {
+      kind,
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        runId: input.runId,
+        planId: input.planId,
+        stepId: input.step.stepId,
+        toolRunId: toolRun.toolRunId,
+        approvalId: toolRun.approvalId,
+      },
+      selected: renderToolDecisionSelected(kind, toolRun),
+      rationale: renderToolDecisionRationale(kind, toolRun),
+      signals: [
+        { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
+        { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
+        { source: "tool_result", key: "reused", value: Boolean(toolRun.reused), weight: "informational" },
+        { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
+      ],
+      evidenceRefs: [
+        { refType: "tool_run", refId: toolRun.toolRunId },
+        ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+      ],
+    });
+  }
+}
+
+function resolveToolDecisionKind(toolRun: ChatToolRunRecord): RuntimeDecisionTraceAppendInput["kind"] | undefined {
+  if (toolRun.reused) {
+    return "tool_reused";
+  }
+  switch (toolRun.status) {
+    case "started":
+    case "executed":
+      return "tool_selected";
+    case "approval_required":
+      return "tool_approval_required";
+    case "blocked":
+      return "tool_blocked";
+    case "failed":
+      return "tool_failed";
+    default:
+      return undefined;
+  }
+}
+
+function renderToolDecisionSelected(kind: RuntimeDecisionTraceAppendInput["kind"], toolRun: ChatToolRunRecord): string {
+  switch (kind) {
+    case "tool_reused":
+      return `Reuse ${toolRun.toolName}`;
+    case "tool_approval_required":
+      return `Request approval for ${toolRun.toolName}`;
+    case "tool_blocked":
+      return `Block ${toolRun.toolName}`;
+    case "tool_failed":
+      return `Mark ${toolRun.toolName} failed`;
+    default:
+      return `Select ${toolRun.toolName}`;
+  }
+}
+
+function renderToolDecisionRationale(
+  kind: RuntimeDecisionTraceAppendInput["kind"],
+  toolRun: ChatToolRunRecord,
+): string {
+  if (kind === "tool_reused") {
+    return toolRun.reuseReason ?? "A prior compatible tool result was reused for this step.";
+  }
+  if (kind === "tool_approval_required") {
+    return "Gateway policy required operator approval before the tool could continue.";
+  }
+  if (kind === "tool_blocked") {
+    return toolRun.failureGuidance ?? toolRun.error ?? "Gateway policy or capability checks blocked the tool.";
+  }
+  if (kind === "tool_failed") {
+    return toolRun.failureGuidance ?? toolRun.error ?? "The tool invocation returned a failure.";
+  }
+  return "The delegated step selected this tool while executing the orchestration plan.";
+}
+
 export async function executePreparedModeOrchestration(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
@@ -225,6 +331,74 @@ export async function executePreparedModeOrchestration(
     status: "running",
     startedAt: new Date().toISOString(),
     steps: orchestration.executionPlanDraft.steps,
+  });
+  recordRuntimeDecision(host, {
+    kind: "workflow_choice",
+    scope: {
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      runId,
+      planId: persistedExecutionPlan.planId,
+    },
+    selected: `Use ${orchestration.orchestrationPlan.workflowTemplate} workflow`,
+    rationale: orchestration.orchestrationPlan.routeDecision.triggerReason,
+    alternatives: [
+      {
+        label: "Direct answer",
+        outcome: "not_chosen",
+        reasonNotChosen: "The mode router selected an inspectable workflow for this turn.",
+      },
+      {
+        label: "Single tool-backed response",
+        outcome: "deferred",
+        reasonNotChosen: "Tool invocation remains governed inside delegated steps and policy checks.",
+      },
+    ],
+    signals: [
+      { source: "routing", key: "mode", value: orchestration.routerInput.task.mode, weight: "strong" },
+      {
+        source: "orchestration",
+        key: "workflow_template",
+        value: orchestration.orchestrationPlan.workflowTemplate,
+        weight: "strong",
+      },
+      {
+        source: "orchestration",
+        key: "parallelism",
+        value: orchestration.orchestrationPlan.routeDecision.parallelism,
+        weight: "informational",
+      },
+      {
+        source: "model_router",
+        key: "decision",
+        value: prepared.modelRouterDecision.orchestration?.decision ?? "allowed",
+        weight: "informational",
+      },
+    ],
+    evidenceRefs: [
+      { refType: "turn", refId: prepared.turnId },
+      { refType: "run", refId: runId },
+      { refType: "plan", refId: persistedExecutionPlan.planId },
+    ],
+  });
+  recordRuntimeDecision(host, {
+    kind: "execution_plan_created",
+    scope: {
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      runId,
+      planId: persistedExecutionPlan.planId,
+    },
+    selected: `Create ${persistedExecutionPlan.steps.length} step execution plan`,
+    rationale: persistedExecutionPlan.summary,
+    signals: [
+      { source: "execution_plan", key: "step_count", value: persistedExecutionPlan.steps.length },
+      { source: "execution_plan", key: "advisory_only", value: persistedExecutionPlan.advisoryOnly },
+      { source: "execution_plan", key: "source", value: persistedExecutionPlan.source },
+    ],
+    evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
   });
   host.recordDevDiagnostic({
     level: "info",
@@ -331,6 +505,23 @@ export async function executePreparedModeOrchestration(
       summary: orchestration.executionPlanDraft.summary,
       finishedAt: new Date().toISOString(),
     });
+    recordRuntimeDecision(host, {
+      kind: "execution_plan_revised",
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        runId,
+        planId: persistedExecutionPlan.planId,
+      },
+      selected: "Finish advisory plan without tool execution",
+      rationale: "Planning mode was advisory, so the runtime returned the drafted execution plan as the final answer.",
+      signals: [
+        { source: "execution_plan", key: "status", value: "ready", weight: "strong" },
+        { source: "operator_pref", key: "planning_mode", value: prepared.prefs.planningMode },
+      ],
+      evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
+    });
     await onProgress?.(advisorySummary);
     return {
       finalOutput: advisoryOutput,
@@ -403,6 +594,12 @@ export async function executePreparedModeOrchestration(
         const childToolRuns = step.childTurnId
           ? (host.storage.chatToolRuns.listByTurnIds([step.childTurnId]).get(step.childTurnId) ?? [])
           : [];
+        recordStepRuntimeDecisions(host, prepared, {
+          runId,
+          planId: persistedExecutionPlan.planId,
+          step,
+          childToolRuns,
+        });
         const activeToolWork = childToolRuns.some(
           (toolRun) => toolRun.status === "started" || toolRun.status === "approval_required",
         );
@@ -474,6 +671,32 @@ export async function executePreparedModeOrchestration(
             allSteps,
           ),
         });
+        recordRuntimeDecision(host, {
+          kind: "execution_plan_revised",
+          scope: {
+            workspaceId: prepared.workspaceId,
+            sessionId: prepared.session.sessionId,
+            turnId: prepared.turnId,
+            runId,
+            planId: persistedExecutionPlan.planId,
+            stepId: step.stepId,
+          },
+          selected: `Step ${step.stepId} marked ${step.status}`,
+          rationale:
+            step.summary ??
+            step.error ??
+            step.waitStatus ??
+            "Execution plan step status changed after runtime evidence.",
+          signals: [
+            { source: "execution_plan", key: "step_status", value: step.status, weight: "strong" },
+            { source: "execution_plan", key: "wait_status", value: step.waitStatus ?? null },
+            { source: "tool_result", key: "child_tool_run_count", value: childToolRuns.length },
+          ],
+          evidenceRefs: [
+            { refType: "plan", refId: persistedExecutionPlan.planId },
+            { refType: "step", refId: step.stepId },
+          ],
+        });
         const summary = host.buildChatOrchestrationSummary({
           runId,
           objective: prepared.content,
@@ -529,6 +752,26 @@ export async function executePreparedModeOrchestration(
       host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
       result.stepResults,
     ),
+  });
+  recordRuntimeDecision(host, {
+    kind: "execution_plan_revised",
+    scope: {
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      runId,
+      planId: persistedExecutionPlan.planId,
+    },
+    selected: `Execution plan ${summary.status}`,
+    rationale: result.finalSummary,
+    signals: [
+      { source: "execution_plan", key: "status", value: summary.status, weight: "strong" },
+      { source: "orchestration", key: "integrity_signal_count", value: result.integritySignals?.length ?? 0 },
+    ],
+    evidenceRefs: [
+      { refType: "plan", refId: persistedExecutionPlan.planId },
+      { refType: "run", refId: runId },
+    ],
   });
   await onProgress?.(summary);
   const lifecycleEvent =
@@ -1300,6 +1543,34 @@ export async function* streamPreparedAgentChatTurn(
     }));
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
+    recordRuntimeDecision(host, {
+      kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+      },
+      selected: prepared.modelRouterDecision.requiresTools ? "Use direct tool-capable turn runtime" : "Answer directly",
+      rationale:
+        prepared.modelRouterDecision.orchestration?.reason ??
+        "The turn did not enter the governed mode-orchestration workflow.",
+      alternatives: [
+        {
+          label: "Mode orchestration workflow",
+          outcome: "not_chosen",
+          reasonNotChosen:
+            prepared.modelRouterDecision.orchestration?.reason ??
+            "Router and preference signals did not require a multi-step workflow.",
+        },
+      ],
+      signals: [
+        { source: "routing", key: "mode", value: prepared.normalized.mode ?? prepared.prefs.mode, weight: "strong" },
+        { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
+        { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
+        { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
+      ],
+      evidenceRefs: [{ refType: "turn", refId: turnId }],
+    });
     for (const steerItem of drainedSteers) {
       await host.ingestEvent(randomUUID(), {
         eventId: randomUUID(),

@@ -40,6 +40,11 @@ describe("Postgres runtime schema generation", () => {
     );
     assert.match(sql, /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
     assert.match(sql, /CREATE TABLE IF NOT EXISTS external_side_effect_runs \(/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS runtime_decision_traces \(/);
+    assert.match(
+      sql,
+      /CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_session_turn ON runtime_decision_traces\(session_id, turn_id, created_at\);/,
+    );
     assert.match(
       sql,
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_external_side_effect_runs_idempotency ON external_side_effect_runs\(route_path, idempotency_key, actor_scope\);/,
