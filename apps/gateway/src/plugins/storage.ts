@@ -4,6 +4,7 @@ import { setBootCheckpoint } from "../boot-tracker.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
+import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import {
   createGatewayRuntime,
   type GatewayAuthValidationPort,
@@ -21,12 +22,29 @@ declare module "fastify" {
 }
 
 export const gatewayPlugin = fp(async (fastify) => {
+  const startupPhases = getStartupPhaseRecorder();
   setBootCheckpoint("storage-plugin:detectRootDir");
   const rootDir = detectRootDir();
   setBootCheckpoint("storage-plugin:loadGatewayConfig");
-  const config = await loadGatewayConfig(rootDir);
+  const loadConfigPhase = startupPhases.open("load_config", { owner: "gateway.storage" });
+  let config: GatewayRuntimeConfig;
+  try {
+    config = await loadGatewayConfig(rootDir);
+    loadConfigPhase.close();
+  } catch (error) {
+    loadConfigPhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   setBootCheckpoint("storage-plugin:ensureBundledPostgresRuntime");
-  const bundledPostgres = await ensureBundledPostgresRuntime(config);
+  const bundledPostgresPhase = startupPhases.open("bundled_postgres", { owner: "gateway.storage" });
+  let bundledPostgres: Awaited<ReturnType<typeof ensureBundledPostgresRuntime>>;
+  try {
+    bundledPostgres = await ensureBundledPostgresRuntime(config);
+    bundledPostgresPhase.close(bundledPostgres ? "ready" : "not configured");
+  } catch (error) {
+    bundledPostgresPhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
   const gateway = createGatewayRuntime(config);
@@ -35,21 +53,40 @@ export const gatewayPlugin = fp(async (fastify) => {
   fastify.decorate("gatewayAuth", gateway);
   fastify.decorate("gatewayConfig", config);
   setBootCheckpoint("storage-plugin:initCritical-starting");
-  await gateway.initCritical();
+  const criticalPhase = startupPhases.open("init_critical", { owner: "gateway.storage" });
+  try {
+    await gateway.initCritical();
+    criticalPhase.close();
+  } catch (error) {
+    criticalPhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   setBootCheckpoint("storage-plugin:initCritical-returned");
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {
     if (shouldStartDeferredInitInBackground()) {
       setImmediate(() => {
-        void gateway.startDeferredInit().catch((error: unknown) => {
-          fastify.log.error(error, "gateway deferred startup failed");
-        });
+        const deferredPhase = startupPhases.open("deferred_init", { owner: "gateway.storage" });
+        void gateway
+          .startDeferredInit()
+          .then(() => deferredPhase.close("background"))
+          .catch((error: unknown) => {
+            deferredPhase.fail(formatStartupPhaseError(error));
+            fastify.log.error(error, "gateway deferred startup failed");
+          });
       });
       fastify.log.debug("gateway deferred startup scheduled in background");
       return;
     }
-    await gateway.startDeferredInit();
+    const deferredPhase = startupPhases.open("deferred_init", { owner: "gateway.storage" });
+    try {
+      await gateway.startDeferredInit();
+      deferredPhase.close("blocking");
+    } catch (error) {
+      deferredPhase.fail(formatStartupPhaseError(error));
+      throw error;
+    }
   });
 
   fastify.addHook("onClose", async () => {
@@ -75,4 +112,11 @@ function detectRootDir(): string {
   }
 
   return path.resolve(process.cwd(), "../..");
+}
+
+function formatStartupPhaseError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }

@@ -44,6 +44,21 @@ describe("dev diagnostics routes", () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it("returns 404 when startup diagnostics are disabled", async () => {
+    app = Fastify();
+    app.decorate("services", {
+      devDiagnostics: { isDevDiagnosticsEnabled: () => false },
+    } as never);
+    await app.register(devDiagnosticsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/dev/diagnostics/startup",
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
   it("rejects malformed diagnostic list and stream filters", async () => {
     app = Fastify();
     app.decorate("services", {
@@ -118,6 +133,38 @@ describe("dev diagnostics routes", () => {
         },
       ],
     });
+  });
+
+  it("returns the startup phase snapshot from the diagnostics service", async () => {
+    const snapshot = {
+      phases: [
+        {
+          id: "build_app",
+          owner: "gateway.main",
+          status: "completed",
+          startedAt: "2026-03-08T00:00:00.000Z",
+          finishedAt: "2026-03-08T00:00:01.000Z",
+          durationMs: 1000,
+        },
+      ],
+      inProgress: [],
+      ready: true,
+    };
+    const getStartupPhaseSnapshot = vi.fn(() => snapshot);
+    app = Fastify();
+    app.decorate("services", {
+      devDiagnostics: { isDevDiagnosticsEnabled: () => true, getStartupPhaseSnapshot },
+    } as never);
+    await app.register(devDiagnosticsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/dev/diagnostics/startup",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getStartupPhaseSnapshot).toHaveBeenCalledTimes(1);
+    expect(response.json()).toEqual(snapshot);
   });
 
   it("matches streamed diagnostics only when all requested filters match", () => {

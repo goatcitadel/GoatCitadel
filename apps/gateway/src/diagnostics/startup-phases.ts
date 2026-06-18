@@ -1,6 +1,7 @@
 export interface StartupPhaseRecord {
   readonly id: string;
   readonly owner: string;
+  readonly status: "completed" | "failed";
   readonly startedAt: string;
   readonly finishedAt?: string;
   readonly durationMs?: number;
@@ -27,6 +28,7 @@ export interface OpenPhaseOptions {
 
 export interface OpenPhase {
   close(notes?: string): void;
+  fail(notes?: string): void;
 }
 
 export type InProgressLogger = (entry: { phase: string; owner: string; ageMs: number }) => void;
@@ -36,6 +38,7 @@ interface InternalPhase {
   owner: string;
   startMs: number;
   endMs?: number;
+  status?: "completed" | "failed";
   notes?: string;
 }
 
@@ -57,12 +60,22 @@ export class StartupPhaseRecorder {
       notes: options.notes,
     };
     this.phases.push(entry);
+    const finish = (status: "completed" | "failed", notes?: string) => {
+      if (entry.endMs !== undefined) {
+        return;
+      }
+      entry.endMs = this.now();
+      entry.status = status;
+      if (notes !== undefined) {
+        entry.notes = notes;
+      }
+    };
     return {
       close: (notes?: string) => {
-        entry.endMs = this.now();
-        if (notes) {
-          entry.notes = notes;
-        }
+        finish("completed", notes);
+      },
+      fail: (notes?: string) => {
+        finish("failed", notes);
       },
     };
   }
@@ -102,6 +115,7 @@ export class StartupPhaseRecorder {
         closed.push({
           id: p.id,
           owner: p.owner,
+          status: p.status ?? "completed",
           startedAt: new Date(p.startMs).toISOString(),
           finishedAt: new Date(p.endMs).toISOString(),
           durationMs: p.endMs - p.startMs,

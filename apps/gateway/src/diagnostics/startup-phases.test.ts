@@ -16,6 +16,43 @@ describe("StartupPhaseRecorder", () => {
     expect(snapshot.phases).toHaveLength(1);
     expect(snapshot.phases[0].durationMs).toBe(1500);
     expect(snapshot.phases[0].owner).toBe("storage");
+    expect(snapshot.phases[0].status).toBe("completed");
+  });
+
+  it("keeps close idempotent so late cleanup cannot stretch a phase", () => {
+    let now = 1_000_000;
+    const recorder = new StartupPhaseRecorder(() => now);
+    const phase = recorder.open("listen", { owner: "gateway" });
+    now += 100;
+    phase.close("listening");
+    now += 900;
+    phase.close("late cleanup");
+
+    const snapshot = recorder.snapshot();
+
+    expect(snapshot.phases[0]).toMatchObject({
+      durationMs: 100,
+      notes: "listening",
+      status: "completed",
+    });
+  });
+
+  it("records failed startup phases with failure notes", () => {
+    let now = 1_000_000;
+    const recorder = new StartupPhaseRecorder(() => now);
+    const phase = recorder.open("bundled_postgres", { owner: "storage" });
+    now += 250;
+    phase.fail("spawn failed");
+    now += 250;
+    phase.fail("late failure");
+
+    const snapshot = recorder.snapshot();
+
+    expect(snapshot.phases[0]).toMatchObject({
+      durationMs: 250,
+      notes: "spawn failed",
+      status: "failed",
+    });
   });
 
   it("supports nested phases (inner closes before outer)", () => {

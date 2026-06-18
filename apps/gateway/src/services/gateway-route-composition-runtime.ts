@@ -1,5 +1,6 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
 import { generateVaultKey } from "@goatcitadel/contracts";
+import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createCronRoutePort } from "./cron-route-service.js";
 import { createDashboardRoutePort } from "./dashboard-route-service.js";
@@ -156,6 +157,7 @@ export function composeRuntimeAdminRouteDependencies(
     },
     devDiagnostics: {
       isDevDiagnosticsEnabled: () => gateway.devDiagnostics.isEnabled(),
+      getStartupPhaseSnapshot: () => getStartupPhaseRecorder().snapshot(),
       listDevDiagnostics: (input) => gateway.devDiagnostics.list(input),
       subscribeDevDiagnostics: (listener) => gateway.devDiagnostics.subscribe(listener),
     },

@@ -537,7 +537,7 @@ function resolveRateLimitConfig(): {
 function classifyRateLimitBucket(url: string, method: string | string[]): "general" | "mutation" | "auth" | "sse" {
   const normalizedUrl = url.toLowerCase();
   const normalizedMethod = Array.isArray(method) ? (method[0]?.toUpperCase() ?? "GET") : method.toUpperCase();
-  if (normalizedUrl.includes("/events/stream")) {
+  if (normalizedUrl.includes("/events/stream") || normalizedUrl.includes("/dev/diagnostics/stream")) {
     return "sse";
   }
   if (normalizedUrl.startsWith("/api/v1/auth") || normalizedUrl.startsWith("/api/v1/secrets")) {
@@ -579,6 +579,7 @@ export const __internal = {
   isLoopbackRateLimitAllowlisted,
   normalizeConfiguredOrigin,
   resolveAllowedOrigins,
+  classifyRateLimitBucket,
   applyBaselineSecurityHeaders,
   calculateRequestDurationMs,
   BASELINE_CONTENT_SECURITY_POLICY,
