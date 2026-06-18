@@ -27,11 +27,19 @@ describe("lazy legacy page adapters", () => {
       LazyNativeRoutePages,
       LazyPromptPacksWorkbenchPage,
       LazyThreadedSurfaceRoute,
+      preloadNativeRoutePages,
+      preloadPromptPacksWorkbenchPage,
       preloadThreadedSurfaceRoute,
     } = await import("./lazy-legacy-pages");
 
     await expect(preloadThreadedSurfaceRoute()).resolves.toMatchObject({
       ThreadedSurfaceRoute: expect.any(Function),
+    });
+    await expect(preloadPromptPacksWorkbenchPage()).resolves.toMatchObject({
+      PromptPacksWorkbenchPage: expect.any(Function),
+    });
+    await expect(preloadNativeRoutePages()).resolves.toMatchObject({
+      NativeRoutePages: expect.any(Function),
     });
 
     const renderer = create(

@@ -8,6 +8,14 @@ export function preloadThreadedSurfaceRoute(): Promise<unknown> {
   return loadThreadedSurfaceRoute();
 }
 
+export function preloadPromptPacksWorkbenchPage(): Promise<unknown> {
+  return loadPromptPacksWorkbenchPage();
+}
+
+export function preloadNativeRoutePages(): Promise<unknown> {
+  return loadNativeRoutePages();
+}
+
 export const LazyThreadedSurfaceRoute = lazy(async () => {
   const module = await loadThreadedSurfaceRoute();
   return { default: module.ThreadedSurfaceRoute };
