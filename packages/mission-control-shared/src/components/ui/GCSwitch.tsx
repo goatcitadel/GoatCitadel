@@ -31,10 +31,7 @@ export function GCSwitch({ checked, onCheckedChange, label, disabled = false, id
           onCheckedChange(!checked);
         }}
       >
-        <span
-          aria-hidden="true"
-          className={cn("gc-switch-thumb", checked && "translate-x-[18px]")}
-        />
+        <span aria-hidden="true" className={cn("gc-switch-thumb", checked && "translate-x-[18px]")} />
       </button>
       {label ? (
         <span id={labelId} className="mc-gc-switch-label">

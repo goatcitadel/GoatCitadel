@@ -1,7 +1,4 @@
-import type {
-  ModelComparisonCreateRequest,
-  ModelComparisonJudgeRequest,
-} from "@goatcitadel/contracts";
+import type { ModelComparisonCreateRequest, ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
 import type { ModelComparisonService } from "./model-comparison-service.js";
 
 export interface ModelComparisonRoutePort {

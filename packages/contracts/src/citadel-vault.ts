@@ -6,9 +6,9 @@
 import * as nodeCrypto from "node:crypto";
 
 export interface SealedValue {
-  iv: string;         // base64
+  iv: string; // base64
   ciphertext: string; // base64
-  tag: string;        // base64 (GCM auth tag)
+  tag: string; // base64 (GCM auth tag)
 }
 
 const ALGORITHM = "aes-256-gcm";
@@ -23,10 +23,7 @@ export function sealValue(plaintext: string, key: Buffer): SealedValue {
   const iv = nodeCrypto.randomBytes(IV_LENGTH);
   const cipher = nodeCrypto.createCipheriv(ALGORITHM, key, iv);
 
-  const encryptedParts: Buffer[] = [
-    cipher.update(plaintext, "utf8"),
-    cipher.final(),
-  ];
+  const encryptedParts: Buffer[] = [cipher.update(plaintext, "utf8"), cipher.final()];
   const ciphertext = Buffer.concat(encryptedParts);
   const tag = cipher.getAuthTag();
 
@@ -45,10 +42,7 @@ export function openValue(sealed: SealedValue, key: Buffer): string {
   const decipher = nodeCrypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
 
-  const decryptedParts: Buffer[] = [
-    decipher.update(ciphertext),
-    decipher.final(),
-  ];
+  const decryptedParts: Buffer[] = [decipher.update(ciphertext), decipher.final()];
   return Buffer.concat(decryptedParts).toString("utf8");
 }
 

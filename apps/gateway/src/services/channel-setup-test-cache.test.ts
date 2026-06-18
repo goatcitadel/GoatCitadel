@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ChannelSetupDraft,
-  ChannelSetupTestResult,
-  IntegrationConnection,
-} from "@goatcitadel/contracts";
+import type { ChannelSetupDraft, ChannelSetupTestResult, IntegrationConnection } from "@goatcitadel/contracts";
 import {
   buildChannelSetupRecentTestSignature,
   resolveReusableChannelSetupTestResult,
@@ -15,10 +11,13 @@ describe("channel setup recent-test cache", () => {
     const connection = createConnection();
     const result = createTestResult("warn");
     const cache = new Map([
-      [draft.draftId, {
-        signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
-        result,
-      }],
+      [
+        draft.draftId,
+        {
+          signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
+          result,
+        },
+      ],
     ]);
 
     const reusable = resolveReusableChannelSetupTestResult({
@@ -36,10 +35,13 @@ describe("channel setup recent-test cache", () => {
     const draft = createDraft();
     const originalConnection = createConnection();
     const cache = new Map([
-      [draft.draftId, {
-        signature: buildChannelSetupRecentTestSignature(draft, originalConnection, draft.testVersion),
-        result: createTestResult("ok"),
-      }],
+      [
+        draft.draftId,
+        {
+          signature: buildChannelSetupRecentTestSignature(draft, originalConnection, draft.testVersion),
+          result: createTestResult("ok"),
+        },
+      ],
     ]);
     const changedConnection = createConnection({
       config: {
@@ -63,10 +65,13 @@ describe("channel setup recent-test cache", () => {
     const draft = createDraft();
     const connection = createConnection();
     const cache = new Map([
-      [draft.draftId, {
-        signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
-        result: createTestResult("error"),
-      }],
+      [
+        draft.draftId,
+        {
+          signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
+          result: createTestResult("error"),
+        },
+      ],
     ]);
 
     const reusable = resolveReusableChannelSetupTestResult({

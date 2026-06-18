@@ -12,32 +12,34 @@ describe("telegram webhook helpers", () => {
   });
 
   it("normalizes inbound Telegram message events", () => {
-    expect(normalizeTelegramWebhookPayload({
-      connectionId: "conn-telegram",
-      payload: {
-        update_id: 9001,
-        message: {
-          message_id: 456,
-          from: {
-            id: 777,
-            is_bot: false,
-            first_name: "Ada",
-            last_name: "Lovelace",
-            username: "ada",
-          },
-          chat: {
-            id: -1001234567890,
-            type: "supergroup",
-            title: "Ops Room",
-          },
-          message_thread_id: 98,
-          text: "please help",
-          reply_to_message: {
-            message_id: 123,
+    expect(
+      normalizeTelegramWebhookPayload({
+        connectionId: "conn-telegram",
+        payload: {
+          update_id: 9001,
+          message: {
+            message_id: 456,
+            from: {
+              id: 777,
+              is_bot: false,
+              first_name: "Ada",
+              last_name: "Lovelace",
+              username: "ada",
+            },
+            chat: {
+              id: -1001234567890,
+              type: "supergroup",
+              title: "Ops Room",
+            },
+            message_thread_id: 98,
+            text: "please help",
+            reply_to_message: {
+              message_id: 123,
+            },
           },
         },
-      },
-    })).toEqual({
+      }),
+    ).toEqual({
       kind: "message",
       eventType: "message",
       eventId: "456",
@@ -80,14 +82,19 @@ describe("telegram webhook helpers", () => {
       },
     };
 
-    expect(normalizeTelegramWebhookPayload({
-      connectionId: "conn-telegram",
-      payload,
-    })).toEqual(expect.objectContaining({
-      kind: "ignore",
-      eventType: "message",
-    }));
-    expect(deriveTelegramWebhookIdempotencyKey("conn-telegram", payload, Buffer.from(JSON.stringify(payload), "utf8")))
-      .toBe("telegram:conn-telegram:9002");
+    expect(
+      normalizeTelegramWebhookPayload({
+        connectionId: "conn-telegram",
+        payload,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "ignore",
+        eventType: "message",
+      }),
+    );
+    expect(
+      deriveTelegramWebhookIdempotencyKey("conn-telegram", payload, Buffer.from(JSON.stringify(payload), "utf8")),
+    ).toBe("telegram:conn-telegram:9002");
   });
 });

@@ -72,7 +72,10 @@ export class ModelComparisonService {
       throw new ValidationError({ field: "testId", message: "Judgment testId is not part of the comparison." });
     }
     if (input.winnerCandidateId && !candidateIds.has(input.winnerCandidateId)) {
-      throw new ValidationError({ field: "winnerCandidateId", message: "Winner candidate is not part of the comparison." });
+      throw new ValidationError({
+        field: "winnerCandidateId",
+        message: "Winner candidate is not part of the comparison.",
+      });
     }
     if (input.scores.length < 1) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "scores" });

@@ -1,15 +1,6 @@
-import type {
-  A2UIContract,
-  A2UICapability,
-  FollowOnParityTargetRecord,
-} from "@goatcitadel/contracts";
+import type { A2UIContract, A2UICapability, FollowOnParityTargetRecord } from "@goatcitadel/contracts";
 
-const UI_CANVAS_CAPABILITIES: A2UICapability[] = [
-  "scene_view",
-  "selection",
-  "inspect",
-  "agent_apply",
-];
+const UI_CANVAS_CAPABILITIES: A2UICapability[] = ["scene_view", "selection", "inspect", "agent_apply"];
 
 const PLATFORM_CAPABILITY_MAP: Partial<Record<string, A2UICapability>> = {
   canvas: "scene_view",

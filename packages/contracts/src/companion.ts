@@ -24,13 +24,7 @@ export type CompanionServerPrerequisite =
   | "sse_resume"
   | "per_device_audit";
 
-export type CompanionBootstrapFeature =
-  | "dashboard"
-  | "chat"
-  | "approvals"
-  | "tasks"
-  | "settings"
-  | "event_feed";
+export type CompanionBootstrapFeature = "dashboard" | "chat" | "approvals" | "tasks" | "settings" | "event_feed";
 
 export interface CompanionContract {
   contractId: CompanionContractId;

@@ -69,7 +69,11 @@ export function verifyNextcloudTalkSignature(
   return timingSafeStringEqual(expected, provided);
 }
 
-export function deriveNextcloudTalkWebhookIdempotencyKey(connectionId: string, rawBody: Buffer, eventId?: string): string {
+export function deriveNextcloudTalkWebhookIdempotencyKey(
+  connectionId: string,
+  rawBody: Buffer,
+  eventId?: string,
+): string {
   if (eventId) {
     return `nextcloud-talk:${connectionId}:${eventId}`;
   }

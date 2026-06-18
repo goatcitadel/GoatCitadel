@@ -6,12 +6,12 @@
 import type { ChamberSensitivity } from "./citadels.js";
 
 export type ModelRoutingDecision =
-  | "any_approved"            // Public: any approved model
+  | "any_approved" // Public: any approved model
   | "approved_cloud_or_local" // Internal: approved cloud/local
-  | "cloud_with_approval"     // Private: cloud only with user-approved provider
-  | "prefer_local"            // Sensitive: prefer local; cloud requires explicit disclosure
-  | "local_only"              // Restricted: local-only by default
-  | "never_send";             // Secret: never send unless manually approved
+  | "cloud_with_approval" // Private: cloud only with user-approved provider
+  | "prefer_local" // Sensitive: prefer local; cloud requires explicit disclosure
+  | "local_only" // Restricted: local-only by default
+  | "never_send"; // Secret: never send unless manually approved
 
 export function routeModelForSensitivity(sensitivity: ChamberSensitivity): ModelRoutingDecision {
   switch (sensitivity) {

@@ -3601,7 +3601,6 @@ describe("prompt-pack scoring, judging, and integrity", () => {
   });
 });
 
-
 describe("score-facing response integrity", () => {
   it("ignores fabricated finalResponseText and scores the raw model output", () => {
     const run: PromptPackRunRecord = {

@@ -13,7 +13,8 @@ export interface CompanionBootstrapBriefDraft {
 export function buildCompanionBootstrapBrief(report: FollowOnParityReport): CompanionBootstrapBriefDraft {
   const generatedAt = new Date().toISOString();
   const contract = report.companion.contract;
-  const proofCurrent = report.companion.artifactStatus.hasArtifact && report.companion.artifactStatus.freshness === "current";
+  const proofCurrent =
+    report.companion.artifactStatus.hasArtifact && report.companion.artifactStatus.freshness === "current";
   const summary = contract
     ? proofCurrent
       ? `${contract.contractId} now has current Android runtime/UI proof recorded for the separate mobile repo, and the gateway/session lane remains aligned to that proof.`
@@ -50,12 +51,10 @@ export function buildCompanionBootstrapBrief(report: FollowOnParityReport): Comp
       `- Bootstrap features: ${contract?.bootstrapFeatures.join(", ") ?? "missing"}`,
       "",
       "## Auth Readiness",
-      ...report.companion.authReadiness.map((item) =>
-        `- ${item.label}: ${item.state} · ${item.note}`),
+      ...report.companion.authReadiness.map((item) => `- ${item.label}: ${item.state} · ${item.note}`),
       "",
       "## Server Prerequisites",
-      ...report.companion.prerequisiteReadiness.map((item) =>
-        `- ${item.label}: ${item.state} · ${item.note}`),
+      ...report.companion.prerequisiteReadiness.map((item) => `- ${item.label}: ${item.state} · ${item.note}`),
       "",
       "## Next Actions",
       ...report.companion.recommendedActions.map((action, index) => `${index + 1}. ${action}`),
@@ -63,15 +62,15 @@ export function buildCompanionBootstrapBrief(report: FollowOnParityReport): Comp
       proofCurrent ? "## Current Proof Focus" : "## Expected First Proof",
       ...(proofCurrent
         ? [
-          "1. Keep the Android approval/bootstrap/runtime evidence current when the bootstrap contract, session semantics, or deployment posture changes.",
-          "2. Re-run the Android-resident proof lane when signed mutation, SSE resume, or refresh rotation behavior changes.",
-          "3. Use this brief plus the attached mobile evidence bundle as the operator handoff instead of re-proving the gateway in isolation.",
-        ]
+            "1. Keep the Android approval/bootstrap/runtime evidence current when the bootstrap contract, session semantics, or deployment posture changes.",
+            "2. Re-run the Android-resident proof lane when signed mutation, SSE resume, or refresh rotation behavior changes.",
+            "3. Use this brief plus the attached mobile evidence bundle as the operator handoff instead of re-proving the gateway in isolation.",
+          ]
         : [
-          "1. Align the separate `GoatCitadel-mobile` repo to the current companion bootstrap template and contract baseline.",
-          "2. Reuse the proved gateway exchange/refresh/signed-session path from the Android runtime instead of re-proving the server in isolation.",
-          "3. Capture Android-resident UI/runtime evidence for approvals, signed session creation, SSE resume, and refresh rotation before broadening feature scope.",
-        ]),
+            "1. Align the separate `GoatCitadel-mobile` repo to the current companion bootstrap template and contract baseline.",
+            "2. Reuse the proved gateway exchange/refresh/signed-session path from the Android runtime instead of re-proving the server in isolation.",
+            "3. Capture Android-resident UI/runtime evidence for approvals, signed session creation, SSE resume, and refresh rotation before broadening feature scope.",
+          ]),
       "",
     ].join("\n"),
   };
@@ -79,8 +78,6 @@ export function buildCompanionBootstrapBrief(report: FollowOnParityReport): Comp
 
 export function buildCompanionBootstrapArtifactPath(draft: CompanionBootstrapBriefDraft): string {
   const day = draft.generatedAt.slice(0, 10);
-  const timestamp = draft.generatedAt
-    .replaceAll(":", "-")
-    .replaceAll(".", "-");
+  const timestamp = draft.generatedAt.replaceAll(":", "-").replaceAll(".", "-");
   return `${COMPANION_ARTIFACT_ROOT}/${day}/companion-bootstrap-brief-${timestamp}.md`;
 }

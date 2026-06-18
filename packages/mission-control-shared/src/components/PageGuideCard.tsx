@@ -94,9 +94,7 @@ export function PageGuideCard(props: PageGuideCardProps) {
         </div>
       </header>
       {mode === "simple" ? (
-        <p className="field-help page-guide-mode-note">
-          Guidance stays in the detail panel so the workspace can lead.
-        </p>
+        <p className="field-help page-guide-mode-note">Guidance stays in the detail panel so the workspace can lead.</p>
       ) : null}
       {!compact && mode === "simple" ? (
         <div className="page-guide-inline-summary">

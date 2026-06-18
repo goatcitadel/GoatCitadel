@@ -743,8 +743,7 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
       "",
       "Use available tools if they are appropriate. Return a brief research summary, an arrival recommendation, and any uncertainty that remains.",
     ].join("\n");
-    const modelAnswer =
-      "## Researcher\n- I checked the market context.\n\n## Operator Handoff\n- Arrive near opening.";
+    const modelAnswer = "## Researcher\n- I checked the market context.\n\n## Operator Handoff\n- Arrive near opening.";
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "gpt-5.5",
       choices: [

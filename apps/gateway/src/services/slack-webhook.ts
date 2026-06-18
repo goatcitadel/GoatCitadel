@@ -1,12 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { createHmac } from "node:crypto";
-import {
-  asRecord,
-  asString,
-  hashRawBodyDigest,
-  timingSafeStringEqual,
-  type JsonRecord,
-} from "./webhook-json-helpers.js";
+import { asRecord, asString, hashRawBodyDigest, timingSafeStringEqual } from "./webhook-json-helpers.js";
 
 const SLACK_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/slack\/webhook$/i;
 const SLACK_SIGNATURE_PREFIX = "v0=";

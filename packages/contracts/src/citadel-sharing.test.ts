@@ -5,14 +5,9 @@ import type { CitadelRole, CitadelCapability } from "./citadel-sharing.js";
 // ---------------------------------------------------------------------------
 // Helper: assert a batch of (role, capability, expected) triples at once.
 // ---------------------------------------------------------------------------
-function expectMatrix(
-  cases: ReadonlyArray<[CitadelRole, CitadelCapability, boolean]>,
-): void {
+function expectMatrix(cases: ReadonlyArray<[CitadelRole, CitadelCapability, boolean]>): void {
   for (const [role, capability, expected] of cases) {
-    expect(
-      roleCan(role, capability),
-      `roleCan("${role}", "${capability}") should be ${expected}`,
-    ).toBe(expected);
+    expect(roleCan(role, capability), `roleCan("${role}", "${capability}") should be ${expected}`).toBe(expected);
   }
 }
 
@@ -218,8 +213,14 @@ describe("cross-role boundary matrix", () => {
 
   it("agents are silent executors — only run_missions is granted", () => {
     const allCapabilities: CitadelCapability[] = [
-      "view", "comment", "contribute", "run_missions",
-      "manage_council", "manage_gates", "manage_members", "delete_citadel",
+      "view",
+      "comment",
+      "contribute",
+      "run_missions",
+      "manage_council",
+      "manage_gates",
+      "manage_members",
+      "delete_citadel",
     ];
     for (const cap of allCapabilities) {
       const expected = cap === "run_missions";

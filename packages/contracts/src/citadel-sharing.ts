@@ -3,15 +3,7 @@
  * Implements spec §12.4.
  */
 
-export type CitadelRole =
-  | "owner"
-  | "steward"
-  | "builder"
-  | "operator"
-  | "contributor"
-  | "viewer"
-  | "guest"
-  | "agent";
+export type CitadelRole = "owner" | "steward" | "builder" | "operator" | "contributor" | "viewer" | "guest" | "agent";
 
 export type CitadelCapability =
   | "view"
@@ -46,41 +38,13 @@ const ROLE_CAPABILITIES: Record<CitadelRole, ReadonlyArray<CitadelCapability>> =
     "manage_members",
     "delete_citadel",
   ],
-  steward: [
-    "view",
-    "comment",
-    "contribute",
-    "run_missions",
-    "manage_council",
-    "manage_gates",
-    "manage_members",
-  ],
-  builder: [
-    "view",
-    "comment",
-    "contribute",
-    "run_missions",
-    "manage_council",
-  ],
-  operator: [
-    "view",
-    "comment",
-    "run_missions",
-  ],
-  contributor: [
-    "view",
-    "comment",
-    "contribute",
-  ],
-  viewer: [
-    "view",
-  ],
-  guest: [
-    "view",
-  ],
-  agent: [
-    "run_missions",
-  ],
+  steward: ["view", "comment", "contribute", "run_missions", "manage_council", "manage_gates", "manage_members"],
+  builder: ["view", "comment", "contribute", "run_missions", "manage_council"],
+  operator: ["view", "comment", "run_missions"],
+  contributor: ["view", "comment", "contribute"],
+  viewer: ["view"],
+  guest: ["view"],
+  agent: ["run_missions"],
 } as const;
 
 /**

@@ -53,10 +53,7 @@ export function SmartPathInput({
     };
   }, [limit, root]);
 
-  const options = useMemo(
-    () => suggestions.map((item) => ({ value: item, label: item })),
-    [suggestions],
-  );
+  const options = useMemo(() => suggestions.map((item) => ({ value: item, label: item })), [suggestions]);
 
   const editedManually = Boolean(autoPath && autoPath !== value);
 
@@ -83,14 +80,17 @@ export function SmartPathInput({
             onChange(suggested);
           }}
           disabled={loading || options.length === 0}
-         className="gc-button">
+          className="gc-button"
+        >
           {globalCopy.smartPathInput.browse}
         </button>
       </div>
       <div className="controls-row">
         <ChangeBadge level={riskLevel} />
         {loading ? <span className="office-subtitle">{globalCopy.smartPathInput.loadingSuggestions}</span> : null}
-        {editedManually ? <span className="office-subtitle">{globalCopy.smartPathInput.editedAfterAutofill}</span> : null}
+        {editedManually ? (
+          <span className="office-subtitle">{globalCopy.smartPathInput.editedAfterAutofill}</span>
+        ) : null}
       </div>
       {helpText ? <p className="office-subtitle">{helpText}</p> : null}
     </div>

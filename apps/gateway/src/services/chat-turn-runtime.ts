@@ -1,8 +1,5 @@
 import type { TurnRuntime, TurnRuntimeRequest, TurnRuntimeResult } from "@goatcitadel/orchestration";
-import {
-  ChatAgentOrchestrator,
-  type ChatAgentOrchestratorDeps,
-} from "./chat-agent-orchestrator.js";
+import { ChatAgentOrchestrator, type ChatAgentOrchestratorDeps } from "./chat-agent-orchestrator.js";
 
 export class GatewayTurnRuntime implements TurnRuntime {
   private readonly orchestrator: ChatAgentOrchestrator;

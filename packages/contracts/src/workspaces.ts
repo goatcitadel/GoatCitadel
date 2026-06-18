@@ -37,13 +37,7 @@ export interface WorkspaceUpdateInput {
   workspacePrefs?: WorkspacePrefs;
 }
 
-export type GuidanceDocType =
-  | "goatcitadel"
-  | "agents"
-  | "claude"
-  | "contributing"
-  | "security"
-  | "vision";
+export type GuidanceDocType = "goatcitadel" | "agents" | "claude" | "contributing" | "security" | "vision";
 
 export interface GuidanceDocumentRecord {
   docType: GuidanceDocType;

@@ -1,14 +1,6 @@
 export type UiActionState = "idle" | "pending" | "success" | "error";
 
-export type IntegrationFieldType =
-  | "text"
-  | "password"
-  | "textarea"
-  | "number"
-  | "boolean"
-  | "select"
-  | "url"
-  | "json";
+export type IntegrationFieldType = "text" | "password" | "textarea" | "number" | "boolean" | "select" | "url" | "json";
 
 export interface IntegrationFieldOption {
   value: string;

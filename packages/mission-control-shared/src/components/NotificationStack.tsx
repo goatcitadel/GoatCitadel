@@ -14,30 +14,26 @@ export function upsertNotificationItem(
   incoming: NotificationItem,
   maxItems = 6,
 ): NotificationItem[] {
-  const matchIndex = current.findIndex((item) => (
+  const matchIndex = current.findIndex((item) =>
     incoming.groupKey
       ? item.groupKey === incoming.groupKey
-      : item.tone === incoming.tone && item.message === incoming.message
-  ));
+      : item.tone === incoming.tone && item.message === incoming.message,
+  );
 
   if (matchIndex === -1) {
     return [{ ...incoming, count: incoming.count ?? 1 }, ...current].slice(0, maxItems);
   }
 
   const matched = current[matchIndex]!;
-  const nextCount = matched.tone === incoming.tone && matched.message === incoming.message
-    ? (matched.count ?? 1) + 1
-    : 1;
+  const nextCount =
+    matched.tone === incoming.tone && matched.message === incoming.message ? (matched.count ?? 1) + 1 : 1;
   const nextItem: NotificationItem = {
     ...incoming,
     id: matched.id,
     count: nextCount,
   };
 
-  return [
-    nextItem,
-    ...current.filter((_, index) => index !== matchIndex),
-  ].slice(0, maxItems);
+  return [nextItem, ...current.filter((_, index) => index !== matchIndex)].slice(0, maxItems);
 }
 
 interface NotificationStackProps {

@@ -38,12 +38,15 @@ describe("runWebhookDestinationLiveChecks", () => {
   });
 
   it("posts a Google Chat sandbox message into the configured thread key", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ name: "spaces/AAAA/messages/123" }), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }));
+    const fetcher = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ name: "spaces/AAAA/messages/123" }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }),
+    );
 
     const result = await runWebhookDestinationLiveChecks({
       channelKey: "google-chat",
@@ -92,14 +95,20 @@ describe("runWebhookDestinationLiveChecks", () => {
   });
 
   it("maps webhook failures into actionable probe categories", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      message: "Webhook was rejected.",
-    }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }));
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: "Webhook was rejected.",
+          }),
+          {
+            status: 403,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        ),
+    );
 
     const result = await runWebhookDestinationLiveChecks({
       channelKey: "google-chat",

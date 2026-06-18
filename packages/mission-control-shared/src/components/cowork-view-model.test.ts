@@ -494,9 +494,7 @@ describe("deriveCoworkRunViewModel", () => {
       id: "role-synth-1",
       tone: "warning",
     });
-    expect(viewModel.roleItems.items[1]?.note).toContain(
-      "Synthesized from 1 failed-but-usable upstream handoff.",
-    );
+    expect(viewModel.roleItems.items[1]?.note).toContain("Synthesized from 1 failed-but-usable upstream handoff.");
     expect(viewModel.roleItems.items[2]).toMatchObject({
       id: "role-critic-1",
       tone: "warning",

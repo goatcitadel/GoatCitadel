@@ -1,10 +1,4 @@
-export type WardEffect =
-  | "allow"
-  | "deny"
-  | "require_approval"
-  | "require_dry_run"
-  | "redact"
-  | "route_local";
+export type WardEffect = "allow" | "deny" | "require_approval" | "require_dry_run" | "redact" | "route_local";
 
 export interface CitadelWard {
   name: string;

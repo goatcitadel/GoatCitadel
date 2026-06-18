@@ -1,30 +1,12 @@
-export const ASSEMBLY_DOMAIN_PRESETS = [
-  "coding",
-  "architecture",
-  "writing",
-  "seo",
-  "analysis",
-  "strategy",
-] as const;
+export const ASSEMBLY_DOMAIN_PRESETS = ["coding", "architecture", "writing", "seo", "analysis", "strategy"] as const;
 
 export type AssemblyDomainPreset = (typeof ASSEMBLY_DOMAIN_PRESETS)[number];
 
-export const ASSEMBLY_MODES = [
-  "consensus",
-  "debate",
-  "critique",
-  "brainstorm",
-] as const;
+export const ASSEMBLY_MODES = ["consensus", "debate", "critique", "brainstorm"] as const;
 
 export type AssemblyMode = (typeof ASSEMBLY_MODES)[number];
 
-export const ASSEMBLY_RUN_STATUSES = [
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "stopped",
-] as const;
+export const ASSEMBLY_RUN_STATUSES = ["queued", "running", "completed", "failed", "stopped"] as const;
 
 export type AssemblyRunStatus = (typeof ASSEMBLY_RUN_STATUSES)[number];
 
@@ -59,12 +41,7 @@ export const ASSEMBLY_ARTIFACT_TYPES = [
 
 export type AssemblyArtifactType = (typeof ASSEMBLY_ARTIFACT_TYPES)[number];
 
-export const ASSEMBLY_REVIEW_VERDICTS = [
-  "accept",
-  "reject",
-  "revise",
-  "merge",
-] as const;
+export const ASSEMBLY_REVIEW_VERDICTS = ["accept", "reject", "revise", "merge"] as const;
 
 export type AssemblyReviewVerdict = (typeof ASSEMBLY_REVIEW_VERDICTS)[number];
 
@@ -75,17 +52,11 @@ export const ASSEMBLY_ADVERSARIAL_OBJECTION_CLASSES = [
   "speculative_concern",
 ] as const;
 
-export type AssemblyAdversarialObjectionClass =
-  (typeof ASSEMBLY_ADVERSARIAL_OBJECTION_CLASSES)[number];
+export type AssemblyAdversarialObjectionClass = (typeof ASSEMBLY_ADVERSARIAL_OBJECTION_CLASSES)[number];
 
-export const ASSEMBLY_ADVERSARIAL_STRICTNESS_LEVELS = [
-  "light",
-  "balanced",
-  "aggressive",
-] as const;
+export const ASSEMBLY_ADVERSARIAL_STRICTNESS_LEVELS = ["light", "balanced", "aggressive"] as const;
 
-export type AssemblyAdversarialStrictness =
-  (typeof ASSEMBLY_ADVERSARIAL_STRICTNESS_LEVELS)[number];
+export type AssemblyAdversarialStrictness = (typeof ASSEMBLY_ADVERSARIAL_STRICTNESS_LEVELS)[number];
 
 export const ASSEMBLY_ADVERSARIAL_SELECTION_STRATEGIES = [
   "user_selected",
@@ -93,14 +64,9 @@ export const ASSEMBLY_ADVERSARIAL_SELECTION_STRATEGIES = [
   "rotate_among_participants",
 ] as const;
 
-export type AssemblyAdversarialSelectionStrategy =
-  (typeof ASSEMBLY_ADVERSARIAL_SELECTION_STRATEGIES)[number];
+export type AssemblyAdversarialSelectionStrategy = (typeof ASSEMBLY_ADVERSARIAL_SELECTION_STRATEGIES)[number];
 
-export const ASSEMBLY_EXPORT_TARGETS = [
-  "artifact",
-  "chat",
-  "task",
-] as const;
+export const ASSEMBLY_EXPORT_TARGETS = ["artifact", "chat", "task"] as const;
 
 export type AssemblyExportTarget = (typeof ASSEMBLY_EXPORT_TARGETS)[number];
 

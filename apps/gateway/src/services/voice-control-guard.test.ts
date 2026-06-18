@@ -59,17 +59,19 @@ describe("buildVoiceControlStartFailure", () => {
       status: createVoiceStatus(),
     });
 
-    expect(failure).toEqual(expect.objectContaining({
-      message: "Cannot start Talk Mode while the managed voice runtime is missing.",
-      stt: expect.objectContaining({
-        state: "error",
-        runtimeReady: false,
-        lastError: "Cannot start Talk Mode while the managed voice runtime is missing.",
+    expect(failure).toEqual(
+      expect.objectContaining({
+        message: "Cannot start Talk Mode while the managed voice runtime is missing.",
+        stt: expect.objectContaining({
+          state: "error",
+          runtimeReady: false,
+          lastError: "Cannot start Talk Mode while the managed voice runtime is missing.",
+        }),
+        talk: expect.objectContaining({
+          state: "error",
+        }),
       }),
-      talk: expect.objectContaining({
-        state: "error",
-      }),
-    }));
+    );
   });
 
   it("blocks wake start when no managed model is selected", () => {
@@ -82,13 +84,15 @@ describe("buildVoiceControlStartFailure", () => {
       status: createVoiceStatus(),
     });
 
-    expect(failure).toEqual(expect.objectContaining({
-      message: "Cannot start Wake listener until a managed voice model is selected.",
-      wake: expect.objectContaining({
-        enabled: false,
-        state: "error",
+    expect(failure).toEqual(
+      expect.objectContaining({
+        message: "Cannot start Wake listener until a managed voice model is selected.",
+        wake: expect.objectContaining({
+          enabled: false,
+          state: "error",
+        }),
       }),
-    }));
+    );
   });
 
   it("keeps an already-running talk session visible when a duplicate start is attempted", () => {
@@ -105,21 +109,25 @@ describe("buildVoiceControlStartFailure", () => {
       }),
     });
 
-    expect(failure).toEqual(expect.objectContaining({
-      message: "Talk Mode is already running on talk-123. Stop it before starting a new session.",
-      talk: expect.objectContaining({
-        activeSessionId: "talk-123",
-        state: "running",
+    expect(failure).toEqual(
+      expect.objectContaining({
+        message: "Talk Mode is already running on talk-123. Stop it before starting a new session.",
+        talk: expect.objectContaining({
+          activeSessionId: "talk-123",
+          state: "running",
+        }),
       }),
-    }));
+    );
   });
 
   it("returns undefined when the control start is allowed", () => {
-    expect(buildVoiceControlStartFailure({
-      action: "wake",
-      now: "2026-03-31T18:25:00.000Z",
-      runtime: createVoiceRuntime(),
-      status: createVoiceStatus(),
-    })).toBeUndefined();
+    expect(
+      buildVoiceControlStartFailure({
+        action: "wake",
+        now: "2026-03-31T18:25:00.000Z",
+        runtime: createVoiceRuntime(),
+        status: createVoiceStatus(),
+      }),
+    ).toBeUndefined();
   });
 });

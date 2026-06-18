@@ -3,11 +3,13 @@ import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 
 describe("sendTelegramTypingIndicator", () => {
   it("sends a Telegram typing action and returns an expiry window", async () => {
-    const fetcher = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
-      new Response(JSON.stringify({ ok: true, result: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+    const fetcher = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
 
     const result = await sendTelegramTypingIndicator({
       connectionId: "telegram-1",
@@ -48,23 +50,28 @@ describe("sendTelegramTypingIndicator", () => {
   });
 
   it("surfaces provider failures", async () => {
-    const fetcher = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
-      new Response(JSON.stringify({
-        ok: false,
-        description: "Forbidden: bot was kicked from the supergroup chat",
-      }), {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-      }));
-
-    await expect(sendTelegramTypingIndicator({
-      connectionId: "telegram-1",
-      target: "-1001234567890",
-      token: "telegram-token",
-      chatId: "-1001234567890",
-      fetcher,
-    })).rejects.toThrow(
-      "telegram.typing failed (403): Forbidden: bot was kicked from the supergroup chat",
+    const fetcher = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: false,
+            description: "Forbidden: bot was kicked from the supergroup chat",
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
     );
+
+    await expect(
+      sendTelegramTypingIndicator({
+        connectionId: "telegram-1",
+        target: "-1001234567890",
+        token: "telegram-token",
+        chatId: "-1001234567890",
+        fetcher,
+      }),
+    ).rejects.toThrow("telegram.typing failed (403): Forbidden: bot was kicked from the supergroup chat");
   });
 });

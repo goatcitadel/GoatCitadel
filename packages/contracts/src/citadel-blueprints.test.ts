@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import type { Citadel, CitadelChamber, CitadelChamberInput, CitadelCharter, CitadelCharterInput, CitadelTemplateTarget } from "./citadels.js";
+import type {
+  Citadel,
+  CitadelChamber,
+  CitadelChamberInput,
+  CitadelCharter,
+  CitadelCharterInput,
+  CitadelTemplateTarget,
+} from "./citadels.js";
 import {
   CITADEL_BLUEPRINT_SCHEMA_VERSION,
   applyCitadelBlueprint,
@@ -21,8 +28,24 @@ function sampleCitadel(): Citadel {
     updatedAt: "t",
   };
   const chambers: CitadelChamber[] = [
-    { chamberId: "ch-1", citadelId: "ws-1", name: "General", sensitivity: "private", sealed: false, createdAt: "t", updatedAt: "t" },
-    { chamberId: "ch-2", citadelId: "ws-1", name: "Finance", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
+    {
+      chamberId: "ch-1",
+      citadelId: "ws-1",
+      name: "General",
+      sensitivity: "private",
+      sealed: false,
+      createdAt: "t",
+      updatedAt: "t",
+    },
+    {
+      chamberId: "ch-2",
+      citadelId: "ws-1",
+      name: "Finance",
+      sensitivity: "restricted",
+      sealed: true,
+      createdAt: "t",
+      updatedAt: "t",
+    },
   ];
   return { citadelId: "ws-1", charter, chambers };
 }
@@ -81,7 +104,7 @@ describe("applyCitadelBlueprint", () => {
         chambers.push(input);
         return { chamberId: `c-${chambers.length}`, citadelId: input.citadelId } as CitadelChamber;
       },
-      getCitadel: (citadelId) => ({ citadelId } as Citadel),
+      getCitadel: (citadelId) => ({ citadelId }) as Citadel,
     };
 
     const blueprint = exportCitadelBlueprint(sampleCitadel());

@@ -65,7 +65,8 @@ export function buildHarnessAuditReport(input: BuildHarnessAuditInput): HarnessA
       label: "Orchestration & Routing",
       score: clampScore(58 + Math.min(candidateEntries.length, 4) * 5 + Math.min(proposalEntries.length, 4) * 4),
       status: statusForScore(58 + Math.min(candidateEntries.length, 4) * 5 + Math.min(proposalEntries.length, 4) * 4),
-      rationale: "Cowork, specialist candidates, and capability proposals already give GoatCitadel a native routing story.",
+      rationale:
+        "Cowork, specialist candidates, and capability proposals already give GoatCitadel a native routing story.",
       nativeDestination: "Operate > Cowork / Configure > Agents",
       evidence: [
         `${candidateEntries.length} candidate capabilities in the inspectable catalog`,
@@ -81,7 +82,9 @@ export function buildHarnessAuditReport(input: BuildHarnessAuditInput): HarnessA
       pillarId: "persistence_state",
       label: "Persistence & State",
       score: clampScore(64 + Math.min(importedSkills.length, 3) * 3 + Math.min(input.improvementReportCount, 6) * 2),
-      status: statusForScore(64 + Math.min(importedSkills.length, 3) * 3 + Math.min(input.improvementReportCount, 6) * 2),
+      status: statusForScore(
+        64 + Math.min(importedSkills.length, 3) * 3 + Math.min(input.improvementReportCount, 6) * 2,
+      ),
       rationale: "Skill lifecycle, import provenance, and weekly replay artifacts already persist in native stores.",
       nativeDestination: "Observe > Improvement / Configure > Agents",
       evidence: [
@@ -97,16 +100,16 @@ export function buildHarnessAuditReport(input: BuildHarnessAuditInput): HarnessA
       pillarId: "quality_feedback",
       label: "Quality Gates & Feedback",
       score: clampScore(40 + Math.min(input.improvementReportCount, 8) * 6 + Math.min(input.proposals.length, 6) * 3),
-      status: statusForScore(40 + Math.min(input.improvementReportCount, 8) * 6 + Math.min(input.proposals.length, 6) * 3),
+      status: statusForScore(
+        40 + Math.min(input.improvementReportCount, 8) * 6 + Math.min(input.proposals.length, 6) * 3,
+      ),
       rationale: "Weekly replay and inspectable proposals make the feedback loop native, reviewable, and bounded.",
       nativeDestination: "Observe > Improvement",
       evidence: [
         `${input.improvementReportCount} replay-backed weekly reports`,
         `${input.proposals.length} proposal records available for inspection`,
       ],
-      recommendedActions: [
-        "Prefer report-first and proposal-backed improvements over autonomous apply loops.",
-      ],
+      recommendedActions: ["Prefer report-first and proposal-backed improvements over autonomous apply loops."],
     },
     {
       pillarId: "permissions_safety",
@@ -123,16 +126,15 @@ export function buildHarnessAuditReport(input: BuildHarnessAuditInput): HarnessA
           Math.round(input.policy.guardedAutoThreshold * 20) +
           Math.min(recentRejectedImports, 3) * 2,
       ),
-      rationale: "The native posture already biases toward disabled-by-default installs, first-use confirmation, and guarded auto-activation.",
+      rationale:
+        "The native posture already biases toward disabled-by-default installs, first-use confirmation, and guarded auto-activation.",
       nativeDestination: "Configure > Agents > Skills",
       evidence: [
         `guarded auto threshold ${input.policy.guardedAutoThreshold.toFixed(2)}`,
         input.policy.requireFirstUseConfirmation ? "first-use confirmation enabled" : "first-use confirmation disabled",
         `${recentRejectedImports} recent rejected imports`,
       ],
-      recommendedActions: [
-        "Keep Capability Evolver-style self-modification outside the callable surface.",
-      ],
+      recommendedActions: ["Keep Capability Evolver-style self-modification outside the callable surface."],
     },
     {
       pillarId: "ergonomics_trust",
@@ -155,9 +157,7 @@ export function buildHarnessAuditReport(input: BuildHarnessAuditInput): HarnessA
         `${enabledSkills.length} directly callable skills`,
         `${sleepingSkills.length} guarded skills available for stronger matches`,
       ],
-      recommendedActions: [
-        "Use the audit as an operator lens and teaching aid, not as a separate hidden runtime.",
-      ],
+      recommendedActions: ["Use the audit as an operator lens and teaching aid, not as a separate hidden runtime."],
     },
   ];
 

@@ -79,10 +79,8 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
     artifactSummary: readString(result?.artifactSummary),
     originalByteLength: readNumber(result?.originalByteLength, result?.byteLength),
     fallbackAttemptCount: fallbackChain.length > 1 ? fallbackChain.length - 1 : 0,
-    hasFailureSignal: run.status === "failed"
-      || run.status === "blocked"
-      || Boolean(run.error)
-      || Boolean(browserFailureClass),
+    hasFailureSignal:
+      run.status === "failed" || run.status === "blocked" || Boolean(run.error) || Boolean(browserFailureClass),
   };
 }
 

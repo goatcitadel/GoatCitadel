@@ -55,19 +55,13 @@ export type MasonInterpret = (prompt: string) => Promise<string>;
  */
 export type VaultKeyProvider = (citadelId: string) => Buffer | undefined;
 
-export type VaultStoreResult =
-  | { ok: false; reason: "unavailable" }
-  | { ok: true; secret: CitadelVaultSecretMetadata };
+export type VaultStoreResult = { ok: false; reason: "unavailable" } | { ok: true; secret: CitadelVaultSecretMetadata };
 
-export type VaultRevealResult =
-  | { ok: false; reason: "unavailable" | "not_found" }
-  | { ok: true; value: string };
+export type VaultRevealResult = { ok: false; reason: "unavailable" | "not_found" } | { ok: true; value: string };
 
 export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
 
-export type MasonReviewResult =
-  | { ok: false; errors: string[] }
-  | { ok: true; review: BlueprintReviewSummary };
+export type MasonReviewResult = { ok: false; errors: string[] } | { ok: true; review: BlueprintReviewSummary };
 
 export type MasonStageResult =
   | { ok: false; errors: string[] }

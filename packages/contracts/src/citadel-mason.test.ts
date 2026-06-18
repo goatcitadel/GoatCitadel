@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { Citadel, CitadelChamber, CitadelCharter } from "./citadels.js";
-import { CITADEL_BLUEPRINT_SCHEMA_VERSION, exportCitadelBlueprint, validateCitadelBlueprint } from "./citadel-blueprints.js";
+import {
+  CITADEL_BLUEPRINT_SCHEMA_VERSION,
+  exportCitadelBlueprint,
+  validateCitadelBlueprint,
+} from "./citadel-blueprints.js";
 import {
   MASON_SETUP_QUESTIONS,
   buildMasonInterpretPrompt,
@@ -24,8 +28,24 @@ function sampleCitadel(): Citadel {
     updatedAt: "t",
   };
   const chambers: CitadelChamber[] = [
-    { chamberId: "c1", citadelId: "ws-1", name: "General", sensitivity: "private", sealed: false, createdAt: "t", updatedAt: "t" },
-    { chamberId: "c2", citadelId: "ws-1", name: "Finance", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
+    {
+      chamberId: "c1",
+      citadelId: "ws-1",
+      name: "General",
+      sensitivity: "private",
+      sealed: false,
+      createdAt: "t",
+      updatedAt: "t",
+    },
+    {
+      chamberId: "c2",
+      citadelId: "ws-1",
+      name: "Finance",
+      sensitivity: "restricted",
+      sealed: true,
+      createdAt: "t",
+      updatedAt: "t",
+    },
   ];
   return { citadelId: "ws-1", charter, chambers };
 }

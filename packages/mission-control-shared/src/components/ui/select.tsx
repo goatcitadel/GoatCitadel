@@ -46,10 +46,7 @@ const SelectTrigger = React.forwardRef<
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(function SelectContent(
-  { className, children, position = "item-aligned", align = "center", ...props },
-  ref,
-) {
+>(function SelectContent({ className, children, position = "item-aligned", align = "center", ...props }, ref) {
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content

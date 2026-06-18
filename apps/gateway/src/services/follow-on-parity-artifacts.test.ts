@@ -17,9 +17,11 @@ describe("follow-on-parity-artifacts", () => {
   const tempRoots: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(tempRoots.splice(0).map(async (tempRoot) => {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }));
+    await Promise.all(
+      tempRoots.splice(0).map(async (tempRoot) => {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }),
+    );
   });
 
   it("prefers the latest artifact for the active deployment profile", async () => {
@@ -38,12 +40,7 @@ describe("follow-on-parity-artifacts", () => {
       "# Remote Hardened\n\n## Summary\nRemote hardened browser proof is current.\n",
     );
 
-    const artifact = readLatestFollowOnParityArtifactFromWorkspace(
-      rootDir,
-      workspaceDir,
-      "browser",
-      "trusted_local",
-    );
+    const artifact = readLatestFollowOnParityArtifactFromWorkspace(rootDir, workspaceDir, "browser", "trusted_local");
 
     expect(artifact).toMatchObject({
       laneId: "browser",
@@ -63,12 +60,7 @@ describe("follow-on-parity-artifacts", () => {
       "# Voice\n\n## Summary\nLocal voice proof is current.\n",
     );
 
-    const artifact = readLatestFollowOnParityArtifactFromWorkspace(
-      rootDir,
-      workspaceDir,
-      "voice",
-      "trusted_local",
-    );
+    const artifact = readLatestFollowOnParityArtifactFromWorkspace(rootDir, workspaceDir, "voice", "trusted_local");
 
     expect(artifact).toMatchObject({
       laneId: "voice",
@@ -94,8 +86,10 @@ describe("follow-on-parity-artifacts", () => {
           laneId: "packaging",
           generatedAt: "2026-04-02T04:39:42.816Z",
           summary: "Remote hardened packaging proof is current.",
-          relativePath: "artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-remote_hardened-2026-04-02T04-39-42-816Z.md",
-          fullPath: "./workspace/artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-remote_hardened-2026-04-02T04-39-42-816Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-remote_hardened-2026-04-02T04-39-42-816Z.md",
+          fullPath:
+            "./workspace/artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-remote_hardened-2026-04-02T04-39-42-816Z.md",
           bytes: 128,
         },
       },
@@ -126,16 +120,14 @@ describe("follow-on-parity-artifacts", () => {
       "# Nested Plugin README\n\nNested file content.\n",
     );
 
-    const artifact = readLatestFollowOnParityArtifactFromWorkspace(
-      rootDir,
-      workspaceDir,
-      "extensions",
-    );
+    const artifact = readLatestFollowOnParityArtifactFromWorkspace(rootDir, workspaceDir, "extensions");
 
     expect(artifact).toMatchObject({
       laneId: "extensions",
       summary: "Extension starter pack exported.",
     });
-    expect(artifact?.relativePath).toBe("artifacts/follow-on-parity/extensions/starter-pack/2026-04-02/extension-starter-pack-2026-04-02T04-18-57-894Z/README.md");
+    expect(artifact?.relativePath).toBe(
+      "artifacts/follow-on-parity/extensions/starter-pack/2026-04-02/extension-starter-pack-2026-04-02T04-18-57-894Z/README.md",
+    );
   });
 });

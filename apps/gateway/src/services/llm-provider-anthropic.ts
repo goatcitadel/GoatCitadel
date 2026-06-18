@@ -6,7 +6,10 @@ import type {
   LlmProviderRequestTarget,
   LlmProviderResolution,
 } from "./llm-provider-adapter.js";
-import { applyEstimatedCostToChatResponseWithSource, applyEstimatedCostToStreamChunkWithSource } from "./llm-pricing.js";
+import {
+  applyEstimatedCostToChatResponseWithSource,
+  applyEstimatedCostToStreamChunkWithSource,
+} from "./llm-pricing.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
@@ -585,7 +588,8 @@ function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Re
   const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
   const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
   const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
-  const cacheCreation = typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
+  const cacheCreation =
+    typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
   return {
     prompt_tokens: inputTokens,
     completion_tokens: outputTokens,

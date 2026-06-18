@@ -28,20 +28,24 @@ describe("companion auth contracts", () => {
   it("exposes admin-facing companion session records", () => {
     expectTypeOf<CompanionSessionAdminRecord>().toHaveProperty("lastRotatedAt").toBeString();
     expectTypeOf<CompanionSessionListResponse["items"]>().toMatchTypeOf<CompanionSessionAdminRecord[]>();
-    expectTypeOf<CompanionSessionRevokeResponse>().toHaveProperty("session").toMatchTypeOf<CompanionSessionAdminRecord>();
+    expectTypeOf<CompanionSessionRevokeResponse>()
+      .toHaveProperty("session")
+      .toMatchTypeOf<CompanionSessionAdminRecord>();
   });
 
   it("exposes audit events for companion session diagnostics", () => {
-    expectTypeOf<CompanionAuditEventListResponse["items"]>().toMatchTypeOf<Array<{
-      event:
-        | "auth.companion_session.exchange"
-        | "auth.companion_session.refresh"
-        | "auth.companion_session.revoke"
-        | "auth.companion_request.accepted"
-        | "auth.companion_request.timestamp_invalid"
-        | "auth.companion_request.signature_invalid"
-        | "auth.companion_request.replay_rejected"
-        | "auth.companion_request.session_inactive";
-    }>>();
+    expectTypeOf<CompanionAuditEventListResponse["items"]>().toMatchTypeOf<
+      Array<{
+        event:
+          | "auth.companion_session.exchange"
+          | "auth.companion_session.refresh"
+          | "auth.companion_session.revoke"
+          | "auth.companion_request.accepted"
+          | "auth.companion_request.timestamp_invalid"
+          | "auth.companion_request.signature_invalid"
+          | "auth.companion_request.replay_rejected"
+          | "auth.companion_request.session_inactive";
+      }>
+    >();
   });
 });

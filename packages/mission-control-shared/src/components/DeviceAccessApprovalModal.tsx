@@ -37,9 +37,11 @@ export function DeviceAccessApprovalModal({
         }
       }}
       title="Approve new device access"
-      description={prompt
-        ? `${prompt.deviceLabel} is waiting for an authenticated session to grant gateway access.`
-        : "A new device is requesting access."}
+      description={
+        prompt
+          ? `${prompt.deviceLabel} is waiting for an authenticated session to grant gateway access.`
+          : "A new device is requesting access."
+      }
       confirmLabel="Allow device"
       cancelLabel="Not now"
       confirmPending={busy}

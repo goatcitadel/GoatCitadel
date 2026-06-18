@@ -26,38 +26,44 @@ describe("chat session utils", () => {
   });
 
   it("builds consistent realtime payloads for session update events", () => {
-    expect(buildChatSessionUpdatedPayload("chat_session_pinned", {
-      sessionId: "sess-1",
-      pinned: true,
-      lifecycleStatus: "active",
-      archivedAt: undefined,
-      projectId: undefined,
-    })).toEqual({
+    expect(
+      buildChatSessionUpdatedPayload("chat_session_pinned", {
+        sessionId: "sess-1",
+        pinned: true,
+        lifecycleStatus: "active",
+        archivedAt: undefined,
+        projectId: undefined,
+      }),
+    ).toEqual({
       type: "chat_session_pinned",
       sessionId: "sess-1",
       pinned: true,
     });
 
-    expect(buildChatSessionUpdatedPayload("chat_session_archived", {
-      sessionId: "sess-1",
-      pinned: false,
-      lifecycleStatus: "archived",
-      archivedAt: "2026-03-07T00:00:00.000Z",
-      projectId: undefined,
-    })).toEqual({
+    expect(
+      buildChatSessionUpdatedPayload("chat_session_archived", {
+        sessionId: "sess-1",
+        pinned: false,
+        lifecycleStatus: "archived",
+        archivedAt: "2026-03-07T00:00:00.000Z",
+        projectId: undefined,
+      }),
+    ).toEqual({
       type: "chat_session_archived",
       sessionId: "sess-1",
       lifecycleStatus: "archived",
       archivedAt: "2026-03-07T00:00:00.000Z",
     });
 
-    expect(buildChatSessionUpdatedPayload("chat_session_project_assigned", {
-      sessionId: "sess-1",
-      pinned: false,
-      lifecycleStatus: "active",
-      archivedAt: undefined,
-      projectId: "project-1",
-    })).toEqual({
+    expect(
+      buildChatSessionUpdatedPayload("chat_session_project_assigned", {
+        sessionId: "sess-1",
+        pinned: false,
+        lifecycleStatus: "active",
+        archivedAt: undefined,
+        projectId: "project-1",
+      }),
+    ).toEqual({
       type: "chat_session_project_assigned",
       sessionId: "sess-1",
       projectId: "project-1",

@@ -23,4 +23,3 @@ export interface ChangeRiskEvaluationResponse {
   overall: ChangeRiskLevel;
   items: ChangeRiskEvaluationItem[];
 }
-

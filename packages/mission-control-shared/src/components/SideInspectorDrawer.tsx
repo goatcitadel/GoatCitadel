@@ -150,11 +150,7 @@ export function SideInspectorDrawer({
       className={`side-inspector-drawer${open ? " open" : " closed"}${pinned ? " pinned" : ""}${dragEnabled ? " draggable" : ""}${dragging ? " dragging" : ""}${className ? ` ${className}` : ""}`}
       aria-hidden={!open}
     >
-      <div
-        className="side-inspector-drawer-head"
-        onPointerDown={handlePointerDown}
-        onDoubleClick={handleDoubleClick}
-      >
+      <div className="side-inspector-drawer-head" onPointerDown={handlePointerDown} onDoubleClick={handleDoubleClick}>
         <div className="side-inspector-drawer-copy">
           {kicker ? <p className="side-inspector-drawer-kicker">{kicker}</p> : null}
           <h3 className="side-inspector-drawer-title">{title}</h3>

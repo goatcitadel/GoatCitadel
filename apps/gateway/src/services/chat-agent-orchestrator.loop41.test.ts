@@ -9,8 +9,7 @@ const WAKE_LIFECYCLE_TASK =
 
 describe("ChatAgentOrchestrator loop41 durable runtime patch-plan eval integrity", () => {
   it("passes the model's patch-plan answer through verbatim without controller prefetch or fabricated evidence", async () => {
-    const modelAnswer =
-      "A generic patch should update the runtime and tests. Parts of this answer may be incomplete.";
+    const modelAnswer = "A generic patch should update the runtime and tests. Parts of this answer may be incomplete.";
     const invokeTool = createPatchPlanEvidenceTool();
     const result = await runPatchPlanTurn(WAKE_LIFECYCLE_TASK, modelAnswer, invokeTool);
 

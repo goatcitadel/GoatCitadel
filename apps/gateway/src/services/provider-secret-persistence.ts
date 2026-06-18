@@ -72,7 +72,9 @@ export function persistProviderApiKeyWithFallback(input: PersistProviderApiKeyIn
 
   const envVar = resolveProviderEnvVar(input.llmService, input.providerId, input.preferredEnvVar);
   if (!envVar) {
-    throw new Error(`Secure keychain is unavailable on this host, and no env var is configured for provider ${input.providerId}.`);
+    throw new Error(
+      `Secure keychain is unavailable on this host, and no env var is configured for provider ${input.providerId}.`,
+    );
   }
 
   return persistProviderApiKeyToEnv(input.providerId, envVar, input.apiKey, input.rootDir, input.env);
@@ -148,7 +150,9 @@ function persistProviderApiKeyToEnv(
 } {
   const writeResult = upsertLocalEnvVar(envVar, apiKey, { rootDir });
   if (!writeResult.updated) {
-    throw new Error(`Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file.`);
+    throw new Error(
+      `Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file.`,
+    );
   }
 
   (env ?? process.env)[envVar] = apiKey;

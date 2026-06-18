@@ -24,5 +24,3 @@ export function TableSkeleton({ rows = 5, cols = 5 }: { rows?: number; cols?: nu
     </table>
   );
 }
-
-

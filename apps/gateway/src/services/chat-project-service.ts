@@ -296,7 +296,11 @@ function deriveRepoName(repoUrl?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const fileName = trimmed.split("/").at(-1)?.replace(/\.git$/i, "")?.trim();
+  const fileName = trimmed
+    .split("/")
+    .at(-1)
+    ?.replace(/\.git$/i, "")
+    ?.trim();
   return fileName || undefined;
 }
 

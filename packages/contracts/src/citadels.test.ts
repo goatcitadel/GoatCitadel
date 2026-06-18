@@ -97,7 +97,7 @@ describe("citadel templates", () => {
         chambers.push(input);
         return { chamberId: `ch-${chambers.length}`, citadelId: input.citadelId } as CitadelChamber;
       },
-      getCitadel: (citadelId) => ({ citadelId } as Citadel),
+      getCitadel: (citadelId) => ({ citadelId }) as Citadel,
     };
 
     const template = findCitadelTemplate("project-command");
@@ -129,9 +129,33 @@ describe("summarizeCitadelGatehouse", () => {
         updatedAt: "t",
       },
       chambers: [
-        { chamberId: "c1", citadelId: "ws-1", name: "General", sensitivity: "private", sealed: false, createdAt: "t", updatedAt: "t" },
-        { chamberId: "c2", citadelId: "ws-1", name: "Finance", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
-        { chamberId: "c3", citadelId: "ws-1", name: "Legal", sensitivity: "restricted", sealed: true, createdAt: "t", updatedAt: "t" },
+        {
+          chamberId: "c1",
+          citadelId: "ws-1",
+          name: "General",
+          sensitivity: "private",
+          sealed: false,
+          createdAt: "t",
+          updatedAt: "t",
+        },
+        {
+          chamberId: "c2",
+          citadelId: "ws-1",
+          name: "Finance",
+          sensitivity: "restricted",
+          sealed: true,
+          createdAt: "t",
+          updatedAt: "t",
+        },
+        {
+          chamberId: "c3",
+          citadelId: "ws-1",
+          name: "Legal",
+          sensitivity: "restricted",
+          sealed: true,
+          createdAt: "t",
+          updatedAt: "t",
+        },
       ],
     });
 
