@@ -5,7 +5,7 @@ import { resolveLaneProof } from "./release-certificate-proof.mjs";
 
 const spec = {
   name: "verify:runtime:truth",
-  workflowFile: "verification-truth-lanes.yml",
+  workflowFile: "verification-1-0-release-proof.yml",
   required: true,
   releaseProofCovered: true,
 };
@@ -132,7 +132,7 @@ test("release certificate requires hostile sandbox proof from the exact-SHA rele
   assert.match(coveredBlock[1], /"verify:code-mode:hostile-sandbox"/);
   assert.match(
     writer,
-    /\{ name: "verify:code-mode:hostile-sandbox", workflowFile: "verification-agentic-code-mode\.yml", required: true \}/,
+    /\{ name: "verify:code-mode:hostile-sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true \}/,
   );
   assert.match(writer, /--hostile-sandbox-proof/);
   assert.match(writer, /hostileSandboxWindowsClaim/);
@@ -140,26 +140,28 @@ test("release certificate requires hostile sandbox proof from the exact-SHA rele
   assert.match(writer, /exactShaMatched/);
 });
 
-test("release certificate requires direct exact-SHA A2A full proof", () => {
+test("release certificate covers A2A full through the umbrella release proof", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
   assert.ok(coveredBlock, "release proof covered lane list should be present");
-  assert.doesNotMatch(coveredBlock[1], /"verify:a2a:full"/);
-  assert.match(writer, /\{ name: "verify:a2a:full", workflowFile: "verification-a2a-full\.yml", required: true \}/);
+  assert.match(coveredBlock[1], /"verify:a2a:full"/);
+  assert.match(writer, /\{ name: "verify:a2a:full", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true \}/);
 
   const workflow = fs.readFileSync(
-    new URL("../../.github/workflows/verification-a2a-full.yml", import.meta.url),
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
     "utf8",
   );
-  assert.match(workflow, /name:\s*Verification A2A Full/);
-  assert.match(workflow, /run:\s*pnpm verify:a2a:full/);
+  assert.match(workflow, /name:\s*Verification 1\.0 Release Proof/);
+  assert.match(workflow, /laneScript:\s*verify:a2a:full/);
   assert.match(workflow, /if-no-files-found:\s*error/);
 
   const releaseWorkflow = fs.readFileSync(
     new URL("../../.github/workflows/release-installers.yml", import.meta.url),
     "utf8",
   );
-  assert.match(releaseWorkflow, /--workflow verification-a2a-full\.yml/);
+  assert.doesNotMatch(releaseWorkflow, /--workflow verification-a2a-full\.yml/);
+  assert.match(releaseWorkflow, /--workflow verification-fast\.yml/);
+  assert.match(releaseWorkflow, /--workflow security-trivy\.yml/);
 });
 
 test("release package metadata locks release and packaging scripts with fail-closed commands", () => {

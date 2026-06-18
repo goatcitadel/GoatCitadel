@@ -19,9 +19,10 @@ pass**, then add these as required (also tick "Require branches to be up to date
 | **Verification Fast** | `.github/workflows/verification-fast.yml` | `pnpm test`, `docs:check`, `verify:fast`, **production coverage gate**, real-Postgres storage lane |
 | **Security Trivy** | `.github/workflows/security-trivy.yml` | vuln / secret / misconfig scan (HIGH/CRITICAL) |
 
-> ⚠️ **Verification Fast** is the only always-on workflow that runs the full test suite + coverage
-> gate — it MUST be in the required set (Code Quality alone does not run tests). It now also re-runs on
-> `v*` tags (finding F-M16), so the exact release SHA is re-proven before a release.
+> ⚠️ **Verification Fast** is the only always-on workflow that runs the full test suite, `docs:check`,
+> production coverage gate, and real-Postgres storage lane — it MUST be in the required set (Code
+> Quality alone does not run tests). It also re-runs on `v*` tags (finding F-M16), so the exact
+> release SHA is re-proven before a release.
 
 ## Option B — API (`gh`)
 

@@ -32,6 +32,9 @@ jobs:
           - laneScript: verify:mesh:readiness
             artifactSlug: mesh-readiness
             runner: ubuntu-latest
+          - laneScript: verify:a2a:full
+            artifactSlug: a2a-full
+            runner: ubuntu-latest
           - laneScript: verify:agentic:governance
             artifactSlug: agentic-governance
             runner: ubuntu-latest

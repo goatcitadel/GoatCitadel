@@ -16,6 +16,7 @@ const RELEASE_PROOF_COVERED_LANES = [
   "verify:code-mode:hostile-sandbox",
   "verify:agentic:governance",
   "verify:agentic:proof",
+  "verify:a2a:full",
   "verify:ui:parity",
   "verify:memory:truth",
   "verify:realtime:truth",
@@ -31,25 +32,25 @@ const RELEASE_PROOF_COVERED_LANES = [
 const RELEASE_PROOF_COVERED_LANE_NAMES = new Set(RELEASE_PROOF_COVERED_LANES);
 const REQUIRED_LANE_SPECS = [
   { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
-  { name: "verify:runtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:auth:matrix", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:code-mode:sandbox", workflowFile: "verification-agentic-code-mode.yml", required: true },
-  { name: "verify:code-mode:hostile-sandbox", workflowFile: "verification-agentic-code-mode.yml", required: true },
-  { name: "verify:agentic:governance", workflowFile: "verification-agentic-code-mode.yml", required: true },
-  { name: "verify:agentic:proof", workflowFile: "verification-agentic-code-mode.yml", required: true },
-  { name: "verify:ui:parity", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:memory:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:realtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:architecture:metrics", workflowFile: "verification-truth-lanes.yml", required: true },
-  { name: "verify:operator:proof", workflowFile: "verification-operator-proof.yml", required: true },
-  { name: "verify:durable:recovery", workflowFile: "verification-durable-recovery.yml", required: true },
-  { name: "verify:surface:regression", workflowFile: "verification-surface-regression.yml", required: true },
-  { name: "verify:visual:regression", workflowFile: "verification-visual-regression.yml", required: true },
-  { name: "verify:backup:roundtrip", workflowFile: "verification-backup-roundtrip.yml", required: true },
-  { name: "verify:catalog:parity", workflowFile: "verification-catalog-parity.yml", required: true },
-  { name: "verify:api:compat", workflowFile: "verification-api-compat.yml", required: true },
-  { name: "verify:a2a:full", workflowFile: "verification-a2a-full.yml", required: true },
-  { name: "docs:check", workflowFile: "verification-docs-check.yml", required: true },
+  { name: "verify:runtime:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:auth:matrix", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:code-mode:sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:code-mode:hostile-sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:agentic:governance", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:agentic:proof", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:ui:parity", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:memory:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:realtime:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:architecture:metrics", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:operator:proof", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:durable:recovery", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:surface:regression", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:visual:regression", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:backup:roundtrip", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:catalog:parity", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:api:compat", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:a2a:full", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "docs:check", workflowFile: "verification-fast.yml", required: true },
   { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
 ].map((spec) => ({
   ...spec,
@@ -136,9 +137,9 @@ if (args.requireSuccess) {
   // valid only when every required lane's proof is anchored to the exact release-candidate SHA.
   if (certificate.exactShaStatus.status !== "matched") {
     throw new Error(
-      `Release certificate exact-SHA proof is "${certificate.exactShaStatus.status}" for ${commit}: `
-        + "one or more required lane proofs are not bound to the release SHA. Re-run the affected lane(s) "
-        + "(or the umbrella release-proof workflow) on the exact commit, then regenerate the certificate.",
+      `Release certificate exact-SHA proof is "${certificate.exactShaStatus.status}" for ${commit}: ` +
+        "one or more required lane proofs are not bound to the release SHA. Re-run the affected lane(s) " +
+        "(or the umbrella release-proof workflow) on the exact commit, then regenerate the certificate.",
     );
   }
 }
@@ -383,7 +384,7 @@ function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLan
     publicClaimAllowed: Boolean(laneGreen && exactShaMatched && proofAllowsWindowsClaim),
     laneStatus: lane?.status ?? "missing",
     workflowRunUrl: lane?.workflowRunUrl ?? null,
-    proofWorkflowFile: lane?.proofWorkflowFile ?? "verification-agentic-code-mode.yml",
+    proofWorkflowFile: lane?.proofWorkflowFile ?? RELEASE_PROOF_WORKFLOW_FILE,
     proofSource: lane?.proofSource ?? "lane-workflow",
     exactSha: commit,
     proofHeadSha,

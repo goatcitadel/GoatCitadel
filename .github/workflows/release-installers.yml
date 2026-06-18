@@ -627,14 +627,24 @@ jobs:
             --commit "$GITHUB_SHA" \
             --timeout-ms 14400000
 
-      - name: Wait for direct A2A full proof
+      - name: Wait for fast proof
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node scripts/release/wait-for-release-proof.mjs \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
-            --workflow verification-a2a-full.yml \
+            --workflow verification-fast.yml \
+            --timeout-ms 7200000
+
+      - name: Wait for security proof
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/wait-for-release-proof.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --workflow security-trivy.yml \
             --timeout-ms 7200000
 
       - name: Write commit-bound release certificate
