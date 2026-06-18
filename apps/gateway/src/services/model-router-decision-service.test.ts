@@ -89,6 +89,59 @@ describe("model-router decision service", () => {
     });
   });
 
+  it("classifies live-data prompts as research so the receipt is never a misleading bypass", () => {
+    const liveDataPrompts = [
+      "what's the latest news on the typescript release",
+      "what is the current price of bitcoin",
+      "what's the weather today",
+    ];
+    for (const prompt of liveDataPrompts) {
+      const decision = routeWithModelRouter({ prompt });
+      expect(decision).toMatchObject({
+        route: "research",
+        selectedEngine: "web_research",
+        requiresFreshness: true,
+      });
+      expect(
+        shouldBypassOrchestrationWithModelRouter({ routerInput: createInput(), decision, advisoryOnly: false }),
+      ).toMatchObject({ bypass: false });
+    }
+  });
+
+  it("never bypasses orchestration for tool, vision, image, confirmation, reasoning, or attachment turns", () => {
+    const blockedInputs = [
+      { prompt: "what is in this screenshot" },
+      { prompt: "generate an image of a lobster" },
+      { prompt: "fix the repo and run tests" },
+      { prompt: "delete the production database" },
+      { prompt: "design a scalable distributed consensus architecture" },
+      { prompt: "summarize this", hasAttachments: true },
+    ];
+    const wronglyBypassed = blockedInputs.filter(
+      (input) =>
+        shouldBypassOrchestrationWithModelRouter({
+          routerInput: createInput(),
+          decision: routeWithModelRouter(input),
+          advisoryOnly: false,
+        }).bypass,
+    );
+    expect(wronglyBypassed).toEqual([]);
+  });
+
+  it("keeps a safe direct-chat turn governed under advisory planning or explicit web mode", () => {
+    const direct = routeWithModelRouter({ prompt: "rewrite this text" });
+    expect(
+      shouldBypassOrchestrationWithModelRouter({ routerInput: createInput(), decision: direct, advisoryOnly: true }),
+    ).toMatchObject({ bypass: false, reason: "planning mode requires an inspectable orchestration plan" });
+    expect(
+      shouldBypassOrchestrationWithModelRouter({
+        routerInput: createInput({ prefs: createPrefs({ webMode: "deep" }) }),
+        decision: direct,
+        advisoryOnly: false,
+      }),
+    ).toMatchObject({ bypass: false, reason: "web mode is explicitly enabled" });
+  });
+
   it("records orchestration evidence without mutating the original receipt", () => {
     const decision = routeWithModelRouter({ prompt: "rewrite this text" });
     const annotated = withModelRouterOrchestrationDecision(decision, {

@@ -1253,7 +1253,8 @@ export interface ChatTurnTraceRecord {
 
 export interface ChatModelRouterTraceRecord {
   source: "model-router";
-  sourceRepository: "doncazper/hermes-router";
+  // Free-form provenance label; widened from a string literal so renaming the upstream model-router repo is not a breaking contract change.
+  sourceRepository: string;
   selectedEngine:
     | "fast_local"
     | "balanced_local"

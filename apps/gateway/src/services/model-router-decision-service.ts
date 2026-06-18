@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { ChatModelRouterTraceRecord } from "@goatcitadel/contracts";
+import { hasLiveDataIntent } from "../orchestration/live-data-detect.js";
 import type { OrchestrationRouterInput } from "../orchestration/types.js";
 
 type ModelRouterRoute = ChatModelRouterTraceRecord["route"];
@@ -161,7 +162,14 @@ function classifyModelRouterRoute(prompt: string): ModelRouterRoute {
   if (CODING_RE.test(rawText)) {
     return "coding";
   }
-  if (RESEARCH_RE.test(rawText) && (CURRENT_RE.test(rawText) || hasRecentYear(rawText))) {
+  if (
+    (RESEARCH_RE.test(rawText) && (CURRENT_RE.test(rawText) || hasRecentYear(rawText))) ||
+    hasLiveDataIntent(prompt)
+  ) {
+    // Live-data intent (latest/news/weather/prices/"right now", etc.) needs the web_research
+    // engine. Reusing the orchestrator's own detector keeps the model-router receipt honest:
+    // these turns are reported as research and never bypass orchestration as a "direct chat"
+    // turn that would still silently fire a web tool downstream.
     return "research";
   }
   if (REASONING_RE.test(rawText)) {
