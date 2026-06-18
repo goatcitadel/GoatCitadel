@@ -152,7 +152,21 @@ describe("OrchestrationPhaseExecutionService", () => {
         subagentPolicy: "off",
       }),
     );
-    expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("Validate the release blocker.");
+    const sentPrompt = agentSendChatMessage.mock.calls[0]?.[1].content ?? "";
+    expect(sentPrompt.split("\n").slice(0, 9)).toEqual([
+      "You are executing one GoatCitadel Cowork orchestration phase.",
+      "",
+      "Goal: Ship safely",
+      "Run: run-1",
+      "Durable run: durable-run-1",
+      "Phase: phase-1",
+      "Owner agent: agent-1",
+      "Loop mode: fresh-context",
+      "Spec path: spec.md",
+    ]);
+    expect(sentPrompt).toContain("Phase spec:\nValidate the release blocker.");
+    expect(sentPrompt).toContain("Do not claim later phases are complete.");
+    expect(sentPrompt).not.toContain("ignored-run-profile");
     expect(agentSendChatMessage.mock.calls[0]?.[1]).toMatchObject({
       subagentPolicy: "off",
       prefsOverride: expect.objectContaining({
