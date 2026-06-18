@@ -51,6 +51,7 @@ import type {
   ModelReputation,
   NpuModelManifest,
   NpuRuntimeStatus,
+  OrchestrationDecisionTrace,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
 import type {
@@ -344,6 +345,10 @@ export async function fetchOrchestrationRunContext(runId: string): Promise<{ ite
 
 export async function fetchOrchestrationRun(runId: string): Promise<OrchestrationRun> {
   return request<OrchestrationRun>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchOrchestrationRunTrace(runId: string): Promise<OrchestrationDecisionTrace> {
+  return request<OrchestrationDecisionTrace>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/trace`);
 }
 
 export async function fetchOrchestrationRunCheckpoints(

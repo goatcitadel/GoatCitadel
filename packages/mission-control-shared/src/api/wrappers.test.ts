@@ -631,6 +631,7 @@ describe("shared API wrappers", () => {
     );
     await expectCall(platform.fetchOrchestrationRunContext("run/1"), "/api/v1/orchestration/runs/run%2F1/context");
     await expectCall(platform.fetchOrchestrationRun("run/1"), "/api/v1/orchestration/runs/run%2F1");
+    await expectCall(platform.fetchOrchestrationRunTrace("run/1"), "/api/v1/orchestration/runs/run%2F1/trace");
     await expectCall(
       platform.fetchOrchestrationRunCheckpoints("run/1"),
       "/api/v1/orchestration/runs/run%2F1/checkpoints",
