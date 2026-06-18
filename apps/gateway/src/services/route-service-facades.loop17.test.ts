@@ -210,6 +210,7 @@ describe("route service facades", () => {
       "exportActivepiecesTemplate",
       "exportN8nTemplate",
       "getRun",
+      "getRunTrace",
       "listRecipeTemplates",
       "listRunCheckpoints",
       "listRunContexts",
@@ -254,6 +255,10 @@ describe("route service facades", () => {
     expect(service.listRunCheckpoints("run-1")).toEqual({
       method: "listRunCheckpoints",
       args: ["run-1", undefined],
+    });
+    expect(service.getRunTrace("run-1", "workspace-1")).toEqual({
+      method: "getRunTrace",
+      args: ["run-1", "workspace-1"],
     });
     expect(service.listRunContexts("run-1")).toEqual({
       method: "listRunContexts",

@@ -127,3 +127,71 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   pendingCostIncrementUsd?: number;
   lastError?: string;
 }
+
+export type OrchestrationDecisionSource = "checkpoint" | "run_event";
+
+export type OrchestrationDecisionKind =
+  | "run_created"
+  | "durable_run_linked"
+  | "worktree_allocated"
+  | "run_queued"
+  | "run_started"
+  | "policy_checked"
+  | "phase_started"
+  | "phase_child_dispatched"
+  | "phase_wait_registered"
+  | "phase_completed"
+  | "phase_failed"
+  | "phase_advanced"
+  | "run_resumed"
+  | "run_completed"
+  | "run_stopped"
+  | "run_failed"
+  | "run_cancelled"
+  | "cost_recorded"
+  | "unknown";
+
+export interface OrchestrationRunEventRecord {
+  eventId: string;
+  runId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface OrchestrationTraceCheckpoint {
+  checkpointId: string;
+  runId: string;
+  planId: string;
+  waveId?: string;
+  phaseId?: string;
+  checkpointKind: string;
+  gitRef?: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface OrchestrationDecisionEvent {
+  decisionId: string;
+  runId: string;
+  kind: OrchestrationDecisionKind;
+  source: OrchestrationDecisionSource;
+  sourceId: string;
+  eventType?: string;
+  checkpointKind?: string;
+  planId?: string;
+  waveId?: string;
+  phaseId?: string;
+  createdAt: string;
+  summary: string;
+  details: Record<string, unknown>;
+}
+
+export interface OrchestrationDecisionTrace {
+  run: OrchestrationRun;
+  checkpoints: OrchestrationTraceCheckpoint[];
+  runEvents: OrchestrationRunEventRecord[];
+  decisions: OrchestrationDecisionEvent[];
+  generatedAt: string;
+  warnings: string[];
+}

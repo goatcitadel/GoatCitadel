@@ -512,6 +512,7 @@ describe("orchestration routes", () => {
     }));
     const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "default" }));
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
+    const getRunTrace = vi.fn(() => ({ decisions: [{ decisionId: "event-1" }] }));
     const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
     app = Fastify();
     app.decorateRequest("authActorId", "operator-auth");
@@ -522,6 +523,7 @@ describe("orchestration routes", () => {
         cancelRun,
         getRun,
         listRunCheckpoints,
+        getRunTrace,
         listRunContexts,
       },
     } as never);
@@ -573,6 +575,14 @@ describe("orchestration routes", () => {
     expect(listRunCheckpoints).toHaveBeenCalledWith("run-1", undefined);
     expect(checkpoints.json()).toMatchObject({ items: [{ checkpointId: "cp-1" }] });
 
+    const trace = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-1/trace",
+    });
+    expect(trace.statusCode).toBe(200);
+    expect(getRunTrace).toHaveBeenCalledWith("run-1", undefined);
+    expect(trace.json()).toMatchObject({ decisions: [{ decisionId: "event-1" }] });
+
     const context = await app.inject({
       method: "GET",
       url: "/api/v1/orchestration/runs/run-1/context",
@@ -585,11 +595,13 @@ describe("orchestration routes", () => {
   it("passes requested workspace scope to run-specific orchestration reads", async () => {
     const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "workspace-a" }));
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
+    const getRunTrace = vi.fn(() => ({ decisions: [{ decisionId: "event-1" }] }));
     app = Fastify();
     app.decorate("services", {
       orchestration: {
         getRun,
         listRunCheckpoints,
+        getRunTrace,
       },
     } as never);
     app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
@@ -603,11 +615,17 @@ describe("orchestration routes", () => {
       method: "GET",
       url: "/api/v1/orchestration/runs/run-1/checkpoints?workspaceId=workspace-a",
     });
+    const trace = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-1/trace?workspaceId=workspace-a",
+    });
 
     expect(run.statusCode).toBe(200);
     expect(checkpoints.statusCode).toBe(200);
+    expect(trace.statusCode).toBe(200);
     expect(getRun).toHaveBeenCalledWith("run-1", "workspace-a");
     expect(listRunCheckpoints).toHaveBeenCalledWith("run-1", "workspace-a");
+    expect(getRunTrace).toHaveBeenCalledWith("run-1", "workspace-a");
   });
 
   it("maps missing orchestration runs to a 404 instead of a 500", async () => {

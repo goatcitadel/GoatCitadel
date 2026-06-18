@@ -14,10 +14,14 @@ import {
   type HookTrigger,
   NotFoundError,
   type OrchestrationPlan,
+  type OrchestrationDecisionEvent,
+  type OrchestrationDecisionKind,
+  type OrchestrationDecisionTrace,
   type OrchestrationPhase,
   type OrchestrationPhaseChildDispatch,
   type OrchestrationPhaseExecutionResult,
   type OrchestrationRun,
+  type OrchestrationRunEventRecord,
   type OrchestrationRunPolicyContext,
   type RealtimeEvent,
   ValidationError,
@@ -112,6 +116,7 @@ export interface OrchestrationLifecycleHost {
       ): OrchestrationRun | undefined;
       appendRunEvent(runId: string, event: string, payload: Record<string, unknown>): void;
       listCheckpoints(runId: string): OrchestrationCheckpoint[];
+      listRunEvents?(runId: string): OrchestrationRunEventRecord[];
       getRun(runId: string): OrchestrationRun;
     };
   };
@@ -1630,6 +1635,78 @@ export function listRunCheckpoints(
   return host.storage.orchestration.listCheckpoints(runId);
 }
 
+export function getRunTrace(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+  workspaceId?: string,
+): OrchestrationDecisionTrace {
+  const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
+  // `lastError` is free-form text that can be large or echo upstream provider errors; bound it
+  // to the same cap as every other trace string. Remaining run fields are ids, numbers, or
+  // closed-enum statuses (e.g. executionState), so there is nothing secret-shaped left to redact.
+  const sanitizedRun: OrchestrationRun =
+    run.lastError === undefined ? run : { ...run, lastError: capTraceString(run.lastError) };
+  const checkpoints = host.storage.orchestration.listCheckpoints(runId).map((checkpoint) => ({
+    ...checkpoint,
+    details: sanitizeTraceDetails(checkpoint.details),
+  }));
+  const warnings: string[] = [];
+  const runEvents = host.storage.orchestration.listRunEvents
+    ? host.storage.orchestration
+        .listRunEvents(runId)
+        .map((event) => ({ ...event, payload: sanitizeTraceDetails(event.payload) }))
+    : [];
+  if (!host.storage.orchestration.listRunEvents) {
+    warnings.push("Run event storage does not expose listRunEvents; trace is checkpoint-only.");
+  }
+
+  const decisions = [
+    ...checkpoints.map((checkpoint): OrchestrationDecisionEvent => {
+      const kind = mapCheckpointDecisionKind(checkpoint.checkpointKind);
+      return {
+        decisionId: `checkpoint:${checkpoint.checkpointId}`,
+        runId: checkpoint.runId,
+        kind,
+        source: "checkpoint",
+        sourceId: checkpoint.checkpointId,
+        checkpointKind: checkpoint.checkpointKind,
+        planId: checkpoint.planId,
+        waveId: checkpoint.waveId,
+        phaseId: checkpoint.phaseId,
+        createdAt: checkpoint.createdAt,
+        summary: summarizeDecision(kind, checkpoint.checkpointKind, checkpoint.details),
+        details: checkpoint.details,
+      };
+    }),
+    ...runEvents.map((event): OrchestrationDecisionEvent => {
+      const kind = mapRunEventDecisionKind(event.eventType, event.payload);
+      return {
+        decisionId: `event:${event.eventId}`,
+        runId: event.runId,
+        kind,
+        source: "run_event",
+        sourceId: event.eventId,
+        eventType: event.eventType,
+        phaseId: asString(event.payload.phaseId),
+        createdAt: event.createdAt,
+        summary: summarizeDecision(kind, event.eventType, event.payload),
+        details: event.payload,
+      };
+    }),
+  ].sort(
+    (left, right) => left.createdAt.localeCompare(right.createdAt) || left.decisionId.localeCompare(right.decisionId),
+  );
+
+  return {
+    run: sanitizedRun,
+    checkpoints,
+    runEvents,
+    decisions,
+    generatedAt: new Date().toISOString(),
+    warnings,
+  };
+}
+
 function assertRunWorkspaceAccess(run: OrchestrationRun, workspaceId?: string): OrchestrationRun {
   const expectedWorkspaceId = normalizeRouteWorkspaceId(workspaceId);
   const actualWorkspaceId = normalizeRouteWorkspaceId(run.workspaceId);
@@ -1648,4 +1725,129 @@ function normalizeRouteWorkspaceId(workspaceId?: string): string {
     throw new ValidationError({ field: "workspaceId", message: "workspaceId contains unsupported characters" });
   }
   return normalized;
+}
+
+function mapCheckpointDecisionKind(checkpointKind: string): OrchestrationDecisionKind {
+  switch (checkpointKind) {
+    case "run_created":
+    case "durable_run_linked":
+    case "worktree_allocated":
+    case "run_queued":
+    case "run_started":
+    case "run_resumed":
+    case "run_completed":
+    case "run_failed":
+    case "run_cancelled":
+      return checkpointKind;
+    case "phase_approved":
+      return "policy_checked";
+    case "phase_executed":
+      return "phase_completed";
+    case "wave_advanced":
+      return "phase_advanced";
+    case "run_paused_for_approval":
+      return "phase_wait_registered";
+    case "run_stopped":
+      return "run_stopped";
+    default:
+      return "unknown";
+  }
+}
+
+function mapRunEventDecisionKind(eventType: string, _payload: Record<string, unknown>): OrchestrationDecisionKind {
+  switch (eventType) {
+    case "run.created":
+      return "run_created";
+    case "run.queued":
+      return "run_queued";
+    case "run.started":
+      return "run_started";
+    case "run.resumed":
+      return "run_resumed";
+    case "run.completed":
+      return "run_completed";
+    case "run.stopped":
+      return "run_stopped";
+    case "run.failed":
+      return "run_failed";
+    case "run.cancelled":
+      return "run_cancelled";
+    case "phase.started":
+      return "phase_started";
+    case "phase.child_dispatched":
+      return "phase_child_dispatched";
+    case "phase.waiting":
+    case "run.paused_for_approval":
+      return "phase_wait_registered";
+    case "phase.completed":
+    case "phase.executed":
+      return "phase_completed";
+    case "cost.recorded":
+      return "cost_recorded";
+    case "phase.failed":
+      return "phase_failed";
+    case "phase.advanced":
+    case "wave.advanced":
+      return "phase_advanced";
+    case "policy.checked":
+      return "policy_checked";
+    default:
+      return "unknown";
+  }
+}
+
+function summarizeDecision(
+  kind: OrchestrationDecisionKind,
+  sourceName: string,
+  details: Record<string, unknown>,
+): string {
+  const phaseId = asString(details.phaseId);
+  const model = asString(details.model);
+  const status = asString(details.status);
+  const parts = [kind.replace(/_/g, " ")];
+  if (phaseId) {
+    parts.push(`phase ${phaseId}`);
+  }
+  if (model) {
+    parts.push(`model ${model}`);
+  }
+  if (status) {
+    parts.push(`status ${status}`);
+  }
+  if (parts.length === 1) {
+    parts.push(sourceName);
+  }
+  return parts.join(" · ");
+}
+
+function sanitizeTraceDetails(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeTraceValue(value, 0) as Record<string, unknown>;
+}
+
+function sanitizeTraceValue(value: unknown, depth: number): unknown {
+  if (depth > 3) {
+    return "[Max depth]";
+  }
+  if (typeof value === "string") {
+    return capTraceString(value);
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeTraceValue(item, depth + 1));
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value).slice(0, 50)) {
+    sanitized[key] = shouldRedactTraceKey(key) ? "[redacted]" : sanitizeTraceValue(child, depth + 1);
+  }
+  return sanitized;
+}
+
+function capTraceString(value: string): string {
+  return value.length > 500 ? `${value.slice(0, 500)}... [truncated]` : value;
+}
+
+function shouldRedactTraceKey(key: string): boolean {
+  return /secret|token|api[-_]?key|authorization|password|credential|cookie/i.test(key);
 }

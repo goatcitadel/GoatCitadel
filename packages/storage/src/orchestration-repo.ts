@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import type { OrchestrationPlan, OrchestrationRun, OrchestrationRunEventRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -71,6 +71,14 @@ interface OrchestrationCheckpointRow {
   created_at: string;
 }
 
+interface OrchestrationEventRow {
+  event_id: string;
+  run_id: string;
+  event_type: string;
+  payload_json: string;
+  created_at: string;
+}
+
 export class OrchestrationRepository {
   private readonly upsertPlanStmt;
   private readonly getPlanStmt;
@@ -85,6 +93,7 @@ export class OrchestrationRepository {
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
   private readonly insertEventStmt;
+  private readonly listEventsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertPlanStmt = db.prepare(`
@@ -222,6 +231,9 @@ export class OrchestrationRepository {
         event_id, run_id, event_type, payload_json, created_at
       ) VALUES (@eventId, @runId, @eventType, @payloadJson, @createdAt)
     `);
+    this.listEventsStmt = db.prepare(
+      "SELECT * FROM orchestration_events WHERE run_id = @runId ORDER BY created_at ASC, rowid ASC LIMIT @limit",
+    );
   }
 
   public upsertPlan(plan: OrchestrationPlan, workspaceId = "default"): void {
@@ -434,6 +446,17 @@ export class OrchestrationRepository {
       createdAt: new Date().toISOString(),
     });
   }
+
+  public listRunEvents(runId: string, options: { limit?: number } = {}): OrchestrationRunEventRecord[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 5_000)));
+    return toOrchestrationEventRows(this.listEventsStmt.all({ runId, limit: safeLimit })).map((row) => ({
+      eventId: row.event_id,
+      runId: row.run_id,
+      eventType: row.event_type,
+      payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
+      createdAt: row.created_at,
+    }));
+  }
 }
 
 function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
@@ -484,6 +507,10 @@ function toOrchestrationCheckpointRows(value: unknown): OrchestrationCheckpointR
   return Array.isArray(value) ? value.filter(isOrchestrationCheckpointRow) : [];
 }
 
+function toOrchestrationEventRows(value: unknown): OrchestrationEventRow[] {
+  return Array.isArray(value) ? value.filter(isOrchestrationEventRow) : [];
+}
+
 function isOrchestrationRunRow(value: unknown): value is OrchestrationRunRow {
   return (
     isRecord(value) &&
@@ -527,6 +554,17 @@ function isOrchestrationCheckpointRow(value: unknown): value is OrchestrationChe
     typeof value.checkpoint_kind === "string" &&
     (typeof value.git_ref === "string" || value.git_ref === null) &&
     typeof value.details_json === "string" &&
+    typeof value.created_at === "string"
+  );
+}
+
+function isOrchestrationEventRow(value: unknown): value is OrchestrationEventRow {
+  return (
+    isRecord(value) &&
+    typeof value.event_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.event_type === "string" &&
+    typeof value.payload_json === "string" &&
     typeof value.created_at === "string"
   );
 }

@@ -406,13 +406,25 @@ describe("OrchestrationRepository", () => {
     const afterCursor = repo.listCheckpoints(run.runId, { cursor: "2026-02-27T00:00:01.000Z", limit: 10 });
     assert.deepEqual(afterCursor[0]?.details, {});
 
-    repo.appendRunEvent(run.runId, "coverage.event", { ok: true });
-    assert.equal(
-      db
-        .prepare("SELECT COUNT(1) AS count FROM orchestration_events WHERE run_id = ?")
-        .get<{ count: number }>(run.runId)?.count,
-      1,
+    repo.appendRunEvent(run.runId, "phase.completed", {
+      phaseId: "phase-2",
+      outputSummary: "finished",
+    });
+    repo.appendRunEvent(run.runId, "run.completed", { totalCostUsd: 1.25 });
+    const events = repo.listRunEvents(run.runId);
+    assert.equal(events.length, 2);
+    assert.equal(events[0]?.eventType, "phase.completed");
+    assert.deepEqual(events[0]?.payload, {
+      phaseId: "phase-2",
+      outputSummary: "finished",
+    });
+    assert.deepEqual(
+      repo.listRunEvents(run.runId, { limit: 1 }).map((event) => event.eventType),
+      ["phase.completed"],
     );
+
+    db.prepare("UPDATE orchestration_events SET payload_json = ? WHERE event_id = ?").run("{bad", events[0]?.eventId);
+    assert.deepEqual(repo.listRunEvents(run.runId)[0]?.payload, {});
 
     assert.deepEqual(
       repo.listRuns(0).map((item) => item.runId),

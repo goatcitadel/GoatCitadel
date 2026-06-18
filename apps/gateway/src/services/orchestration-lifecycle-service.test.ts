@@ -11,6 +11,7 @@ import {
   createOrchestrationPlan,
   executeDurableOrchestrationRun,
   getRun as getOrchestrationRun,
+  getRunTrace,
   runOrchestrationPlan,
   cancelOrchestrationRun,
   type OrchestrationLifecycleHost,
@@ -792,6 +793,89 @@ describe("orchestration-lifecycle-service", () => {
     });
 
     expect(() => getOrchestrationRun(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
+  });
+
+  it("projects orchestration checkpoints and run events into a sanitized decision trace", () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+          })),
+          listCheckpoints: vi.fn(() => [
+            {
+              checkpointId: "cp-1",
+              runId: "run-1",
+              planId: "plan-1",
+              checkpointKind: "run_started",
+              details: { apiKey: "secret-value", status: "running" },
+              createdAt: "2026-04-12T00:00:01.000Z",
+            },
+          ]),
+          listRunEvents: vi.fn(() => [
+            {
+              eventId: "event-1",
+              runId: "run-1",
+              eventType: "phase.completed",
+              payload: {
+                phaseId: "phase-1",
+                model: "fast-model",
+                outputText: "x".repeat(700),
+              },
+              createdAt: "2026-04-12T00:00:02.000Z",
+            },
+          ]),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    const trace = getRunTrace(host, "run-1", "workspace-a");
+
+    expect(trace.decisions.map((decision) => decision.kind)).toEqual(["run_started", "phase_completed"]);
+    expect(trace.checkpoints[0]?.details.apiKey).toBe("[redacted]");
+    expect(trace.runEvents[0]?.payload.outputText).toContain("[truncated]");
+    expect(trace.decisions[1]?.summary).toContain("phase phase-1");
+  });
+
+  it("denies trace reads for a run owned by another workspace", () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    expect(() => getRunTrace(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
+  });
+
+  it("caps the run lastError text included in the trace", () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+            lastError: "e".repeat(700),
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    const trace = getRunTrace(host, "run-1", "workspace-a");
+
+    expect(trace.run.lastError).toContain("[truncated]");
+    expect(trace.run.lastError?.length ?? 0).toBeLessThan(700);
   });
 
   it("rejects approvals for non-approval phases in auto mode", async () => {
