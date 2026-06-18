@@ -194,6 +194,14 @@ describe("gateway app config helpers", () => {
       0,
     );
   });
+
+  it("uses the SSE rate-limit bucket for realtime and dev diagnostics streams only", () => {
+    expect(__internal.classifyRateLimitBucket("/api/v1/events/stream", "GET")).toBe("sse");
+    expect(__internal.classifyRateLimitBucket("/api/v1/dev/diagnostics/stream", "GET")).toBe("sse");
+    expect(__internal.classifyRateLimitBucket("/api/v1/chat/sessions/session-1/messages/stream", "POST")).toBe(
+      "mutation",
+    );
+  });
 });
 
 describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {

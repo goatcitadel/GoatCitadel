@@ -196,6 +196,11 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.dashboard.operatorSummary()).toEqual({ operator: "ready" });
     expect(deps.daemon.systemSettings).toBe(gateway.storage.systemSettings);
     expect(deps.devDiagnostics.isDevDiagnosticsEnabled()).toBe(true);
+    expect(deps.devDiagnostics.getStartupPhaseSnapshot()).toMatchObject({
+      phases: [],
+      inProgress: [],
+      ready: false,
+    });
     expect(deps.devDiagnostics.listDevDiagnostics({ limit: 1 })).toEqual([{ diagnosticId: "diag-1" }]);
     expect(deps.devDiagnostics.subscribeDevDiagnostics(() => undefined)).toBe("unsub");
 

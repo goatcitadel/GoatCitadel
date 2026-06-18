@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DevDiagnosticsEvent } from "@goatcitadel/contracts";
 import { devDiagnosticsRoutes } from "./dev-diagnostics.js";
 
-type RouteHandler = (request: { query: unknown; raw: EventEmitter }, reply: FakeReply) => Promise<void>;
+type RouteHandler = (request: { query: unknown; raw: EventEmitter; ip: string }, reply: FakeReply) => Promise<void>;
 
 class FakeRaw extends EventEmitter {
   public readonly chunks: string[] = [];
@@ -28,9 +28,29 @@ class FakeRaw extends EventEmitter {
 interface FakeReply {
   raw: FakeRaw;
   hijack: ReturnType<typeof vi.fn>;
+  code: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  getHeader(name: string): unknown;
+  payload?: unknown;
 }
 
 describe("dev diagnostics stream route", () => {
+  const originalSpecificLimit = process.env.GOATCITADEL_DEV_DIAGNOSTICS_SSE_MAX_CONNECTIONS_PER_IP;
+  const originalSharedLimit = process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
+
+  afterEach(() => {
+    if (originalSpecificLimit === undefined) {
+      delete process.env.GOATCITADEL_DEV_DIAGNOSTICS_SSE_MAX_CONNECTIONS_PER_IP;
+    } else {
+      process.env.GOATCITADEL_DEV_DIAGNOSTICS_SSE_MAX_CONNECTIONS_PER_IP = originalSpecificLimit;
+    }
+    if (originalSharedLimit === undefined) {
+      delete process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
+    } else {
+      process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = originalSharedLimit;
+    }
+  });
+
   async function getStreamHandler(services: Record<string, unknown>): Promise<RouteHandler> {
     const routes = new Map<string, RouteHandler>();
     await devDiagnosticsRoutes({
@@ -76,9 +96,9 @@ describe("dev diagnostics stream route", () => {
     });
     const raw = new FakeRaw();
     const requestRaw = new EventEmitter();
-    const reply: FakeReply = { raw, hijack: vi.fn() };
+    const reply = createReply(raw);
 
-    await handler({ query: { replay: "2", level: "info" }, raw: requestRaw }, reply);
+    await handler({ query: { replay: "2", level: "info" }, raw: requestRaw, ip: "127.0.0.1" }, reply);
 
     expect(raw.statusCode).toBe(200);
     expect(raw.headers).toMatchObject({
@@ -125,9 +145,9 @@ describe("dev diagnostics stream route", () => {
         },
       });
       const raw = new FakeRaw();
-      const reply: FakeReply = { raw, hijack: vi.fn() };
+      const reply = createReply(raw);
 
-      await handler({ query: { replay: "1" }, raw: new EventEmitter() }, reply);
+      await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, reply);
       await vi.advanceTimersByTimeAsync(25000);
       expect(raw.chunks).toContain(": keep-alive\n\n");
 
@@ -142,15 +162,91 @@ describe("dev diagnostics stream route", () => {
       throwingRaw.end.mockImplementationOnce(() => {
         throw new Error("socket already closed");
       });
-      const throwingReply: FakeReply = { raw: throwingRaw, hijack: vi.fn() };
-      await handler({ query: { replay: "1" }, raw: new EventEmitter() }, throwingReply);
+      const throwingReply = createReply(throwingRaw);
+      await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, throwingReply);
       throwingRaw.emit("close");
       expect(throwingRaw.end).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
   });
+
+  it("preserves CORS headers when the raw SSE response is written", async () => {
+    const handler = await getStreamHandler({
+      devDiagnostics: {
+        isDevDiagnosticsEnabled: () => true,
+        listDevDiagnostics: vi.fn(() => ({ items: [] })),
+        subscribeDevDiagnostics: vi.fn(() => vi.fn()),
+      },
+    });
+    const raw = new FakeRaw();
+    const reply = createReply(raw, {
+      "Access-Control-Allow-Origin": "http://localhost:5173",
+      "Access-Control-Allow-Credentials": "true",
+      Vary: "Origin",
+    });
+
+    await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, reply);
+
+    expect(raw.headers).toMatchObject({
+      "Access-Control-Allow-Origin": "http://localhost:5173",
+      "Access-Control-Allow-Credentials": "true",
+      Vary: "Origin",
+    });
+    raw.emit("close");
+  });
+
+  it("limits active streams per client IP and releases the slot on close", async () => {
+    process.env.GOATCITADEL_DEV_DIAGNOSTICS_SSE_MAX_CONNECTIONS_PER_IP = "1";
+    const handler = await getStreamHandler({
+      devDiagnostics: {
+        isDevDiagnosticsEnabled: () => true,
+        listDevDiagnostics: vi.fn(() => ({ items: [] })),
+        subscribeDevDiagnostics: vi.fn(() => vi.fn()),
+      },
+    });
+    const firstRaw = new FakeRaw();
+    const firstReply = createReply(firstRaw);
+    const blockedRaw = new FakeRaw();
+    const blockedReply = createReply(blockedRaw);
+
+    await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, firstReply);
+    await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, blockedReply);
+
+    expect(blockedReply.code).toHaveBeenCalledWith(429);
+    expect(blockedReply.send).toHaveBeenCalledWith({
+      error: "Too many active dev diagnostics streams for this client.",
+      code: "DEV_DIAGNOSTICS_SSE_CONNECTION_LIMIT",
+      limit: 1,
+    });
+
+    firstRaw.emit("close");
+    const afterCloseRaw = new FakeRaw();
+    const afterCloseReply = createReply(afterCloseRaw);
+    await handler({ query: { replay: "1" }, raw: new EventEmitter(), ip: "127.0.0.1" }, afterCloseReply);
+
+    expect(afterCloseRaw.statusCode).toBe(200);
+    afterCloseRaw.emit("close");
+  });
 });
+
+function createReply(raw: FakeRaw, initialHeaders: Record<string, string> = {}): FakeReply {
+  const headers = new Map(Object.entries(initialHeaders).map(([name, value]) => [name.toLowerCase(), value]));
+  const reply: FakeReply = {
+    raw,
+    hijack: vi.fn(),
+    code: vi.fn((statusCode: number) => {
+      raw.statusCode = statusCode;
+      return reply;
+    }),
+    send: vi.fn((payload: unknown) => {
+      reply.payload = payload;
+      return reply;
+    }),
+    getHeader: (name: string) => headers.get(name.toLowerCase()),
+  };
+  return reply;
+}
 
 function parseSseData(chunk: string): DevDiagnosticsEvent {
   return JSON.parse(chunk.replace(/^data: /, "").trim()) as DevDiagnosticsEvent;

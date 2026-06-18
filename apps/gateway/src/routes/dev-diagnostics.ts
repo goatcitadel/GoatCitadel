@@ -29,6 +29,8 @@ const streamQuerySchema = z.object({
 
 type DevDiagnosticsRouteFilter = Omit<z.infer<typeof streamQuerySchema>, "replay">;
 
+const DEFAULT_MAX_DEV_DIAGNOSTICS_SSE_CONNECTIONS_PER_IP = 25;
+
 export function matchesDevDiagnosticsRouteFilter(
   event: DevDiagnosticsEvent,
   filter: DevDiagnosticsRouteFilter,
@@ -61,6 +63,9 @@ export function matchesDevDiagnosticsRouteFilter(
 }
 
 export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
+  const activeSseConnectionsByIp = new Map<string, number>();
+  const maxSseConnectionsPerIp = resolveMaxDevDiagnosticsSseConnectionsPerIp();
+
   fastify.get("/api/v1/dev/diagnostics", async (request, reply) => {
     if (!fastify.services.devDiagnostics.isDevDiagnosticsEnabled()) {
       return reply.code(404).send({ error: "Development diagnostics are disabled." });
@@ -72,6 +77,13 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.devDiagnostics.listDevDiagnostics(parsed.data));
   });
 
+  fastify.get("/api/v1/dev/diagnostics/startup", async (_request, reply) => {
+    if (!fastify.services.devDiagnostics.isDevDiagnosticsEnabled()) {
+      return reply.code(404).send({ error: "Development diagnostics are disabled." });
+    }
+    return reply.send(fastify.services.devDiagnostics.getStartupPhaseSnapshot());
+  });
+
   fastify.get("/api/v1/dev/diagnostics/stream", async (request, reply) => {
     if (!fastify.services.devDiagnostics.isDevDiagnosticsEnabled()) {
       return reply.code(404).send({ error: "Development diagnostics are disabled." });
@@ -81,13 +93,43 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
+    const connectionKey = normalizeSseConnectionKey(request.ip);
+    const activeConnections = activeSseConnectionsByIp.get(connectionKey) ?? 0;
+    if (activeConnections >= maxSseConnectionsPerIp) {
+      return reply.code(429).send({
+        error: "Too many active dev diagnostics streams for this client.",
+        code: "DEV_DIAGNOSTICS_SSE_CONNECTION_LIMIT",
+        limit: maxSseConnectionsPerIp,
+      });
+    }
+    activeSseConnectionsByIp.set(connectionKey, activeConnections + 1);
+    let connectionReleased = false;
+    const releaseConnection = () => {
+      if (connectionReleased) {
+        return;
+      }
+      connectionReleased = true;
+      const current = activeSseConnectionsByIp.get(connectionKey) ?? 0;
+      if (current <= 1) {
+        activeSseConnectionsByIp.delete(connectionKey);
+        return;
+      }
+      activeSseConnectionsByIp.set(connectionKey, current - 1);
+    };
+
     const raw = reply.raw;
     const controller = new AbortController();
+    const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
+    const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
+    const corsVary = reply.getHeader("Vary");
     raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      ...(typeof corsOrigin === "string" ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
+      ...(typeof corsCredentials === "string" ? { "Access-Control-Allow-Credentials": corsCredentials } : {}),
+      ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
     });
     raw.flushHeaders?.();
     await writeSseChunk(raw, ": connected\n\n", controller.signal);
@@ -116,14 +158,18 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
     let closed = false;
     let writeChain = Promise.resolve();
     let unsubscribe = () => undefined;
+    let keepAlive: ReturnType<typeof setInterval> | undefined = undefined;
     function cleanup() {
       if (closed) {
         return;
       }
       closed = true;
       controller.abort(new Error("dev_diagnostics_sse_closed"));
-      clearInterval(keepAlive);
+      if (keepAlive !== undefined) {
+        clearInterval(keepAlive);
+      }
       unsubscribe();
+      releaseConnection();
       try {
         raw.end();
       } catch {
@@ -131,7 +177,7 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    const keepAlive = setInterval(() => {
+    keepAlive = setInterval(() => {
       void writeSseChunk(raw, ": keep-alive\n\n", controller.signal).catch(() => cleanup());
     }, 25000);
 
@@ -153,4 +199,24 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
     request.raw.on("aborted", cleanup);
     reply.hijack();
   });
+};
+
+function normalizeSseConnectionKey(ip: string): string {
+  return ip.trim().toLowerCase().replace(/%.+$/, "");
+}
+
+function resolveMaxDevDiagnosticsSseConnectionsPerIp(): number {
+  const specific = process.env.GOATCITADEL_DEV_DIAGNOSTICS_SSE_MAX_CONNECTIONS_PER_IP?.trim();
+  const shared = process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP?.trim();
+  const raw = specific || shared;
+  if (!raw) {
+    return DEFAULT_MAX_DEV_DIAGNOSTICS_SSE_CONNECTIONS_PER_IP;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_DEV_DIAGNOSTICS_SSE_CONNECTIONS_PER_IP;
+}
+
+export const __internal = {
+  normalizeSseConnectionKey,
+  resolveMaxDevDiagnosticsSseConnectionsPerIp,
 };
