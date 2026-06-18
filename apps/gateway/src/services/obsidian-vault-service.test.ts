@@ -187,6 +187,32 @@ describe("ObsidianVaultService", () => {
     );
   });
 
+  it("rejects symlink escapes inside allowed Obsidian roots", async () => {
+    const vault = await createVault();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-obsidian-outside-"));
+    tempRoots.push(outside);
+    await fs.writeFile(path.join(outside, "Secret.md"), "outside vault", "utf8");
+    await fs.symlink(path.join(outside, "Secret.md"), path.join(vault, "GoatCitadel", "Inbox", "Linked.md"));
+    await fs.symlink(outside, path.join(vault, "GoatCitadel", "Inbox", "Outside"));
+    await fs.symlink(outside, path.join(vault, "GoatCitadel", "LinkedRoot"));
+
+    const { service } = createService();
+    service.updateConfig({ enabled: true, vaultPath: vault, allowedSubpaths: ["GoatCitadel/Inbox"] });
+
+    await expect(service.readNote("GoatCitadel/Inbox/Linked.md")).rejects.toThrow(
+      "Path resolves outside configured Obsidian allowed subpaths.",
+    );
+    await expect(service.appendToNote("GoatCitadel/Inbox/Outside/New.md", "leak")).rejects.toThrow(
+      "Path resolves outside configured Obsidian allowed subpaths.",
+    );
+    await expect(service.appendToNote("GoatCitadel/Inbox/Linked.md", "leak")).rejects.toThrow(
+      "Path resolves outside configured Obsidian allowed subpaths.",
+    );
+
+    service.updateConfig({ allowedSubpaths: ["GoatCitadel/LinkedRoot"] });
+    await expect(service.searchNotes("outside", 20)).resolves.toEqual([]);
+  });
+
   it("captures sanitized inbox rows with defaults", async () => {
     const vault = await createVault();
     const { service } = createService();

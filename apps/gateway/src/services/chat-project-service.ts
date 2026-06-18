@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ChatProjectRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import { ValidationError, type ChatProjectImportResult } from "@goatcitadel/contracts";
+import { assertExistingPathRealpathAllowed } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 
@@ -65,8 +66,9 @@ export class ChatProjectService {
     repoUrl?: string;
     ref?: string;
   }): Promise<ChatProjectImportResult> {
-    const workspaceRoot = path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir);
-    await fsPromises.mkdir(workspaceRoot, { recursive: true });
+    const configuredWorkspaceRoot = path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir);
+    await fsPromises.mkdir(configuredWorkspaceRoot, { recursive: true });
+    const workspaceRoot = await fsPromises.realpath(configuredWorkspaceRoot);
 
     const sourceType = input.sourceType;
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
@@ -87,8 +89,10 @@ export class ChatProjectService {
         workspaceRoot,
         sourcePath,
         desiredName,
+        writeJailRoots: this.ctx.config.toolPolicy.sandbox.writeJailRoots,
+        readOnlyRoots: this.ctx.config.toolPolicy.sandbox.readOnlyRoots,
       });
-      imported = path.resolve(sourcePath) !== materializedAbsolutePath;
+      imported = (await fsPromises.realpath(path.resolve(sourcePath))) !== materializedAbsolutePath;
     } else {
       const repoUrl = input.repoUrl?.trim();
       if (!repoUrl) {
@@ -198,28 +202,36 @@ async function materializeLocalFolder(input: {
   workspaceRoot: string;
   sourcePath: string;
   desiredName: string;
+  writeJailRoots: string[];
+  readOnlyRoots: string[];
 }): Promise<string> {
   const absoluteSourcePath = path.resolve(input.sourcePath);
   const stat = await fsPromises.stat(absoluteSourcePath).catch(() => null);
   if (!stat?.isDirectory()) {
     throw new ValidationError({ message: `Local folder does not exist: ${input.sourcePath}` });
   }
+  const [writeJailRoots, readOnlyRoots] = await Promise.all([
+    realpathExistingRoots(input.writeJailRoots),
+    realpathExistingRoots(input.readOnlyRoots),
+  ]);
+  assertExistingPathRealpathAllowed(absoluteSourcePath, writeJailRoots, readOnlyRoots);
 
-  const sourceInsideWorkspace = isPathInsideRoot(input.workspaceRoot, absoluteSourcePath);
+  const sourceRealPath = await fsPromises.realpath(absoluteSourcePath);
+  const sourceInsideWorkspace = isPathInsideRoot(input.workspaceRoot, sourceRealPath);
   const targetPath = sourceInsideWorkspace
-    ? absoluteSourcePath
+    ? sourceRealPath
     : await allocateImportTarget(input.workspaceRoot, input.desiredName, "local");
 
   if (!sourceInsideWorkspace) {
-    if (isGitRepo(absoluteSourcePath)) {
-      await cloneRepoToTarget(absoluteSourcePath, targetPath);
+    if (isGitRepo(sourceRealPath)) {
+      await cloneRepoToTarget(sourceRealPath, targetPath);
     } else {
-      await fsPromises.cp(absoluteSourcePath, targetPath, { recursive: true });
+      await fsPromises.cp(sourceRealPath, targetPath, { recursive: true });
     }
   }
 
   if (!isGitRepo(targetPath)) {
-    await initializeImportedRepo(targetPath, `Initial import of ${path.basename(absoluteSourcePath)}`);
+    await initializeImportedRepo(targetPath, `Initial import of ${path.basename(sourceRealPath)}`);
   }
 
   return targetPath;
@@ -287,6 +299,18 @@ function isPathInsideRoot(root: string, target: string): boolean {
   return relative === "" || relative === "." || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+async function realpathExistingRoots(roots: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const root of roots) {
+    try {
+      out.push(await fsPromises.realpath(root));
+    } catch {
+      out.push(path.resolve(root));
+    }
+  }
+  return out;
+}
+
 function isGitRepo(targetPath: string): boolean {
   return fs.existsSync(path.join(targetPath, ".git"));
 }
@@ -296,7 +320,11 @@ function deriveRepoName(repoUrl?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const fileName = trimmed.split("/").at(-1)?.replace(/\.git$/i, "")?.trim();
+  const fileName = trimmed
+    .split("/")
+    .at(-1)
+    ?.replace(/\.git$/i, "")
+    ?.trim();
   return fileName || undefined;
 }
 
