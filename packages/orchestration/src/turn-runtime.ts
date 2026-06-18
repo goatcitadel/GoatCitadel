@@ -40,6 +40,7 @@ export interface TurnRuntimeRequest {
   fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
+  modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
 }
 

@@ -8,6 +8,7 @@ import {
   resolvePreparedTurnOrchestration,
   type ChatTurnPrepHost,
 } from "./chat-turn-prep-service.js";
+import { routeWithModelRouter } from "./model-router-decision-service.js";
 
 function createPrefs(
   mode: ChatSessionPrefsRecord["mode"],
@@ -623,6 +624,24 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
+  it("uses model-router to bypass planner work for long direct Chat summaries", async () => {
+    const harness = createHost("chat");
+    const prepared = createPreparedTurnForOrchestration({
+      planningMode: "off",
+      content: `summarize these notes:\n${"customer update ".repeat(80)}`,
+    });
+
+    await expect(resolvePreparedTurnOrchestration(harness.host, prepared as never)).resolves.toBeUndefined();
+
+    expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
+    expect(prepared.modelRouterDecision).toMatchObject({
+      selectedEngine: "balanced_local",
+      orchestration: {
+        decision: "bypassed",
+      },
+    });
+  });
+
   it("maps orchestration summary status and step evidence for running, failed, partial, and advisory outcomes", () => {
     const routeDecision = createPlan({ steps: [] }).routeDecision;
     expect(
@@ -812,15 +831,20 @@ describe("prepareAgentChatTurn personality overlay", () => {
   });
 });
 
-function createPreparedTurnForOrchestration(overrides: { planningMode: ChatSessionPrefsRecord["planningMode"] }) {
+function createPreparedTurnForOrchestration(overrides: {
+  planningMode: ChatSessionPrefsRecord["planningMode"];
+  content?: string;
+}) {
+  const content = overrides.content ?? "Draft a launch note";
   return {
     session: { sessionId: "session-1" },
     workspaceId: "default",
-    content: "Draft a launch note",
+    content,
     conversationMessages: [],
     history: [],
     normalized: { mode: "chat" },
     prefs: createPrefs("chat", { planningMode: overrides.planningMode }),
+    modelRouterDecision: routeWithModelRouter({ prompt: content }),
   };
 }
 

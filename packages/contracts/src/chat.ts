@@ -1206,6 +1206,7 @@ export interface ChatTurnTraceRecord {
     fallbackApiStyle?: import("./llm.js").LlmApiStyle;
     fallbackReason?: string;
     fallbackUsed?: boolean;
+    modelRouter?: ChatModelRouterTraceRecord;
   };
   retrieval?: {
     l0Used: boolean;
@@ -1248,6 +1249,39 @@ export interface ChatTurnTraceRecord {
   executionPlan?: ChatExecutionPlanRecord;
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
+}
+
+export interface ChatModelRouterTraceRecord {
+  source: "model-router";
+  // Free-form provenance label; widened from a string literal so renaming the upstream model-router repo is not a breaking contract change.
+  sourceRepository: string;
+  selectedEngine:
+    | "fast_local"
+    | "balanced_local"
+    | "reasoning_local"
+    | "code_agent"
+    | "web_research"
+    | "multimodal_vision"
+    | "image_generation"
+    | "human_confirm";
+  route: "simple" | "balanced" | "reasoning" | "coding" | "research" | "vision" | "image_generation" | "confirmation";
+  fallbackEngine?: string;
+  complexityScore: number;
+  riskScore: number;
+  confidenceScore: number;
+  requiresConfirmation: boolean;
+  requiresTools: boolean;
+  requiresFreshness: boolean;
+  requiresCodeExecution: boolean;
+  requiresVision: boolean;
+  requiresImageGeneration: boolean;
+  hasAttachments?: boolean;
+  decisionLatencyMs: number;
+  reasons: string[];
+  orchestration?: {
+    decision: "allowed" | "bypassed";
+    reason: string;
+  };
 }
 
 export interface ChatDelegationStepRecord {
