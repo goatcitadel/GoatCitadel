@@ -5,6 +5,13 @@ export type VoiceModelLanguageScope = "english" | "multilingual";
 export type VoiceRuntimeInstallSource = "managed" | "env_override" | "manual";
 export type VoiceRuntimeReadiness = "ready" | "missing" | "broken";
 export type VoiceTransportReadiness = "ready" | "degraded" | "unavailable";
+export type TavernConnectionQuality = "high" | "balanced" | "constrained" | "poor" | "data_saver" | "unknown";
+export type TavernMediaSessionKind = "voice" | "video" | "screen_share";
+export type TavernMediaSessionState = "planned" | "connecting" | "running" | "degraded" | "ended" | "failed";
+export type TavernMediaParticipantAudioState = "unknown" | "muted" | "enabled" | "speaking";
+export type TavernMediaParticipantVideoState = "unknown" | "off" | "enabled" | "degraded";
+export type TavernMediaParticipantScreenShareState = "unknown" | "off" | "sharing";
+export type TavernMediaQualityPresetId = "high" | "balanced" | "constrained" | "poor" | "data_saver";
 export type RealtimeVoiceProvider = "openai-realtime" | "local-transcription";
 export type GoogleMeetSessionState =
   | "blocked"
@@ -149,6 +156,105 @@ export const TAVERN_AUDIO_CAPTURE_DEFAULTS: TavernAudioCaptureDefaults = {
   autoGainControl: true,
 };
 
+export interface TavernMediaQualityPreset {
+  presetId: TavernMediaQualityPresetId;
+  connectionQuality: TavernConnectionQuality;
+  label: string;
+  maxVideo: {
+    width: number;
+    height: number;
+    frameRate: number;
+  };
+  audioFirst: boolean;
+  intendedUse: string;
+}
+
+export const TAVERN_MEDIA_QUALITY_PRESETS: TavernMediaQualityPreset[] = [
+  {
+    presetId: "high",
+    connectionQuality: "high",
+    label: "High",
+    maxVideo: { width: 1920, height: 1080, frameRate: 30 },
+    audioFirst: false,
+    intendedUse: "Strong connection with enough headroom for 1080p live video.",
+  },
+  {
+    presetId: "balanced",
+    connectionQuality: "balanced",
+    label: "Balanced",
+    maxVideo: { width: 1280, height: 720, frameRate: 30 },
+    audioFirst: false,
+    intendedUse: "Default live room target for ordinary broadband connections.",
+  },
+  {
+    presetId: "constrained",
+    connectionQuality: "constrained",
+    label: "Constrained",
+    maxVideo: { width: 854, height: 480, frameRate: 24 },
+    audioFirst: false,
+    intendedUse: "Lower bandwidth or higher latency links that still allow video.",
+  },
+  {
+    presetId: "poor",
+    connectionQuality: "poor",
+    label: "Poor",
+    maxVideo: { width: 640, height: 360, frameRate: 15 },
+    audioFirst: true,
+    intendedUse: "Poor live room conditions where voice continuity should win over video fidelity.",
+  },
+  {
+    presetId: "data_saver",
+    connectionQuality: "data_saver",
+    label: "Data saver",
+    maxVideo: { width: 640, height: 360, frameRate: 15 },
+    audioFirst: true,
+    intendedUse: "Operator-selected data saver mode; video should be optional and conservative.",
+  },
+];
+
+export interface TavernMediaParticipant {
+  participantId: string;
+  displayName?: string;
+  connectionQuality: TavernConnectionQuality;
+  audioState: TavernMediaParticipantAudioState;
+  videoState: TavernMediaParticipantVideoState;
+  screenShareState: TavernMediaParticipantScreenShareState;
+  joinedAt?: string;
+  updatedAt: string;
+}
+
+export interface TavernMediaSession {
+  sessionId: string;
+  kind: TavernMediaSessionKind;
+  state: TavernMediaSessionState;
+  qualityPresetId?: TavernMediaQualityPresetId;
+  participants: TavernMediaParticipant[];
+  createdAt: string;
+  updatedAt: string;
+  endedAt?: string;
+}
+
+export interface TavernMediaSessionDesignStatus {
+  state: "design_only";
+  implementationStatus: "not_implemented";
+  updatedAt: string;
+  message: string;
+  supportedSessionKinds: TavernMediaSessionKind[];
+  audioCaptureDefaults: TavernAudioCaptureDefaults;
+  qualityPresets: TavernMediaQualityPreset[];
+  futureQualitySignals: {
+    browserConnectionInfo: boolean;
+    webRtcStats: boolean;
+    operatorOverride: boolean;
+  };
+  runtime: {
+    signalingReady: false;
+    webRtcPeerConnectionReady: false;
+    cameraCaptureStarted: false;
+    microphoneCaptureStarted: false;
+  };
+}
+
 export interface VoiceTransportStatus {
   playback: {
     state: VoiceTransportReadiness;
@@ -167,6 +273,7 @@ export interface VoiceTransportStatus {
     updatedAt: string;
     message?: string;
   };
+  tavernMedia?: TavernMediaSessionDesignStatus;
 }
 
 export interface VoiceStatus {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   TAVERN_AUDIO_CAPTURE_DEFAULTS,
+  TAVERN_MEDIA_QUALITY_PRESETS,
   buildVoiceOperatorGuidance,
   buildVoiceRecoveryActions,
   type VoiceRuntimeStatus,
@@ -62,6 +63,25 @@ describe("voice operator helpers", () => {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
+    });
+  });
+
+  it("defines design-only Tavern media quality presets", () => {
+    expect(TAVERN_MEDIA_QUALITY_PRESETS).toHaveLength(5);
+    expect(TAVERN_MEDIA_QUALITY_PRESETS.map((preset) => preset.presetId)).toEqual([
+      "high",
+      "balanced",
+      "constrained",
+      "poor",
+      "data_saver",
+    ]);
+    expect(TAVERN_MEDIA_QUALITY_PRESETS.find((preset) => preset.presetId === "high")).toMatchObject({
+      maxVideo: { width: 1920, height: 1080, frameRate: 30 },
+      audioFirst: false,
+    });
+    expect(TAVERN_MEDIA_QUALITY_PRESETS.find((preset) => preset.presetId === "data_saver")).toMatchObject({
+      maxVideo: { width: 640, height: 360, frameRate: 15 },
+      audioFirst: true,
     });
   });
 

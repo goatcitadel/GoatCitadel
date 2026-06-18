@@ -376,7 +376,26 @@ describe("MediaVoiceService", () => {
       transcription: {
         provider: "whisper.cpp",
       },
+      tavernMedia: {
+        state: "design_only",
+        implementationStatus: "not_implemented",
+        supportedSessionKinds: ["voice", "video", "screen_share"],
+        runtime: {
+          signalingReady: false,
+          webRtcPeerConnectionReady: false,
+          cameraCaptureStarted: false,
+          microphoneCaptureStarted: false,
+        },
+      },
     });
+    expect(status.transport?.tavernMedia?.message).toMatch(/does not start WebRTC/i);
+    expect(status.transport?.tavernMedia?.qualityPresets.map((preset) => preset.presetId)).toEqual([
+      "high",
+      "balanced",
+      "constrained",
+      "poor",
+      "data_saver",
+    ]);
     expect(["ready", "degraded", "unavailable"]).toContain(status.transport?.transcription.state);
   });
 

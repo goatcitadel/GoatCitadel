@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { TAVERN_AUDIO_CAPTURE_DEFAULTS } from "@goatcitadel/contracts";
+import { TAVERN_AUDIO_CAPTURE_DEFAULTS, TAVERN_MEDIA_QUALITY_PRESETS } from "@goatcitadel/contracts";
 import type {
   ChatAttachmentMediaType,
   ChatAttachmentPlaybackMetadata,
@@ -269,6 +269,27 @@ function buildVoiceTransportStatus(input: {
       provider: input.stt.provider,
       updatedAt: input.now,
       message: transcriptionMessage,
+    },
+    tavernMedia: {
+      state: "design_only",
+      implementationStatus: "not_implemented",
+      updatedAt: input.now,
+      message:
+        "Tavern live media sessions are a design hook only; GoatCitadel does not start WebRTC signaling, peer connections, camera capture, or microphone capture here.",
+      supportedSessionKinds: ["voice", "video", "screen_share"],
+      audioCaptureDefaults: TAVERN_AUDIO_CAPTURE_DEFAULTS,
+      qualityPresets: TAVERN_MEDIA_QUALITY_PRESETS,
+      futureQualitySignals: {
+        browserConnectionInfo: true,
+        webRtcStats: true,
+        operatorOverride: true,
+      },
+      runtime: {
+        signalingReady: false,
+        webRtcPeerConnectionReady: false,
+        cameraCaptureStarted: false,
+        microphoneCaptureStarted: false,
+      },
     },
   };
 }
