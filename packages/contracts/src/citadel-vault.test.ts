@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  generateVaultKey,
-  sealValue,
-  openValue,
-} from "./citadel-vault.js";
+import { generateVaultKey, sealValue, openValue } from "./citadel-vault.js";
 
 describe("citadel-vault", () => {
   describe("generateVaultKey", () => {
@@ -23,8 +19,7 @@ describe("citadel-vault", () => {
   describe("sealValue / openValue", () => {
     it("round-trips a non-trivial plaintext string", () => {
       const key = generateVaultKey();
-      const plaintext =
-        "The quick brown fox jumps over the lazy dog — secret payload #42!";
+      const plaintext = "The quick brown fox jumps over the lazy dog — secret payload #42!";
       const sealed = sealValue(plaintext, key);
       const recovered = openValue(sealed, key);
       expect(recovered).toBe(plaintext);

@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  RAIL_ITEMS,
-  buildAppHref,
-  getRouteLabel,
-  getRouteReleaseScope,
-  parseAppRoute,
-} from "./route-model";
+import { RAIL_ITEMS, buildAppHref, getRouteLabel, getRouteReleaseScope, parseAppRoute } from "./route-model";
 
 describe("odysseus personal AI routes", () => {
   it("exposes notes, communications, and local AI as rail-backed native routes", () => {

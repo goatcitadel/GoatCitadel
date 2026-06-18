@@ -20,13 +20,7 @@ export type CitadelKind =
   | "team"
   | "custom";
 
-export type ChamberSensitivity =
-  | "public"
-  | "internal"
-  | "private"
-  | "sensitive"
-  | "restricted"
-  | "secret";
+export type ChamberSensitivity = "public" | "internal" | "private" | "sensitive" | "restricted" | "secret";
 
 export type CitadelRiskPosture = "conservative" | "balanced" | "collaborative" | "automation_forward";
 
@@ -220,9 +214,10 @@ export interface CitadelGatehouseSummary {
 }
 
 export function summarizeCitadelGatehouse(citadel: Citadel): CitadelGatehouseSummary {
-  const sensitivityCounts = Object.fromEntries(
-    CHAMBER_SENSITIVITIES.map((sensitivity) => [sensitivity, 0]),
-  ) as Record<ChamberSensitivity, number>;
+  const sensitivityCounts = Object.fromEntries(CHAMBER_SENSITIVITIES.map((sensitivity) => [sensitivity, 0])) as Record<
+    ChamberSensitivity,
+    number
+  >;
   let sealedChamberCount = 0;
   for (const chamber of citadel.chambers) {
     sensitivityCounts[chamber.sensitivity] = (sensitivityCounts[chamber.sensitivity] ?? 0) + 1;

@@ -1,4 +1,8 @@
-import { FOLLOW_ON_PROOF_LANE_SPECS, type FollowOnProofLaneDraftId, type FollowOnProofLaneSpec } from "@goatcitadel/contracts";
+import {
+  FOLLOW_ON_PROOF_LANE_SPECS,
+  type FollowOnProofLaneDraftId,
+  type FollowOnProofLaneSpec,
+} from "@goatcitadel/contracts";
 
 interface GatewayFollowOnProofLaneSpec extends FollowOnProofLaneSpec {
   artifactRoot: string;

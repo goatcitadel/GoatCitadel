@@ -5,13 +5,7 @@ import {
   type AutomationRiskMode,
 } from "./citadel-automation.js";
 
-const ALL_MODES: AutomationRiskMode[] = [
-  "observe",
-  "draft",
-  "stage",
-  "execute_with_approval",
-  "autopilot",
-];
+const ALL_MODES: AutomationRiskMode[] = ["observe", "draft", "stage", "execute_with_approval", "autopilot"];
 
 describe("automationCanExternalWrite", () => {
   it("returns false for observe — read-only mode has no external writes", () => {

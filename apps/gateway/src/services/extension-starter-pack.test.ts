@@ -130,7 +130,8 @@ describe("extension starter pack", () => {
     const draft = {
       generatedAt: "2026-03-31T18:14:00.000Z",
       summary: "starter summary",
-      starterRoot: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z",
+      starterRoot:
+        "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z",
       files: [],
       markdown: "# Extension Starter Pack",
     };
@@ -138,24 +139,28 @@ describe("extension starter pack", () => {
     const files = await buildExtensionStarterPackFiles(draft);
 
     expect(files).toHaveLength(6);
-    expect(files[0]).toEqual(expect.objectContaining({
-      relativePath: `${draft.starterRoot}/README.md`,
-      content: expect.stringContaining("# GoatCitadel Extension Starter Pack"),
-    }));
-    expect(files).toEqual(expect.arrayContaining([
+    expect(files[0]).toEqual(
       expect.objectContaining({
-        relativePath: `${draft.starterRoot}/docs/PLUGIN_SDK_CONTRACT.md`,
-        content: expect.stringContaining("# Plugin And Add-on SDK Contract"),
+        relativePath: `${draft.starterRoot}/README.md`,
+        content: expect.stringContaining("# GoatCitadel Extension Starter Pack"),
       }),
-      expect.objectContaining({
-        relativePath: `${draft.starterRoot}/addons/reference-separate-repo-addon/goatcitadel.addon.json`,
-        content: expect.stringContaining("\"schemaVersion\": 1"),
-      }),
-      expect.objectContaining({
-        relativePath: `${draft.starterRoot}/integration-plugins/reference-integration-plugin/goatcitadel.integration-plugin.json`,
-        content: expect.stringContaining("\"pluginId\": \"reference-integration-plugin\""),
-      }),
-    ]));
+    );
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relativePath: `${draft.starterRoot}/docs/PLUGIN_SDK_CONTRACT.md`,
+          content: expect.stringContaining("# Plugin And Add-on SDK Contract"),
+        }),
+        expect.objectContaining({
+          relativePath: `${draft.starterRoot}/addons/reference-separate-repo-addon/goatcitadel.addon.json`,
+          content: expect.stringContaining('"schemaVersion": 1'),
+        }),
+        expect.objectContaining({
+          relativePath: `${draft.starterRoot}/integration-plugins/reference-integration-plugin/goatcitadel.integration-plugin.json`,
+          content: expect.stringContaining('"pluginId": "reference-integration-plugin"'),
+        }),
+      ]),
+    );
   });
 
   it("summarizes exported starter-pack files", () => {
@@ -163,19 +168,24 @@ describe("extension starter pack", () => {
       {
         generatedAt: "2026-03-31T18:14:00.000Z",
         summary: "starter summary",
-        starterRoot: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z",
+        starterRoot:
+          "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z",
         files: [],
         markdown: "",
       },
       [
         {
-          relativePath: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/README.md",
-          fullPath: "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/README.md",
+          relativePath:
+            "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/README.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/README.md",
           bytes: 100,
         },
         {
-          relativePath: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
-          fullPath: "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
+          relativePath:
+            "artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-31/extension-starter-pack-2026-03-31T18-14-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
           bytes: 200,
         },
       ],

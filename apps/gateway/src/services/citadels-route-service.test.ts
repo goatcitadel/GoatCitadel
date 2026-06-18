@@ -34,7 +34,13 @@ describe("CitadelsRouteService.interpretSessionMessage", () => {
 
   it("returns no_interpreter when no model is configured", async () => {
     const repo = repoStub({
-      getMasonSession: vi.fn(() => ({ sessionId: "s1", answers: {}, status: "collecting", createdAt: "t", updatedAt: "t" })),
+      getMasonSession: vi.fn(() => ({
+        sessionId: "s1",
+        answers: {},
+        status: "collecting",
+        createdAt: "t",
+        updatedAt: "t",
+      })),
     });
     const service = new CitadelsRouteService(repo);
 

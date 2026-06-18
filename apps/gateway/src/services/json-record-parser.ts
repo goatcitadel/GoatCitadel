@@ -2,7 +2,7 @@ function safeJsonParseObject(raw: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : undefined;
   } catch {
     return undefined;
@@ -12,10 +12,10 @@ function safeJsonParseObject(raw: string): Record<string, unknown> | undefined {
 function normalizeJsonRecordCandidate(value: string): string {
   return value
     .replace(/^\uFEFF/, "")
-    .replace(/[“”]/g, "\"")
+    .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/([{,]\s*)'([^']+)'\s*:/g, "$1\"$2\":")
-    .replace(/:\s*'([^']*)'/g, ": \"$1\"")
+    .replace(/([{,]\s*)'([^']+)'\s*:/g, '$1"$2":')
+    .replace(/:\s*'([^']*)'/g, ': "$1"')
     .replace(/,\s*([}\]])/g, "$1")
     .replace(/\\n/g, "\n")
     .trim();

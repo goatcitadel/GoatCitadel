@@ -576,12 +576,14 @@ function parseHeadersJson(text: string): Record<string, string> | undefined {
     throw new Error("Custom headers must be a JSON object.");
   }
   const entries = Object.entries(parsed);
-  const headers = Object.fromEntries(entries.map(([key, value]) => {
-    if (typeof value !== "string") {
-      throw new Error("Custom header values must be strings.");
-    }
-    return [key, value];
-  }));
+  const headers = Object.fromEntries(
+    entries.map(([key, value]) => {
+      if (typeof value !== "string") {
+        throw new Error("Custom header values must be strings.");
+      }
+      return [key, value];
+    }),
+  );
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 

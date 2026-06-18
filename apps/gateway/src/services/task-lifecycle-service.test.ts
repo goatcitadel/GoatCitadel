@@ -1096,7 +1096,7 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     const { service } = createService();
     const a = service.createTask({ title: "a" });
     const b = service.createTask({ title: "b" });
-    
+
     vi.setSystemTime(new Date("2026-05-01T12:00:01.000Z"));
     service.updateTask(b.taskId, { title: "b changed" });
 

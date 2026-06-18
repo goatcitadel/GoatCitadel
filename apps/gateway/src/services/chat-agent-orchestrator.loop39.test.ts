@@ -177,9 +177,7 @@ describe("ChatAgentOrchestrator loop39 runtime and delegation repair behavior", 
         "Use role-labeled sections in this exact order: `Planner`, `Operator Handoff`, `Members`, `Organizer`, `Risk Review`, `Synthesis`. End with a single recommendation.",
     });
 
-    expect(result.assistantContent).toBe(
-      "I can give a brief plan, but the exact roles are not expanded yet.",
-    );
+    expect(result.assistantContent).toBe("I can give a brief plan, but the exact roles are not expanded yet.");
   });
 });
 

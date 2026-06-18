@@ -58,11 +58,7 @@ describe("ChatAgentOrchestrator loop38 cowork delegation eval-integrity behavior
   });
 });
 
-async function runCoworkEvalTurn(input: {
-  sessionId: string;
-  task: string;
-  instruction: string;
-}): Promise<{
+async function runCoworkEvalTurn(input: { sessionId: string; task: string; instruction: string }): Promise<{
   assistantContent: string;
   turnTrace: ChatTurnTraceRecord;
   invokeTool: Mock<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>;

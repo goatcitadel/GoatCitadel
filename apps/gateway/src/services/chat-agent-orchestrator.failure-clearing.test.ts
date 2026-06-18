@@ -125,7 +125,8 @@ describe("shouldClearRecoverableCompletionFailure", () => {
       expect(
         shouldClearRecoverableCompletionFailure(
           buildInput({
-            assistantContent: '<tool_call>{"name": "file.read_range", "arguments": "{\\"path\\": \\"a.ts\\"}"}</tool_call>',
+            assistantContent:
+              '<tool_call>{"name": "file.read_range", "arguments": "{\\"path\\": \\"a.ts\\"}"}</tool_call>',
           }),
         ),
       ).toBe(false);
@@ -218,11 +219,9 @@ describe("shouldClearRecoverableCompletionFailure", () => {
     });
 
     it("never clears on the live chat surface", () => {
-      expect(
-        shouldClearRecoverableCompletionFailure(
-          buildInput({ normalizationProfile: "live", mode: "chat" }),
-        ),
-      ).toBe(false);
+      expect(shouldClearRecoverableCompletionFailure(buildInput({ normalizationProfile: "live", mode: "chat" }))).toBe(
+        false,
+      );
     });
   });
 });

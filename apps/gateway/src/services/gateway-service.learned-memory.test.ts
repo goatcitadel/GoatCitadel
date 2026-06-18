@@ -10,7 +10,9 @@ import {
 
 describe("gateway learned-memory hygiene", () => {
   it("treats blocked/fallback assistant text as low confidence", () => {
-    expect(looksLowConfidenceResponse("A source blocked automated browsing on movieinsider.com, so I'm falling back.")).toBe(true);
+    expect(
+      looksLowConfidenceResponse("A source blocked automated browsing on movieinsider.com, so I'm falling back."),
+    ).toBe(true);
     expect(looksLowConfidenceResponse("I hit a tool issue that was not safe to keep retrying.")).toBe(true);
   });
 
@@ -53,13 +55,15 @@ describe("gateway learned-memory hygiene", () => {
     };
 
     expect(hasProblematicBrowserRun([blockedRun])).toBe(true);
-    expect(shouldExtractLearnedMemoryContent("Here are the release leads I found.", {
-      role: "assistant",
-      sourceRef: "assistant-1",
-      trace: {
-        status: "completed",
-        toolRuns: [blockedRun],
-      },
-    })).toBe(false);
+    expect(
+      shouldExtractLearnedMemoryContent("Here are the release leads I found.", {
+        role: "assistant",
+        sourceRef: "assistant-1",
+        trace: {
+          status: "completed",
+          toolRuns: [blockedRun],
+        },
+      }),
+    ).toBe(false);
   });
 });

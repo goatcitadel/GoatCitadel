@@ -30,10 +30,7 @@ export function buildGatewayConnectorRecords(input: {
   ];
 }
 
-export function filterConnectorRecords(
-  records: ConnectorRecord[],
-  connectorType?: ConnectorType,
-): ConnectorRecord[] {
+export function filterConnectorRecords(records: ConnectorRecord[], connectorType?: ConnectorType): ConnectorRecord[] {
   if (!connectorType) {
     return records;
   }
@@ -57,16 +54,15 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
       surface: "mission-control-web",
       approvalDeliveryMode: "browser_realtime",
       approvalDeliveryReady: true,
-      approvalDeliveryReason: "Mission Control listens for approval_remote_action_ready and can resolve remote approval tokens.",
+      approvalDeliveryReason:
+        "Mission Control listens for approval_remote_action_ready and can resolve remote approval tokens.",
     },
   };
 }
 
 function toIntegrationConnectorRecord(connection: IntegrationConnection): ConnectorRecord {
   const isChannel = connection.kind === "channel";
-  const channelFeatures = isChannel
-    ? describeChannelFeatureMetadata(connection.key, connection.config)
-    : undefined;
+  const channelFeatures = isChannel ? describeChannelFeatureMetadata(connection.key, connection.config) : undefined;
   const status = !connection.enabled
     ? "disabled"
     : connection.lastError
@@ -102,9 +98,10 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       approvalDeliveryReady,
       approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
-      channelCapabilities: channelFeatures && connection.kind === "channel"
-        ? describeChannelCapabilities(connection.key, connection.config)
-        : undefined,
+      channelCapabilities:
+        channelFeatures && connection.kind === "channel"
+          ? describeChannelCapabilities(connection.key, connection.config)
+          : undefined,
       supportedDeliveryActions: channelFeatures?.supportedDeliveryActions,
       supportedAttachmentSources: channelFeatures?.supportedAttachmentSources,
       channelSupportNotes: channelFeatures?.supportNotes,
@@ -117,11 +114,7 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
 }
 
 function toMcpConnectorRecord(server: McpServerRecord, tools: McpToolRecord[]): ConnectorRecord {
-  const status = !server.enabled
-    ? "disabled"
-    : server.status === "connected"
-      ? "active"
-      : "degraded";
+  const status = !server.enabled ? "disabled" : server.status === "connected" ? "active" : "degraded";
   const approvalDeliveryTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_DELIVERY_TOOL_NAME);
   const approvalDeliveryReady = status === "active" && Boolean(approvalDeliveryTool);
   return {

@@ -29,4 +29,3 @@ export interface ReplayDiffSummary {
   };
   comparedAt: string;
 }
-

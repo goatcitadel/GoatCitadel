@@ -31,10 +31,7 @@ export interface CitadelPassageInput {
  * - No `expiresAt` → always active.
  * - `expiresAt` present → active only when it is strictly after `nowIso`.
  */
-export function isPassageActive(
-  passage: CitadelPassage,
-  nowIso: string,
-): boolean {
+export function isPassageActive(passage: CitadelPassage, nowIso: string): boolean {
   if (passage.expiresAt === undefined) {
     return true;
   }
@@ -47,10 +44,7 @@ export function isPassageActive(
  *
  * Does NOT mutate `data`.
  */
-export function filterPassageFields(
-  passage: CitadelPassage,
-  data: Record<string, unknown>,
-): Record<string, unknown> {
+export function filterPassageFields(passage: CitadelPassage, data: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const key of passage.allowedFields) {
     if (Object.prototype.hasOwnProperty.call(data, key)) {

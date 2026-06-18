@@ -78,10 +78,7 @@ function artifactProofPriority(proofState: ArtifactProofState): number {
   }
 }
 
-function isBetterArtifactCandidate(
-  candidate: ArtifactCandidate,
-  current: ArtifactCandidate | undefined,
-): boolean {
+function isBetterArtifactCandidate(candidate: ArtifactCandidate, current: ArtifactCandidate | undefined): boolean {
   if (!current) {
     return true;
   }
@@ -217,7 +214,7 @@ export function readLatestFollowOnParityArtifactFromWorkspace(
   deploymentProfile?: DeploymentProfile,
 ): FollowOnProofLaneArtifactRecord | undefined {
   const scanned = scanFollowOnParityArtifacts(rootDir, workspaceDir, laneId);
-  const selected = deploymentProfile ? scanned.byProfile[deploymentProfile] ?? scanned.overall : scanned.overall;
+  const selected = deploymentProfile ? (scanned.byProfile[deploymentProfile] ?? scanned.overall) : scanned.overall;
   const selectedPath = selected?.entryPath;
   const selectedGeneratedAt = selected?.generatedAtMs ?? -1;
   if (!selectedPath) {
@@ -245,12 +242,7 @@ export function readLatestVoiceEvidenceArtifactsByProfile(
   rootDir: string,
   workspaceDir: string,
 ): Partial<Record<DeploymentProfile, FollowOnProofLaneArtifactRecord>> {
-  const scanned = scanFollowOnParityArtifacts(
-    rootDir,
-    workspaceDir,
-    "voice",
-    VOICE_EVIDENCE_ARTIFACT_PREFIXES,
-  );
+  const scanned = scanFollowOnParityArtifacts(rootDir, workspaceDir, "voice", VOICE_EVIDENCE_ARTIFACT_PREFIXES);
   return Object.fromEntries(
     Object.entries(scanned.byProfile).map(([profile, candidate]) => [
       profile,
@@ -267,18 +259,17 @@ export function mergeLatestFollowOnParityArtifacts(
 ): FollowOnProofLaneArtifactIndex {
   const merged: FollowOnProofLaneArtifactIndex = { ...stored };
   for (const laneId of ["browser", "packaging", "a2ui", "voice", "companion", "extensions"] as const) {
-    const scanned = readLatestFollowOnParityArtifactFromWorkspace(
-      rootDir,
-      workspaceDir,
-      laneId,
-      deploymentProfile,
-    );
+    const scanned = readLatestFollowOnParityArtifactFromWorkspace(rootDir, workspaceDir, laneId, deploymentProfile);
     if (!scanned) {
       continue;
     }
     const storedGeneratedAt = stored[laneId] ? Date.parse(stored[laneId]!.generatedAt) : -1;
     const scannedGeneratedAt = Date.parse(scanned.generatedAt);
-    if (!stored[laneId] || scannedGeneratedAt > storedGeneratedAt || stored[laneId]?.relativePath !== scanned.relativePath) {
+    if (
+      !stored[laneId] ||
+      scannedGeneratedAt > storedGeneratedAt ||
+      stored[laneId]?.relativePath !== scanned.relativePath
+    ) {
       merged[laneId] = scanned;
     }
   }

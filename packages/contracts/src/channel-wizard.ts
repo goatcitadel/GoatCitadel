@@ -12,17 +12,9 @@ export type ChannelArchetype =
 
 export type ChannelSetupTier = "tier_1" | "tier_2" | "tier_3" | "tier_4";
 
-export type ChannelSetupLifecycleMode =
-  | "create"
-  | "edit"
-  | "repair"
-  | "rotate_secret"
-  | "retest";
+export type ChannelSetupLifecycleMode = "create" | "edit" | "repair" | "rotate_secret" | "retest";
 
-export type ChannelSetupManualModePolicy =
-  | "hidden-until-needed"
-  | "available-secondary"
-  | "expert-forward";
+export type ChannelSetupManualModePolicy = "hidden-until-needed" | "available-secondary" | "expert-forward";
 
 export type ChannelSetupValidationLevel =
   | "structural"
@@ -46,12 +38,7 @@ export type ChannelSetupFailureCategory =
   | "deprecated_path"
   | "unknown";
 
-export type ChannelSetupHydrationStatus =
-  | "clean"
-  | "partial"
-  | "opaque-secret"
-  | "legacy-shape"
-  | "invalid-runtime";
+export type ChannelSetupHydrationStatus = "clean" | "partial" | "opaque-secret" | "legacy-shape" | "invalid-runtime";
 
 export type ChannelSetupStepKind =
   | "intro"
@@ -63,14 +50,7 @@ export type ChannelSetupStepKind =
   | "test"
   | "confirm";
 
-export type ChannelSetupFieldType =
-  | "text"
-  | "secret"
-  | "url"
-  | "id"
-  | "select"
-  | "boolean"
-  | "textarea";
+export type ChannelSetupFieldType = "text" | "secret" | "url" | "id" | "select" | "boolean" | "textarea";
 
 export type ChannelSetupRichBlock =
   | { kind: "paragraph"; text: string }

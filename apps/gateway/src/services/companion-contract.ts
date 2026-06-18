@@ -17,11 +17,7 @@ const PLATFORM_CAPABILITY_MAP: Partial<Record<string, A2UICapability>> = {
   voice: "voice_input",
 };
 
-const TRANSPORT_LANES: CompanionTransportLane[] = [
-  "foreground_sse",
-  "push_refresh",
-  "manual_refresh",
-];
+const TRANSPORT_LANES: CompanionTransportLane[] = ["foreground_sse", "push_refresh", "manual_refresh"];
 
 const AUTH_REQUIREMENTS: CompanionAuthRequirement[] = [
   "device_identity",

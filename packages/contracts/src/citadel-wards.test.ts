@@ -35,9 +35,7 @@ describe("wardMatchesAction", () => {
 
 describe("evaluateWards", () => {
   it("no matching ward → allow", () => {
-    const wards: CitadelWard[] = [
-      { name: "email-deny", actionPattern: "email.*", effect: "deny" },
-    ];
+    const wards: CitadelWard[] = [{ name: "email-deny", actionPattern: "email.*", effect: "deny" }];
     expect(evaluateWards(wards, "filesystem.read")).toBe("allow");
   });
 
@@ -54,9 +52,7 @@ describe("evaluateWards", () => {
   });
 
   it("require_approval returned when only that ward matches", () => {
-    const wards: CitadelWard[] = [
-      { name: "approval-db", actionPattern: "database.*", effect: "require_approval" },
-    ];
+    const wards: CitadelWard[] = [{ name: "approval-db", actionPattern: "database.*", effect: "require_approval" }];
     expect(evaluateWards(wards, "database.insert")).toBe("require_approval");
   });
 
@@ -93,9 +89,7 @@ describe("evaluateWards", () => {
   });
 
   it("allow returned when only allow wards match", () => {
-    const wards: CitadelWard[] = [
-      { name: "allow-email", actionPattern: "email.*", effect: "allow" },
-    ];
+    const wards: CitadelWard[] = [{ name: "allow-email", actionPattern: "email.*", effect: "allow" }];
     expect(evaluateWards(wards, "email.send")).toBe("allow");
   });
 });

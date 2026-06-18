@@ -207,7 +207,10 @@ export function parseMasonInterpretResponse(raw: string): Partial<MasonAnswers> 
       }
     }
   }
-  if (typeof parsed.riskPosture === "string" && (MASON_RISK_POSTURES as readonly string[]).includes(parsed.riskPosture)) {
+  if (
+    typeof parsed.riskPosture === "string" &&
+    (MASON_RISK_POSTURES as readonly string[]).includes(parsed.riskPosture)
+  ) {
     out.riskPosture = parsed.riskPosture as CitadelRiskPosture;
   }
   if (typeof parsed.preferLocalForSensitive === "boolean") {
@@ -224,7 +227,9 @@ function extractJsonObject(raw: string): Record<string, unknown> | undefined {
   }
   try {
     const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }

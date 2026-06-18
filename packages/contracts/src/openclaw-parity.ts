@@ -14,11 +14,7 @@ export type OpenclawParityEpicId =
 
 export type OpenclawParityEpicStatus = "complete" | "in_progress" | "pending";
 
-export type OpenclawParityBlockerKind =
-  | "repo_runtime"
-  | "manual_operator"
-  | "external_repo"
-  | "publication";
+export type OpenclawParityBlockerKind = "repo_runtime" | "manual_operator" | "external_repo" | "publication";
 
 export interface OpenclawParityBlockerRecord {
   kind: OpenclawParityBlockerKind;
@@ -122,21 +118,17 @@ export const OPENCLAW_PARITY_EPICS: OpenclawParityEpicDefinition[] = [
   },
 ];
 
-export const OPENCLAW_PARITY_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS.map(
-  (epic) => epic.epicId,
-);
+export const OPENCLAW_PARITY_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS.map((epic) => epic.epicId);
 
-export const OPENCLAW_PARITY_COMPLETED_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS
-  .filter((epic) => epic.status === "complete")
-  .map((epic) => epic.epicId);
+export const OPENCLAW_PARITY_COMPLETED_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS.filter(
+  (epic) => epic.status === "complete",
+).map((epic) => epic.epicId);
 
-export const OPENCLAW_PARITY_OPEN_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS
-  .filter((epic) => epic.status !== "complete")
-  .map((epic) => epic.epicId);
+export const OPENCLAW_PARITY_OPEN_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PARITY_EPICS.filter(
+  (epic) => epic.status !== "complete",
+).map((epic) => epic.epicId);
 
 // This is the full-program closeout order for finishing parity end to end.
 // It intentionally differs from the follow-on-only order, which applies only
 // when working the follow-on lanes before planned-channel completion.
-export const OPENCLAW_PARITY_COMPLETION_ORDER: OpenclawParityEpicId[] = [
-  "GC-P1-09",
-];
+export const OPENCLAW_PARITY_COMPLETION_ORDER: OpenclawParityEpicId[] = ["GC-P1-09"];

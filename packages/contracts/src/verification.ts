@@ -1,23 +1,10 @@
 import { z } from "zod";
 
-export const VerificationLaneSchema = z.enum([
-  "fast",
-  "deep-core",
-  "deep-ecosystem",
-  "soak",
-  "review",
-  "all",
-]);
+export const VerificationLaneSchema = z.enum(["fast", "deep-core", "deep-ecosystem", "soak", "review", "all"]);
 
 export type VerificationLane = z.infer<typeof VerificationLaneSchema>;
 
-export const VerificationScenarioStatusSchema = z.enum([
-  "passed",
-  "failed",
-  "skipped",
-  "not_configured",
-  "degraded",
-]);
+export const VerificationScenarioStatusSchema = z.enum(["passed", "failed", "skipped", "not_configured", "degraded"]);
 
 export type VerificationScenarioStatus = z.infer<typeof VerificationScenarioStatusSchema>;
 
@@ -38,13 +25,7 @@ export const VerificationFailureFamilySchema = z.enum([
 
 export type VerificationFailureFamily = z.infer<typeof VerificationFailureFamilySchema>;
 
-export const VerificationSeveritySchema = z.enum([
-  "critical",
-  "high",
-  "medium",
-  "low",
-  "info",
-]);
+export const VerificationSeveritySchema = z.enum(["critical", "high", "medium", "low", "info"]);
 
 export type VerificationSeverity = z.infer<typeof VerificationSeveritySchema>;
 
@@ -96,19 +77,21 @@ export const VerificationRunManifestSchema = z.object({
   repoRoot: z.string().min(1),
   artifactRoot: z.string().min(1),
   scenarios: z.array(VerificationScenarioResultSchema).default([]),
-  counts: z.object({
-    passed: z.number().int().nonnegative().default(0),
-    failed: z.number().int().nonnegative().default(0),
-    skipped: z.number().int().nonnegative().default(0),
-    degraded: z.number().int().nonnegative().default(0),
-    notConfigured: z.number().int().nonnegative().default(0),
-  }).default({
-    passed: 0,
-    failed: 0,
-    skipped: 0,
-    degraded: 0,
-    notConfigured: 0,
-  }),
+  counts: z
+    .object({
+      passed: z.number().int().nonnegative().default(0),
+      failed: z.number().int().nonnegative().default(0),
+      skipped: z.number().int().nonnegative().default(0),
+      degraded: z.number().int().nonnegative().default(0),
+      notConfigured: z.number().int().nonnegative().default(0),
+    })
+    .default({
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      degraded: 0,
+      notConfigured: 0,
+    }),
   metadata: z.record(z.unknown()).default({}),
 });
 
@@ -133,19 +116,21 @@ export const VerificationReviewSchema = z.object({
   generatedAt: z.string().min(1),
   status: z.enum(["ok", "issues_found"]).default("ok"),
   items: z.array(VerificationReviewItemSchema).default([]),
-  summary: z.object({
-    totalFailures: z.number().int().nonnegative().default(0),
-    critical: z.number().int().nonnegative().default(0),
-    high: z.number().int().nonnegative().default(0),
-    medium: z.number().int().nonnegative().default(0),
-    low: z.number().int().nonnegative().default(0),
-  }).default({
-    totalFailures: 0,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-  }),
+  summary: z
+    .object({
+      totalFailures: z.number().int().nonnegative().default(0),
+      critical: z.number().int().nonnegative().default(0),
+      high: z.number().int().nonnegative().default(0),
+      medium: z.number().int().nonnegative().default(0),
+      low: z.number().int().nonnegative().default(0),
+    })
+    .default({
+      totalFailures: 0,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    }),
 });
 
 export type VerificationReview = z.infer<typeof VerificationReviewSchema>;

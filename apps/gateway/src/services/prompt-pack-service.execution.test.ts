@@ -2458,16 +2458,19 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         trace: createTrace(`sess-${testId}`),
       };
     });
-    const autoScorePromptPackTest = vi.spyOn(service, "autoScorePromptPackTest").mockImplementation(async (input) => ({
-      score: {
-        autoScoreId: `auto-${input.testId}`,
-        weightedScore: 96,
-        autoVerdict: "pass",
-        scoreState: "auto_valid",
-      },
-      legacyScore: undefined,
-      run: createRun(String(input.runId ?? "run-scored"), "completed", "2026-03-16T00:03:00.000Z"),
-    }) as never);
+    const autoScorePromptPackTest = vi.spyOn(service, "autoScorePromptPackTest").mockImplementation(
+      async (input) =>
+        ({
+          score: {
+            autoScoreId: `auto-${input.testId}`,
+            weightedScore: 96,
+            autoVerdict: "pass",
+            scoreState: "auto_valid",
+          },
+          legacyScore: undefined,
+          run: createRun(String(input.runId ?? "run-scored"), "completed", "2026-03-16T00:03:00.000Z"),
+        }) as never,
+    );
 
     const task = (
       service as unknown as { runPromptPackBenchmarkTask: (benchmarkRunId: string) => Promise<void> }

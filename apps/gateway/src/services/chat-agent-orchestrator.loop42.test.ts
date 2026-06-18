@@ -20,15 +20,18 @@ describe("ChatAgentOrchestrator loop42 eval-integrity passthrough coverage", () 
       task: 'Cowork request: "Shortlist a public venue for a small meetup, but do not contact or book anything."',
       instruction: "Use role-labeled sections in this exact order: `Researcher`, `Risk Review`, `Operator Handoff`.",
     },
-  ])("passes cowork eval-turn model output through verbatim for $sessionId", async ({ sessionId, task, instruction }) => {
-    const result = await runCoworkEvalTurn({ sessionId, task, instruction });
+  ])(
+    "passes cowork eval-turn model output through verbatim for $sessionId",
+    async ({ sessionId, task, instruction }) => {
+      const result = await runCoworkEvalTurn({ sessionId, task, instruction });
 
-    expect(result.assistantContent).toBe(COWORK_MODEL_OUTPUT);
-    expect(result.assistantContent).not.toContain("## Researcher");
-    expect(result.assistantContent).not.toContain("## Risk Review");
-    expect(result.assistantContent).not.toContain("## Operator Handoff");
-    expect(result.assistantContent).not.toContain("Source URLs:");
-  });
+      expect(result.assistantContent).toBe(COWORK_MODEL_OUTPUT);
+      expect(result.assistantContent).not.toContain("## Researcher");
+      expect(result.assistantContent).not.toContain("## Risk Review");
+      expect(result.assistantContent).not.toContain("## Operator Handoff");
+      expect(result.assistantContent).not.toContain("Source URLs:");
+    },
+  );
 
   it("passes code eval-turn model output through verbatim with no forced prefetch tool runs", async () => {
     const result = await runCodeEvalTurn(

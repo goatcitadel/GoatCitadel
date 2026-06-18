@@ -139,9 +139,7 @@ describe("ChatAgentOrchestrator loop35 prompt-lab approval coverage", () => {
     expect(result.requiresApproval).toBeUndefined();
     expect(result.turnTrace.status).toBe("completed");
     expect(
-      result.turnTrace.toolRuns.some(
-        (run) => run.toolName === "file.read_range" && run.status === "approval_required",
-      ),
+      result.turnTrace.toolRuns.some((run) => run.toolName === "file.read_range" && run.status === "approval_required"),
     ).toBe(true);
     const followUpMessages = requestMessages(createChatCompletion.mock.calls[2]?.[0]);
     expect(

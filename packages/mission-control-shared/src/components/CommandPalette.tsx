@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { appCopy, globalCopy } from "../content/copy";
 
 export interface CommandPaletteItem {
@@ -66,9 +59,8 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+      previouslyFocusedElementRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       queueMicrotask(() => {
         inputRef.current?.focus();
       });
@@ -113,7 +105,9 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
     }
 
     const focusables = dialogRef.current
-      ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>(focusableSelectors)).filter((element) => !element.hasAttribute("disabled"))
+      ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+          (element) => !element.hasAttribute("disabled"),
+        )
       : [];
 
     if (focusables.length === 0) {
@@ -210,33 +204,39 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
             role="combobox"
             aria-expanded={filtered.length > 0}
             aria-controls={listboxId}
-            aria-activedescendant={selectedIndex >= 0 ? `${listboxId}-option-${filtered[selectedIndex]?.id}` : undefined}
+            aria-activedescendant={
+              selectedIndex >= 0 ? `${listboxId}-option-${filtered[selectedIndex]?.id}` : undefined
+            }
           />
           <span className="command-palette-shortcut">Ctrl/Cmd + K</span>
         </div>
         <ul id={listboxId} className="command-palette-list" role="listbox">
           {filtered.length === 0 ? (
             <li className="command-palette-empty">No matching actions.</li>
-          ) : filtered.map((item, index) => (
-            <li key={item.id} className="command-palette-item">
-              <button
-                id={`${listboxId}-option-${item.id}`}
-                type="button"
-                className={["gc-button", (`command-palette-action${selectedIndex === index ? " active" : ""}`)].filter(Boolean).join(" ")}
-                role="option"
-                aria-selected={selectedIndex === index}
-                onMouseEnter={() => setSelectedIndex(index)}
-                onFocus={() => setSelectedIndex(index)}
-                onClick={() => {
-                  item.run();
-                  closePalette();
-                }}
-              >
-                <span>{item.label}</span>
-                <span className="command-palette-go">↵</span>
-              </button>
-            </li>
-          ))}
+          ) : (
+            filtered.map((item, index) => (
+              <li key={item.id} className="command-palette-item">
+                <button
+                  id={`${listboxId}-option-${item.id}`}
+                  type="button"
+                  className={["gc-button", `command-palette-action${selectedIndex === index ? " active" : ""}`]
+                    .filter(Boolean)
+                    .join(" ")}
+                  role="option"
+                  aria-selected={selectedIndex === index}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  onFocus={() => setSelectedIndex(index)}
+                  onClick={() => {
+                    item.run();
+                    closePalette();
+                  }}
+                >
+                  <span>{item.label}</span>
+                  <span className="command-palette-go">↵</span>
+                </button>
+              </li>
+            ))
+          )}
         </ul>
       </div>
     </div>

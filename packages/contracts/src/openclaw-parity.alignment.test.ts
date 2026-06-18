@@ -48,7 +48,7 @@ describe("openclaw parity roadmap alignment", () => {
         const match = line.match(/`(GC-P\d-\d{2})`/);
         return match?.[1];
       })
-      .filter((epicId): epicId is typeof OPENCLAW_PARITY_COMPLETION_ORDER[number] => Boolean(epicId));
+      .filter((epicId): epicId is (typeof OPENCLAW_PARITY_COMPLETION_ORDER)[number] => Boolean(epicId));
 
     expect(actualOrder).toEqual(OPENCLAW_PARITY_COMPLETION_ORDER);
   });

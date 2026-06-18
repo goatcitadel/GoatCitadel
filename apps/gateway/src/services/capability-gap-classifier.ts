@@ -77,7 +77,11 @@ export function classifyCapabilityGapFromTrace(input: {
     };
   }
 
-  if (failureClass === "network_interrupted" || failureClass === "provider_timeout" || looksRetryableNetworkFailure(normalizedEvidence)) {
+  if (
+    failureClass === "network_interrupted" ||
+    failureClass === "provider_timeout" ||
+    looksRetryableNetworkFailure(normalizedEvidence)
+  ) {
     return {
       causeClass: "retryable_network_failure",
       recoveryOptions: ["retry_once", "replay_failed_turn"],
@@ -113,20 +117,24 @@ function looksMissingRequiredToolEvidence(normalizedEvidence: string): boolean {
 }
 
 function looksProviderToolMismatch(normalizedEvidence: string): boolean {
-  return normalizedEvidence.includes("tool not supported")
-    || normalizedEvidence.includes("unsupported tool")
-    || normalizedEvidence.includes("does not support tools")
-    || normalizedEvidence.includes("model does not support tool")
-    || normalizedEvidence.includes("provider/tool mismatch");
+  return (
+    normalizedEvidence.includes("tool not supported") ||
+    normalizedEvidence.includes("unsupported tool") ||
+    normalizedEvidence.includes("does not support tools") ||
+    normalizedEvidence.includes("model does not support tool") ||
+    normalizedEvidence.includes("provider/tool mismatch")
+  );
 }
 
 function looksRetryableNetworkFailure(normalizedEvidence: string): boolean {
-  return normalizedEvidence.includes("timed out")
-    || normalizedEvidence.includes("timeout")
-    || normalizedEvidence.includes("fetch failed")
-    || normalizedEvidence.includes("econnreset")
-    || normalizedEvidence.includes("enotfound")
-    || normalizedEvidence.includes("socket hang up")
-    || normalizedEvidence.includes("connection reset")
-    || normalizedEvidence.includes("network");
+  return (
+    normalizedEvidence.includes("timed out") ||
+    normalizedEvidence.includes("timeout") ||
+    normalizedEvidence.includes("fetch failed") ||
+    normalizedEvidence.includes("econnreset") ||
+    normalizedEvidence.includes("enotfound") ||
+    normalizedEvidence.includes("socket hang up") ||
+    normalizedEvidence.includes("connection reset") ||
+    normalizedEvidence.includes("network")
+  );
 }

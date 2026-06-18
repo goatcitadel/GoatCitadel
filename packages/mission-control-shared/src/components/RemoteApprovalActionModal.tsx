@@ -41,11 +41,13 @@ export function RemoteApprovalActionModal({
         }
       }}
       title="Resolve remote approval"
-      description={prompt
-        ? tokenExpired
-          ? `${prompt.kind} is no longer actionable because its single-use connector token expired.`
-          : `${prompt.kind} is ready for a Mission Control decision with a single-use connector action token.`
-        : "A remote approval action is ready."}
+      description={
+        prompt
+          ? tokenExpired
+            ? `${prompt.kind} is no longer actionable because its single-use connector token expired.`
+            : `${prompt.kind} is ready for a Mission Control decision with a single-use connector action token.`
+          : "A remote approval action is ready."
+      }
       confirmLabel="Approve action"
       cancelLabel="Dismiss"
       confirmPending={busy}
@@ -92,7 +94,12 @@ export function RemoteApprovalActionModal({
         </>
       ) : null}
       <div className="gc-modal-actions" style={{ marginTop: "1rem" }}>
-        <button type="button" className="gc-button danger" disabled={busy || tokenExpired} onClick={() => void onReject()}>
+        <button
+          type="button"
+          className="gc-button danger"
+          disabled={busy || tokenExpired}
+          onClick={() => void onReject()}
+        >
           {busy ? "Working..." : "Reject action"}
         </button>
       </div>

@@ -364,7 +364,6 @@ describe("chat agent recovered answer helpers", () => {
         { note: "Recovered from weak content." },
       ),
     ).toContain("Pricing login support demo trial");
-
   });
 });
 

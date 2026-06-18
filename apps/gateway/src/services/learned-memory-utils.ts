@@ -37,11 +37,13 @@ export function looksLowConfidenceResponse(content: string): boolean {
     return true;
   }
   return (
-    normalized.length < 30
-    || /\b(i don't know|not sure|can't help|cannot help|unable to|wasn't able to|couldn't retrieve|blocking access|ran out of time|tool issue|site is blocking automated requests|stopped retrying|do not have a reliable enough partial answer)\b/.test(normalized)
-    || normalized.startsWith("a source blocked automated browsing")
-    || normalized.startsWith("i hit a tool issue")
-    || normalized.startsWith("i hit the same tool issue repeatedly")
+    normalized.length < 30 ||
+    /\b(i don't know|not sure|can't help|cannot help|unable to|wasn't able to|couldn't retrieve|blocking access|ran out of time|tool issue|site is blocking automated requests|stopped retrying|do not have a reliable enough partial answer)\b/.test(
+      normalized,
+    ) ||
+    normalized.startsWith("a source blocked automated browsing") ||
+    normalized.startsWith("i hit a tool issue") ||
+    normalized.startsWith("i hit the same tool issue repeatedly")
   );
 }
 
@@ -102,7 +104,9 @@ export function isQuestionLikeMemoryLine(line: string): boolean {
   if (normalized.endsWith("?")) {
     return true;
   }
-  return /^(what|which|who|when|where|why|how|is|are|am|do|does|did|can|could|should|would|will|has|have|had)\b/.test(normalized);
+  return /^(what|which|who|when|where|why|how|is|are|am|do|does|did|can|could|should|would|will|has|have|had)\b/.test(
+    normalized,
+  );
 }
 
 export function hasProblematicBrowserRun(toolRuns: ChatToolRunRecord[]): boolean {
@@ -141,10 +145,9 @@ function isProblematicBrowserRun(run: ChatToolRunRecord): boolean {
 }
 
 function hasProblematicBrowserFailureClass(value: unknown): boolean {
-  return value === "remote_blocked"
-    || value === "http_error"
-    || value === "runtime_error"
-    || value === "unusable_output";
+  return (
+    value === "remote_blocked" || value === "http_error" || value === "runtime_error" || value === "unusable_output"
+  );
 }
 
 function normalizeMemoryText(value: string): string {

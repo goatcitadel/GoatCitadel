@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, it } from "vitest";
-import {
-  deleteProviderApiKeyWithFallback,
-  persistProviderApiKeyWithFallback,
-} from "./provider-secret-persistence.js";
+import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -194,7 +191,7 @@ describe("provider secret persistence fallback", () => {
     await mkdir(path.join(tempRoot, "config"), { recursive: true });
     await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
     const envPath = path.join(tempRoot, ".env");
-    await writeFile(envPath, "OPENAI_API_KEY=\"sk-test-value\"\n", "utf8");
+    await writeFile(envPath, 'OPENAI_API_KEY="sk-test-value"\n', "utf8");
     const env: NodeJS.ProcessEnv = {
       OPENAI_API_KEY: "sk-test-value",
     };

@@ -17,11 +17,7 @@ import type { ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
 import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 
 export interface ApprovalRuntime {
-  listToolGrants(
-    scope?: ToolGrantScope,
-    scopeRef?: string,
-    limit?: number,
-  ): ToolGrantRecord[];
+  listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): ToolGrantRecord[];
   createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord;
   revokeToolGrant(grantId: string, revokedBy: string): boolean;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
@@ -71,11 +67,7 @@ export interface ApprovalRuntime {
 export class ApprovalRuntimeService implements ApprovalRuntime {
   public constructor(private readonly host: ApprovalLifecycleHost) {}
 
-  public listToolGrants(
-    scope?: ToolGrantScope,
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return approvalLifecycleService.listToolGrants(this.host, scope, scopeRef, limit);
   }
 

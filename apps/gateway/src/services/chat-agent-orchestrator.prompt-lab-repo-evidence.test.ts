@@ -147,8 +147,9 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    const sentenceCount = (result.assistantContent.replace(/\bhttps?:\/\/[^\s)]+/gi, "URL").match(/[.!?](?:\s|$)/g) ?? [])
-      .length;
+    const sentenceCount = (
+      result.assistantContent.replace(/\bhttps?:\/\/[^\s)]+/gi, "URL").match(/[.!?](?:\s|$)/g) ?? []
+    ).length;
     expect(result.assistantContent).toContain(weatherUrl);
     expect(result.assistantContent).not.toContain("Source URLs:");
     expect(sentenceCount).toBe(2);
@@ -179,7 +180,10 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       outcome: "executed",
       policyReason: "allowed",
       auditEventId: "audit-prompt-lab-no-docs-read",
-      result: { path: "apps/gateway/src/services/prompt-pack-service.ts", content: "export class PromptPackService {}" },
+      result: {
+        path: "apps/gateway/src/services/prompt-pack-service.ts",
+        content: "export class PromptPackService {}",
+      },
     });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -204,7 +208,9 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    const firstCompletion = createChatCompletion.mock.calls[0]?.[0] as { tools?: Array<{ function?: { name?: string } }> };
+    const firstCompletion = createChatCompletion.mock.calls[0]?.[0] as {
+      tools?: Array<{ function?: { name?: string } }>;
+    };
     expect(firstCompletion.tools?.map((tool) => tool.function?.name)).not.toContain("documents_create");
     expect(invokeTool.mock.calls.some((call) => call[0].toolName === "documents.create")).toBe(false);
   });
@@ -259,7 +265,10 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       outcome: "executed",
       policyReason: "allowed",
       auditEventId: "audit-prompt-lab-broad-read",
-      result: { path: "apps/gateway/src/services/prompt-pack-service.ts", content: "export class PromptPackService {}" },
+      result: {
+        path: "apps/gateway/src/services/prompt-pack-service.ts",
+        content: "export class PromptPackService {}",
+      },
     });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,

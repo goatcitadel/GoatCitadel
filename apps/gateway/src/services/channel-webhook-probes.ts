@@ -48,14 +48,17 @@ export async function runWebhookDestinationLiveChecks(
       key: `${prefix}_sandbox_send`,
       label: "Sandbox send",
       status: "skipped",
-      message: "Non-destructive diagnostics skipped the sandbox post. Run the guided test or retest flow to send a webhook probe and confirm delivery manually.",
+      message:
+        "Non-destructive diagnostics skipped the sandbox post. Run the guided test or retest flow to send a webhook probe and confirm delivery manually.",
     });
     return {
-      checks: [{
-        key: `${prefix}_live_send`,
-        status: "warn",
-        message: `${connectionLabel} live send probe skipped because non-destructive diagnostics do not post webhook messages.`,
-      }],
+      checks: [
+        {
+          key: `${prefix}_live_send`,
+          status: "warn",
+          message: `${connectionLabel} live send probe skipped because non-destructive diagnostics do not post webhook messages.`,
+        },
+      ],
       probe,
     };
   }
@@ -105,25 +108,17 @@ export async function runWebhookDestinationLiveChecks(
   }
 }
 
-function mapProbeStepsToChecks(
-  steps: ChannelProbeReport["steps"],
-): ConnectorDiagnosticReport["checks"] {
+function mapProbeStepsToChecks(steps: ChannelProbeReport["steps"]): ConnectorDiagnosticReport["checks"] {
   return steps
     .filter((step) => step.status !== "skipped")
     .map((step) => ({
       key: step.key,
-      status: step.status === "pass"
-        ? "pass"
-        : step.status === "fail"
-          ? "fail"
-          : "warn",
+      status: step.status === "pass" ? "pass" : step.status === "fail" ? "fail" : "warn",
       message: `${step.label}: ${step.message}`,
     }));
 }
 
-function buildWebhookProbeRequest(
-  input: RunWebhookLiveChecksInput,
-): { url: string; init: RequestInit } {
+function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: string; init: RequestInit } {
   const probeMessage = `[GoatCitadel probe ${input.checkedAt ?? new Date().toISOString()}] Channel setup smoke check. Confirm this arrived, then delete or ignore it.`;
   if (input.channelKey === "google-chat") {
     const url = new URL(input.webhookUrl ?? "");

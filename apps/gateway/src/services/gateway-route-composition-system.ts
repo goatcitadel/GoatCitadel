@@ -13,16 +13,7 @@ import {
 export function composeSystemRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
-  | "a2a"
-  | "addons"
-  | "assembly"
-  | "costs"
-  | "media"
-  | "personalOps"
-  | "settings"
-  | "tasks"
-  | "voice"
-  | "workspaces"
+  "a2a" | "addons" | "assembly" | "costs" | "media" | "personalOps" | "settings" | "tasks" | "voice" | "workspaces"
 > {
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
 

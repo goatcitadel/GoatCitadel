@@ -328,14 +328,16 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "library-citadel-overview",
       label: "Overview",
-      description: "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
+      description:
+        "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
       area: "library",
       section: "citadel-overview",
     },
     {
       id: "library-citadel",
       label: "Mason",
-      description: "Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates.",
+      description:
+        "Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates.",
       area: "library",
       section: "citadel",
     },
@@ -602,7 +604,14 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     {
       id: "library-citadel",
       label: "Citadel",
-      sections: ["citadel-overview", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint"],
+      sections: [
+        "citadel-overview",
+        "citadel",
+        "citadel-wards",
+        "citadel-council",
+        "citadel-vault",
+        "citadel-blueprint",
+      ],
     },
   ],
   ops: [

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  filterPassageFields,
-  isPassageActive,
-  type CitadelPassage,
-} from "./citadel-passages.js";
+import { filterPassageFields, isPassageActive, type CitadelPassage } from "./citadel-passages.js";
 
 const BASE_PASSAGE: CitadelPassage = {
   passageId: "p-001",

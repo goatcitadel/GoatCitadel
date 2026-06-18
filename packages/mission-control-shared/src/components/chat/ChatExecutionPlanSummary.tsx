@@ -1,8 +1,4 @@
-import type {
-  ChatExecutionPlanRecord,
-  ChatExecutionPlanStepRecord,
-  ChatMode,
-} from "@goatcitadel/contracts";
+import type { ChatExecutionPlanRecord, ChatExecutionPlanStepRecord, ChatMode } from "@goatcitadel/contracts";
 
 type PlanDensity = "compact" | "expanded" | "checklist";
 
@@ -18,9 +14,11 @@ function getPlanDensity(mode: ChatMode): PlanDensity {
 }
 
 function getCurrentPlanStep(plan: ChatExecutionPlanRecord): ChatExecutionPlanStepRecord | undefined {
-  return plan.steps.find((step) => step.status === "running")
-    ?? plan.steps.find((step) => step.status === "pending")
-    ?? plan.steps.find((step) => step.status === "failed");
+  return (
+    plan.steps.find((step) => step.status === "running") ??
+    plan.steps.find((step) => step.status === "pending") ??
+    plan.steps.find((step) => step.status === "failed")
+  );
 }
 
 function formatPlanStepStatus(step: ChatExecutionPlanStepRecord): string {
@@ -60,11 +58,7 @@ function describePlanStepDelegation(step: ChatExecutionPlanStepRecord): string |
   return null;
 }
 
-export function ChatExecutionPlanSummary({
-  plan,
-}: {
-  plan: ChatExecutionPlanRecord;
-}) {
+export function ChatExecutionPlanSummary({ plan }: { plan: ChatExecutionPlanRecord }) {
   const density = getPlanDensity(plan.mode);
   const currentStep = getCurrentPlanStep(plan);
   const currentStepDelegation = currentStep ? describePlanStepDelegation(currentStep) : null;
@@ -107,8 +101,12 @@ export function ChatExecutionPlanSummary({
                 <span>{formatPlanStepStatus(step)}</span>
                 {density === "expanded" && step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
                 {density === "expanded" && step.expectedOutput ? <p>Output: {step.expectedOutput}</p> : null}
-                {density === "expanded" && step.suggestedTools?.length ? <p>Tools: {step.suggestedTools.join(", ")}</p> : null}
-                {density === "expanded" && step.dependsOnStepIds?.length ? <p>Depends on: {step.dependsOnStepIds.join(", ")}</p> : null}
+                {density === "expanded" && step.suggestedTools?.length ? (
+                  <p>Tools: {step.suggestedTools.join(", ")}</p>
+                ) : null}
+                {density === "expanded" && step.dependsOnStepIds?.length ? (
+                  <p>Depends on: {step.dependsOnStepIds.join(", ")}</p>
+                ) : null}
                 {step.summary ? <p>{step.summary}</p> : null}
                 {step.error ? <p>Error: {step.error}</p> : null}
                 {step.delegatedRole ? <p>Delegated role: {step.delegatedRole}</p> : null}
