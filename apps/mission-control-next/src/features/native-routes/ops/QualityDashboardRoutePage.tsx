@@ -18,7 +18,7 @@ import {
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
 import {
   formatBytes,
   formatDateTime,
@@ -28,6 +28,7 @@ import {
   type NativeLoadIssue,
 } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route }: NativeRoutePagesProps) {
@@ -275,7 +276,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     <NativePageFrame
       area="ops"
       icon={BarChart3}
-      kicker="Ops · Quality"
+      kicker={routeKicker(route)}
       title="Quality Dashboard"
       description={`Evaluation proof, prompt-pack gates, and export posture for ${activeWorkspaceName}.`}
       loading={loading}
@@ -289,25 +290,24 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       ]}
       actions={
         <>
-          <button
-            type="button"
-            className="mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={() => void copyEvalProofExport()}
             disabled={exporting}
           >
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy eval proof export"}
-          </button>
-          <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+          </NativeButton>
+          <NativeButton variant="secondary" onClick={() => void reload()}>
             <BarChart3 className="h-4 w-4" />
             Refresh
-          </button>
+          </NativeButton>
         </>
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
-      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
+      {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-quality-dashboard-grid">
         <NativeCard
           title="Quality gates"
@@ -331,14 +331,13 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
               />
               <div className="mc-next-approvals-inline-actions">
                 {packs.slice(0, 6).map((pack) => (
-                  <button
+                  <NativeButton
                     key={pack.packId}
-                    type="button"
-                    className={pack.packId === selectedPack?.packId ? "mc-next-button" : "mc-next-button-secondary"}
+                    variant={pack.packId === selectedPack?.packId ? "default" : "secondary"}
                     onClick={() => setSelectedPackId(pack.packId)}
                   >
                     {pack.name}
-                  </button>
+                  </NativeButton>
                 ))}
               </div>
             </>
@@ -412,22 +411,20 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 ]}
               />
               <div className="mc-next-approvals-inline-actions">
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void copyPromptPackExportPath()}
                   disabled={!selectedExport}
                 >
                   <ClipboardCopy className="h-4 w-4" />
                   Copy prompt-pack export path
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => openPromptPackWorkbench(selectedPack?.packId)}
                 >
                   Open selected pack
-                </button>
+                </NativeButton>
               </div>
             </>
           ) : selectedPackEvidence.error ? (
@@ -472,10 +469,9 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
               {securityEvalPacks
                 .filter((pack) => pack.status === "available" || pack.importedPackId)
                 .map((pack) => (
-                  <button
+                  <NativeButton
                     key={pack.packKey}
-                    type="button"
-                    className="mc-next-button-secondary"
+                    variant="secondary"
                     onClick={() =>
                       pack.importedPackId
                         ? openPromptPackWorkbench(pack.importedPackId)
@@ -488,7 +484,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                       : importingPackKey === pack.packKey
                         ? "Importing..."
                         : "Import and open defensive security pack"}
-                  </button>
+                  </NativeButton>
                 ))}
             </div>
           ) : null}
@@ -545,14 +541,13 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 .filter((gate) => gate.packId)
                 .slice(0, 2)
                 .map((gate) => (
-                  <button
+                  <NativeButton
                     key={gate.gateId}
-                    type="button"
-                    className="mc-next-button-secondary"
+                    variant="secondary"
                     onClick={() => openPromptPackWorkbench(gate.packId)}
                   >
                     Review security pack scoring
-                  </button>
+                  </NativeButton>
                 ))}
             </div>
           ) : null}
@@ -569,7 +564,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {designQuality?.error ? (
-            <div className="mc-next-directory-alert">{designQuality.error}</div>
+            <ErrorState size="inline" description={designQuality.error} />
           ) : data?.designQuality?.warnings[0] ? (
             <div className="mc-next-runtime-notice tone-info">{data.designQuality.warnings[0]}</div>
           ) : null}
@@ -600,20 +595,18 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             maxHeight="min(36vh, 24rem)"
           />
           <div className="mc-next-approvals-inline-actions">
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            <NativeButton
+              variant="secondary"
               onClick={() => navigate({ area: "library", section: "skills", theme: route.theme })}
             >
               Open skills
-            </button>
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            </NativeButton>
+            <NativeButton
+              variant="secondary"
               onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
             >
               Open runtime evidence
-            </button>
+            </NativeButton>
           </div>
         </NativeCard>
 
@@ -753,15 +746,14 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             emptyLabel="No export surfaces are registered."
           />
           <div className="mc-next-approvals-inline-actions">
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            <NativeButton
+              variant="secondary"
               onClick={() => void copyOtelQualityExport()}
               disabled={otelExporting}
             >
               <ClipboardCopy className="h-4 w-4" />
               {otelExporting ? "Exporting..." : "Copy OTel evidence"}
-            </button>
+            </NativeButton>
           </div>
           <button
             type="button"

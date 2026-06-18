@@ -30,6 +30,12 @@ Status meanings:
 | `/library/artifacts` | `ship` | Reopen artifacts and expose linked run/source/decision provenance. |
 | `/library/prompt-packs` | `ship` | Author, export, benchmark, review prompt packs, and inspect model-comparison judgments. |
 | `/library/curator` | `experimental` | Skill-health proposals only; not release automation. |
+| `/library/citadel` | `ship` | Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates. |
+| `/library/citadel-overview` | `ship` | Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture. |
+| `/library/citadel-wards` | `ship` | List, add, and test Gatehouse Wards (deny-wins) for the active Citadel. |
+| `/library/citadel-council` | `ship` | Inspect the agents seated in the Citadel by reference to the agents catalog. |
+| `/library/citadel-blueprint` | `ship` | Export the active Citadel as a secret-free Blueprint, or validate and import one. |
+| `/library/citadel-vault` | `ship` | Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key. |
 | `/ops/activity` | `ship` | Inspect retained events and Ops attention signals. |
 | `/ops/sessions` | `ship` | Inspect session timelines, summaries, and operator evidence. |
 | `/ops/schedules` | `ship` | Review scheduler posture and primary governed-work actions. |

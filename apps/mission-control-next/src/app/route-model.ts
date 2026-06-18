@@ -12,7 +12,13 @@ export type LibrarySection =
   | "files"
   | "artifacts"
   | "prompt-packs"
-  | "curator";
+  | "curator"
+  | "citadel"
+  | "citadel-overview"
+  | "citadel-wards"
+  | "citadel-council"
+  | "citadel-blueprint"
+  | "citadel-vault";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -319,6 +325,48 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       area: "library",
       section: "curator",
     },
+    {
+      id: "library-citadel-overview",
+      label: "Overview",
+      description: "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
+      area: "library",
+      section: "citadel-overview",
+    },
+    {
+      id: "library-citadel",
+      label: "Mason",
+      description: "Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates.",
+      area: "library",
+      section: "citadel",
+    },
+    {
+      id: "library-citadel-wards",
+      label: "Wards",
+      description: "List, add, and test Gatehouse Wards (deny-wins) for the active Citadel.",
+      area: "library",
+      section: "citadel-wards",
+    },
+    {
+      id: "library-citadel-council",
+      label: "Council",
+      description: "Inspect the agents seated in the Citadel by reference to the agents catalog.",
+      area: "library",
+      section: "citadel-council",
+    },
+    {
+      id: "library-citadel-vault",
+      label: "Vault",
+      description: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
+      area: "library",
+      section: "citadel-vault",
+    },
+    {
+      id: "library-citadel-blueprint",
+      label: "Blueprint",
+      description: "Export the active Citadel as a secret-free Blueprint, or validate and import one.",
+      area: "library",
+      section: "citadel-blueprint",
+    },
   ],
   ops: [
     {
@@ -515,6 +563,92 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ],
 };
 
+export interface RailGroup {
+  id: string;
+  label: string;
+  sections: NonNullable<AppRoute["section"]>[];
+}
+
+/**
+ * Single source of truth for rail grouping. Drives both the nav rail
+ * (buildRailSections) and breadcrumb derivation (routeKicker), so the two can
+ * never disagree. Areas absent here render as one ungrouped rail. Sections
+ * intentionally omitted from every group (settings "permissions"/"onboarding")
+ * stay reachable via deep link but are not surfaced in grouped navigation
+ * (H-13 ship punchlist: keeps the ongoing configuration surface scannable).
+ */
+export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
+  settings: [
+    { id: "settings-foundations", label: "Foundations", sections: ["general", "workspaces"] },
+    {
+      id: "settings-identity",
+      label: "Identity",
+      sections: ["access", "personalities", "providers", "local-ai", "trust-policy"],
+    },
+    { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
+    { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },
+  ],
+  library: [
+    {
+      id: "library-knowledge",
+      label: "Knowledge",
+      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
+    },
+    {
+      id: "library-assets",
+      label: "Assets",
+      sections: ["files", "artifacts", "communications", "prompt-packs", "curator"],
+    },
+    {
+      id: "library-citadel",
+      label: "Citadel",
+      sections: ["citadel-overview", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint"],
+    },
+  ],
+  ops: [
+    { id: "ops-observe", label: "Observe", sections: ["activity", "sessions", "schedules"] },
+    {
+      id: "ops-control",
+      label: "Operate",
+      sections: ["improvement", "notifications", "approvals", "costs", "quality", "runtime", "diagnostics", "kanban"],
+    },
+  ],
+};
+
+/** The rail group a section belongs to, or undefined when ungrouped. */
+export function railGroupForSection(area: PrimaryArea, section: AppRoute["section"]): RailGroup | undefined {
+  if (!section) {
+    return undefined;
+  }
+  return RAIL_GROUPS[area]?.find((group) => group.sections.includes(section));
+}
+
+/**
+ * Derives a page's breadcrumb kicker from the route registry so it always
+ * matches the nav rail: "Area · [Group ·] Section", with the section name taken
+ * verbatim from the rail item label. Grouped sections render three levels;
+ * ungrouped sections render two. Falls back to the area label for root/unknown.
+ */
+export function routeKicker(route: AppRoute): string {
+  const areaLabel = AREA_META[route.area].label;
+  const section = route.section;
+  if (!section) {
+    return areaLabel;
+  }
+  const sectionLabel = RAIL_ITEMS[route.area]?.find((item) => item.section === section)?.label;
+  if (!sectionLabel) {
+    return areaLabel;
+  }
+  const group = railGroupForSection(route.area, section);
+  // Collapse to "Area · Section" when the section's name equals its group's (e.g.
+  // the Knowledge section inside the Knowledge group) to avoid a redundant
+  // "Library · Knowledge · Knowledge".
+  if (group && group.label.toLowerCase() !== sectionLabel.toLowerCase()) {
+    return `${areaLabel} · ${group.label} · ${sectionLabel}`;
+  }
+  return `${areaLabel} · ${sectionLabel}`;
+}
+
 export const ROUTE_RELEASE_SCOPE = [
   {
     area: "chat",
@@ -652,6 +786,56 @@ export const ROUTE_RELEASE_SCOPE = [
       "Review skill health proposals without treating archive recommendations as final release automation.",
     verification: "verify:surface:regression label check",
     note: "Curator remains visible as experimental operator assistance.",
+  },
+  {
+    area: "library",
+    section: "citadel",
+    status: "ship",
+    releaseAction:
+      "Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates.",
+    verification: "verify:surface:regression",
+    note: "The Mason and Citadel staging are release-bearing for drafting and review; staging never activates connections or opens Gates on its own.",
+  },
+  {
+    area: "library",
+    section: "citadel-overview",
+    status: "ship",
+    releaseAction:
+      "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
+    verification: "verify:surface:regression",
+    note: "Citadel overview is a release-bearing read-only governance view of the active workspace.",
+  },
+  {
+    area: "library",
+    section: "citadel-wards",
+    status: "ship",
+    releaseAction: "List, add, and test Gatehouse Wards (deny-wins) for the active Citadel.",
+    verification: "verify:surface:regression, verify:agentic:governance",
+    note: "Wards are release-bearing for authoring and evaluation; live request-path enforcement stays behind the GOATCITADEL_CITADEL_ENFORCEMENT flag until it is fully proven.",
+  },
+  {
+    area: "library",
+    section: "citadel-council",
+    status: "ship",
+    releaseAction: "Inspect the agents seated in the Citadel by reference to the existing agents catalog.",
+    verification: "verify:surface:regression",
+    note: "Council seating is release-bearing as a read-only view of seated agents; per-seat grant-ceiling enforcement is a tracked follow-on.",
+  },
+  {
+    area: "library",
+    section: "citadel-blueprint",
+    status: "ship",
+    releaseAction: "Export the active Citadel as a secret-free Blueprint, or validate and import one.",
+    verification: "verify:surface:regression",
+    note: "Blueprint import/export is release-bearing; imports are schema-checked and secret-scanned, and staging never activates connections.",
+  },
+  {
+    area: "library",
+    section: "citadel-vault",
+    status: "ship",
+    releaseAction: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
+    verification: "verify:surface:regression, verify:auth:matrix",
+    note: "Vault is release-bearing for sealed per-Citadel secret storage and fails closed when the keychain is unavailable; per-Chamber keys and rotation are the tracked follow-on.",
   },
   {
     area: "ops",

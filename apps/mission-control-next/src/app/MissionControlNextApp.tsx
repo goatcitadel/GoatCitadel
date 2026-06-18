@@ -46,6 +46,8 @@ import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
   LazyThreadedSurfaceRoute,
+  preloadNativeRoutePages,
+  preloadPromptPacksWorkbenchPage,
   preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
@@ -69,6 +71,7 @@ import {
   isRailItemActive,
   normalizeAppRoute,
   type AppRoute,
+  RAIL_GROUPS,
   type PrimaryArea,
   type RailItem,
 } from "./route-model";
@@ -79,6 +82,7 @@ import { useShellStatus, type ShellStatusState } from "./use-shell-status";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
+import { NativeButton } from "@next/features/native-routes/primitives";
 
 type RailSection = {
   id: string;
@@ -111,6 +115,19 @@ const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{
   { area: "ops", section: "improvement", label: "Ops → Improvement" },
   { area: "ops", section: "kanban", label: "Ops → Kanban" },
 ];
+
+function preloadRouteChunk(targetRoute: AppRoute): void {
+  const normalized = normalizeAppRoute(targetRoute);
+  if (normalized.area === "chat" || normalized.area === "cowork" || normalized.area === "code") {
+    void preloadThreadedSurfaceRoute();
+    return;
+  }
+  if (normalized.area === "library" && normalized.section === "prompt-packs") {
+    void preloadPromptPacksWorkbenchPage();
+    return;
+  }
+  void preloadNativeRoutePages();
+}
 
 export function MissionControlNextApp() {
   useBeforeUnloadGuard();
@@ -332,16 +349,15 @@ export function MissionControlNextApp() {
         </div>
       ),
       actions: route.sessionId ? (
-        <button
-          type="button"
-          className="mc-next-button-secondary"
+        <NativeButton
+          variant="secondary"
           onClick={() => {
             void copyTrustReportForRoute(route);
           }}
         >
           <ShieldCheck size={14} />
           Copy trust report
-        </button>
+        </NativeButton>
       ) : null,
       body: (
         <div className="mc-next-inspector-stack">
@@ -473,10 +489,8 @@ export function MissionControlNextApp() {
   }, []);
 
   useEffect(() => {
-    if (route.area === "chat" || route.area === "cowork" || route.area === "code") {
-      void preloadThreadedSurfaceRoute();
-    }
-  }, [route.area]);
+    preloadRouteChunk(route);
+  }, [route]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -581,17 +595,22 @@ export function MissionControlNextApp() {
                 <h1>Mission Control</h1>
               </div>
               <nav className="mc-next-primary-nav" aria-label="Primary mission areas">
-                {PRIMARY_NAV.map(({ area, icon: Icon }) => (
-                  <button
-                    key={area}
-                    type="button"
-                    className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
-                    onClick={() => navigate(buildPrimaryAreaRoute(area))}
-                  >
-                    <Icon size={16} />
-                    <span>{AREA_META[area].label}</span>
-                  </button>
-                ))}
+                {PRIMARY_NAV.map(({ area, icon: Icon }) => {
+                  const target = buildPrimaryAreaRoute(area);
+                  return (
+                    <button
+                      key={area}
+                      type="button"
+                      className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
+                      onFocus={() => preloadRouteChunk(target)}
+                      onMouseEnter={() => preloadRouteChunk(target)}
+                      onClick={() => navigate(target)}
+                    >
+                      <Icon size={16} />
+                      <span>{AREA_META[area].label}</span>
+                    </button>
+                  );
+                })}
               </nav>
             </div>
             <div className="mc-next-topbar-right">
@@ -606,24 +625,24 @@ export function MissionControlNextApp() {
                 <span>Search commands</span>
                 <kbd>Ctrl K</kbd>
               </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary mc-next-start-button"
+              <NativeButton
+                variant="secondary"
+                className="mc-next-start-button"
                 onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}
                 title="Open Start Here"
               >
                 <Rocket size={15} />
                 Start Here
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary mc-next-mode-toggle"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
+                className="mc-next-mode-toggle"
                 onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
                 title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
               >
                 <SlidersHorizontal size={15} />
                 {mode === "simple" ? "Guided" : "Expert"}
-              </button>
+              </NativeButton>
               <label className="mc-next-select-field">
                 <span>Workspace</span>
                 <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
@@ -695,14 +714,14 @@ export function MissionControlNextApp() {
                 {notificationPreferences.soundMode === "off" ? <VolumeX size={16} /> : <Volume2 size={16} />}
                 <span>{notificationPreferences.soundMode === "off" ? "Off" : "On"}</span>
               </button>
-              <button
-                type="button"
-                className="mc-next-button mc-next-button-secondary mc-next-wa-button"
+              <NativeButton
+                variant="secondary"
+                className="mc-next-wa-button"
                 onClick={() => setInspectorOpen((current) => !current)}
               >
                 {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
                 {inspectorOpen ? "Hide Context" : "Open Context"}
-              </button>
+              </NativeButton>
               <button
                 type="button"
                 className="mc-next-icon-button mc-next-theme-toggle"
@@ -754,6 +773,8 @@ export function MissionControlNextApp() {
                             type="button"
                             className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
                             aria-label={`${item.label}: ${item.description}`}
+                            onFocus={() => preloadRouteChunk(target)}
+                            onMouseEnter={() => preloadRouteChunk(target)}
                             onClick={() => navigate(target)}
                           >
                             <div>
@@ -1068,126 +1089,26 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
   return (
     <section className="mc-next-route-fallback" aria-live="polite">
       <BlocksShuffleLoader label={`Loading ${label}`} />
-      <p>Loading {label}</p>
       <span>{description}</span>
     </section>
   );
 }
 
 export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
-  if (area === "settings") {
-    /*
-     * H-13 (ship punchlist): Settings IA keeps one-time and overlap routes
-     * out of grouped rail navigation so the ongoing configuration surface
-     * stays scannable. Two leaves are intentionally NOT surfaced
-     * in any group:
-     *   - "permissions": semantic overlap with "access" — both are
-     *     authorization. Folded into Access in spirit; the route still
-     *     resolves for deep links + redirects.
-     *   - "onboarding" ("Start Here"): a one-time first-run flow rather
-     *     than ongoing settings; deserves its own discoverable entry point
-     *     elsewhere (W3.2 follow-up).
-     * Net distribution: Foundations(2) / Identity(4) / Surfaces(4) /
-     * Operations(3) = 13 with Trust & Policy promoted as an ongoing
-     * governance dashboard.
-     */
-    return [
-      {
-        id: "settings-foundations",
-        label: "Foundations",
-        items: items.filter((item) => item.section === "general" || item.section === "workspaces"),
-      },
-      {
-        id: "settings-identity",
-        label: "Identity",
-        items: items.filter(
-          (item) =>
-            item.section === "access" ||
-            item.section === "personalities" ||
-            item.section === "providers" ||
-            item.section === "local-ai" ||
-            item.section === "trust-policy",
-        ),
-      },
-      {
-        id: "settings-surfaces",
-        label: "Surfaces",
-        items: items.filter(
-          (item) =>
-            item.section === "channels" ||
-            item.section === "integrations" ||
-            item.section === "mcp" ||
-            item.section === "tools",
-        ),
-      },
-      {
-        id: "settings-operations",
-        label: "Operations",
-        items: items.filter(
-          (item) => item.section === "runtime" || item.section === "addons" || item.section === "budget",
-        ),
-      },
-    ].filter((group) => group.items.length);
+  // Grouping is data-driven from RAIL_GROUPS (route-model) so the nav rail and
+  // breadcrumb kickers (routeKicker) can never disagree. See RAIL_GROUPS for the
+  // H-13 rationale on intentionally-ungrouped settings leaves.
+  const groups = RAIL_GROUPS[area];
+  if (!groups) {
+    return [{ id: `${area}-primary`, items }];
   }
-
-  if (area === "library") {
-    return [
-      {
-        id: "library-knowledge",
-        label: "Knowledge",
-        items: items.filter(
-          (item) =>
-            item.section === "agents" ||
-            item.section === "skills" ||
-            item.section === "capabilities" ||
-            item.section === "memory" ||
-            item.section === "knowledge" ||
-            item.section === "notes",
-        ),
-      },
-      {
-        id: "library-assets",
-        label: "Assets",
-        items: items.filter(
-          (item) =>
-            item.section === "files" ||
-            item.section === "artifacts" ||
-            item.section === "communications" ||
-            item.section === "prompt-packs" ||
-            item.section === "curator",
-        ),
-      },
-    ].filter((group) => group.items.length);
-  }
-
-  if (area === "ops") {
-    return [
-      {
-        id: "ops-observe",
-        label: "Observe",
-        items: items.filter(
-          (item) => item.section === "activity" || item.section === "sessions" || item.section === "schedules",
-        ),
-      },
-      {
-        id: "ops-control",
-        label: "Operate",
-        items: items.filter(
-          (item) =>
-            item.section === "improvement" ||
-            item.section === "notifications" ||
-            item.section === "approvals" ||
-            item.section === "costs" ||
-            item.section === "quality" ||
-            item.section === "runtime" ||
-            item.section === "diagnostics" ||
-            item.section === "kanban",
-        ),
-      },
-    ].filter((group) => group.items.length);
-  }
-
-  return [{ id: `${area}-primary`, items }];
+  return groups
+    .map((group) => ({
+      id: group.id,
+      label: group.label,
+      items: items.filter((item) => item.section != null && group.sections.includes(item.section)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 function StatusPill({

@@ -32,7 +32,7 @@ import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, FilterPillGroup, ModeBar } from "../primitives";
+import { EmptyState, FilterPillGroup, ModeBar, NativeButton, NativeSelectableList } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -532,11 +532,7 @@ export function ProjectsRoutePage({
             }))}
             onChange={(value) => setFilterView(value as ProjectFilterView)}
           />
-          <div
-            className="mc-next-settings-selectable-list is-compact is-scrollable"
-            data-native-scroll="true"
-            style={{ maxHeight: "min(62vh, 38rem)" }}
-          >
+          <NativeSelectableList density="compact" maxHeight="min(62vh, 38rem)">
             {visibleProjects.length ? (
               visibleProjects.map((project) => {
                 const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
@@ -623,30 +619,23 @@ export function ProjectsRoutePage({
                       <p>Create a project, start in a surface, or use the sample mission to shape the first run.</p>
                     </div>
                     <div className="mc-next-settings-button-row">
-                      <button type="button" className="mc-next-button" onClick={handleFocusCreateProject}>
+                      <NativeButton onClick={handleFocusCreateProject}>
                         <FolderPlus className="h-4 w-4" />
                         Create project setup
-                      </button>
+                      </NativeButton>
                       {SURFACES.map((surface) => (
-                        <button
-                          key={surface.mode}
-                          type="button"
-                          className="mc-next-button"
-                          onClick={() => handleOpenSurface(surface.mode)}
-                        >
+                        <NativeButton key={surface.mode} onClick={() => handleOpenSurface(surface.mode)}>
                           <MessageSquarePlus className="h-4 w-4" />
                           {`Start ${surface.label}`}
-                        </button>
+                        </NativeButton>
                       ))}
-                      <button type="button" className="mc-next-button" onClick={handleOpenStartHere}>
-                        Use Start Here sample mission
-                      </button>
+                      <NativeButton onClick={handleOpenStartHere}>Use Start Here sample mission</NativeButton>
                     </div>
                   </div>
                 ) : null}
               </>
             )}
-          </div>
+          </NativeSelectableList>
         </NativeCard>
 
         <NativeCard
@@ -690,16 +679,14 @@ export function ProjectsRoutePage({
           ) : null}
           <div className="mc-next-settings-button-row">
             {SURFACES.map((surface) => (
-              <button
+              <NativeButton
                 key={surface.mode}
-                type="button"
-                className="mc-next-button"
                 disabled={!selectedProject}
                 onClick={() => void handleNewSession(surface.mode)}
               >
                 <MessageSquarePlus className="h-4 w-4" />
                 {surface.action}
-              </button>
+              </NativeButton>
             ))}
           </div>
           <div className="mc-next-project-thread-groups">
@@ -761,15 +748,10 @@ export function ProjectsRoutePage({
                   placeholder="What this project is for."
                 />
               </label>
-              <button
-                type="button"
-                className="mc-next-button"
-                disabled={projectActionBusy === "create"}
-                onClick={() => void handleCreateProject()}
-              >
+              <NativeButton disabled={projectActionBusy === "create"} onClick={() => void handleCreateProject()}>
                 <FolderPlus className="h-4 w-4" />
                 {projectActionBusy === "create" ? "Creating..." : "Create project"}
-              </button>
+              </NativeButton>
             </section>
 
             {selectedProject ? (
@@ -803,15 +785,10 @@ export function ProjectsRoutePage({
                   />
                 </label>
                 <div className="mc-next-settings-button-row">
-                  <button
-                    type="button"
-                    className="mc-next-button"
-                    disabled={projectActionBusy === "save"}
-                    onClick={() => void handleSaveProject()}
-                  >
+                  <NativeButton disabled={projectActionBusy === "save"} onClick={() => void handleSaveProject()}>
                     <Save className="h-4 w-4" />
                     {projectActionBusy === "save" ? "Saving..." : "Save project"}
-                  </button>
+                  </NativeButton>
                 </div>
                 <p className="mc-next-settings-field-note">
                   Pin or archive {selectedProject.name} from the card glyphs in the projects list.

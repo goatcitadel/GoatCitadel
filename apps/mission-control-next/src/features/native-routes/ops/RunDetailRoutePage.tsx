@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { ClipboardCopy, Database, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryCodeBlock, LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
@@ -94,7 +95,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
   return (
     <NativePageFrame
       area="ops"
-      kicker="Ops · Run detail"
+      kicker={routeKicker(route)}
       title={runId ? `Run ${runId}` : "Run detail"}
       description={`Operator-visible request, execution, evidence, and recovery posture for ${activeWorkspaceName}.`}
       loading={loading}
@@ -107,25 +108,24 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       ]}
       actions={
         <>
-          <button
-            type="button"
-            className="mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={() => void copyTraceExport()}
             disabled={!runId || exporting}
           >
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy trace export"}
-          </button>
-          <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+          </NativeButton>
+          <NativeButton variant="secondary" onClick={() => void reload()}>
             <RefreshCw className="h-4 w-4" />
             Refresh
-          </button>
+          </NativeButton>
         </>
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
-      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
+      {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-run-detail-grid">
         <NativeCard
           title="Request"
@@ -162,10 +162,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
             />
           )}
           {detail.memoryWarning ? (
-            <div className="mc-next-directory-alert">
-              <Database className="h-4 w-4" />
-              <span>{detail.memoryWarning}</span>
-            </div>
+            <ErrorState size="inline" tone="caution" description={detail.memoryWarning} />
           ) : null}
         </NativeCard>
 
@@ -252,9 +249,8 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
           </div>
           <p className="mc-next-approvals-summary">{detail.replayReason}</p>
           {detail.sessionId && detail.turnId && isStableSurface(detail.sourceSurface) ? (
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            <NativeButton
+              variant="secondary"
               onClick={() =>
                 navigate({
                   area: detail.sourceSurface as "chat" | "cowork" | "code",
@@ -267,7 +263,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
             >
               <GitBranch className="h-4 w-4" />
               Open source thread
-            </button>
+            </NativeButton>
           ) : null}
         </NativeCard>
       </NativeGrid>

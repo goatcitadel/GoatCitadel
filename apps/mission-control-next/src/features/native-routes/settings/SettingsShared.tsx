@@ -23,8 +23,8 @@ import type { McpServerRecord } from "@goatcitadel/contracts";
 import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
-import { ReleaseScopeBadge } from "../NativeRoutePageLayout";
-import { ThreePartChip, EmptyState, ErrorState, type ChipTone } from "../primitives";
+import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
+import { ThreePartChip, EmptyState, ErrorState, NativeButton, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -89,7 +89,12 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
     return null;
   }
   return (
-    <SettingsPanel title="Some data could not load" subtitle="The rest of this settings page is still usable.">
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title="Some data could not load"
+      subtitle="The rest of this settings page is still usable."
+    >
       <SettingsActionList
         items={issues.map((issue) => ({
           label: issue.label,
@@ -98,12 +103,12 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
         }))}
       />
       <div className="mc-next-settings-actions">
-        <button type="button" className="mc-next-button-secondary" onClick={() => void onRetry()}>
+        <NativeButton variant="secondary" onClick={() => void onRetry()}>
           <RefreshCw className="h-4 w-4" />
           Retry
-        </button>
+        </NativeButton>
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -123,23 +128,22 @@ export function SettingsPageFrame({
   /** F-M11: renders an on-surface "Experimental" badge for experimental sections. */
   releaseStatus?: ReleaseSurfaceStatus;
 }) {
+  // Delegates to the canonical NativePageFrame so Settings shares one frame with
+  // the rest of the app (loading/error are handled separately by SettingsSectionShell,
+  // hence loading={false} error={null} here).
   return (
-    <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header" data-area="settings">
-        <div className="mc-next-directory-icon">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mc-next-directory-copy">
-          <p>{kicker}</p>
-          <div className="mc-next-directory-title-row">
-            <h1>{title}</h1>
-            <ReleaseScopeBadge status={releaseStatus} />
-          </div>
-          <span>{description}</span>
-        </div>
-      </header>
+    <NativePageFrame
+      icon={Icon}
+      area="settings"
+      kicker={kicker}
+      title={title}
+      description={description}
+      loading={false}
+      error={null}
+      releaseStatus={releaseStatus}
+    >
       {children}
-    </section>
+    </NativePageFrame>
   );
 }
 
@@ -169,10 +173,10 @@ export function SettingsSectionShell({
         description={error}
         primaryAction={
           onRetry ? (
-            <button type="button" className="gc-button" onClick={() => onRetry()}>
+            <NativeButton variant="outline" onClick={() => onRetry()}>
               <RefreshCw className="h-4 w-4" />
               Retry
-            </button>
+            </NativeButton>
           ) : undefined
         }
       />
@@ -259,7 +263,9 @@ export function SettingsPosturePanel({
   ];
 
   return (
-    <SettingsPanel
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Active posture"
       subtitle="Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance."
     >
@@ -293,7 +299,7 @@ export function SettingsPosturePanel({
           onOpen={() => onNavigate("access")}
         />
       </div>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -317,9 +323,9 @@ function SettingsPostureCard({
           <h3>{title}</h3>
           <span>{count} total</span>
         </div>
-        <button type="button" className="mc-next-button-secondary" onClick={onOpen}>
+        <NativeButton variant="secondary" onClick={onOpen}>
           Open
-        </button>
+        </NativeButton>
       </header>
       {rows.length > 0 ? (
         <ul className="mc-next-settings-posture-card-rows">
@@ -339,65 +345,6 @@ function SettingsPostureCard({
   );
 }
 
-export function SettingsPanel({
-  title,
-  subtitle,
-  stats,
-  headerAccessory,
-  children,
-  compact = true,
-  scrollBody = false,
-  bodyMaxHeight,
-}: {
-  title: string;
-  subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
-  /**
-   * Optional element rendered in the panel head — used to surface the
-   * "Unsaved" indicator next to the section title. Sections opt in by
-   * combining `useFormDirty` with this slot.
-   */
-  headerAccessory?: ReactNode;
-  children: ReactNode;
-  compact?: boolean;
-  scrollBody?: boolean;
-  bodyMaxHeight?: string;
-}) {
-  return (
-    <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
-      <div className="mc-next-directory-card-head">
-        <div>
-          <div
-            className="mc-next-settings-panel-title-row"
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}
-          >
-            <h2>{title}</h2>
-            {headerAccessory}
-          </div>
-          <p>{subtitle}</p>
-        </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <div
-        className={`mc-next-settings-panel-body${scrollBody ? " is-scrollable" : ""}`}
-        data-native-scroll={scrollBody ? "true" : undefined}
-        style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
-      >
-        {children}
-      </div>
-    </article>
-  );
-}
-
 export function SettingsFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
@@ -413,20 +360,6 @@ export function SettingsField({ label, children, span = 1 }: { label: string; ch
 
 export function SettingsButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
-}
-
-export function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export function SettingsConfigSourceLegend() {
@@ -459,50 +392,6 @@ export function SettingsWizardSteps({
         </li>
       ))}
     </ol>
-  );
-}
-
-export function SettingsSelectableList({
-  items,
-  selectedId,
-  onSelect,
-  emptyLabel,
-  maxHeight = "min(56vh, 34rem)",
-  compact = true,
-}: {
-  items: Array<{ id: string; title: string; meta?: string; body?: string }>;
-  selectedId: string;
-  onSelect: (id: string) => void;
-  emptyLabel: string;
-  maxHeight?: string;
-  compact?: boolean;
-}) {
-  if (!items.length) {
-    return <SettingsEmptyState label={emptyLabel} />;
-  }
-  return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -543,9 +432,9 @@ export function SettingsActionList({
             {item.meta ? <span>{item.meta}</span> : null}
           </div>
           {item.onClick ? (
-            <button type="button" className="mc-next-button-secondary" onClick={item.onClick}>
+            <NativeButton variant="secondary" onClick={item.onClick}>
               {item.actionLabel ?? "Open"}
-            </button>
+            </NativeButton>
           ) : item.actionLabel ? (
             <span className="mc-next-settings-chip">{item.actionLabel}</span>
           ) : null}
@@ -594,7 +483,13 @@ export function SettingsEmptyState({ label }: { label: string }) {
 }
 
 export function SettingsNotice({ notice }: { notice: Notice }) {
-  return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
+  // Error-toned notices use the shared ErrorState (role=alert); info/success/
+  // warning tones fold onto the app's consistent runtime-notice channel rather
+  // than the bespoke .mc-next-settings-notice class.
+  if (notice.tone === "error") {
+    return <ErrorState size="inline" description={notice.message} />;
+  }
+  return <div className={`mc-next-runtime-notice tone-${notice.tone}`}>{notice.message}</div>;
 }
 
 // ---------------------------------------------------------------------------

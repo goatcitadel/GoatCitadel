@@ -14,7 +14,7 @@ import {
   exportN8nWorkflowTemplate,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
-import { EmptyState, ErrorState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
 import {
   useOpsRuntimeSnapshot,
   type RuntimeSnapshotSourceStatus,
@@ -22,6 +22,7 @@ import {
 import type { DaemonControlHandoff } from "@goatcitadel/mission-control-shared/api/types";
 import {
   getRouteReleaseScope,
+  routeKicker,
   ROUTE_RELEASE_SCOPE,
   type AppRoute,
   type RouteReleaseScope,
@@ -496,14 +497,13 @@ export function RuntimeRoutePage({
                 </label>
               </div>
               <div className="mc-next-runtime-actions">
-                <button
-                  type="button"
-                  className="gc-button"
+                <NativeButton
+                  variant="outline"
                   onClick={() => void handleCreateSchedule()}
                   disabled={scheduleCreating}
                 >
                   {scheduleCreating ? "Creating..." : "Create schedule"}
-                </button>
+                </NativeButton>
               </div>
             </NativeCard>
             <NativeCard
@@ -574,14 +574,13 @@ export function RuntimeRoutePage({
                 </label>
               </div>
               <div className="mc-next-runtime-actions">
-                <button
-                  type="button"
-                  className="gc-button"
+                <NativeButton
+                  variant="outline"
                   onClick={() => void handleDraftAutomation()}
                   disabled={automationBusy}
                 >
                   {automationBusy ? "Drafting..." : "Preview recipe"}
-                </button>
+                </NativeButton>
               </div>
               {automationPreview ? (
                 <div className="mc-next-settings-code-block">
@@ -872,34 +871,32 @@ export function RuntimeRoutePage({
                 <EmptyState size="compact" title={data.daemon.controlMessage} />
               ) : null}
               <div className="mc-next-runtime-actions">
-                <button
-                  type="button"
-                  className="gc-button"
+                <NativeButton
+                  variant="outline"
                   onClick={() => void runtime.runDaemonAction("start")}
                   disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "start" ? "Starting..." : "Start daemon"}
-                </button>
-                <button
-                  type="button"
-                  className="gc-button"
+                </NativeButton>
+                <NativeButton
+                  variant="outline"
                   onClick={() => void runtime.runDaemonAction("restart")}
                   disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
-                </button>
-                <button
-                  type="button"
-                  className="gc-button danger"
+                </NativeButton>
+                <NativeButton
+                  variant="outline"
+                  className="danger"
                   onClick={() => void runtime.runDaemonAction("stop")}
                   disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "stop" ? "Stopping..." : "Stop daemon"}
-                </button>
-                <button type="button" className="gc-button subtle" onClick={() => void runtime.reload()}>
+                </NativeButton>
+                <NativeButton variant="outline" className="subtle" onClick={() => void runtime.reload()}>
                   <RefreshCw className="h-4 w-4" />
                   Refresh
-                </button>
+                </NativeButton>
               </div>
             </NativeCard>
             <NativeCard
@@ -1341,7 +1338,7 @@ export function RuntimeRoutePage({
   return (
     <NativePageFrame
       area="ops"
-      kicker={`Ops · ${labelForOpsSection(section)}`}
+      kicker={routeKicker({ ...route, section })}
       title={labelForOpsSection(section)}
       description={descriptionForOpsSection(section)}
       loading={runtime.loading}
@@ -1396,10 +1393,10 @@ function ReleaseProofDashboardPanel({
         { label: "Lanes", value: lanes.length ? `${currentLanes}/${lanes.length} current` : "not loaded" },
       ]}
       actions={
-        <button type="button" className="gc-button subtle" disabled={loading} onClick={() => void onRefresh()}>
+        <NativeButton variant="outline" className="subtle" disabled={loading} onClick={() => void onRefresh()}>
           <RefreshCw className="h-4 w-4" />
           Refresh proof
-        </button>
+        </NativeButton>
       }
     >
       <div className="mc-next-release-proof-status-row">
@@ -1573,10 +1570,10 @@ function ReviewReadinessPanel({
         { label: "Findings", value: String(summary?.openFindings ?? 0) },
       ]}
       actions={
-        <button type="button" className="gc-button subtle" disabled={loading} onClick={() => void onRefresh()}>
+        <NativeButton variant="outline" className="subtle" disabled={loading} onClick={() => void onRefresh()}>
           <RefreshCw className="h-4 w-4" />
           Refresh
-        </button>
+        </NativeButton>
       }
     >
       {error ? (
@@ -1644,12 +1641,12 @@ function OpsNeedsAttentionCard({
                 <p>{item.body}</p>
               </div>
               <div className="mc-next-ops-attention-actions">
-                <button type="button" className="gc-button" onClick={() => navigate(item.primaryRoute)}>
+                <NativeButton variant="outline" onClick={() => navigate(item.primaryRoute)}>
                   {item.primaryLabel}
-                </button>
-                <button type="button" className="gc-button subtle" onClick={() => navigate(item.inspectRoute)}>
+                </NativeButton>
+                <NativeButton variant="outline" className="subtle" onClick={() => navigate(item.inspectRoute)}>
                   {item.inspectLabel}
-                </button>
+                </NativeButton>
               </div>
             </li>
           ))}
@@ -2209,10 +2206,10 @@ function OpsDegradedSourcesStrip({
       title="Live runtime data is degraded"
       description={describeOpsDegradedSources(degraded)}
       primaryAction={
-        <button type="button" className="gc-button" onClick={onRetry} disabled={retrying}>
+        <NativeButton variant="outline" onClick={onRetry} disabled={retrying}>
           <RefreshCw className="h-4 w-4" />
           {retrying ? "Retrying..." : "Retry"}
-        </button>
+        </NativeButton>
       }
     />
   );

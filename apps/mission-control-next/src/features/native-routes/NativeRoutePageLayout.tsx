@@ -3,7 +3,7 @@ import { ArrowRight, FlaskConical, RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
-import { EmptyState, ErrorState, type AreaSlug } from "./primitives";
+import { EmptyState, ErrorState, NativeButton, type AreaSlug } from "./primitives";
 
 /**
  * F-M11: on-surface "Experimental" badge for routes scoped `experimental` in
@@ -150,10 +150,10 @@ export function NativePageFrame({
           description={error}
           primaryAction={
             onRetry ? (
-              <button type="button" className="gc-button" onClick={onRetry}>
+              <NativeButton variant="outline" onClick={onRetry}>
                 <RefreshCw className="h-4 w-4" />
                 Retry
-              </button>
+              </NativeButton>
             ) : undefined
           }
         />
@@ -173,6 +173,7 @@ export function NativeCard({
   stats,
   children,
   actions,
+  headerAccessory,
   density = "standard",
   scrollBody = false,
   bodyMaxHeight,
@@ -183,6 +184,12 @@ export function NativeCard({
   stats?: Array<{ label: string; value: string }>;
   children: ReactNode;
   actions?: ReactNode;
+  /**
+   * Optional element rendered inline next to the title — used by Settings to
+   * surface the "Unsaved" indicator beside the section title. Kept distinct
+   * from `actions` (top-right) so the indicator stays adjacent to the heading.
+   */
+  headerAccessory?: ReactNode;
   density?: "standard" | "compact";
   scrollBody?: boolean;
   bodyMaxHeight?: string;
@@ -196,7 +203,14 @@ export function NativeCard({
     >
       <div className="mc-next-directory-card-head">
         <div>
-          <h2>{title}</h2>
+          {headerAccessory ? (
+            <div className="mc-next-directory-card-title-row">
+              <h2>{title}</h2>
+              {headerAccessory}
+            </div>
+          ) : (
+            <h2>{title}</h2>
+          )}
           <p>{subtitle}</p>
         </div>
         {stats?.length ? (

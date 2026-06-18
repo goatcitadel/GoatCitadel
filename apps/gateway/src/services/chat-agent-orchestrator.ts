@@ -369,6 +369,7 @@ export interface ChatAgentTurnInput {
   fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
+  modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
 }
 
@@ -521,6 +522,7 @@ export class ChatAgentOrchestrator {
       effectiveToolAutonomy: input.toolAutonomy,
       routing: {
         liveDataIntent: intents.liveData,
+        ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
       },
       loopGuard: createLoopGuardTrace(loopGuardState),
       startedAt: now,
@@ -626,6 +628,7 @@ export class ChatAgentOrchestrator {
       primaryModel: input.model,
       effectiveProviderId: input.providerId,
       effectiveModel: input.model,
+      ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
     };
     let finalStatus: ChatTurnTraceRecord["status"] = "completed";
     let finalFailure: ChatTurnFailureRecord | undefined;

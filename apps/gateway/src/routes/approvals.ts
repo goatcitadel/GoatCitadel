@@ -73,6 +73,7 @@ const remoteResolveSchema = z.object({
 const listQuerySchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
+  workspaceId: z.string().min(1).optional(),
 });
 
 const MAX_REMOTE_APPROVAL_TOKEN_LENGTH = 4096;
@@ -149,7 +150,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: approvals.listApprovals(parsed.data.status, parsed.data.limit) });
+      return reply.send({ items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

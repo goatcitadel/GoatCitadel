@@ -1,4 +1,5 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
+import { generateVaultKey } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createCronRoutePort } from "./cron-route-service.js";
 import { createDashboardRoutePort } from "./dashboard-route-service.js";
@@ -31,6 +32,9 @@ export function composeRuntimeAdminRouteDependencies(
 ): RouteDependencyDomain<
   | "authAdmin"
   | "approvals"
+  | "citadels"
+  | "masonInterpret"
+  | "vaultKey"
   | "cron"
   | "dashboard"
   | "daemon"
@@ -105,6 +109,35 @@ export function composeRuntimeAdminRouteDependencies(
       verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),
     },
     approvals: gateway.approvalRuntime,
+    citadels: gateway.storage.citadels,
+    masonInterpret: async (prompt: string): Promise<string> => {
+      // Best-effort extraction. If no model/provider is configured, chatCompletions
+      // throws — we swallow it so the Mason degrades to the structured answers path.
+      try {
+        const response = await gateway.llmService.chatCompletions({
+          messages: [{ role: "user", content: prompt }],
+        });
+        const content = response.choices?.[0]?.message?.content;
+        return typeof content === "string" ? content : "";
+      } catch {
+        return "";
+      }
+    },
+    vaultKey: (citadelId: string): Buffer | undefined => {
+      // The per-Citadel master key lives in the OS keychain. If the secret store
+      // is unavailable, the Vault fails closed (never a plaintext fallback).
+      const store = gateway.secretStore;
+      if (!store || !store.isAvailable()) {
+        return undefined;
+      }
+      const account = `citadel:${citadelId}:vault_master_key`;
+      let keyBase64 = store.getSecret(account);
+      if (!keyBase64) {
+        keyBase64 = generateVaultKey().toString("base64");
+        store.setSecret(account, keyBase64);
+      }
+      return Buffer.from(keyBase64, "base64");
+    },
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
       backupRetentionService: gateway.backupRetentionService,

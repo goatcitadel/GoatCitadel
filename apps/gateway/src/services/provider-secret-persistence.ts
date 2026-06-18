@@ -29,6 +29,7 @@ interface PersistProviderApiKeyInput {
   env?: NodeJS.ProcessEnv;
   preferredEnvVar?: string;
   persistToEnv?: boolean;
+  allowEnvFallback?: boolean;
 }
 
 interface DeleteProviderApiKeyInput {
@@ -55,6 +56,16 @@ export function persistProviderApiKeyWithFallback(input: PersistProviderApiKeyIn
     } catch (error) {
       if (!isKeychainUnavailableError(error)) {
         throw error;
+      }
+      // The keychain is unavailable. Only downgrade to a plaintext .env file when the
+      // operator has explicitly opted in — never silently write secrets to disk.
+      if (!isEnvFallbackAllowed(input)) {
+        throw new Error(
+          `Secure keychain is unavailable on this host and writing the secret for provider ${input.providerId} ` +
+            "to a plaintext .env file is disabled. Set GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK=1 " +
+            "(or pass allowEnvFallback) to opt in to env-backed secrets.",
+          { cause: error },
+        );
       }
     }
   }
@@ -114,6 +125,14 @@ function resolveProviderEnvVar(
 
 function isKeychainUnavailableError(error: unknown): boolean {
   return isSecretStoreUnavailableLikeError(error);
+}
+
+function isEnvFallbackAllowed(input: PersistProviderApiKeyInput): boolean {
+  if (typeof input.allowEnvFallback === "boolean") {
+    return input.allowEnvFallback;
+  }
+  const flag = (input.env ?? process.env).GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
 }
 
 function persistProviderApiKeyToEnv(

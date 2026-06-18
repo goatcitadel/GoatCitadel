@@ -12,7 +12,7 @@ import {
   type TestResultFilter,
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
-import { EmptyState } from "../native-routes/primitives";
+import { EmptyState, NativeButton } from "../native-routes/primitives";
 import {
   FILTER_OPTIONS,
   resultCategoryClass,
@@ -139,9 +139,9 @@ export function PromptPackTestsColumn({
                   </span>
                 </span>
               </div>
-              <button
-                type="button"
-                className="mc-next-button mc-next-button-secondary mc-pp-run-button"
+              <NativeButton
+                variant="secondary"
+                className="mc-pp-run-button"
                 onClick={() => onRunOne(test)}
                 disabled={running && activeRun?.testId !== test.testId}
               >
@@ -151,7 +151,7 @@ export function PromptPackTestsColumn({
                   <Play size={15} />
                 )}
                 Run
-              </button>
+              </NativeButton>
             </article>
           );
         })}

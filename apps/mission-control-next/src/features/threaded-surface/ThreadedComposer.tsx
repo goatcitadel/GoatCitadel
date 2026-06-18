@@ -929,6 +929,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             ref={props.audioInputRef}
             type="file"
             accept="audio/*"
+            aria-label="Attach audio"
             className="mc-next-hidden-file"
             disabled={composerActionDisabled}
             onChange={(event) => {

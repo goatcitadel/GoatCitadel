@@ -13,7 +13,7 @@ import {
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -472,22 +472,20 @@ export function CoworkNativePage({
           />
           <p className="mc-next-settings-field-note">{coworkContinuation.boardTruth}</p>
           <LibraryButtonRow>
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               onClick={() => navigate({ area: "cowork", section: "tasks", theme: route.theme })}
             >
               <Workflow className="h-4 w-4" />
               Review tasks
-            </button>
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            </NativeButton>
+            <NativeButton
+              variant="secondary"
               onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
             >
               <CheckCircle2 className="h-4 w-4" />
               Approval queue
-            </button>
+            </NativeButton>
           </LibraryButtonRow>
         </NativeCard>
         <NativeCard title="Work distribution" subtitle="Current task flow by status lane." density="compact">
@@ -593,14 +591,14 @@ export function CoworkNativePage({
             </LibraryField>
           </LibraryFieldGrid>
           <LibraryButtonRow>
-            <button type="button" className="mc-next-button" onClick={() => void handleCreateTask()}>
+            <NativeButton variant="default" onClick={() => void handleCreateTask()}>
               <Plus className="h-4 w-4" />
               Create task
-            </button>
-            <button type="button" className="mc-next-button-secondary" onClick={() => void refreshCowork()}>
+            </NativeButton>
+            <NativeButton variant="secondary" onClick={() => void refreshCowork()}>
               <RefreshCw className="h-4 w-4" />
               Refresh
-            </button>
+            </NativeButton>
           </LibraryButtonRow>
           <div className="mc-next-task-lanes">
             <NativeLane
@@ -702,25 +700,24 @@ export function CoworkNativePage({
                 </LibraryField>
               </LibraryFieldGrid>
               <LibraryButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => void handleSaveTask()}
                   disabled={Boolean(selectedTask.deletedAt)}
                 >
                   <Save className="h-4 w-4" />
                   Save task
-                </button>
+                </NativeButton>
                 {selectedTask.deletedAt ? (
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleRestoreTask()}>
+                  <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
                     <Undo2 className="h-4 w-4" />
                     Restore
-                  </button>
+                  </NativeButton>
                 ) : (
-                  <button type="button" className="mc-next-button-danger" onClick={() => void handleDeleteTask()}>
+                  <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
                     <Undo2 className="h-4 w-4" />
                     Move to trash
-                  </button>
+                  </NativeButton>
                 )}
               </LibraryButtonRow>
               <LibraryCodeBlock label="Task -> deliverables">
@@ -765,15 +762,14 @@ export function CoworkNativePage({
                 </LibraryField>
               </LibraryFieldGrid>
               <LibraryButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void handleAddDeliverable()}
                   disabled={Boolean(selectedTask.deletedAt)}
                 >
                   <Plus className="h-4 w-4" />
                   Add deliverable
-                </button>
+                </NativeButton>
               </LibraryButtonRow>
               <NativeList
                 items={(deliverables.data ?? []).map((item) => ({
@@ -877,8 +873,10 @@ function NativeLane({
                 <span>{item.priority}</span>
                 <span>{formatDateTime(item.updatedAt)}</span>
               </div>
-              <strong>{item.title}</strong>
-              <p>{item.description?.trim() || "No description yet."}</p>
+              <strong title={item.title}>{item.title}</strong>
+              <p title={item.description?.trim() || undefined}>
+                {item.description?.trim() || "No description yet."}
+              </p>
               <div className="mc-next-directory-lane-status">
                 <CheckCircle2 className="h-4 w-4" />
                 <span>{formatTaskStatus(item.status)}</span>

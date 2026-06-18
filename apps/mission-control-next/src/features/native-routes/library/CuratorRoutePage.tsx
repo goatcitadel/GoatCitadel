@@ -3,9 +3,9 @@ import { Archive, RefreshCw, ShieldCheck } from "lucide-react";
 import type { CuratorSkillStatusItem, CuratorStatusResponse } from "@goatcitadel/contracts";
 import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { getRouteReleaseScope } from "@next/app/route-model";
+import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState } from "../primitives";
+import { EmptyState, NativeButton } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -96,7 +96,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
   return (
     <NativePageFrame
       icon={ShieldCheck}
-      kicker="Library"
+      kicker={routeKicker(route)}
       title="Skill Curator"
       description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
       loading={loading}
@@ -109,19 +109,19 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
           subtitle={subtitle}
           actions={
             <div className="mc-next-runtime-actions">
-              <button
-                type="button"
-                className="gc-button subtle"
+              <NativeButton
+                variant="outline"
+                className="subtle"
                 onClick={() => void load()}
                 disabled={loading || actionBusy}
               >
                 <RefreshCw className="h-4 w-4" />
                 Refresh
-              </button>
-              <button type="button" className="gc-button subtle" onClick={handleRun} disabled={loading || actionBusy}>
+              </NativeButton>
+              <NativeButton variant="outline" className="subtle" onClick={handleRun} disabled={loading || actionBusy}>
                 <ShieldCheck className="h-4 w-4" />
                 Generate report
-              </button>
+              </NativeButton>
             </div>
           }
         >
@@ -170,16 +170,16 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
                   </div>
                   {!item.immune && !item.archived ? (
                     <div className="mc-next-runtime-actions">
-                      <button
-                        type="button"
-                        className="gc-button subtle"
+                      <NativeButton
+                        variant="outline"
+                        className="subtle"
                         onClick={() => handleArchive(item)}
                         disabled={actionBusy}
                         aria-label={`Archive ${item.name}`}
                       >
                         <Archive className="h-4 w-4" />
                         Archive
-                      </button>
+                      </NativeButton>
                     </div>
                   ) : null}
                 </div>

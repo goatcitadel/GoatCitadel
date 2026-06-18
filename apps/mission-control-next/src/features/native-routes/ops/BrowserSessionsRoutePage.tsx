@@ -20,9 +20,10 @@ import {
   rotateBrowserSessionGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, NativeButton, StatusChip } from "../primitives";
 import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
 type BrowserSessionFilter = BrowserSessionStatus | "all";
@@ -35,7 +36,7 @@ const GRANT_SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
 };
 const EMPTY_BROWSER_SESSIONS: BrowserSessionRecord[] = [];
 
-export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [filter, setFilter] = useState<BrowserSessionFilter>("active");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -174,7 +175,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
     <NativePageFrame
       area="ops"
       icon={ShieldCheck}
-      kicker="Ops · Sessions"
+      kicker={routeKicker(route)}
       title="Browser Sessions"
       description={`Govern in-memory browser session state, grants, and events for ${activeWorkspaceName}.`}
       loading={loading}
@@ -186,10 +187,10 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
         { label: "Events", value: String(detail.events.length) },
       ]}
       actions={
-        <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+        <NativeButton variant="secondary" onClick={() => void reload()}>
           <RefreshCw className="h-4 w-4" />
           Refresh
-        </button>
+        </NativeButton>
       }
     >
       <LibraryLoadWarnings issues={[...(data?.issues ?? []), ...detail.issues]} onRetry={() => void reload()} />

@@ -965,8 +965,7 @@
   padding-inline: 0.18rem;
 }
 
-.mc-next-shell.ui-mode-simple .mc-next-rail-head p,
-.mc-next-shell.ui-mode-simple .mc-next-rail-separator span {
+.mc-next-shell.ui-mode-simple .mc-next-rail-head p {
   font-size: 0;
 }
 

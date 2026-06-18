@@ -672,6 +672,8 @@ export function PixelOfficeCanvas({
             <canvas
               ref={canvasRef}
               className="pixel-office-canvas"
+              role="img"
+              aria-label="Pixel office floor visualizing agent activity"
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}

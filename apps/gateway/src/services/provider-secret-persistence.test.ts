@@ -20,6 +20,62 @@ afterEach(async () => {
 });
 
 describe("provider secret persistence fallback", () => {
+  it("throws instead of silently writing the secret to a plaintext env file when the keychain is unavailable and env fallback is not allowed", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-no-fallback-test-"));
+    TEMP_ROOTS.push(tempRoot);
+    await mkdir(path.join(tempRoot, "config"), { recursive: true });
+    await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
+    const envPath = path.join(tempRoot, ".env");
+    const env: NodeJS.ProcessEnv = {};
+    const llmService = createStubLlmService({
+      providerId: "openai",
+      apiKeyRef: "OPENAI_API_KEY",
+      setError: new Error("Secure keychain is unavailable on this host. Use apiKeyEnv for env-backed secrets."),
+    });
+
+    assert.throws(
+      () =>
+        persistProviderApiKeyWithFallback({
+          providerId: "openai",
+          apiKey: "sk-test-value",
+          rootDir: tempRoot,
+          llmService,
+          env,
+        }),
+      /keychain is unavailable/i,
+    );
+
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    await assert.rejects(() => readFile(envPath, "utf8"));
+  });
+
+  it("allows the env fallback when GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK is set", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-env-flag-test-"));
+    TEMP_ROOTS.push(tempRoot);
+    await mkdir(path.join(tempRoot, "config"), { recursive: true });
+    await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
+    const envPath = path.join(tempRoot, ".env");
+    const env: NodeJS.ProcessEnv = { GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK: "1" };
+    const llmService = createStubLlmService({
+      providerId: "openai",
+      apiKeyRef: "OPENAI_API_KEY",
+      setError: new Error("Secure keychain is unavailable on this host. Use apiKeyEnv for env-backed secrets."),
+    });
+
+    const status = persistProviderApiKeyWithFallback({
+      providerId: "openai",
+      apiKey: "sk-test-value",
+      rootDir: tempRoot,
+      llmService,
+      env,
+    });
+
+    assert.equal(status.source, "env");
+    assert.equal(env.OPENAI_API_KEY, "sk-test-value");
+    const raw = await readFile(envPath, "utf8");
+    assert.match(raw, /OPENAI_API_KEY="sk-test-value"/);
+  });
+
   it("writes the provider secret to the local env file when keychain storage is unavailable", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-test-"));
     TEMP_ROOTS.push(tempRoot);
@@ -39,6 +95,7 @@ describe("provider secret persistence fallback", () => {
       rootDir: tempRoot,
       llmService,
       env,
+      allowEnvFallback: true,
     });
 
     assert.deepEqual(status, {
@@ -70,6 +127,7 @@ describe("provider secret persistence fallback", () => {
       rootDir: tempRoot,
       llmService,
       env,
+      allowEnvFallback: true,
     });
 
     assert.deepEqual(status, {

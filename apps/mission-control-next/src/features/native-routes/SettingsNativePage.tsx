@@ -193,9 +193,10 @@ import {
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { getRouteReleaseScope, type AppRoute } from "@next/app/route-model";
+import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { StatusChip } from "./primitives";
+import { ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList, StatusChip } from "./primitives";
+import { NativeCard } from "./NativeRoutePageLayout";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -218,13 +219,10 @@ import {
   SettingsFilterBar,
   SettingsGrid,
   SettingsLoadWarnings,
-  SettingsMetricGrid,
   SettingsNotice,
   SettingsPageFrame,
-  SettingsPanel,
   SettingsPosturePanel,
   SettingsSectionShell,
-  SettingsSelectableList,
   SettingsStack,
   SettingsWizardSteps,
   descriptionForSettingsSection,
@@ -326,7 +324,7 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
   return (
     <SettingsPageFrame
       icon={iconForSettingsSection(section)}
-      kicker={`Settings · ${labelForSettingsSection(section)}`}
+      kicker={routeKicker(normalizeAppRoute(props.route))}
       title={labelForSettingsSection(section)}
       description={descriptionForSettingsSection(section)}
       releaseStatus={getRouteReleaseScope(props.route).status}
@@ -439,8 +437,8 @@ function LocalAiSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid>
-        <SettingsPanel title="Hardware readiness" subtitle="Read-only local scan and runtime detection.">
-          <SettingsMetricGrid
+        <NativeCard density="compact" className="mc-next-settings-panel" title="Hardware readiness" subtitle="Read-only local scan and runtime detection.">
+          <NativeMetricGrid
             items={[
               {
                 label: "Platform",
@@ -469,9 +467,9 @@ function LocalAiSection(_props: SettingsSectionProps) {
             }))}
             emptyLabel="No local runtimes were detected."
           />
-        </SettingsPanel>
+        </NativeCard>
         <SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Model fit"
             subtitle="Conservative recommendations; no download starts without approval."
           >
@@ -493,16 +491,16 @@ function LocalAiSection(_props: SettingsSectionProps) {
                 Queue serve approval
               </button>
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel title="Jobs and endpoints" subtitle="Side-effectful work remains approval-gated.">
-            <SettingsMetricGrid
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel" title="Jobs and endpoints" subtitle="Side-effectful work remains approval-gated.">
+            <NativeMetricGrid
               items={[
                 { label: "Downloads", value: String(data?.readiness?.downloads.length ?? 0) },
                 { label: "Serve jobs", value: String(data?.readiness?.serveJobs.length ?? 0) },
                 { label: "Endpoints", value: String(data?.readiness?.endpoints.length ?? 0) },
               ]}
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsStack>
       </SettingsGrid>
     </SettingsSectionShell>
@@ -553,7 +551,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Mission Control posture"
             subtitle="Core defaults and system posture at a glance."
             stats={[
@@ -562,7 +560,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               { label: "Auth", value: data.settings?.auth.mode ?? "unknown" },
             ]}
           >
-            <SettingsMetricGrid
+            <NativeMetricGrid
               items={[
                 {
                   label: "Workspaces",
@@ -591,7 +589,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
               ]}
             />
-          </SettingsPanel>
+          </NativeCard>
           <SettingsPosturePanel
             settings={data.settings}
             mcpServers={data.mcpServers}
@@ -599,7 +597,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
             workspaces={data.workspaces}
             onNavigate={(section) => navigate({ area: "settings", section, theme: route.theme })}
           />
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Setup path"
             subtitle="Begin with the configuration that unlocks useful work; keep deep controls available after that."
           >
@@ -622,8 +620,8 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
               ]}
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Quick routes"
             subtitle="Jump straight into the settings surfaces that actually change behavior."
           >
@@ -696,8 +694,8 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
               ]}
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Notifications and sounds"
             subtitle="Choose how GoatCitadel asks for attention when work completes, blocks, or waits on approval."
             stats={[
@@ -767,24 +765,22 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              <NativeButton
+                variant="secondary"
                 onClick={() => void requestBrowserNotificationPermission()}
               >
                 <Bell size={16} />
                 Check permission
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
                 onClick={() => setNotificationSoundMode(notifications.soundMode === "off" ? "subtle" : "off")}
               >
                 <Volume2 size={16} />
                 {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -890,7 +886,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
           <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <EcosystemProofLanePanel route={route} navigate={navigate} />
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="First-run setup"
             subtitle="Configured readiness for the first trustworthy send."
             stats={[
@@ -926,8 +922,8 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 },
               ]}
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Apply first-run defaults"
             subtitle="Set the minimum runtime defaults without duplicating advanced setup."
           >
@@ -1018,7 +1014,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 />
               </SettingsField>
             </SettingsFieldGrid>
-            <SettingsMetricGrid
+            <NativeMetricGrid
               items={[
                 {
                   label: "Auth",
@@ -1033,20 +1029,20 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
               ]}
             />
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button" onClick={() => void applyDefaults()}>
+              <NativeButton variant="default" onClick={() => void applyDefaults()}>
                 <Save size={16} />
                 Apply defaults
-              </button>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void markComplete()}>
+              </NativeButton>
+              <NativeButton variant="secondary" onClick={() => void markComplete()}>
                 <CheckCircle2 size={16} />
                 Mark complete
-              </button>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+              </NativeButton>
+              <NativeButton variant="secondary" onClick={() => void reload()}>
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -1097,7 +1093,7 @@ function DemoStartPanel({
   const workspaceLabel = data?.workspace?.name ?? "Not created";
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Start Here"
       subtitle="Create a safe local demo workspace with sample Chat, Cowork, Code, and memory data."
       stats={[
@@ -1107,12 +1103,7 @@ function DemoStartPanel({
       ]}
     >
       {notice ? <SettingsNotice notice={notice} /> : null}
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <ErrorState size="inline" description={error} /> : null}
       <SettingsWizardSteps
         steps={[
           {
@@ -1145,16 +1136,16 @@ function DemoStartPanel({
         emptyLabel="Starter prompts will appear after the demo state loads."
       />
       <SettingsButtonRow>
-        <button type="button" className="mc-next-button" onClick={() => void startDemo()} disabled={busy}>
+        <NativeButton variant="default" onClick={() => void startDemo()} disabled={busy}>
           <Play size={16} />
           {data?.status === "ready" ? "Open demo" : "Start safe demo"}
-        </button>
-        <button type="button" className="mc-next-button-secondary" onClick={() => void reload()} disabled={busy}>
+        </NativeButton>
+        <NativeButton variant="secondary" onClick={() => void reload()} disabled={busy}>
           <RefreshCw size={16} />
           Refresh
-        </button>
+        </NativeButton>
       </SettingsButtonRow>
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -1177,7 +1168,7 @@ function FirstOutcomePathPanel({
   const pathState = deriveFirstRunGovernedJobState(onboarding, demoState, firstRunEvidence);
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="First trusted outcome"
       subtitle="Follow one path from provider readiness to a proof-backed Chat, Cowork, or Code result."
       stats={[
@@ -1205,7 +1196,7 @@ function FirstOutcomePathPanel({
         }))}
         maxHeight=""
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -1223,7 +1214,7 @@ function ProviderSmokeEvidencePanel({
   const nextItem = items.find((item) => item.state !== "complete") ?? items.at(-1);
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Provider smoke evidence"
       subtitle="Configured providers are not release proof until a live smoke lane records pass/fail evidence."
       stats={[
@@ -1260,7 +1251,7 @@ function ProviderSmokeEvidencePanel({
         ]}
         maxHeight=""
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -1278,7 +1269,7 @@ function SetupCenterPanel({
   const needsInputCount = items.filter((item) => item.state === "active").length;
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Setup Center"
       subtitle="One checklist for providers, local runtimes, channels, tools, database posture, and packaging readiness."
       stats={[
@@ -1316,7 +1307,7 @@ function SetupCenterPanel({
           },
         ]}
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -1330,7 +1321,7 @@ function EcosystemProofLanePanel({
   const items = deriveEcosystemProofLaneItems();
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Ecosystem proof lanes"
       subtitle="Follow-on setup order for ecosystem claims; blocked lanes stay explicit until a named proof lane passes."
       stats={[
@@ -1346,7 +1337,7 @@ function EcosystemProofLanePanel({
         }))}
         maxHeight=""
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -1521,7 +1512,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
       </p>
       {data ? (
         <SettingsGrid variant="detail-wide">
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Personality catalog"
             subtitle="Built-in presets, custom overlays, and the global Chat default."
             scrollBody
@@ -1533,16 +1524,16 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
             ]}
           >
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button" onClick={beginCustomPersonality}>
+              <NativeButton variant="default" onClick={beginCustomPersonality}>
                 <Plus size={16} />
                 Add custom personality
-              </button>
-              <button type="button" className="mc-next-button-secondary" onClick={refreshPersonalities}>
+              </NativeButton>
+              <NativeButton variant="secondary" onClick={refreshPersonalities}>
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-            <SettingsSelectableList
+            <NativeSelectableList
               items={data.items.map((item) => ({
                 id: item.id,
                 title: item.label,
@@ -1562,8 +1553,8 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
               emptyLabel="No personalities returned from the gateway."
               maxHeight="min(48vh, 28rem)"
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={
               editorMode === "new" ? "New custom personality" : (selectedPersonality?.label ?? "Personality editor")
             }
@@ -1669,41 +1660,37 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsButtonRow>
-                  <button
-                    type="button"
-                    className="mc-next-button"
+                  <NativeButton
+                    variant="default"
                     onClick={() => void savePersonality()}
                     disabled={!canSave}
                   >
                     <Save size={16} />
                     {editorMode === "new" ? "Create personality" : "Save edits"}
-                  </button>
+                  </NativeButton>
                   {editorMode === "selected" ? (
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       onClick={() => void makeDefault()}
                       disabled={!selectedPersonality}
                     >
                       <CheckCircle2 size={16} />
                       {selectedPersonality?.id === "default" ? "Clear Chat default" : "Set as Chat default"}
-                    </button>
+                    </NativeButton>
                   ) : null}
                   {editorMode === "selected" && selectedPersonality?.id !== "default" ? (
-                    <button
-                      type="button"
-                      className={selectedPersonality?.builtin ? "mc-next-button-secondary" : "mc-next-button-danger"}
+                    <NativeButton
+                      variant={selectedPersonality?.builtin ? "secondary" : "destructive"}
                       onClick={() => void removeOrResetPersonality()}
                       disabled={selectedPersonality?.builtin === true && !selectedPersonality.modified}
                     >
                       {selectedPersonality?.builtin ? <RotateCcw size={16} /> : <Trash2 size={16} />}
                       {selectedPersonality?.builtin ? "Reset built-in" : "Remove custom"}
-                    </button>
+                    </NativeButton>
                   ) : null}
                   {editorMode === "new" ? (
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       onClick={() => {
                         setEditorMode("selected");
                         setDraft(createPersonalityEditorDraft(selectedPersonality));
@@ -1711,14 +1698,14 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                     >
                       <RotateCcw size={16} />
                       Cancel
-                    </button>
+                    </NativeButton>
                   ) : null}
                 </SettingsButtonRow>
               </>
             ) : (
               <SettingsEmptyState label="Choose a personality or create a custom one." />
             )}
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -2758,7 +2745,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid variant="detail-wide">
-        <SettingsPanel
+        <NativeCard density="compact" className="mc-next-settings-panel"
           title="Providers & Models"
           subtitle="Available providers, probe posture, and current catalog coverage."
           scrollBody
@@ -2769,21 +2756,20 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           ]}
         >
           <SettingsButtonRow>
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               onClick={() => void handleAddChatGptOAuthProvider()}
               disabled={providerSaveBusy}
             >
               <KeyRound size={16} />
               {hasCodexOAuthProvider ? "ChatGPT setup" : "Add ChatGPT setup"}
-            </button>
-            <button type="button" className="mc-next-button-secondary" onClick={handleStartNewProviderDraft}>
+            </NativeButton>
+            <NativeButton variant="secondary" onClick={handleStartNewProviderDraft}>
               <Plus size={16} />
               New provider draft
-            </button>
+            </NativeButton>
           </SettingsButtonRow>
-          <SettingsSelectableList
+          <NativeSelectableList
             items={providers.map((item) => ({
               id: item.providerId,
               title: item.label,
@@ -2802,9 +2788,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             emptyLabel="No providers returned from runtime settings."
             maxHeight="min(44vh, 25rem)"
           />
-        </SettingsPanel>
+        </NativeCard>
         <SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Active routing"
             subtitle="Change the provider/model pair Mission Control uses by default."
           >
@@ -2854,13 +2840,13 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               />
             ) : null}
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button" onClick={() => void handleSaveRouting()}>
+              <NativeButton variant="default" onClick={() => void handleSaveRouting()}>
                 <Save size={16} />
                 Save routing
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
             stats={[
@@ -2909,18 +2895,17 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               />
             )}
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              <NativeButton
+                variant="secondary"
                 onClick={() => void handleLoadProviderAdvice()}
                 disabled={providerAdvice.loading}
               >
                 <Gauge size={16} />
                 {providerAdvice.loading ? "Loading advice..." : "Load advice"}
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="OpenAI Codex ChatGPT login"
             subtitle="Connect the OpenAI Codex provider through ChatGPT OAuth. No API key needed."
             stats={[
@@ -3002,83 +2987,77 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             ) : null}
             <SettingsButtonRow>
               {!hasCodexOAuthProvider ? (
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => void handleAddChatGptOAuthProvider()}
                   disabled={providerSaveBusy}
                 >
                   <KeyRound size={16} />
                   Add provider and continue
-                </button>
+                </NativeButton>
               ) : codexOAuthFlow ? (
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={handleOpenCodexOAuthVerification}
                   disabled={codexOAuthBusy}
                 >
                   <ExternalLink size={16} />
                   Open OpenAI page
-                </button>
+                </NativeButton>
               ) : (
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => void handleStartCodexOAuth(true)}
                   disabled={codexOAuthBusy}
                 >
                   <KeyRound size={16} />
                   {codexOAuthConnected ? "Reconnect ChatGPT" : "Start ChatGPT login"}
-                </button>
+                </NativeButton>
               )}
               {codexOAuthFlow ? (
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void handlePollCodexOAuth()}
                   disabled={codexOAuthBusy}
                 >
                   <RefreshCw size={16} />I approved, check now
-                </button>
+                </NativeButton>
               ) : null}
               {codexOAuthFlow ? (
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void handleRestartCodexOAuth()}
                   disabled={codexOAuthBusy}
                 >
                   <RotateCcw size={16} />
                   {codexOAuthFlowUserCode ? "Get a new code" : "Restart login"}
-                </button>
+                </NativeButton>
               ) : null}
               {hasCodexOAuthProvider && !codexOAuthFlow ? (
-                <button type="button" className="mc-next-button-secondary" onClick={handleShowCodexOAuthProviderDetail}>
+                <NativeButton variant="secondary" onClick={handleShowCodexOAuthProviderDetail}>
                   <SlidersHorizontal size={16} />
                   Advanced details
-                </button>
+                </NativeButton>
               ) : null}
               {hasCodexOAuthCredential ? (
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void handleDisconnectCodexOAuth()}
                   disabled={codexOAuthBusy}
                 >
                   <Trash2 size={16} />
                   Disconnect
-                </button>
+                </NativeButton>
               ) : null}
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedProvider?.label ?? "Provider detail"}
             subtitle="Credential posture, probe state, and read-only runtime trust signals."
           >
             {selectedProvider ? (
               <>
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     { label: "Default model", value: selectedProvider.defaultModel, meta: "Configured fallback" },
                     {
@@ -3176,15 +3155,14 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       }}
                     />
                     <SettingsButtonRow>
-                      <button
-                        type="button"
-                        className="mc-next-button-secondary"
+                      <NativeButton
+                        variant="secondary"
                         onClick={() => void handleRefreshModels(selectedProvider.providerId)}
                         disabled={providerProbeBusyId === selectedProvider.providerId}
                       >
                         <RefreshCw size={16} />
                         {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
-                      </button>
+                      </NativeButton>
                     </SettingsButtonRow>
                   </>
                 ) : (
@@ -3209,23 +3187,22 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       <SettingsNotice notice={{ tone: "error", message: secretState.error }} />
                     ) : null}
                     <SettingsButtonRow>
-                      <button type="button" className="mc-next-button" onClick={() => void handleSaveSecret()}>
+                      <NativeButton variant="default" onClick={() => void handleSaveSecret()}>
                         <KeyRound size={16} />
                         Save secret
-                      </button>
-                      <button
-                        type="button"
-                        className="mc-next-button-secondary"
+                      </NativeButton>
+                      <NativeButton
+                        variant="secondary"
                         onClick={() => void handleRefreshModels(selectedProvider.providerId)}
                         disabled={providerProbeBusyId === selectedProvider.providerId}
                       >
                         <RefreshCw size={16} />
                         {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
-                      </button>
-                      <button type="button" className="mc-next-button-danger" onClick={() => void handleDeleteSecret()}>
+                      </NativeButton>
+                      <NativeButton variant="destructive" onClick={() => void handleDeleteSecret()}>
                         <Trash2 size={16} />
                         Delete secret
-                      </button>
+                      </NativeButton>
                     </SettingsButtonRow>
                   </>
                 )}
@@ -3233,8 +3210,8 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
             )}
-          </SettingsPanel>
-          <SettingsPanel title="Provider editor" subtitle={editorHint}>
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel" title="Provider editor" subtitle={editorHint}>
             <SettingsFieldGrid>
               <SettingsField label="Provider id">
                 <input
@@ -3336,18 +3313,16 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               error={providerRequestValidation.error}
             />
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button"
+              <NativeButton
+                variant="default"
                 disabled={providerSaveBusy}
                 onClick={() => void handleSaveProvider()}
               >
                 <Save size={16} />
                 {providerSaveBusy ? "Saving..." : "Save provider"}
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
                 onClick={() =>
                   selectedProvider
                     ? handleRefreshModels(selectedProvider.providerId)
@@ -3363,10 +3338,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 providerProbeBusyId === providerDraft.providerId
                   ? "Probing..."
                   : "Probe from editor"}
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
                 onClick={() => {
                   setEditorMode("selected");
                   setProviderDraft(buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider));
@@ -3376,9 +3350,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               >
                 <RotateCcw size={16} />
                 Reload selected
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         </SettingsStack>
       </SettingsGrid>
     </SettingsSectionShell>
@@ -3561,7 +3535,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Gateway access"
               subtitle="Change auth mode, loopback behavior, and optional credentials."
               stats={[
@@ -3637,25 +3611,24 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 </SettingsField>
               </SettingsFieldGrid>
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
+                <NativeButton variant="default" onClick={() => void handleSave()}>
                   <Save size={16} />
                   Save access settings
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void handleGenerateInstallToken()}
                 >
                   <RefreshCw size={16} />
                   Generate install token
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
               {installToken ? (
                 <SettingsCodeBlock label="Install token preview">{installToken}</SettingsCodeBlock>
               ) : null}
-            </SettingsPanel>
-            <SettingsPanel title="Current posture" subtitle="Readable auth state instead of a recycled general page.">
-              <SettingsMetricGrid
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Current posture" subtitle="Readable auth state instead of a recycled general page.">
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Loopback bypass",
@@ -3677,8 +3650,8 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                   },
                 ]}
               />
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Desktop/mobile continuity"
               subtitle="Trusted devices, desktop runtime state, and companion handoff boundaries."
               stats={[
@@ -3699,9 +3672,9 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 }))}
                 maxHeight="min(36vh, 22rem)"
               />
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Approved devices"
             subtitle="View and revoke device grants that can access the gateway."
             stats={[{ label: "Grants", value: String(data.grants.length) }]}
@@ -3720,7 +3693,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
               }))}
               emptyLabel="No device grants found."
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -3912,8 +3885,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
           {data.llamaModelsWarning ? (
             <SettingsNotice notice={{ tone: "info", message: data.llamaModelsWarning }} />
           ) : null}
-          <SettingsPanel title="Runtime posture" subtitle="Providers, local runtimes, and attached systems.">
-            <SettingsMetricGrid
+          <NativeCard density="compact" className="mc-next-settings-panel" title="Runtime posture" subtitle="Providers, local runtimes, and attached systems.">
+            <NativeMetricGrid
               items={[
                 {
                   label: "Daemon",
@@ -3937,10 +3910,10 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 },
               ]}
             />
-          </SettingsPanel>
+          </NativeCard>
           <SettingsGrid variant="balanced">
-            <SettingsPanel title="Gateway daemon" subtitle="Control the background runtime serving Mission Control.">
-              <SettingsMetricGrid
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Gateway daemon" subtitle="Control the background runtime serving Mission Control.">
+              <NativeMetricGrid
                 items={[
                   {
                     label: "State",
@@ -3955,39 +3928,36 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 ]}
               />
               <SettingsButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}
                   disabled={!data.daemon?.controllable}
                 >
                   <Play size={16} />
                   Start
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}
                   disabled={!data.daemon?.controllable}
                 >
                   <Square size={16} />
                   Stop
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}
                   disabled={!data.daemon?.controllable}
                 >
                   <RotateCcw size={16} />
                   Restart
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
               {!data.daemon?.controllable && data.daemon?.controlMessage ? (
                 <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
               ) : null}
-            </SettingsPanel>
-            <SettingsPanel title="llama.cpp runtime" subtitle="Configure and control the local llama.cpp runtime.">
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel" title="llama.cpp runtime" subtitle="Configure and control the local llama.cpp runtime.">
               <SettingsFieldGrid>
                 <SettingsField label="Base URL">
                   <input
@@ -4074,17 +4044,15 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 </SettingsField>
               </SettingsFieldGrid>
               <SettingsButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => void runAndReload(saveLlamaSettings, "llama.cpp settings saved.")}
                 >
                   <Save size={16} />
                   Save
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() =>
                     void runAndReload(async () => {
                       await saveLlamaSettings();
@@ -4094,25 +4062,23 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 >
                   <Play size={16} />
                   Start
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void runAndReload(stopLlamaCppRuntime, "llama.cpp stop requested.")}
                 >
                   <Square size={16} />
                   Stop
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void runAndReload(refreshLlamaCppRuntime, "llama.cpp refresh requested.")}
                 >
                   <RefreshCw size={16} />
                   Refresh
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
-              <SettingsMetricGrid
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Process",
@@ -4126,15 +4092,14 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   },
                 ]}
               />
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Local acceleration"
               subtitle="NPU sidecar support is retired from the shipped 1.0 runtime."
             >
               <SettingsButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() =>
                     void runAndReload(
                       () =>
@@ -4151,17 +4116,16 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 >
                   <Save size={16} />
                   Normalize
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => void runAndReload(refreshNpuRuntime, "NPU refresh requested.")}
                 >
                   <RefreshCw size={16} />
                   Refresh
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
-              <SettingsMetricGrid
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Process",
@@ -4175,9 +4139,9 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   },
                 ]}
               />
-            </SettingsPanel>
-            <SettingsPanel title="Voice runtime" subtitle="Install or activate the local voice transcription runtime.">
-              <SettingsMetricGrid
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Voice runtime" subtitle="Install or activate the local voice transcription runtime.">
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Readiness",
@@ -4192,9 +4156,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 ]}
               />
               <SettingsButtonRow>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   onClick={() => {
                     const recommended =
                       data.voiceRuntime?.catalog.find((item) => item.defaultInstall)?.id ??
@@ -4207,11 +4170,10 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 >
                   <Plus size={16} />
                   Install starter model
-                </button>
+                </NativeButton>
                 {data.voiceRuntime?.installedModels[0] ? (
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runAndReload(
                         () => selectVoiceRuntimeModel(data.voiceRuntime?.installedModels[0]?.modelId ?? ""),
@@ -4221,7 +4183,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   >
                     <CheckCircle2 size={16} />
                     Activate first installed
-                  </button>
+                  </NativeButton>
                 ) : null}
               </SettingsButtonRow>
               <SettingsActionList
@@ -4235,7 +4197,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 }))}
                 emptyLabel="No voice model catalog available."
               />
-            </SettingsPanel>
+            </NativeCard>
           </SettingsGrid>
         </SettingsStack>
       ) : null}
@@ -4370,7 +4332,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
       />
       <SettingsGrid variant="detail-wide">
         <SettingsStack>
-          <SettingsPanel title="Create workspace" subtitle="Add a new workspace before digging through the directory.">
+          <NativeCard density="compact" className="mc-next-settings-panel" title="Create workspace" subtitle="Add a new workspace before digging through the directory.">
             <SettingsFieldGrid>
               <SettingsField label="Name">
                 <input
@@ -4395,13 +4357,13 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
+              <NativeButton variant="default" onClick={() => void handleCreate()}>
                 <Plus size={16} />
                 Create workspace
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Workspace directory"
             subtitle="Switch between active and archived workspaces, then edit the selected one."
             scrollBody
@@ -4420,7 +4382,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
               value={view}
               onChange={(next) => setView(next as "active" | "archived" | "all")}
             />
-            <SettingsSelectableList
+            <NativeSelectableList
               items={filtered.map((item) => ({
                 id: item.workspaceId,
                 title: item.name,
@@ -4432,9 +4394,9 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
               emptyLabel="No workspaces in this view."
               maxHeight="min(42vh, 23rem)"
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsStack>
-        <SettingsPanel
+        <NativeCard density="compact" className="mc-next-settings-panel"
           title={selectedWorkspace?.name ?? "Workspace editor"}
           subtitle="Rename, describe, archive, restore, or make the selected workspace active."
         >
@@ -4463,7 +4425,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
                   />
                 </SettingsField>
               </SettingsFieldGrid>
-              <SettingsMetricGrid
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Workspace ID",
@@ -4478,35 +4440,34 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
                 ]}
               />
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
+                <NativeButton variant="default" onClick={() => void handleSave()}>
                   <Save size={16} />
                   Save changes
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}
                 >
                   <CheckCircle2 size={16} />
                   Make active
-                </button>
+                </NativeButton>
                 {selectedWorkspace.lifecycleStatus === "archived" ? (
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleRestore()}>
+                  <NativeButton variant="secondary" onClick={() => void handleRestore()}>
                     <RotateCcw size={16} />
                     Restore
-                  </button>
+                  </NativeButton>
                 ) : (
-                  <button type="button" className="mc-next-button-danger" onClick={() => void handleArchive()}>
+                  <NativeButton variant="destructive" onClick={() => void handleArchive()}>
                     <Trash2 size={16} />
                     Archive
-                  </button>
+                  </NativeButton>
                 )}
               </SettingsButtonRow>
             </>
           ) : (
             <SettingsEmptyState label="Choose a workspace to edit or create a new one." />
           )}
-        </SettingsPanel>
+        </NativeCard>
       </SettingsGrid>
     </SettingsSectionShell>
   );
@@ -4782,7 +4743,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <SettingsPanel title="Create connection" subtitle="Create a new integration connection from the catalog.">
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Create connection" subtitle="Create a new integration connection from the catalog.">
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
                   <select
@@ -4818,7 +4779,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 <ConfigFormBuilder schema={createSchema} value={createGuidedConfig} onChange={setCreateGuidedConfig} />
               )}
               {selectedCatalog ? (
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     { label: "Kind", value: selectedCatalog.kind, meta: selectedCatalog.key },
                     {
@@ -4838,21 +4799,20 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 }}
               />
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
+                <NativeButton variant="default" onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create connection
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   onClick={() => setShowCreateJson((current) => !current)}
                 >
                   <SlidersHorizontal size={16} />
                   {showCreateJson ? "Use guided fields" : "Advanced JSON"}
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Connected integrations"
               subtitle="Review live connections and jump into the selected one."
               scrollBody
@@ -4863,7 +4823,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 { label: "Plugins", value: String(data.plugins.length) },
               ]}
             >
-              <SettingsSelectableList
+              <NativeSelectableList
                 items={data.connections.map((item) => ({
                   id: item.connectionId,
                   title: item.label,
@@ -4879,7 +4839,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 emptyLabel="No integration connections yet."
                 maxHeight="min(36vh, 21rem)"
               />
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
           <SettingsStack>
             <PluginTrustPanel plugins={data.plugins} />
@@ -4894,7 +4854,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
             />
             <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedConnection?.label ?? "Integration catalog"}
             subtitle={
               selectedConnection
@@ -4954,7 +4914,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                     onChange={setDetailGuidedConfig}
                   />
                 )}
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     { label: "Catalog key", value: selectedConnection.key, meta: selectedConnection.kind },
                     {
@@ -4965,26 +4925,25 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                   ]}
                 />
                 <SettingsButtonRow>
-                  <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
+                  <NativeButton variant="default" onClick={() => void handleSave()}>
                     <Save size={16} />
                     Save changes
-                  </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleDiagnostics()}>
+                  </NativeButton>
+                  <NativeButton variant="secondary" onClick={() => void handleDiagnostics()}>
                     <RefreshCw size={16} />
                     Run diagnostics
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() => setShowDetailJson((current) => !current)}
                   >
                     <SlidersHorizontal size={16} />
                     {showDetailJson ? "Use guided fields" : "Advanced JSON"}
-                  </button>
-                  <button type="button" className="mc-next-button-danger" onClick={() => void handleDelete()}>
+                  </NativeButton>
+                  <NativeButton variant="destructive" onClick={() => void handleDelete()}>
                     <Trash2 size={16} />
                     Delete
-                  </button>
+                  </NativeButton>
                 </SettingsButtonRow>
                 {selectedCatalog?.operatorActions?.length ? (
                   <div className="mc-next-settings-stack">
@@ -4994,7 +4953,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                         : {};
                       return (
                         <div key={action.actionId} className="mc-next-settings-panel-body">
-                          <SettingsMetricGrid
+                          <NativeMetricGrid
                             items={[
                               { label: "Action", value: action.label, meta: action.description },
                               { label: "Capability", value: action.capability, meta: action.actionId },
@@ -5028,14 +4987,13 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                             </SettingsField>
                           ) : null}
                           <SettingsButtonRow>
-                            <button
-                              type="button"
-                              className="mc-next-button"
+                            <NativeButton
+                              variant="default"
                               onClick={() => void handleOperatorAction(action)}
                             >
                               <Play size={16} />
                               Run
-                            </button>
+                            </NativeButton>
                           </SettingsButtonRow>
                         </div>
                       );
@@ -5067,7 +5025,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                 maxHeight="min(58vh, 34rem)"
               />
             )}
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -5085,7 +5043,7 @@ function OperatorActionResultPanel({ result }: { result: IntegrationActionInvoke
           message: `${result.actionLabel}: ${result.message}`,
         }}
       />
-      <SettingsMetricGrid
+      <NativeMetricGrid
         items={[
           { label: "Action", value: result.actionLabel, meta: result.actionId },
           { label: "Status", value: result.status, meta: result.message },
@@ -5127,7 +5085,7 @@ function OperatorActionResultPanel({ result }: { result: IntegrationActionInvoke
 function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
   const warningCount = plugins.reduce((count, plugin) => count + (plugin.trustWarnings?.length ?? 0), 0);
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Plugin trust"
       subtitle="Installed plugin source, integrity, readiness, and dashboard theme truth."
       stats={[
@@ -5158,7 +5116,7 @@ function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
         })}
         emptyLabel="No integration plugins installed."
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -5194,7 +5152,7 @@ function ExternalSideEffectLedgerPanel({
   const health = summary ?? buildExternalSideEffectFallbackSummary(runs);
 
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="External side effects"
       subtitle="Read-only ledger for integration writebacks that crossed, or prepared to cross, an external boundary."
       stats={[
@@ -5203,7 +5161,7 @@ function ExternalSideEffectLedgerPanel({
         { label: "Blocked", value: String(blockedCount) },
       ]}
     >
-      <SettingsMetricGrid
+      <NativeMetricGrid
         items={[
           {
             label: "Success rate",
@@ -5264,24 +5222,22 @@ function ExternalSideEffectLedgerPanel({
         maxHeight="min(34vh, 20rem)"
       />
       <SettingsButtonRow>
-        <button
-          type="button"
-          className="mc-next-button-secondary"
+        <NativeButton
+          variant="secondary"
           disabled={busy || replayAuditCandidates.length === 0}
           onClick={() => onStartReplayAudit(replayAuditCandidates[0])}
         >
           <RefreshCw size={16} />
           Start replay audit
-        </button>
+        </NativeButton>
         {lastReplayAuditRunId ? (
-          <button
-            type="button"
-            className="mc-next-button-secondary"
+          <NativeButton
+            variant="secondary"
             onClick={() => onOpenReplayAudit(lastReplayAuditRunId)}
           >
             <ExternalLink size={16} />
             Open replay audit
-          </button>
+          </NativeButton>
         ) : null}
       </SettingsButtonRow>
       <SettingsNotice
@@ -5302,7 +5258,7 @@ function ExternalSideEffectLedgerPanel({
           }}
         />
       ) : null}
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -5462,7 +5418,7 @@ function GoogleMeetStatusPanel({
   sessions: GoogleMeetSessionRecord[];
 }) {
   return (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Google Meet voice"
       subtitle="Realtime meeting voice remains blocked until OAuth, provider, browser, audio, and user-start prerequisites pass."
       stats={[
@@ -5472,7 +5428,7 @@ function GoogleMeetStatusPanel({
     >
       {status ? (
         <>
-          <SettingsMetricGrid
+          <NativeMetricGrid
             items={[
               {
                 label: "Provider",
@@ -5510,7 +5466,7 @@ function GoogleMeetStatusPanel({
       ) : (
         <SettingsEmptyState label="Google Meet prerequisite status is unavailable from the gateway." />
       )}
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -5790,7 +5746,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Channel definitions"
               subtitle="Available guided setup definitions for supported channel integrations."
               scrollBody
@@ -5822,15 +5778,15 @@ function ChannelsSection(_props: SettingsSectionProps) {
               />
               <SettingsButtonRow>
                 {createCatalogId === "channel.slack" ? (
-                  <button type="button" className="mc-next-button" onClick={() => void handleStartSlackOAuth()}>
+                  <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
                     <ExternalLink size={16} />
                     Connect Slack
-                  </button>
+                  </NativeButton>
                 ) : null}
-                <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
+                <NativeButton variant="default" onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create setup draft
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
               <SettingsActionList
                 items={data.definitions.map((item) => ({
@@ -5843,12 +5799,12 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 emptyLabel="No channel setup definitions returned."
                 maxHeight="min(34vh, 18rem)"
               />
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Drafts"
               subtitle="Saved setup drafts, readiness checks, trial sends, and finalization."
             >
-              <SettingsSelectableList
+              <NativeSelectableList
                 items={data.drafts.map((item) => ({
                   id: item.draftId,
                   title: item.label || item.catalogId,
@@ -5862,9 +5818,9 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 }}
                 emptyLabel="No channel drafts yet."
               />
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"}
             subtitle="Edit the draft payload, then check readiness, send a trial message, and finalize it."
           >
@@ -5897,7 +5853,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   </SettingsField>
                 </SettingsFieldGrid>
                 {selectedDefinition ? (
-                  <SettingsMetricGrid
+                  <NativeMetricGrid
                     items={[
                       {
                         label: "Difficulty",
@@ -5914,37 +5870,36 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 ) : null}
                 <SettingsButtonRow>
                   {selectedDraft.catalogId === "channel.slack" ? (
-                    <button type="button" className="mc-next-button" onClick={() => void handleStartSlackOAuth()}>
+                    <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
                       <ExternalLink size={16} />
                       Connect Slack
-                    </button>
+                    </NativeButton>
                   ) : null}
                   {selectedDraft.catalogId === "channel.telegram" ? (
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       onClick={() => void handleDiscoverTelegramTargets()}
                     >
                       <RefreshCw size={16} />
                       Detect Telegram Chats
-                    </button>
+                    </NativeButton>
                   ) : null}
-                  <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
+                  <NativeButton variant="default" onClick={() => void handleSave()}>
                     <Save size={16} />
                     Save draft
-                  </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleValidate()}>
+                  </NativeButton>
+                  <NativeButton variant="secondary" onClick={() => void handleValidate()}>
                     <ShieldCheck size={16} />
                     Validate
-                  </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleTest()}>
+                  </NativeButton>
+                  <NativeButton variant="secondary" onClick={() => void handleTest()}>
                     <Play size={16} />
                     Test
-                  </button>
-                  <button type="button" className="mc-next-button" onClick={() => void handleFinalize()}>
+                  </NativeButton>
+                  <NativeButton variant="default" onClick={() => void handleFinalize()}>
                     <CheckCircle2 size={16} />
                     Finalize
-                  </button>
+                  </NativeButton>
                 </SettingsButtonRow>
                 {selectedDefinition ? (
                   <SettingsActionList
@@ -5967,7 +5922,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Create or select a channel setup draft to continue." />
             )}
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -6119,7 +6074,7 @@ function McpSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="MCP servers"
               subtitle="Connected and disconnected MCP servers available to the operator."
               scrollBody
@@ -6129,7 +6084,7 @@ function McpSection(_props: SettingsSectionProps) {
                 { label: "Templates", value: String(data.templates.length) },
               ]}
             >
-              <SettingsSelectableList
+              <NativeSelectableList
                 items={data.servers.map((item) => ({
                   id: item.serverId,
                   title: item.label,
@@ -6144,8 +6099,8 @@ function McpSection(_props: SettingsSectionProps) {
                 emptyLabel="No MCP servers configured."
                 maxHeight="min(38vh, 22rem)"
               />
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Create MCP server"
               subtitle="Set up a local stdio MCP server or use a runtime-supported template."
             >
@@ -6201,10 +6156,10 @@ function McpSection(_props: SettingsSectionProps) {
                 }}
               />
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
+                <NativeButton variant="default" onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create MCP server
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
               {data.templates.length ? (
                 <SettingsActionList
@@ -6230,12 +6185,12 @@ function McpSection(_props: SettingsSectionProps) {
                   }))}
                 />
               ) : null}
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Server mode preview"
               subtitle="Operator-authenticated export posture for agents that may call GoatCitadel in the future."
             >
-              <SettingsMetricGrid
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Runtime",
@@ -6270,12 +6225,12 @@ function McpSection(_props: SettingsSectionProps) {
                 }))}
                 emptyLabel="No callable capability descriptors are exported."
               />
-            </SettingsPanel>
-            <SettingsPanel
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Remote MCP preview"
               subtitle="Read-only posture for http/sse MCP records, runtime support, auth, trust, and invocation state."
             >
-              <SettingsMetricGrid
+              <NativeMetricGrid
                 items={[
                   {
                     label: "Remote servers",
@@ -6330,9 +6285,9 @@ function McpSection(_props: SettingsSectionProps) {
                 }))}
                 emptyLabel="No remote MCP records or templates are visible."
               />
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedServer?.label ?? "Server detail"}
             subtitle="Edit, connect, diagnose, or delete the selected MCP server."
             scrollBody
@@ -6407,7 +6362,7 @@ function McpSection(_props: SettingsSectionProps) {
                     }}
                   />
                 ) : null}
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
                     {
@@ -6439,13 +6394,12 @@ function McpSection(_props: SettingsSectionProps) {
                   ]}
                 />
                 <SettingsButtonRow>
-                  <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
+                  <NativeButton variant="default" onClick={() => void handleSave()}>
                     <Save size={16} />
                     Save changes
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runServerAction(async () => {
                         const flow = await startMcpOAuth(selectedServer.serverId);
@@ -6460,10 +6414,9 @@ function McpSection(_props: SettingsSectionProps) {
                   >
                     <KeyRound size={16} />
                     OAuth
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runServerAction(
                         () => connectMcpServer(selectedServer.serverId),
@@ -6474,10 +6427,9 @@ function McpSection(_props: SettingsSectionProps) {
                   >
                     <Plug2 size={16} />
                     Connect
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runServerAction(
                         () => disconnectMcpServer(selectedServer.serverId),
@@ -6487,10 +6439,9 @@ function McpSection(_props: SettingsSectionProps) {
                   >
                     <Square size={16} />
                     Disconnect
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runServerAction(
                         async () => setHealthReport(await runMcpServerHealthCheck(selectedServer.serverId)),
@@ -6501,10 +6452,9 @@ function McpSection(_props: SettingsSectionProps) {
                   >
                     <RefreshCw size={16} />
                     Health check
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-danger"
+                  </NativeButton>
+                  <NativeButton
+                    variant="destructive"
                     onClick={() =>
                       void runServerAction(async () => {
                         if (!window.confirm(`Delete MCP server ${selectedServer.label}?`)) {
@@ -6516,7 +6466,7 @@ function McpSection(_props: SettingsSectionProps) {
                   >
                     <Trash2 size={16} />
                     Delete
-                  </button>
+                  </NativeButton>
                 </SettingsButtonRow>
                 <SettingsActionList
                   items={tools.map((item) => ({
@@ -6530,7 +6480,7 @@ function McpSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Select a server or create a new one." />
             )}
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -6856,7 +6806,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Permission profiles"
             subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
             stats={[
@@ -6864,7 +6814,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               { label: "Chat effective", value: chatEffectiveProfileLabel },
             ]}
           >
-            <SettingsSelectableList
+            <NativeSelectableList
               items={data.profiles.map((profile) => ({
                 id: profile.profileId,
                 title: profile.label,
@@ -6876,9 +6826,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               emptyLabel="No permission profiles returned by the gateway."
               maxHeight="22rem"
             />
-          </SettingsPanel>
+          </NativeCard>
           <SettingsStack>
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title={selectedProfile?.label ?? "Profile"}
               subtitle={selectedProfile ? describePermissionProfile(selectedProfile) : "Select a profile to activate."}
               stats={[
@@ -6926,82 +6876,78 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     <p className="mc-next-settings-field-note">{promptSkippingProfileRestriction}</p>
                   ) : null}
                   <SettingsButtonRow>
-                    <button
-                      type="button"
-                      className="mc-next-button"
+                    <NativeButton
+                      variant="default"
                       disabled={activationBlockedByRemoteHardened}
                       onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
                     >
                       <ShieldCheck size={16} />
                       Use for all surfaces
-                    </button>
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
                       disabled={activationBlockedByRemoteHardened}
                       onClick={() => void handleActivateProfile(selectedProfile.profileId, "code")}
                     >
                       <Code2 size={16} />
                       Use for Code
-                    </button>
+                    </NativeButton>
                   </SettingsButtonRow>
                   <SettingsButtonRow>
                     {PERMISSION_SURFACE_OPTIONS.filter((surface) => surface !== "code").map((surface) => (
-                      <button
+                      <NativeButton
                         key={surface}
-                        type="button"
-                        className="mc-next-button-secondary"
+                        variant="secondary"
                         disabled={activationBlockedByRemoteHardened}
                         onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
                       >
                         <ShieldCheck size={16} />
                         Use for {surface.toUpperCase()}
-                      </button>
+                      </NativeButton>
                     ))}
                   </SettingsButtonRow>
                 </>
               ) : (
                 <SettingsEmptyState label="Select a profile." />
               )}
-            </SettingsPanel>
+            </NativeCard>
             {selectedProfile && !selectedProfile.builtin ? (
-              <SettingsPanel title="Edit custom profile" subtitle="Update or archive the selected profile.">
+              <NativeCard density="compact" className="mc-next-settings-panel" title="Edit custom profile" subtitle="Update or archive the selected profile.">
                 <PermissionProfileDraftFields
                   draft={profileEditDraft}
                   bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
                   setDraft={setProfileEditDraft}
                 />
                 <SettingsButtonRow>
-                  <button type="button" className="mc-next-button" onClick={() => void handleUpdateSelectedProfile()}>
+                  <NativeButton variant="default" onClick={() => void handleUpdateSelectedProfile()}>
                     <Save size={16} />
                     Save profile
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-danger"
+                  </NativeButton>
+                  <NativeButton
+                    variant="destructive"
                     onClick={() => void handleArchiveSelectedProfile()}
                   >
                     <Trash2 size={16} />
                     Archive profile
-                  </button>
+                  </NativeButton>
                 </SettingsButtonRow>
-              </SettingsPanel>
+              </NativeCard>
             ) : null}
-            <SettingsPanel title="Custom profile" subtitle="Create a workspace-scoped profile for your own workflow.">
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Custom profile" subtitle="Create a workspace-scoped profile for your own workflow.">
               <PermissionProfileDraftFields
                 draft={profileDraft}
                 bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
                 setDraft={setProfileDraft}
               />
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleCreateProfile()}>
+                <NativeButton variant="default" onClick={() => void handleCreateProfile()}>
                   <Plus size={16} />
                   Create profile
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Active defaults"
             subtitle="Effective profile and temporary local override state by surface."
           >
@@ -7018,8 +6964,8 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               }))}
               emptyLabel="No effective profile state returned."
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Local Operator Override"
             subtitle={
               isRemoteHardened
@@ -7117,18 +7063,17 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               </span>
             </label>
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button-danger"
+              <NativeButton
+                variant="destructive"
                 disabled={Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
                 onClick={() => void handleStartOverride()}
               >
                 <AlertTriangle size={16} />
                 Start temporary override
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Autonomous activation grants"
             subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
             stats={[
@@ -7155,7 +7100,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
               }))}
               emptyLabel="No autonomous activation grants recorded."
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -7417,7 +7362,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Global tool prompt mode"
             subtitle="Base prompt behavior for otherwise-allowed tools when no active permission profile overrides it."
             stats={[
@@ -7456,14 +7401,14 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               ) : null}
             </SettingsField>
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button" onClick={() => void handleSaveApprovalMode()}>
+              <NativeButton variant="default" onClick={() => void handleSaveApprovalMode()}>
                 <Save size={16} />
                 Save mode
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
           <SettingsStack>
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="Tool catalog"
               subtitle="Review the full catalog instead of a tiny first-page slice."
               scrollBody
@@ -7481,7 +7426,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   placeholder="Search tool name, category, or description"
                 />
               </SettingsField>
-              <SettingsSelectableList
+              <NativeSelectableList
                 items={filteredTools.map((item) => ({
                   id: item.toolName,
                   title: item.toolName,
@@ -7493,8 +7438,8 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 emptyLabel="No tools match the current search."
                 maxHeight="min(48vh, 28rem)"
               />
-            </SettingsPanel>
-            <SettingsPanel title="Create tool grant" subtitle="Create a scoped policy grant for the selected tool.">
+            </NativeCard>
+            <NativeCard density="compact" className="mc-next-settings-panel" title="Create tool grant" subtitle="Create a scoped policy grant for the selected tool.">
               <SettingsFieldGrid>
                 <SettingsField label="Tool pattern">
                   <input
@@ -7572,14 +7517,14 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 ) : null}
               </SettingsFieldGrid>
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void handleCreateGrant()}>
+                <NativeButton variant="default" onClick={() => void handleCreateGrant()}>
                   <Plus size={16} />
                   Create grant
-                </button>
+                </NativeButton>
               </SettingsButtonRow>
-            </SettingsPanel>
+            </NativeCard>
           </SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedTool?.toolName ?? "Tool detail"}
             subtitle="Selected catalog entry and tool grants."
             scrollBody
@@ -7587,7 +7532,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
           >
             {selectedTool ? (
               <>
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     {
                       label: "Category",
@@ -7628,7 +7573,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
               maxHeight="min(42vh, 24rem)"
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -7992,7 +7937,7 @@ function AddonsSection(_props: SettingsSectionProps) {
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           {productPosture ? (
-            <SettingsPanel
+            <NativeCard density="compact" className="mc-next-settings-panel"
               title="1.0 add-on posture"
               subtitle="Experimental local extensions with operator-reviewed install and launch controls."
               stats={productPosture.stats}
@@ -8008,9 +7953,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                 }))}
                 maxHeight="min(42vh, 24rem)"
               />
-            </SettingsPanel>
+            </NativeCard>
           ) : null}
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Add-on catalog"
             subtitle="Experimental add-on runtimes and their current local install posture."
             scrollBody
@@ -8020,7 +7965,7 @@ function AddonsSection(_props: SettingsSectionProps) {
               { label: "Installed", value: String(data.installed.length) },
             ]}
           >
-            <SettingsSelectableList
+            <NativeSelectableList
               items={data.catalog.map((item) => {
                 const installed = installedById.get(item.addonId);
                 const lifecycle = installed
@@ -8040,8 +7985,8 @@ function AddonsSection(_props: SettingsSectionProps) {
               emptyLabel="No add-ons returned from the catalog."
               maxHeight="min(42vh, 24rem)"
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title={selectedAddon?.label ?? "Add-on detail"}
             subtitle="Operator-reviewed lifecycle controls for the selected local add-on."
             scrollBody
@@ -8050,7 +7995,7 @@ function AddonsSection(_props: SettingsSectionProps) {
             {selectedAddon ? (
               <>
                 <SettingsCodeBlock label="Description">{selectedAddon.description}</SettingsCodeBlock>
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     { label: "Trust tier", value: selectedAddon.trustTier, meta: selectedAddon.owner },
                     {
@@ -8071,9 +8016,8 @@ function AddonsSection(_props: SettingsSectionProps) {
                   ]}
                 />
                 <SettingsButtonRow>
-                  <button
-                    type="button"
-                    className="mc-next-button"
+                  <NativeButton
+                    variant="default"
                     onClick={() =>
                       void runAddonAction(
                         () => installAddon(selectedAddon.addonId, { confirmRepoDownload: true, actorId: "operator" }),
@@ -8083,10 +8027,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <Plus size={16} />
                     Install
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     onClick={() =>
                       void runAddonAction(
                         () => updateAddon(selectedAddon.addonId),
@@ -8096,10 +8039,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <RefreshCw size={16} />
                     Update
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     disabled={!selectedAddonInstalled || selectedAddonEnabled}
                     onClick={() =>
                       void runAddonAction(
@@ -8110,10 +8052,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <ShieldCheck size={16} />
                     Enable
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     disabled={!selectedAddonInstalled || !selectedAddonEnabled}
                     onClick={() =>
                       void runAddonAction(
@@ -8124,10 +8065,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <Plug2 size={16} />
                     Disable
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     disabled={!selectedAddonInstalled || !selectedAddonEnabled}
                     onClick={() =>
                       void runAddonAction(
@@ -8138,10 +8078,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <Play size={16} />
                     Launch
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
                     disabled={!selectedAddonCanStop}
                     onClick={() =>
                       void runAddonAction(
@@ -8152,10 +8091,9 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <Square size={16} />
                     Stop
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-danger"
+                  </NativeButton>
+                  <NativeButton
+                    variant="destructive"
                     onClick={() => {
                       if (!window.confirm(`Uninstall ${selectedAddon.label}?`)) {
                         return;
@@ -8168,7 +8106,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                   >
                     <Trash2 size={16} />
                     Uninstall
-                  </button>
+                  </NativeButton>
                 </SettingsButtonRow>
                 <SettingsActionList
                   items={selectedAddon.installCommands.map((item) => ({
@@ -8190,8 +8128,8 @@ function AddonsSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose an add-on from the catalog." />
             )}
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Capability packs"
             subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
             scrollBody
@@ -8202,7 +8140,7 @@ function AddonsSection(_props: SettingsSectionProps) {
               { label: "Selected", value: selectedPack?.trustTier ?? "none" },
             ]}
           >
-            <SettingsSelectableList
+            <NativeSelectableList
               items={data.capabilityPacks.map((item) => ({
                 id: item.packId,
                 title: item.name,
@@ -8221,7 +8159,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                   <SettingsEmptyState label={`Preview failed: ${packPreview.error}`} />
                 ) : packPreview.data ? (
                   <>
-                    <SettingsMetricGrid
+                    <NativeMetricGrid
                       items={[
                         { label: "Trust", value: packPreview.data.manifest.trustTier, meta: "local bundled manifest" },
                         {
@@ -8254,9 +8192,8 @@ function AddonsSection(_props: SettingsSectionProps) {
                       emptyLabel="No warnings for this pack."
                     />
                     <SettingsButtonRow>
-                      <button
-                        type="button"
-                        className="mc-next-button"
+                      <NativeButton
+                        variant="default"
                         disabled={packPreview.loading}
                         onClick={() =>
                           void runAddonAction(
@@ -8267,16 +8204,15 @@ function AddonsSection(_props: SettingsSectionProps) {
                       >
                         <ShieldCheck size={16} />
                         Stage pack
-                      </button>
-                      <button
-                        type="button"
-                        className="mc-next-button-secondary"
+                      </NativeButton>
+                      <NativeButton
+                        variant="secondary"
                         disabled={packExport.loading}
                         onClick={() => void exportSelectedPack()}
                       >
                         <ExternalLink size={16} />
                         Export manifest
-                      </button>
+                      </NativeButton>
                     </SettingsButtonRow>
                     {packExport.error ? (
                       <SettingsEmptyState label={`Export failed: ${packExport.error}`} />
@@ -8328,8 +8264,8 @@ function AddonsSection(_props: SettingsSectionProps) {
               ]}
               maxHeight=""
             />
-          </SettingsPanel>
-          <SettingsPanel
+          </NativeCard>
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Portable pack"
             subtitle="Local-file manifests are staged for review; skills and add-ons are not auto-enabled."
             scrollBody
@@ -8350,29 +8286,27 @@ function AddonsSection(_props: SettingsSectionProps) {
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              <NativeButton
+                variant="secondary"
                 disabled={localPackPreview.loading || !localPackText.trim()}
                 onClick={() => void previewLocalPack()}
               >
                 <ShieldCheck size={16} />
                 Preview local pack
-              </button>
-              <button
-                type="button"
-                className="mc-next-button"
+              </NativeButton>
+              <NativeButton
+                variant="default"
                 disabled={localPackPreview.loading || !localPackPreview.data}
                 onClick={() => void stageLocalPack()}
               >
                 <Plus size={16} />
                 Stage local pack
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
             {localPackPreview.error ? <SettingsEmptyState label={`Preview failed: ${localPackPreview.error}`} /> : null}
             {localPackPreview.data ? (
               <>
-                <SettingsMetricGrid
+                <NativeMetricGrid
                   items={[
                     {
                       label: "Pack",
@@ -8410,7 +8344,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                 />
               </>
             ) : null}
-          </SettingsPanel>
+          </NativeCard>
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
@@ -8419,7 +8353,7 @@ function AddonsSection(_props: SettingsSectionProps) {
 
 function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
   return (
-    <SettingsPanel title="Diagnostics" subtitle={`Status: ${report.status}`}>
+    <NativeCard density="compact" className="mc-next-settings-panel" title="Diagnostics" subtitle={`Status: ${report.status}`}>
       <SettingsActionList
         items={report.checks.map((check) => ({
           label: check.key,
@@ -8430,7 +8364,7 @@ function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
       {report.recommendedNextAction ? (
         <SettingsCodeBlock label="Recommended next action">{report.recommendedNextAction}</SettingsCodeBlock>
       ) : null}
-    </SettingsPanel>
+    </NativeCard>
   );
 }
 
@@ -9652,13 +9586,10 @@ export {
   SettingsFilterBar,
   SettingsGrid,
   SettingsLoadWarnings,
-  SettingsMetricGrid,
   SettingsNotice,
   SettingsPageFrame,
-  SettingsPanel,
   SettingsPosturePanel,
   SettingsSectionShell,
-  SettingsSelectableList,
   SettingsStack,
   SettingsWizardSteps,
   descriptionForSettingsSection,

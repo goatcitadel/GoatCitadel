@@ -42,7 +42,7 @@ describe("approval lifecycle service", () => {
     host.storage.approvals.list = vi.fn(() => [expiredApproval, activeApproval]);
 
     expect(listApprovals(host, "pending").map((approval) => approval.approvalId)).toEqual(["approval-active"]);
-    expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100);
+    expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100, undefined);
   });
 
   it("creates approvals with explicit wait-run linkage and retained-stream metadata", async () => {

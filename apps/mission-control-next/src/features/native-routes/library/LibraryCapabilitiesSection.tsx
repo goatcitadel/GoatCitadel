@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { fetchCapabilityCatalog } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, QuickJumpCard } from "../NativeRoutePageLayout";
+import { ErrorState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import {
   deriveCapabilityStatus,
@@ -213,10 +214,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
                 />
                 <LibraryCodeBlock label="What it can do">{selectedCapability.summary}</LibraryCodeBlock>
                 {selectedCapability.reviewWarning ? (
-                  <div className="mc-next-directory-alert">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span>{selectedCapability.reviewWarning}</span>
-                  </div>
+                  <ErrorState size="inline" tone="caution" description={selectedCapability.reviewWarning} />
                 ) : null}
                 <div className="mc-next-technical-detail">
                   <LibraryCodeBlock label="Technical detail">

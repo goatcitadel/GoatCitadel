@@ -114,6 +114,7 @@ interface WorkspaceMemoryItemRow {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
+  workspace_id: string | null;
 }
 
 interface WorkspaceToolArtifactRow {
@@ -167,6 +168,7 @@ export class MemoryMaintenanceRepository {
   private readonly listEligibleSessionsStmt;
   private readonly listEligibleSessionsSinceStmt;
   private readonly listActiveMemoryItemsStmt;
+  private readonly listActiveMemoryItemsByWorkspaceStmt;
   private readonly listRecentToolArtifactsStmt;
   private readonly listRecentToolArtifactsSinceStmt;
 
@@ -534,10 +536,19 @@ export class MemoryMaintenanceRepository {
       LIMIT @limit
     `);
     this.listActiveMemoryItemsStmt = db.prepare(`
-      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, created_at, updated_at
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, created_at, updated_at, workspace_id
       FROM memory_items
       WHERE status = 'active'
         AND (expires_at IS NULL OR expires_at > @now)
+      ORDER BY pinned DESC, updated_at DESC
+      LIMIT @limit
+    `);
+    this.listActiveMemoryItemsByWorkspaceStmt = db.prepare(`
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, created_at, updated_at, workspace_id
+      FROM memory_items
+      WHERE status = 'active'
+        AND (expires_at IS NULL OR expires_at > @now)
+        AND (workspace_id = @workspaceId OR workspace_id IS NULL)
       ORDER BY pinned DESC, updated_at DESC
       LIMIT @limit
     `);
@@ -607,12 +618,23 @@ export class MemoryMaintenanceRepository {
     }));
   }
 
-  public listActiveMemoryItems(limit = 200): MemoryItemRecord[] {
+  public listActiveMemoryItems(limit = 200, workspaceId?: string): MemoryItemRecord[] {
     const nowIso = new Date().toISOString();
-    const rows = this.listActiveMemoryItemsStmt.all({
-      now: nowIso,
-      limit: clampLimit(limit, 500),
-    }) as WorkspaceMemoryItemRow[];
+    const scopedWorkspaceId = workspaceId?.trim();
+    // A workspace-scoped read returns that workspace's items plus global items
+    // (workspace_id IS NULL), so unscoped/global memory remains visible everywhere.
+    const rows = (
+      scopedWorkspaceId
+        ? this.listActiveMemoryItemsByWorkspaceStmt.all({
+            now: nowIso,
+            limit: clampLimit(limit, 500),
+            workspaceId: scopedWorkspaceId,
+          })
+        : this.listActiveMemoryItemsStmt.all({
+            now: nowIso,
+            limit: clampLimit(limit, 500),
+          })
+    ) as WorkspaceMemoryItemRow[];
     return rows.map((row) => ({
       itemId: row.item_id,
       namespace: row.namespace,
@@ -623,6 +645,7 @@ export class MemoryMaintenanceRepository {
       ttlOverrideSeconds: row.ttl_override_seconds ?? undefined,
       expiresAt: row.expires_at ?? undefined,
       status: "active",
+      workspaceId: row.workspace_id ?? undefined,
       lifecycleState: deriveMemoryItemLifecycleState(
         {
           status: "active",

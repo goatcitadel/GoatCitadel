@@ -10,7 +10,7 @@ import type {
   MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
-import { EmptyState, FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
+import { EmptyState, FilterPillGroup, NativeButton, StatusChip, type FilterPillOption } from "../primitives";
 import {
   describeQmdImpact,
   formatBytes,
@@ -24,6 +24,7 @@ import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/h
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
+import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import {
   buildProvenanceCoverage,
@@ -350,7 +351,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   return (
     <NativePageFrame
       area="library"
-      kicker="Library · Memory"
+      kicker={routeKicker(route)}
       title="Memory"
       description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture."
       loading={memory.loading}
@@ -464,22 +465,20 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       without durable memory writes.
                     </p>
                     <div className="mc-next-settings-button-row">
-                      <button
-                        type="button"
-                        className="mc-next-button"
+                      <NativeButton
+                        variant="default"
                         onClick={() => navigate({ area: "settings", section: "trust-policy", theme: route.theme })}
                       >
                         <Settings className="h-4 w-4" />
                         Open settings
-                      </button>
-                      <button
-                        type="button"
-                        className="mc-next-button"
+                      </NativeButton>
+                      <NativeButton
+                        variant="default"
                         onClick={() => navigate({ area: "chat", theme: route.theme })}
                       >
                         <MessageSquareText className="h-4 w-4" />
                         Continue without durable memory
-                      </button>
+                      </NativeButton>
                     </div>
                   </div>
                 ) : null}
@@ -615,9 +614,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </label>
               </div>
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
                   aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
                   onClick={() =>
@@ -632,16 +630,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   }
                 >
                   Save item
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-danger"
+                </NativeButton>
+                <NativeButton
+                  variant="destructive"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
                   aria-label={`Forget memory item ${selectedVisibleItem.title} — permanent`}
                   onClick={() => void memory.forgetSelectedItem()}
                 >
                   Forget item
-                </button>
+                </NativeButton>
               </div>
               <div className="mc-next-settings-code-block">
                 <span>Item history</span>
@@ -716,9 +713,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             />
           )}
           <div className="mc-next-runtime-actions">
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            <NativeButton
+              variant="secondary"
               aria-label="Refresh evidence envelopes"
               onClick={() => {
                 setEvidence((current) => ({ ...current, loading: true, error: null }));
@@ -737,7 +733,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             >
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
               Refresh evidence
-            </button>
+            </NativeButton>
           </div>
         </NativeCard>
         <NativeCard
@@ -782,25 +778,23 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         >
           <SectionTruthNotice message={sectionErrors?.memoryQualityIssues ?? null} />
           <div className="mc-next-runtime-actions" role="group" aria-label="Memory quality actions">
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               disabled={!memoryCanMutate || memory.busyKey === "memory-quality:scan"}
               aria-label="Run memory quality scan"
               onClick={() => void memory.scanMemoryQuality()}
             >
               <SearchCheck className="h-4 w-4" aria-hidden="true" />
               Scan quality
-            </button>
-            <button
-              type="button"
-              className="mc-next-button-secondary"
+            </NativeButton>
+            <NativeButton
+              variant="secondary"
               aria-label="Refresh memory quality issues"
               onClick={() => void memory.reload()}
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
               Refresh
-            </button>
+            </NativeButton>
           </div>
           <div className="mc-next-approvals-risk-strip">
             <StatusChip tone={highQualityIssueCount > 0 ? "critical" : "muted"}>
@@ -830,9 +824,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     role="group"
                     aria-label={`Resolve memory quality issue ${issue.summary}`}
                   >
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       disabled={!memoryCanMutate || issue.status === "resolved"}
                       aria-label={`Resolve memory quality issue ${issue.summary}`}
                       onClick={() =>
@@ -840,10 +833,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       }
                     >
                       Resolve
-                    </button>
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
                       disabled={!memoryCanMutate || issue.status === "dismissed"}
                       aria-label={`Dismiss memory quality issue ${issue.summary}`}
                       onClick={() =>
@@ -855,7 +847,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       }
                     >
                       Dismiss
-                    </button>
+                    </NativeButton>
                   </div>
                 </li>
               ))}
@@ -894,15 +886,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             </label>
           </div>
           <div className="mc-next-runtime-actions" role="group" aria-label="Recall benchmark actions">
-            <button
-              type="button"
-              className="mc-next-button"
+            <NativeButton
+              variant="default"
               disabled={recallBenchmark.loading}
               aria-label="Run recall benchmark"
               onClick={runRecallProbe}
             >
               Run probe
-            </button>
+            </NativeButton>
           </div>
           <SectionTruthNotice message={recallBenchmark.error} />
           {recallBenchmark.result ? (
@@ -1112,15 +1103,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   </span>
                   <DecisionJournalFacts decision={decision} />
                   {!decision.retrospective && decision.reviewAt ? (
-                    <button
-                      type="button"
-                      className="mc-next-button-secondary"
+                    <NativeButton
+                      variant="secondary"
                       disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
                       aria-label={`Record review for decision ${decision.title}`}
                       onClick={() => void memory.reviewDecision(decision.id)}
                     >
                       Record review
-                    </button>
+                    </NativeButton>
                   ) : null}
                 </li>
               ))}
@@ -1244,33 +1234,30 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </div>
               ) : null}
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
-                <button
-                  type="button"
-                  className="mc-next-button"
+                <NativeButton
+                  variant="default"
                   disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
                   aria-label="Run memory maintenance now"
                   onClick={() => void memory.runMaintenance()}
                 >
                   Run maintenance now
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button"
+                </NativeButton>
+                <NativeButton
+                  variant="default"
                   disabled={!maintenanceControlsReady || !memory.policyDirty || memory.busyKey === "maintenance:policy"}
                   aria-label="Save memory maintenance policy"
                   onClick={() => void memory.savePolicy()}
                 >
                   Save policy
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-button-secondary"
+                </NativeButton>
+                <NativeButton
+                  variant="secondary"
                   aria-label="Refresh memory maintenance state"
                   onClick={() => void memory.reload()}
                 >
                   <RefreshCw className="h-4 w-4" aria-hidden="true" />
                   Refresh
-                </button>
+                </NativeButton>
               </div>
               <div className="mc-next-runtime-metric-grid">
                 <div className="mc-next-runtime-metric">
@@ -1323,24 +1310,22 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                           role="group"
                           aria-label={`Resolve recommendation ${item.kind}`}
                         >
-                          <button
-                            type="button"
-                            className="mc-next-button-secondary"
+                          <NativeButton
+                            variant="secondary"
                             disabled={!maintenanceControlsReady}
                             aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
                           >
                             Accept
-                          </button>
-                          <button
-                            type="button"
-                            className="mc-next-button-secondary"
+                          </NativeButton>
+                          <NativeButton
+                            variant="secondary"
                             disabled={!maintenanceControlsReady}
                             aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
                           >
                             Reject
-                          </button>
+                          </NativeButton>
                         </div>
                       </li>
                     ))}
@@ -1408,9 +1393,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <p>Durable run: {memory.selectedRun.durableRunId ?? "none"}</p>
                     {memory.selectedRun.durableRunId ? (
                       <div className="mc-next-runtime-actions" role="group" aria-label="Memory run trace actions">
-                        <button
-                          type="button"
-                          className="mc-next-button-secondary"
+                        <NativeButton
+                          variant="secondary"
                           onClick={() =>
                             navigate({
                               area: "ops",
@@ -1423,7 +1407,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                         >
                           <Waypoints className="h-4 w-4" />
                           Open Run Detail
-                        </button>
+                        </NativeButton>
                       </div>
                     ) : null}
                     <p>

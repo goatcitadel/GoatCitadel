@@ -719,6 +719,7 @@ export class GatewayService {
   public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
+  public readonly secretStore: SecretStoreService;
   private readonly skillsService: SkillsService;
   public readonly orchestrationEngine: OrchestrationEngine;
   private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
@@ -871,8 +872,14 @@ export class GatewayService {
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      // Wrap-first Citadel enforcement. Off by default; when the operator sets
+      // GOATCITADEL_CITADEL_ENFORCEMENT=1 the engine treats each workspace as its
+      // Citadel and enforces that Citadel's Wards (deny-wins) — no per-call-site
+      // threading needed, since citadelId aliases the workspaceId requests already carry.
+      citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
     });
     const secretStore = new SecretStoreService();
+    this.secretStore = secretStore;
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -1827,21 +1834,22 @@ export class GatewayService {
         closedLeaseCount,
       });
     }
-    const flushedTranscriptCount = await this.eventIngestService.flushPendingTranscriptOutbox();
+    const [flushedTranscriptCount, restartedChannelDeliveries] = await Promise.all([
+      this.eventIngestService.flushPendingTranscriptOutbox(),
+      this.drainDueChannelDeliveries(),
+    ]);
     if (flushedTranscriptCount > 0) {
       log.info("flushed pending transcript outbox entries", {
         flushedTranscriptCount,
       });
     }
-    const restartedChannelDeliveries = await this.drainDueChannelDeliveries();
     if (restartedChannelDeliveries.length > 0) {
       log.info("drained due channel deliveries after restart", {
         deliveryCount: restartedChannelDeliveries.length,
       });
     }
-    await this.discordRuntimeService.sync();
     this.improvementService.markInterruptedDecisionReplayRuns();
-    await this.loadCronJobsFromConfig();
+    await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
     this.improvementService.ensureWeeklyImprovementCronJob();
     this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
@@ -1849,8 +1857,7 @@ export class GatewayService {
     this.ensureCostReportCronJob();
     this.ensureUpdateReviewCronJob();
     this.meshService.init();
-    await this.npuSidecar.init();
-    await this.llamaCppRuntime.init();
+    await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
     if (this.closing) {
       return;
     }
@@ -2319,14 +2326,32 @@ export class GatewayService {
     if (this.closing) {
       return;
     }
-    await this.runPrivateBetaBackupSchedulerIfDue();
-    await this.runMemoryFlushSchedulerIfDue();
-    await this.runCostReportSchedulerIfDue();
-    await this.runUpdateReviewSchedulerIfDue();
-    await this.curatorService.runCuratorWeeklyIfDue();
-    await this.cronAutomationService.runDueTaskCronJobs();
-    await this.memoryLifecycleService.runDueEvaluation();
-    await this.drainDueChannelDeliveries();
+    const tasks = [
+      { label: "private beta backups", run: () => this.runPrivateBetaBackupSchedulerIfDue() },
+      { label: "memory flush", run: () => this.runMemoryFlushSchedulerIfDue() },
+      { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
+      { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
+      { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
+      { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
+      { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
+      { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
+    ];
+    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    const failedLabels: string[] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        return;
+      }
+      const label = tasks[index]?.label ?? "unknown";
+      failedLabels.push(label);
+      log.error("maintenance scheduler task failed", {
+        task: label,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    });
+    if (failedLabels.length > 0) {
+      throw new Error(`Maintenance scheduler tick failed for: ${failedLabels.join(", ")}`);
+    }
   }
 
   /**
@@ -4721,6 +4746,7 @@ export class GatewayService {
         primaryModel: input.model ?? prepared.prefs.model,
         effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
         effectiveModel: input.model ?? prepared.prefs.model,
+        modelRouter: prepared.modelRouterDecision,
       },
       durable: {
         runId: run.runId,
@@ -5391,11 +5417,7 @@ export class GatewayService {
     return record;
   }
 
-  public listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
-    scopeRef?: string,
-    limit = 200,
-  ): ToolGrantRecord[] {
+  public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
@@ -5458,8 +5480,8 @@ export class GatewayService {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return this.approvalRuntime.listApprovals(status, limit);
+  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    return this.approvalRuntime.listApprovals(status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {

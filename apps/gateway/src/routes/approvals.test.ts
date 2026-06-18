@@ -29,6 +29,21 @@ describe("approvals routes", () => {
     app = null;
   });
 
+  it("forwards the workspaceId query filter to the approvals service", async () => {
+    const listApprovals = vi.fn(() => []);
+    const built = buildApp({ listApprovals });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals?status=pending&workspaceId=workspace-a",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listApprovals).toHaveBeenCalledWith("pending", 100, "workspace-a");
+  });
+
   it("blocks approval creation for non-loopback callers", async () => {
     const built = buildApp({
       createApproval: vi.fn(),

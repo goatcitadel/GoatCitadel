@@ -26,6 +26,7 @@ import {
   type RealtimeEvent,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
+  type ToolGrantScope,
   type ToolInvokeResult,
   ValidationError,
 } from "@goatcitadel/contracts";
@@ -141,7 +142,7 @@ export interface ApprovalLifecycleHost {
 
 export function listToolGrants(
   host: ApprovalLifecycleHost,
-  scope?: "global" | "session" | "workspace" | "agent" | "task",
+  scope?: ToolGrantScope,
   scopeRef?: string,
   limit = 200,
 ): ToolGrantRecord[] {
@@ -181,9 +182,10 @@ export function listApprovals(
   host: ApprovalLifecycleHost,
   status?: ApprovalRequest["status"],
   limit = 100,
+  workspaceId?: string,
 ): ApprovalRequest[] {
   return host.storage.approvals
-    .list(status, limit)
+    .list(status, limit, workspaceId)
     .filter((approval) => status !== "pending" || !isApprovalExpired(approval))
     .map((approval) =>
       withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),

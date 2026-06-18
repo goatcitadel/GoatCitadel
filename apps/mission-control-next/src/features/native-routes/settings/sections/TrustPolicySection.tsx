@@ -6,14 +6,13 @@ import {
   type TrustPolicyPosture,
   type TrustPolicySnapshot,
 } from "@goatcitadel/mission-control-shared/api/trust";
+import { StatusChip, type StatusChipTone } from "../../primitives";
 import {
   SettingsActionList,
   SettingsButtonRow,
   SettingsEmptyState,
   SettingsGrid,
   SettingsLoadWarnings,
-  SettingsMetricGrid,
-  SettingsPanel,
   SettingsSectionShell,
   SettingsStack,
   nativeLoad,
@@ -21,6 +20,8 @@ import {
   useAsyncLoad,
   type SettingsSectionProps,
 } from "../SettingsShared";
+import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeButton, NativeMetricGrid } from "../../primitives";
 
 type TrustPolicyDashboardStatus =
   | "ready"
@@ -102,7 +103,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid variant="detail-wide">
-        <SettingsPanel
+        <NativeCard density="compact" className="mc-next-settings-panel"
           title="Trust & Policy snapshot"
           subtitle={`Read-only dashboard for ${activeWorkspaceId} capability, tool, and source posture. Open owner surfaces to edit.`}
           stats={[
@@ -112,7 +113,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             { label: "Needs review", value: String(summary.blocked + summary.quarantined + summary.approval_required) },
           ]}
         >
-          <SettingsMetricGrid
+          <NativeMetricGrid
             items={[
               { label: "Ready", value: String(summary.ready), meta: "Callable under current policy" },
               { label: "Not callable", value: String(summary.not_callable), meta: "Inspectable or setup-only" },
@@ -124,14 +125,14 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             ]}
           />
           <SettingsButtonRow>
-            <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+            <NativeButton variant="secondary" onClick={() => void reload()}>
               <RefreshCw size={16} />
               Refresh snapshot
-            </button>
+            </NativeButton>
           </SettingsButtonRow>
-        </SettingsPanel>
+        </NativeCard>
         <SettingsStack>
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Edit owners"
             subtitle="This page does not replace the existing editors; it keeps their trust signals together."
           >
@@ -170,10 +171,10 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
               ]}
               maxHeight=""
             />
-          </SettingsPanel>
+          </NativeCard>
         </SettingsStack>
       </SettingsGrid>
-      <SettingsPanel
+      <NativeCard density="compact" className="mc-next-settings-panel"
         title="Trust matrix"
         subtitle="Capability, tool, and source rows with callable posture, grants, blockers, and last-use evidence."
         scrollBody
@@ -200,7 +201,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
         ) : (
           <TrustPolicyEmptyState hasIssues={Boolean(data?.issues.length)} />
         )}
-      </SettingsPanel>
+      </NativeCard>
     </SettingsSectionShell>
   );
 }
@@ -339,12 +340,26 @@ function TrustPolicyEmptyState({ hasIssues }: { hasIssues: boolean }) {
   );
 }
 
+function toneForTrustPolicyStatus(status: TrustPolicyDashboardStatus): StatusChipTone {
+  switch (status) {
+    case "ready":
+      return "success";
+    case "blocked":
+    case "quarantined":
+      return "critical";
+    case "approval_required":
+      return "warning";
+    case "experimental":
+      return "default";
+    case "not_callable":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
+
 function TrustPolicyStatusBadge({ status }: { status: TrustPolicyDashboardStatus }) {
-  return (
-    <span className="mc-next-trust-policy-status" data-status={status}>
-      {labelForTrustPolicyStatus(status)}
-    </span>
-  );
+  return <StatusChip tone={toneForTrustPolicyStatus(status)}>{labelForTrustPolicyStatus(status)}</StatusChip>;
 }
 
 function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined): TrustPolicyMatrixRow[] {

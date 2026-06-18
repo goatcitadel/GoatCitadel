@@ -30,6 +30,7 @@ export class CronJobRepository {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly listStmt;
+  private readonly listByCitadelStmt;
   private readonly deleteStmt;
 
   public constructor(
@@ -61,6 +62,9 @@ export class CronJobRepository {
 
     this.getStmt = db.prepare("SELECT * FROM cron_jobs WHERE job_id = @jobId");
     this.listStmt = db.prepare("SELECT * FROM cron_jobs ORDER BY job_id ASC");
+    this.listByCitadelStmt = db.prepare(
+      "SELECT * FROM cron_jobs WHERE citadel_id = @citadelId OR citadel_id IS NULL ORDER BY job_id ASC",
+    );
     this.deleteStmt = db.prepare("DELETE FROM cron_jobs WHERE job_id = @jobId");
   }
 
@@ -112,6 +116,17 @@ export class CronJobRepository {
 
   public list(): CronJobRecord[] {
     const rows = this.listStmt.all();
+    assertCronJobRows(rows);
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * List cron jobs visible to a Citadel: jobs scoped to that Citadel plus global
+   * (unscoped) jobs. The Watchtower enforcement point once a real citadel scope
+   * is threaded through scheduling.
+   */
+  public listByCitadel(citadelId: string): CronJobRecord[] {
+    const rows = this.listByCitadelStmt.all({ citadelId });
     assertCronJobRows(rows);
     return rows.map((row) => this.mapRow(row));
   }

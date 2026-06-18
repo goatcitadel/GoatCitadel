@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import {
   getErrorMessage,
@@ -11,16 +11,17 @@ import {
   SettingsFieldGrid,
   SettingsGrid,
   SettingsNotice,
-  SettingsPanel,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
+import { NativeCard } from "../../NativeRoutePageLayout";
 import {
   BUDGET_MODE_OPTIONS,
   describeBudgetMode,
   labelForBudgetMode,
   normalizeBudgetMode,
 } from "../../SettingsNativePage";
+import { ErrorState, NativeButton } from "../../primitives";
 
 export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const load = useCallback(() => fetchSettings(), []);
@@ -64,7 +65,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   }
 
   const costEvidencePanel = (
-    <SettingsPanel
+    <NativeCard density="compact" className="mc-next-settings-panel"
       title="Cost evidence"
       subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
     >
@@ -82,21 +83,16 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
           },
         ]}
       />
-    </SettingsPanel>
+    </NativeCard>
   );
 
   return (
     <>
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <ErrorState size="inline" description={error} /> : null}
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid>
         {data ? (
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Budget mode"
             subtitle="Set the default cost posture used by runtime settings and first-run defaults."
             stats={[
@@ -121,28 +117,26 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button"
+              <NativeButton
+                variant="default"
                 disabled={savingBudgetMode || budgetDraft === currentBudgetMode}
                 onClick={() => void saveBudgetMode()}
               >
                 <Save size={16} />
                 {savingBudgetMode ? "Saving..." : "Save budget mode"}
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
                 disabled={savingBudgetMode}
                 onClick={() => void reload()}
               >
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         ) : (
-          <SettingsPanel
+          <NativeCard density="compact" className="mc-next-settings-panel"
             title="Budget mode unavailable"
             subtitle="Budget mode could not be loaded, but cost and provider evidence remain reachable."
           >
@@ -150,12 +144,12 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
               Refresh the route to retry the settings read before changing the runtime budget posture.
             </p>
             <SettingsButtonRow>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+              <NativeButton variant="secondary" onClick={() => void reload()}>
                 <RefreshCw size={16} />
                 Refresh
-              </button>
+              </NativeButton>
             </SettingsButtonRow>
-          </SettingsPanel>
+          </NativeCard>
         )}
         {costEvidencePanel}
       </SettingsGrid>

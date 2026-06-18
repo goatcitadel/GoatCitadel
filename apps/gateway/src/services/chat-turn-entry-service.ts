@@ -281,6 +281,7 @@ async function runAgentSendChatMessageLlmPath(
       fullWebAccess: input.fullWebAccess,
       historyMessages: prepared.history,
       outputMessageId: prepared.assistantMessageId,
+      modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
     });
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
@@ -347,6 +348,7 @@ async function runAgentSendChatMessageLlmPath(
         fullWebAccess: input.fullWebAccess,
         historyMessages: retryHistory,
         outputMessageId: prepared.assistantMessageId,
+        modelRouter: prepared.modelRouterDecision,
         signal: controller.signal,
       });
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {

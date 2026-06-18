@@ -2,7 +2,7 @@ import type React from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
@@ -27,10 +27,10 @@ export function LibrarySectionShell({
         description={error}
         primaryAction={
           onRetry ? (
-            <button type="button" className="gc-button" onClick={() => onRetry()}>
+            <NativeButton variant="outline" onClick={() => onRetry()}>
               <RefreshCw className="h-4 w-4" />
               Retry
-            </button>
+            </NativeButton>
           ) : undefined
         }
       />
@@ -65,17 +65,8 @@ export function LibraryButtonRow({ children }: { children: React.ReactNode }) {
 }
 
 export function LibraryMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
+  // Delegates to the canonical NativeMetricGrid primitive.
+  return <NativeMetricGrid items={items} />;
 }
 
 export function LibrarySelectableList({
@@ -93,32 +84,16 @@ export function LibrarySelectableList({
   maxHeight?: string;
   compact?: boolean;
 }) {
-  if (!items.length) {
-    return <LibraryEmptyState label={emptyLabel} />;
-  }
+  // Delegates to the canonical NativeSelectableList primitive.
   return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
+    <NativeSelectableList
+      items={items}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      emptyLabel={emptyLabel}
+      maxHeight={maxHeight}
+      density={compact ? "compact" : "standard"}
+    />
   );
 }
 
@@ -273,10 +248,10 @@ export function LibraryLoadWarnings({ issues, onRetry }: { issues: NativeLoadIss
       />
       {onRetry ? (
         <div className="mc-next-settings-actions">
-          <button type="button" className="mc-next-button-secondary" onClick={() => void onRetry()}>
+          <NativeButton variant="secondary" onClick={() => void onRetry()}>
             <RefreshCw className="h-4 w-4" />
             Retry
-          </button>
+          </NativeButton>
         </div>
       ) : null}
     </NativeCard>

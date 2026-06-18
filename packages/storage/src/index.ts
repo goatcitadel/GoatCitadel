@@ -10,6 +10,7 @@ import { AuditLog } from "./audit-log.js";
 import { PostgresTranscriptLog } from "./postgres-transcript-log.js";
 import { PostgresAuditLog } from "./postgres-audit-log.js";
 import { ApprovalRepository } from "./approval-repo.js";
+import { CitadelRepository } from "./citadel-repo.js";
 import { CostLedgerRepository } from "./cost-ledger-repo.js";
 import { LlmEvalProofRepository } from "./llm-eval-proof-repo.js";
 import { LlmRuntimeMeasurementRepository } from "./llm-runtime-measurement-repo.js";
@@ -128,6 +129,7 @@ export class Storage {
   public readonly transcripts: TranscriptLog | PostgresTranscriptLog;
   public readonly audit: AuditLog | PostgresAuditLog;
   public readonly approvals: ApprovalRepository;
+  public readonly citadels: CitadelRepository;
   public readonly approvalEvents: ApprovalEventRepository;
   public readonly pendingApprovalActions: PendingApprovalActionRepository;
   public readonly remoteActionTokens: RemoteActionTokenRepository;
@@ -235,6 +237,7 @@ export class Storage {
       options.audit ??
       (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
     this.approvals = new ApprovalRepository(this.db);
+    this.citadels = new CitadelRepository(this.db);
     this.approvalEvents = new ApprovalEventRepository(this.db);
     this.pendingApprovalActions = new PendingApprovalActionRepository(this.db, {
       quarantine: this.stateValidationQuarantine,

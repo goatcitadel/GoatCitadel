@@ -1124,23 +1124,20 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.stopLlamaCppRuntime).toHaveBeenCalledTimes(1);
     expect(settingsMocks.refreshLlamaCppRuntime).toHaveBeenCalledTimes(1);
 
-    await change(runtime.root.findByProps({ value: "http://127.0.0.1:39110" }), "http://127.0.0.1:39111");
-    const npuCheckboxes = runtime.root.findAll((node) => node.type === "input" && node.props.type === "checkbox");
-    await change(npuCheckboxes[2]!, "", false);
-    await change(npuCheckboxes[3]!, "", true);
-    await click(buttons(runtime.root, "Save")[1]!);
+    // NPU sidecar support is retired from the shipped 1.0 runtime, so the
+    // "Local acceleration" panel no longer exposes a sidecar URL field,
+    // enable/auto-start toggles, or start/stop controls. It only normalizes the
+    // retired settings (forcing disabled, preserving the recorded sidecar URL)
+    // and refreshes status.
+    await click(findButton(runtime.root, "Normalize"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
       npu: {
         enabled: false,
-        autoStart: true,
-        sidecarUrl: "http://127.0.0.1:39111",
+        autoStart: false,
+        sidecarUrl: "http://127.0.0.1:39110",
       },
     });
-    await click(buttons(runtime.root, "Start")[2]!);
-    await click(buttons(runtime.root, "Stop")[2]!);
     await click(buttons(runtime.root, "Refresh")[1]!);
-    expect(settingsMocks.startNpuRuntime).toHaveBeenCalledTimes(1);
-    expect(settingsMocks.stopNpuRuntime).toHaveBeenCalledTimes(1);
     expect(settingsMocks.refreshNpuRuntime).toHaveBeenCalledTimes(1);
 
     await click(findButton(runtime.root, "Install starter model"));

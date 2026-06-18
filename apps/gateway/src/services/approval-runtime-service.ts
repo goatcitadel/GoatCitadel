@@ -6,6 +6,7 @@ import type {
   ApprovalResolveInput,
   ToolGrantCreateInput,
   ToolGrantRecord,
+  ToolGrantScope,
 } from "@goatcitadel/contracts";
 import type {
   ApprovalReplayResult,
@@ -17,7 +18,7 @@ import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 
 export interface ApprovalRuntime {
   listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
+    scope?: ToolGrantScope,
     scopeRef?: string,
     limit?: number,
   ): ToolGrantRecord[];
@@ -46,7 +47,7 @@ export interface ApprovalRuntime {
     resolutionNote?: string;
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
-  listApprovals(status?: ApprovalRequest["status"], limit?: number): ApprovalRequest[];
+  listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): ApprovalRequest[];
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
   getApprovalReplay(approvalId: string, replayedBy?: string): ApprovalReplayResult;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
@@ -71,7 +72,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
   public constructor(private readonly host: ApprovalLifecycleHost) {}
 
   public listToolGrants(
-    scope?: "global" | "session" | "workspace" | "agent" | "task",
+    scope?: ToolGrantScope,
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {
@@ -121,8 +122,8 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this.host, input);
   }
 
-  public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return approvalLifecycleService.listApprovals(this.host, status, limit);
+  public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
+    return approvalLifecycleService.listApprovals(this.host, status, limit, workspaceId);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {
