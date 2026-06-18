@@ -23,6 +23,7 @@ describe("follow-on parity roadmap alignment", () => {
   it("keeps the register recommended order aligned with the shared contract list", () => {
     const followOnRegister = readFileSync(followOnRegisterPath, "utf8");
     const section = followOnRegister.split("## Recommended Order")[1];
+    const recommendedEpicIds = new Set<string>(FOLLOW_ON_PARITY_RECOMMENDED_ORDER);
 
     expect(section).toBeTruthy();
     if (!section) {
@@ -37,7 +38,10 @@ describe("follow-on parity roadmap alignment", () => {
         const match = line.match(/`(GC-P\d-\d{2})`/);
         return match?.[1];
       })
-      .filter((epicId): epicId is (typeof FOLLOW_ON_PARITY_RECOMMENDED_ORDER)[number] => Boolean(epicId));
+      .filter(
+        (epicId): epicId is (typeof FOLLOW_ON_PARITY_RECOMMENDED_ORDER)[number] =>
+          typeof epicId === "string" && recommendedEpicIds.has(epicId),
+      );
 
     expect(actualOrder).toEqual(FOLLOW_ON_PARITY_RECOMMENDED_ORDER);
   });

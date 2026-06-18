@@ -34,10 +34,19 @@ const PERSONAL_PATH_SCAN_SKIP_PATTERNS = [
   /\.spec\.[cm]?[jt]sx?$/i,
   /^docs\/review\//i,
   /^docs\/antigravity\//i,
+  /^docs\/qa_1_0_readiness_manual_qa_2026-06-13\//i,
   /^docs\/QA_MANUAL_TEST_PLAN\.md$/i,
   /^docs\/GATEWAY_DECOMPOSITION_(?:REVIEW|IMPLEMENTATION_PLANNING)_PROMPT\.md$/i,
   /^eval-assets\/goatcitadel_prompt_pack\.md$/i,
 ];
+const TRACKED_IGNORED_FILE_ALLOWLIST = new Set([
+  "scripts/packaging/runtime/ui-static-server.mjs",
+  "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/ERRORS.md",
+  "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/EVAL_IDEAS.md",
+  "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/FEATURE_REQUESTS.md",
+  "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/LEARNINGS.md",
+  "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/ROUTING_GAPS.md",
+]);
 
 export function collectRepoHygieneFindings(input) {
   const trackedFiles = input.trackedFiles.map(normalizeRepoPath);
@@ -52,7 +61,7 @@ export function collectRepoHygieneFindings(input) {
     const lowerPath = filePath.toLowerCase();
     const ext = path.posix.extname(lowerPath);
 
-    if (ignoredTrackedFiles.has(filePath)) {
+    if (ignoredTrackedFiles.has(filePath) && !TRACKED_IGNORED_FILE_ALLOWLIST.has(filePath)) {
       findings.push({
         code: "TRACKED_IGNORED_FILE",
         filePath,

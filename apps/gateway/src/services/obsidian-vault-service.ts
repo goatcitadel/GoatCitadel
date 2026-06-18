@@ -391,7 +391,7 @@ async function resolveExistingAllowedRoots(vaultRoot: string, allowedSubpaths: s
         roots.push(realRoot);
       }
     } catch {
-      // Missing allowed roots simply have no searchable markdown files yet.
+      // Skip missing allowed roots; they simply have no searchable markdown files yet.
     }
   }
   return roots;

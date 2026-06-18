@@ -113,6 +113,14 @@
       "riskTier": "medium",
       "expectedTests": ["scripts/check-skill-catalog.mjs"],
       "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "extra:citadel-mason",
+      "owner": "library",
+      "source": "extra",
+      "riskTier": "medium",
+      "expectedTests": ["scripts/check-skill-catalog.mjs"],
+      "catalogExposure": "inspectable"
     }
   ]
 }

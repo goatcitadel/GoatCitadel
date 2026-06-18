@@ -105,6 +105,31 @@ describe("evaluateChannelInboundAccess", () => {
     });
   });
 
+  it("fails closed for malformed inbound access config while preserving raw allowlist evidence", () => {
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "allow_list", allowedSenders: ["U-Owner"] },
+        actorId: "U-Intruder",
+      }),
+    ).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "invalid_config",
+      allowedSenders: ["u-owner"],
+    });
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner", 42] },
+        actorId: "U-Owner",
+      }),
+    ).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "invalid_config",
+      allowedSenders: ["u-owner"],
+    });
+  });
+
   it("rejects missing or unlisted actors under allowlist mode", () => {
     expect(
       evaluateChannelInboundAccess({

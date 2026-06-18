@@ -384,6 +384,70 @@ describe("chat-thread-knowledge-service", () => {
     assert.equal(result.citations.length, 3);
   });
 
+  it("does not read or fail full-text attachments once the context budget is exhausted", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-budget-read-boundary");
+
+    for (const index of [1, 2, 3, 4]) {
+      const attachmentId = `budget-boundary-${index}`;
+      seedAttachment(storage, session.sessionId, attachmentId, {
+        fileName: `budget-boundary-${index}.md`,
+        mimeType: "text/markdown",
+        mediaType: "text",
+        extractPreview: undefined,
+        ocrText: undefined,
+        transcriptText: undefined,
+      });
+      storage.chatThreadKnowledgeAttachments.create({
+        attachmentId: `knowledge-budget-boundary-${index}`,
+        sessionId: session.sessionId,
+        sourceType: "file",
+        sourceRef: `budget-boundary-${index}.md`,
+        title: `Budget boundary ${index}`,
+        retrievalMode: "full_text",
+        ingestStatus: "ready",
+        chatAttachmentId: attachmentId,
+        chunkCount: 1,
+        createdAt: `2026-04-20T00:00:0${index}.000Z`,
+        updatedAt: `2026-04-20T00:00:0${index}.000Z`,
+      });
+    }
+
+    const orderedAttachments = storage.chatThreadKnowledgeAttachments
+      .listBySession(session.sessionId)
+      .filter((item) => item.retrievalMode === "full_text");
+    const skippedAttachment = orderedAttachments[3];
+    assert.ok(skippedAttachment);
+    assert.ok(skippedAttachment.chatAttachmentId);
+    const readAttachmentIds: string[] = [];
+    const host = createHost(storage, {
+      readChatAttachmentContent: async (attachmentId: string) => {
+        readAttachmentIds.push(attachmentId);
+        const record = storage.chatAttachments.get(attachmentId);
+        return {
+          bytes: Buffer.from(
+            attachmentId === skippedAttachment.chatAttachmentId ? "" : `${attachmentId} `.repeat(20_000),
+            "utf8",
+          ),
+          record,
+        };
+      },
+    });
+
+    const result = await resolveThreadKnowledgeContext(host, session.sessionId, "Summarize the docs");
+    const skippedAfterResolve = storage.chatThreadKnowledgeAttachments.get(skippedAttachment.attachmentId);
+
+    assert.equal(readAttachmentIds.length, 3);
+    assert.equal(readAttachmentIds.includes(skippedAttachment.chatAttachmentId), false);
+    assert.equal(skippedAfterResolve.ingestStatus, "ready");
+    assert.match(
+      result.systemInstruction ?? "",
+      new RegExp(`Skipped ${skippedAttachment.title} because the thread knowledge full-text budget was exhausted\\.`),
+    );
+  });
+
   it("retries a previously failed file attachment instead of returning the stale failed record", async () => {
     const { storage, rootDir } = await createStorage();
     roots.push(rootDir);

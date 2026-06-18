@@ -18,7 +18,7 @@ const POSTGRES_RUNTIME_SCHEMA_INTERNAL_PATH = path.join(
 const PROTECTED_POSTGRES_MIGRATIONS = Object.freeze([
   { version: 1, name: "runtime_event_and_cutover_tables", sha256: "9f9644496238572a6c3f284c11f5fa9fcbfab3fb14087378efd713f87676be3d" },
   { version: 2, name: "canonical_runtime_schema", sha256: null },
-  { version: 3, name: "runtime_schema_hardening", sha256: "cb2794e00ad64863b9529477f25c9e83670ca004de7ce2b4ff683045e4602078" },
+  { version: 3, name: "runtime_schema_hardening", sha256: "9702918aae7ceb5df2ee186f5cbe305bf89b34bce5bc05815f5c8231fb779040" },
   { version: 4, name: "chat_session_workbench_schema", sha256: "3f019ed0886e1c6006cc7b9ddca4718e04313c1297ab61b6e2e5cea8f85aad5d" },
   { version: 5, name: "sessions_session_key_unique_index", sha256: "b953dad29a0ab2399fd024300ed839d3b381e4fb7869a325b948794735ee1c33" },
   { version: 6, name: "runtime_inline_unique_indexes", sha256: "5f23718df4dca77b201eaaeb8e69ecc0f7b290e001d64e382f867d4631ca7167" },

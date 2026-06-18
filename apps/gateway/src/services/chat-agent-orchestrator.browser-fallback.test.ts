@@ -5678,16 +5678,6 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
             message: {
               role: "assistant",
               content: "Researcher\n- Checked source: National Weather Service.\n- Source: https://www.weather.gov/",
-              tool_calls: [
-                {
-                  id: "call-code-search-files-ignored-1",
-                  type: "function",
-                  function: {
-                    name: "code_search_files",
-                    arguments: JSON.stringify({ path: ".", query: "contracts" }),
-                  },
-                },
-              ],
             },
           },
         ],
@@ -5727,6 +5717,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
 
     expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
     expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("file.read_range");
+    expect(invokeTool).not.toHaveBeenCalled();
     expect(result.assistantContent).toContain("National Weather Service");
   });
 

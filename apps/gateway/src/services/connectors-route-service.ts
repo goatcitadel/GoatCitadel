@@ -62,6 +62,9 @@ export class ConnectorsRouteService {
     input: ConnectorEnrollmentCompleteRequest,
   ): ConnectorEnrollmentRecord {
     const enrollment = this.requireEnrollment(enrollmentId);
+    if (enrollment.status !== "challenge_issued" && enrollment.status !== "failed_signature") {
+      return stripEnrollmentSecret(enrollment);
+    }
     if (isEnrollmentExpired(enrollment)) {
       enrollment.status = "expired";
       enrollment.lastError = "Connector enrollment challenge expired.";

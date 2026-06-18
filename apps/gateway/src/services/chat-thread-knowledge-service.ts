@@ -315,15 +315,25 @@ export async function resolveThreadKnowledgeContext(
   let remainingFullTextBudget = FULL_TEXT_TOTAL_CHAR_BUDGET;
   const now = new Date().toISOString();
 
-  const fullTextAttachmentContents = await mapWithConcurrency(
-    fullTextAttachments,
-    FULL_TEXT_ATTACHMENT_READ_CONCURRENCY,
-    async (attachment) => ({
-      attachment,
-      text: await resolveFullTextAttachmentContent(deps, attachment),
-    }),
+  const { contents: fullTextAttachmentContents, skipped: budgetSkippedFullTextAttachments } =
+    await readFullTextAttachmentContentsWithinBudget(deps, fullTextAttachments);
+  const fullTextAttachmentContentById = new Map(
+    fullTextAttachmentContents.map((content) => [content.attachment.attachmentId, content] as const),
   );
-  for (const { attachment, text } of fullTextAttachmentContents) {
+  const budgetSkippedFullTextAttachmentIds = new Set(
+    budgetSkippedFullTextAttachments.map((attachment) => attachment.attachmentId),
+  );
+
+  for (const attachment of fullTextAttachments) {
+    if (budgetSkippedFullTextAttachmentIds.has(attachment.attachmentId)) {
+      notices.push(`Skipped ${attachment.title} because the thread knowledge full-text budget was exhausted.`);
+      continue;
+    }
+    const content = fullTextAttachmentContentById.get(attachment.attachmentId);
+    if (!content) {
+      continue;
+    }
+    const { text, maxChars } = content;
     if (!text.trim()) {
       deps.storage.chatThreadKnowledgeAttachments.patch(
         attachment.attachmentId,
@@ -342,7 +352,7 @@ export async function resolveThreadKnowledgeContext(
       notices.push(`Skipped ${attachment.title} because the thread knowledge full-text budget was exhausted.`);
       continue;
     }
-    const excerpt = text.slice(0, Math.min(FULL_TEXT_SOURCE_CHAR_LIMIT, remainingFullTextBudget)).trim();
+    const excerpt = text.slice(0, Math.min(maxChars, remainingFullTextBudget)).trim();
     if (!excerpt) {
       notices.push(`Skipped ${attachment.title} because the remaining full-text budget was exhausted.`);
       continue;
@@ -515,27 +525,55 @@ async function resolveFullTextAttachmentContent(
   return extractAttachmentKnowledgeText(deps, record);
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
+interface FullTextAttachmentContent {
+  attachment: ThreadKnowledgeAttachmentRecord;
+  index: number;
+  maxChars: number;
+  text: string;
+}
+
+async function readFullTextAttachmentContentsWithinBudget(
+  deps: ChatThreadKnowledgeDependencies,
+  attachments: ThreadKnowledgeAttachmentRecord[],
+): Promise<{ contents: FullTextAttachmentContent[]; skipped: ThreadKnowledgeAttachmentRecord[] }> {
+  if (attachments.length === 0) {
+    return { contents: [], skipped: [] };
   }
-  const results = new Array<R>(items.length);
+  const contents: FullTextAttachmentContent[] = [];
+  let reservableBudget = FULL_TEXT_TOTAL_CHAR_BUDGET;
   let cursor = 0;
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  const workerCount = Math.max(1, Math.min(FULL_TEXT_ATTACHMENT_READ_CONCURRENCY, attachments.length));
+
+  const nextJob = (): { attachment: ThreadKnowledgeAttachmentRecord; index: number; maxChars: number } | undefined => {
+    if (reservableBudget <= 0 || cursor >= attachments.length) {
+      return undefined;
+    }
+    const index = cursor;
+    cursor += 1;
+    const maxChars = Math.min(FULL_TEXT_SOURCE_CHAR_LIMIT, reservableBudget);
+    reservableBudget -= maxChars;
+    return { attachment: attachments[index] as ThreadKnowledgeAttachmentRecord, index, maxChars };
+  };
+
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        results[index] = await worker(items[index] as T, index);
+      for (;;) {
+        const job = nextJob();
+        if (!job) {
+          return;
+        }
+        const text = await resolveFullTextAttachmentContent(deps, job.attachment);
+        const usedChars = text.slice(0, job.maxChars).trim().length;
+        reservableBudget += job.maxChars - usedChars;
+        contents.push({ ...job, text });
       }
     }),
   );
-  return results;
+  const readIndexes = new Set(contents.map((content) => content.index));
+  return {
+    contents: contents.sort((left, right) => left.index - right.index),
+    skipped: attachments.filter((_, index) => !readIndexes.has(index)),
+  };
 }
 
 async function extractAttachmentKnowledgeText(
