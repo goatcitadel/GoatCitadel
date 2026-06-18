@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
-import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  exportObserveRunTrace,
+  fetchObserveRunTrace,
+  fetchOrchestrationRunTrace,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
 import { routeKicker } from "@next/app/route-model";
@@ -33,6 +37,13 @@ interface RunDetailModel {
   sideEffects: NativeListItem[];
   errors: NativeListItem[];
   evidenceStates: NativeListItem[];
+  orchestrationDecisions: NativeListItem[];
+  orchestrationPrompts: NativeListItem[];
+  orchestrationModels: NativeListItem[];
+  orchestrationPolicies: NativeListItem[];
+  orchestrationLineage: NativeListItem[];
+  orchestrationWaits: NativeListItem[];
+  orchestrationFailures: NativeListItem[];
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
@@ -62,12 +73,18 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       fetchObserveRunTrace(runId).then((value) => value as unknown as RunTracePayload),
       buildEmptyRunTrace(runId),
     );
+    const orchestrationTrace = await fetchOrchestrationRunTrace(runId).catch(() => null);
     return {
       issues: nativeLoadIssues([trace]),
       trace: trace.data,
+      orchestrationTrace,
     };
   }, [runId]);
-  const detail = buildRunDetailModel(data?.trace ?? buildEmptyRunTrace(runId ?? "unknown"), runId ?? "unknown");
+  const detail = buildRunDetailModel(
+    data?.trace ?? buildEmptyRunTrace(runId ?? "unknown"),
+    runId ?? "unknown",
+    data?.orchestrationTrace ?? null,
+  );
 
   const copyTraceExport = async () => {
     if (!runId) {
@@ -108,11 +125,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       ]}
       actions={
         <>
-          <NativeButton
-            variant="secondary"
-            onClick={() => void copyTraceExport()}
-            disabled={!runId || exporting}
-          >
+          <NativeButton variant="secondary" onClick={() => void copyTraceExport()} disabled={!runId || exporting}>
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy trace export"}
           </NativeButton>
@@ -150,6 +163,42 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
           />
         </NativeCard>
 
+        <NativeCard
+          title="Orchestration decisions"
+          subtitle="Decision trace events from the durable orchestration layer when this run has them."
+          stats={[
+            { label: "Decisions", value: String(detail.orchestrationDecisions.length) },
+            { label: "Policies", value: String(detail.orchestrationPolicies.length) },
+          ]}
+        >
+          <NativeList
+            density="compact"
+            items={detail.orchestrationDecisions}
+            emptyLabel="No orchestration decision trace is attached to this run."
+            maxHeight="min(46vh, 28rem)"
+          />
+        </NativeCard>
+
+        <NativeCard
+          title="Orchestration evidence"
+          subtitle="Prompt hashes, model choices, policy gates, lineage, waits, resumes, and failures."
+          className={detail.orchestrationFailures.length > 0 ? "mc-next-run-detail-attention" : undefined}
+        >
+          <NativeList
+            density="compact"
+            items={[
+              ...detail.orchestrationPrompts,
+              ...detail.orchestrationModels,
+              ...detail.orchestrationPolicies,
+              ...detail.orchestrationLineage,
+              ...detail.orchestrationWaits,
+              ...detail.orchestrationFailures,
+            ]}
+            emptyLabel="No orchestration evidence fields are attached to this run."
+            maxHeight="min(46vh, 28rem)"
+          />
+        </NativeCard>
+
         <NativeCard title="Memory and context" subtitle="Memory use is shown only when the trace records it.">
           {detail.memoryContext.length === 0 ? (
             <EmptyState size="compact" title="No memory/context evidence is attached to this trace." />
@@ -161,9 +210,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
               maxHeight="min(42vh, 26rem)"
             />
           )}
-          {detail.memoryWarning ? (
-            <ErrorState size="inline" tone="caution" description={detail.memoryWarning} />
-          ) : null}
+          {detail.memoryWarning ? <ErrorState size="inline" tone="caution" description={detail.memoryWarning} /> : null}
         </NativeCard>
 
         <NativeCard title="Tools and approvals" subtitle="Tool calls and approval checkpoints recorded for this run.">
@@ -314,8 +361,9 @@ function buildEmptyRunTrace(runId: string): RunTracePayload {
   };
 }
 
-function buildRunDetailModel(raw: unknown, fallbackRunId: string): RunDetailModel {
+function buildRunDetailModel(raw: unknown, fallbackRunId: string, orchestrationRaw: unknown = null): RunDetailModel {
   const record = asRecord(raw) ?? {};
+  const orchestrationTrace = asRecord(orchestrationRaw);
   const run = readRecord(record, "run") ?? readRecord(record, "durableRun");
   const trace = readRecord(record, "trace");
   const request = readRecord(record, "request");
@@ -389,6 +437,13 @@ function buildRunDetailModel(raw: unknown, fallbackRunId: string): RunDetailMode
     sideEffects: getSideEffectItems(record),
     errors: getErrorItems(record, trace, firstTurn, run),
     evidenceStates: getEvidenceStateItems(record),
+    orchestrationDecisions: getOrchestrationDecisionItems(orchestrationTrace),
+    orchestrationPrompts: getOrchestrationPromptItems(orchestrationTrace),
+    orchestrationModels: getOrchestrationModelItems(orchestrationTrace),
+    orchestrationPolicies: getOrchestrationPolicyItems(orchestrationTrace),
+    orchestrationLineage: getOrchestrationLineageItems(orchestrationTrace),
+    orchestrationWaits: getOrchestrationWaitItems(orchestrationTrace),
+    orchestrationFailures: getOrchestrationFailureItems(orchestrationTrace),
     inputTokens: readNumber(cost?.inputTokens) ?? readNumber(providerTotals?.inputTokens),
     outputTokens: readNumber(cost?.outputTokens) ?? readNumber(providerTotals?.outputTokens),
     costUsd:
@@ -407,7 +462,7 @@ function buildRunDetailModel(raw: unknown, fallbackRunId: string): RunDetailMode
       readString(run?.recoverySummary) ??
       "No replay or resume claim is made without trace evidence.",
     recoveryState: readString(run?.recoveryState),
-    raw,
+    raw: orchestrationTrace ? { observeTrace: raw, orchestrationTrace } : raw,
   };
 }
 
@@ -466,6 +521,184 @@ function getTimelineItems(
     });
   }
   return synthetic;
+}
+
+function getOrchestrationDecisionItems(trace?: RunTracePayload): NativeListItem[] {
+  return getOrchestrationDecisions(trace).map((decision) => {
+    const details = readRecord(decision, "details");
+    const phaseId = readString(decision.phaseId) ?? readString(details?.phaseId);
+    return {
+      title: readString(decision.kind) ?? readString(decision.eventType) ?? "orchestration decision",
+      meta: [
+        readString(decision.source),
+        readString(decision.eventType) ?? readString(decision.checkpointKind),
+        phaseId ? `phase ${phaseId}` : undefined,
+        formatDateTime(readString(decision.createdAt)),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      body:
+        readString(decision.summary) ??
+        [readString(details?.status), readString(details?.model), readString(details?.error)]
+          .filter(Boolean)
+          .join(" · "),
+    };
+  });
+}
+
+function getOrchestrationPromptItems(trace?: RunTracePayload): NativeListItem[] {
+  const prompts = new Map<string, NativeListItem>();
+  for (const decision of getOrchestrationDecisions(trace)) {
+    const details = readRecord(decision, "details");
+    const prompt = readRecord(details, "prompt");
+    const promptId = readString(prompt?.promptId);
+    const promptVersion = readString(prompt?.promptVersion);
+    const promptHash = readString(prompt?.promptHash);
+    if (!promptId || !promptHash) {
+      continue;
+    }
+    const key = `${promptId}:${promptVersion ?? "unknown"}:${promptHash}`;
+    prompts.set(key, {
+      title: `Prompt ${promptId}`,
+      meta: [promptVersion ? `version ${promptVersion}` : undefined, promptHash].filter(Boolean).join(" · "),
+      body: [
+        readString(decision.kind),
+        readString(details?.phaseId) ? `phase ${readString(details?.phaseId)}` : undefined,
+        readString(details?.model) ? `model ${readString(details?.model)}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+  return [...prompts.values()];
+}
+
+function getOrchestrationModelItems(trace?: RunTracePayload): NativeListItem[] {
+  const models = new Map<string, NativeListItem>();
+  for (const decision of getOrchestrationDecisions(trace)) {
+    const details = readRecord(decision, "details");
+    const model = readString(details?.model) ?? readString(details?.selectedModel);
+    const provider = readString(details?.providerId) ?? readString(details?.selectedProviderId);
+    if (!model && !provider) {
+      continue;
+    }
+    const phaseId = readString(decision.phaseId) ?? readString(details?.phaseId);
+    const key = [provider, model, phaseId, readString(decision.kind)].filter(Boolean).join(":");
+    models.set(key, {
+      title: model ? `Model ${model}` : "Model choice",
+      meta: [provider, phaseId ? `phase ${phaseId}` : undefined, readString(decision.kind)].filter(Boolean).join(" · "),
+      body: [
+        readNumber(details?.costUsd) !== undefined ? `cost ${formatCost(readNumber(details?.costUsd))}` : undefined,
+        readNumber(details?.inputTokens) !== undefined
+          ? `input ${formatCount(readNumber(details?.inputTokens))}`
+          : undefined,
+        readNumber(details?.outputTokens) !== undefined
+          ? `output ${formatCount(readNumber(details?.outputTokens))}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+  return [...models.values()];
+}
+
+function getOrchestrationPolicyItems(trace?: RunTracePayload): NativeListItem[] {
+  return getOrchestrationDecisions(trace)
+    .filter((decision) => readString(decision.kind) === "policy_checked")
+    .map((decision) => {
+      const details = readRecord(decision, "details");
+      const patchKeys = readArray(details?.patchKeys)
+        .map((value) => readString(value))
+        .filter((value): value is string => Boolean(value));
+      return {
+        title: readString(details?.gate) ?? "policy gate",
+        meta: [readString(details?.outcome), readString(details?.trigger), readString(details?.entityType)]
+          .filter(Boolean)
+          .join(" · "),
+        body: [
+          readString(details?.blockedReason),
+          patchKeys.length > 0 ? `patch keys ${patchKeys.join(", ")}` : undefined,
+          readBoolean(details?.approvalRequired) ? "approval required" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      };
+    });
+}
+
+function getOrchestrationLineageItems(trace?: RunTracePayload): NativeListItem[] {
+  return getOrchestrationDecisions(trace).flatMap((decision) => {
+    const details = readRecord(decision, "details");
+    const childSessionId = readString(details?.childSessionId);
+    const childTurnId = readString(details?.childTurnId);
+    const childRunId = readString(details?.childRunId);
+    if (!childSessionId && !childTurnId && !childRunId) {
+      return [];
+    }
+    return [
+      {
+        title: readString(details?.phaseId) ? `Child lineage for ${readString(details?.phaseId)}` : "Child lineage",
+        meta: readString(decision.kind),
+        body: [
+          childSessionId ? `session ${childSessionId}` : undefined,
+          childTurnId ? `turn ${childTurnId}` : undefined,
+          childRunId ? `run ${childRunId}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      },
+    ];
+  });
+}
+
+function getOrchestrationWaitItems(trace?: RunTracePayload): NativeListItem[] {
+  return getOrchestrationDecisions(trace).flatMap((decision) => {
+    const details = readRecord(decision, "details");
+    const kind = readString(decision.kind);
+    const approvalId = readString(details?.approvalId);
+    const resumeRequested = readBoolean(details?.resumeRequested);
+    if (kind !== "phase_wait_registered" && kind !== "run_resumed" && !approvalId && !resumeRequested) {
+      return [];
+    }
+    return [
+      {
+        title: kind === "run_resumed" || resumeRequested ? "Resume evidence" : "Wait evidence",
+        meta: [
+          kind,
+          readString(details?.phaseId) ? `phase ${readString(details?.phaseId)}` : undefined,
+          approvalId ? `approval ${approvalId}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        body: readString(decision.summary) ?? readString(details?.status),
+      },
+    ];
+  });
+}
+
+function getOrchestrationFailureItems(trace?: RunTracePayload): NativeListItem[] {
+  return getOrchestrationDecisions(trace).flatMap((decision) => {
+    const details = readRecord(decision, "details");
+    const kind = readString(decision.kind);
+    const error = readString(details?.error) ?? readString(details?.blockedReason);
+    if (!error && kind !== "phase_failed" && kind !== "run_failed" && kind !== "run_cancelled") {
+      return [];
+    }
+    return [
+      {
+        title: kind ?? "orchestration failure",
+        meta: [readString(details?.phaseId), readString(details?.status)].filter(Boolean).join(" · "),
+        body: error ?? readString(decision.summary) ?? "Failure reason was not recorded.",
+      },
+    ];
+  });
+}
+
+function getOrchestrationDecisions(trace?: RunTracePayload): RunTracePayload[] {
+  return readArray(trace?.decisions)
+    .map((item) => asRecord(item))
+    .filter((item): item is RunTracePayload => Boolean(item));
 }
 
 function getMemoryContextItems(record: RunTracePayload): NativeListItem[] {

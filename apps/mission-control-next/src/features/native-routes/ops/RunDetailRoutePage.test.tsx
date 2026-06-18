@@ -5,6 +5,7 @@ import { RunDetailRoutePage } from "./RunDetailRoutePage";
 const runTraceHarness = vi.hoisted(() => ({
   exportObserveRunTrace: vi.fn(),
   fetchObserveRunTrace: vi.fn(),
+  fetchOrchestrationRunTrace: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
@@ -15,12 +16,15 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     ...actual,
     exportObserveRunTrace: runTraceHarness.exportObserveRunTrace,
     fetchObserveRunTrace: runTraceHarness.fetchObserveRunTrace,
+    fetchOrchestrationRunTrace: runTraceHarness.fetchOrchestrationRunTrace,
   };
 });
 
 beforeEach(() => {
   runTraceHarness.exportObserveRunTrace.mockReset();
   runTraceHarness.fetchObserveRunTrace.mockReset();
+  runTraceHarness.fetchOrchestrationRunTrace.mockReset();
+  runTraceHarness.fetchOrchestrationRunTrace.mockRejectedValue(new Error("not an orchestration run"));
   Object.defineProperty(globalThis.navigator, "clipboard", {
     configurable: true,
     value: {
@@ -223,6 +227,125 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Artifacts not available");
     expect(text).toContain("Artifact index unavailable.");
     expect(text).toContain("Lifecycle trace not retained.");
+  });
+
+  it("surfaces orchestration decision trace evidence outside raw JSON", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      runId: "orch-run-1",
+      status: "paused",
+      mode: "orchestration.plan.execute",
+      request: { summary: "Run a durable Cowork orchestration.", requestedAt: "2026-05-02T19:00:00.000Z" },
+      artifacts: [],
+      timeline: [],
+      tools: [],
+      approvals: [],
+      sideEffects: [],
+      errors: [],
+    });
+    runTraceHarness.fetchOrchestrationRunTrace.mockResolvedValueOnce({
+      run: { runId: "orch-run-1", status: "paused", planId: "plan-1" },
+      decisions: [
+        {
+          decisionId: "event-policy",
+          runId: "orch-run-1",
+          kind: "policy_checked",
+          source: "run_event",
+          sourceId: "event-policy",
+          eventType: "policy.checked",
+          createdAt: "2026-05-02T19:00:01.000Z",
+          summary: "policy checked",
+          details: {
+            gate: "pre_phase",
+            trigger: "orchestration.phase.before",
+            entityType: "orchestration_phase",
+            outcome: "allowed",
+            phaseId: "phase-1",
+            approvalRequired: true,
+          },
+        },
+        {
+          decisionId: "event-phase",
+          runId: "orch-run-1",
+          kind: "phase_completed",
+          source: "run_event",
+          sourceId: "event-phase",
+          eventType: "phase.executed",
+          phaseId: "phase-1",
+          createdAt: "2026-05-02T19:00:02.000Z",
+          summary: "phase completed phase phase-1 model gpt-test",
+          details: {
+            phaseId: "phase-1",
+            model: "gpt-test",
+            costUsd: 0.25,
+            inputTokens: 100,
+            outputTokens: 40,
+            childSessionId: "child-session-1",
+            childTurnId: "turn-1",
+            childRunId: "child-run-1",
+            prompt: {
+              promptId: "orchestration.durable.phase.execute",
+              promptVersion: "v1",
+              promptHash: "sha256:abc123",
+            },
+          },
+        },
+        {
+          decisionId: "event-wait",
+          runId: "orch-run-1",
+          kind: "phase_wait_registered",
+          source: "run_event",
+          sourceId: "event-wait",
+          eventType: "phase.waiting",
+          phaseId: "phase-2",
+          createdAt: "2026-05-02T19:00:03.000Z",
+          summary: "phase wait registered phase phase-2",
+          details: { phaseId: "phase-2", approvalId: "approval-1", status: "waiting" },
+        },
+        {
+          decisionId: "event-resume",
+          runId: "orch-run-1",
+          kind: "run_resumed",
+          source: "run_event",
+          sourceId: "event-resume",
+          eventType: "phase.approved",
+          phaseId: "phase-2",
+          createdAt: "2026-05-02T19:00:04.000Z",
+          summary: "run resumed",
+          details: { phaseId: "phase-2", resumeRequested: true },
+        },
+        {
+          decisionId: "event-failure",
+          runId: "orch-run-1",
+          kind: "phase_failed",
+          source: "run_event",
+          sourceId: "event-failure",
+          eventType: "phase.failed",
+          phaseId: "phase-3",
+          createdAt: "2026-05-02T19:00:05.000Z",
+          summary: "phase failed",
+          details: { phaseId: "phase-3", status: "failed", error: "Child phase failed." },
+        },
+      ],
+    });
+
+    const text = await renderText("orch-run-1");
+
+    expect(runTraceHarness.fetchOrchestrationRunTrace).toHaveBeenCalledWith("orch-run-1");
+    expect(text).toContain("Orchestration decisions");
+    expect(text).toContain("policy_checked");
+    expect(text).toContain("pre_phase");
+    expect(text).toContain("approval required");
+    expect(text).toContain("Prompt orchestration.durable.phase.execute");
+    expect(text).toContain("sha256:abc123");
+    expect(text).toContain("Model gpt-test");
+    expect(text).toContain("cost $0.2500");
+    expect(text).toContain("Child lineage for phase-1");
+    expect(text).toContain("session child-session-1");
+    expect(text).toContain("Wait evidence");
+    expect(text).toContain("approval approval-1");
+    expect(text).toContain("Resume evidence");
+    expect(text).toContain("phase_failed");
+    expect(text).toContain("Child phase failed.");
   });
 
   it("does not treat normal empty trace groups as unavailable evidence", async () => {

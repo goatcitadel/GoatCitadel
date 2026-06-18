@@ -815,6 +815,7 @@ export {
   fetchOrchestrationRun,
   fetchOrchestrationRunCheckpoints,
   fetchOrchestrationRunContext,
+  fetchOrchestrationRunTrace,
   fetchProviderSecretStatus,
   generateLlmImage,
   fetchEvidenceEnvelopes,
