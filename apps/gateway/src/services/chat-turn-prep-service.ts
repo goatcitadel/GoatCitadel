@@ -68,6 +68,8 @@ import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 
+const CHAT_PLANNER_COMPLETION_TIMEOUT_MS = 2500;
+
 export interface ChatTurnRoute {
   channel: string;
   account: string;
@@ -368,6 +370,13 @@ export async function prepareAgentChatTurn(
     userMessage = options.existingUserMessage;
   }
 
+  const resolvedGuidancePromise = host.resolveRuntimeGuidance(workspaceId);
+  const threadKnowledgeContextPromise = host.resolveThreadKnowledgeContext(sessionId, content);
+  const sideChatSystemInstructionPromise = input.sideChatContext
+    ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
+    : Promise.resolve(undefined);
+  const sessionStatePromise = host.loadChatTurnSessionState(sessionId);
+
   const prefsOverride = applyChatModePresetToPatch({
     ...(input.prefsOverride ?? {}),
     mode: input.mode ?? input.prefsOverride?.mode,
@@ -402,16 +411,17 @@ export async function prepareAgentChatTurn(
     webMode: normalized.webMode ?? prefs.webMode,
     memoryMode: normalized.memoryMode ?? prefs.memoryMode,
   });
-  const resolvedGuidance = await host.resolveRuntimeGuidance(workspaceId);
-  const threadKnowledgeContext = await host.resolveThreadKnowledgeContext(sessionId, content);
   const personalityOverlay = prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
   const goalAdjustedBaseGuidance = applyGoalToGuidanceSystemInstruction({
     baseInstruction: undefined,
     goal: sessionMeta.pinnedGoal ?? null,
   });
-  const sideChatSystemInstruction = input.sideChatContext
-    ? await buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
-    : undefined;
+  const [resolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([
+    resolvedGuidancePromise,
+    threadKnowledgeContextPromise,
+    sideChatSystemInstructionPromise,
+    sessionStatePromise,
+  ]);
   const guidanceSystemInstruction = mergeChatSystemInstructions(
     goalAdjustedBaseGuidance || undefined,
     resolvedGuidance.systemInstruction,
@@ -425,7 +435,6 @@ export async function prepareAgentChatTurn(
     options?.extraSystemInstruction,
   );
 
-  const sessionState = await host.loadChatTurnSessionState(sessionId);
   const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
   const parentTurnId = hasExplicitParentTurnId ? options?.parentTurnId : sessionState.activeLeafTurnId;
   const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(sessionState.turnLineageById, parentTurnId) : [];
@@ -716,11 +725,15 @@ export async function generatePreparedExecutionPlanDraft(
     objective: prepared.content,
     advisoryOnly,
   });
+  if ((prepared.normalized?.speedMode ?? prepared.prefs.speedMode) === "fast") {
+    return fallbackDraft;
+  }
   try {
     const completion = await host.createChatCompletion({
       providerId: prepared.prefs.providerId,
       model: prepared.prefs.model,
       stream: false,
+      timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
       memory: {
         enabled: false,
         mode: "off",

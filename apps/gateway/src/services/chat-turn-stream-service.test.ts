@@ -463,6 +463,46 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("emits capability_upgrade_suggestion in-band on a normal completion", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createModeOrchestrationResolution()) as never;
+    host.collectCapabilityUpgradeSuggestions = vi.fn(async () => [
+      {
+        suggestionId: "capability-1",
+        capabilityId: "shell.exec",
+        label: "Shell execution",
+        reason: "A follow-up step would benefit from shell access.",
+      },
+    ]) as never;
+    host.createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { content: "Planner output" }, finish_reason: "stop" }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { content: "Final host-ready checklist." }, finish_reason: "stop" }],
+      }) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createModeOrchestrationResolution(),
+    )) {
+      chunks.push(chunk);
+    }
+
+    // Regression guard: capability suggestions must be emitted in-band on normal
+    // completions (not silently deferred to an unconsumed realtime event).
+    expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "capability_upgrade_suggestion")).toBe(true);
+  });
+
   it("persists advisory-only orchestration plans without delegated execution", async () => {
     const host = createHost();
     const progress: Array<Record<string, unknown>> = [];
