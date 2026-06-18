@@ -1026,6 +1026,31 @@ export interface ChatOrchestrationProviderSelection {
   role: string;
   providerId?: string;
   model?: string;
+  modelSelection?: ChatOrchestrationModelSelectionEvidence;
+}
+
+export interface ChatOrchestrationModelCandidateEvidence {
+  providerId: string;
+  model: string;
+  score: number;
+  selected: boolean;
+  reasons: string[];
+}
+
+export interface ChatOrchestrationModelSelectionEvidence {
+  mode: "report_only";
+  role: string;
+  providerPreference: ChatOrchestrationProviderPreference;
+  selectedProviderId?: string;
+  selectedModel?: string;
+  reasons: string[];
+  inputs: {
+    capabilityCount: number;
+    usedProviderCount: number;
+    explicitProviderPin: boolean;
+    explicitModelPin: boolean;
+  };
+  candidates: ChatOrchestrationModelCandidateEvidence[];
 }
 
 export interface ChatOrchestrationSpecialistSelection {
