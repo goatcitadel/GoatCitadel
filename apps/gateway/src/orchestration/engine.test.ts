@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCitationRecord, ChatCompletionResponse, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
+import type {
+  ChatCitationRecord,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatSessionPrefsRecord,
+} from "@goatcitadel/contracts";
 import { executeOrchestrationPlan } from "./engine.js";
 import type { OrchestrationPlan, OrchestrationTaskInput } from "./types.js";
 
@@ -357,6 +362,90 @@ describe("orchestration engine", () => {
 
     expect(createChatCompletion).toHaveBeenCalledTimes(6);
     expect(maxActive).toBe(4);
+  });
+
+  it("waits for every parallel stage handoff before starting the downstream synthesis stage", async () => {
+    const started: string[] = [];
+    let resolveFirst: ((response: ChatCompletionResponse) => void) | undefined;
+    let resolveSecond: ((response: ChatCompletionResponse) => void) | undefined;
+    const createChatCompletion = vi.fn((request: ChatCompletionRequest) => {
+      const userPrompt = String(request.messages.at(-1)?.content ?? "");
+      if (userPrompt.includes("First independent branch")) {
+        started.push("first");
+        return new Promise<ChatCompletionResponse>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      if (userPrompt.includes("Second independent branch")) {
+        started.push("second");
+        return new Promise<ChatCompletionResponse>((resolve) => {
+          resolveSecond = resolve;
+        });
+      }
+      started.push("synthesis");
+      return Promise.resolve(createCompletion("Merged synthesis"));
+    });
+
+    const execution = executeOrchestrationPlan({
+      task: createTask(),
+      plan: {
+        ...createPlan(),
+        workflowTemplate: "cowork.plan.work.synthesize",
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "worker",
+            label: "First",
+            stage: 1,
+            objective: "First independent branch",
+            parallelizable: true,
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "worker",
+            label: "Second",
+            stage: 1,
+            objective: "Second independent branch",
+            parallelizable: true,
+            providerId: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+          {
+            stepId: "step-3",
+            index: 2,
+            role: "synthesizer",
+            label: "Synthesis",
+            stage: 2,
+            objective: "Merge upstream handoffs",
+            parallelizable: false,
+            dependsOnStepIds: ["step-1", "step-2"],
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+          },
+        ],
+      },
+      callbacks: {
+        createChatCompletion,
+      },
+      concurrency: 2,
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual(["first", "second"]);
+
+    resolveFirst?.(createCompletion("First branch complete"));
+    await Promise.resolve();
+    expect(started).toEqual(["first", "second"]);
+
+    resolveSecond?.(createCompletion("Second branch complete"));
+    const result = await execution;
+
+    expect(started).toEqual(["first", "second", "synthesis"]);
+    expect(result.finalOutput).toBe("Merged synthesis");
   });
 
   it("passes expanded labeled handoffs into workstream synthesis and repairs missing sections", async () => {

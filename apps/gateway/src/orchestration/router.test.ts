@@ -239,6 +239,39 @@ describe("orchestration router", () => {
     expectPlanDependenciesValid(plan);
   });
 
+  it("keeps route decision evidence aligned with the generated Cowork step plan", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Research the market, compare the strongest options, and synthesize a recommendation.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+        orchestrationParallelism: "parallel",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+
+    expect(plan.routeDecision).toMatchObject({
+      modePolicy: "cowork",
+      workflowTemplate: plan.workflowTemplate,
+      hidden: false,
+      visibility: "explicit",
+      parallelism: "parallel",
+      triggerReason: "cowork_explicit_orchestration",
+    });
+    expect(plan.routeDecision.selectedRoles).toEqual(plan.steps.map((step) => step.label ?? step.role));
+    expect(plan.routeDecision.selectedProviders).toEqual(
+      plan.steps.map((step) => ({
+        role: step.label ?? step.role,
+        providerId: step.providerId,
+        model: step.model,
+      })),
+    );
+    expectPlanDependenciesValid(plan);
+  });
+
   it("suggests presentation creation for Cowork deck deliverables", () => {
     const input = createInput({
       mode: "cowork",

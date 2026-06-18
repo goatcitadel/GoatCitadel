@@ -879,6 +879,43 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
   });
 
+  it("records durable execution checkpoints and run events in lifecycle order", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("paused");
+    expect(vi.mocked(host.createCheckpoint).mock.calls.map(([input]) => input.checkpointKind)).toEqual([
+      "run_started",
+      "phase_executed",
+      "run_paused_for_approval",
+    ]);
+    expect(vi.mocked(host.storage.orchestration.appendRunEvent).mock.calls.map(([, eventType]) => eventType)).toEqual([
+      "run.started",
+      "phase.started",
+      "phase.executed",
+      "phase.advanced",
+      "run.paused_for_approval",
+    ]);
+    expect(vi.mocked(host.recordDurableTimelineEvent).mock.calls.map(([, eventType]) => eventType)).toEqual([
+      "run_started",
+    ]);
+  });
+
   it("rejects durable orchestration payloads that point at a different workspace than the run", async () => {
     const base = createHost();
     const getPlan = vi.fn(() => buildPlan());
