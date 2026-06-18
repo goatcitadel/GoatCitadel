@@ -8,6 +8,7 @@ import type {
   ChatTurnLifecycleStatus,
   ChatOrchestrationSpecialistSelection,
   ChatOrchestrationIntensity,
+  ChatOrchestrationModelSelectionEvidence,
   ChatOrchestrationRouteDecision,
   ChatOrchestrationVisibility,
   ChatSessionPrefsRecord,
@@ -69,6 +70,7 @@ export interface OrchestrationStepPlan {
   delegatedRole?: string;
   providerId?: string;
   model?: string;
+  modelSelection?: ChatOrchestrationModelSelectionEvidence;
   specialistCandidate?: ChatOrchestrationSpecialistSelection;
 }
 

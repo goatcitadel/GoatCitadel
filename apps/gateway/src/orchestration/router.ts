@@ -1,7 +1,6 @@
 import type {
   ChatMode,
   ChatOrchestrationParallelism,
-  ChatOrchestrationProviderPreference,
   ChatOrchestrationRouteDecision,
   ChatOrchestrationVisibility,
   ChatSessionPrefsRecord,
@@ -10,6 +9,7 @@ import { CHAT_MODE_POLICY } from "./policies/chat-policy.js";
 import { CODE_MODE_POLICY } from "./policies/code-policy.js";
 import { COWORK_MODE_POLICY } from "./policies/cowork-policy.js";
 import { hasLiveDataKeywords, shouldPreferToolBackedChatPath } from "./live-data-detect.js";
+import { selectOrchestrationModel } from "./model-selector.js";
 import type {
   ModeOrchestrationPolicy,
   OrchestrationPlan,
@@ -93,6 +93,7 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
       role: step.label ?? step.role,
       providerId: step.providerId,
       model: step.model,
+      modelSelection: step.modelSelection,
     })),
     triggerReason: deriveTriggerReason(task.mode, task.objective),
   };
@@ -206,7 +207,8 @@ function buildWorkstreamStepPlans(
     .filter((stepId): stepId is string => Boolean(stepId));
   const workstreamSteps = labels.map((label, index) => {
     const role: OrchestrationRole = isReviewWorkstream(label) ? "reviewer" : "worker";
-    const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
+    const selection = selectOrchestrationModel({ role, capabilities, prefs: input.prefs, usedProviders });
+    const provider = selection.selected;
     if (!input.prefs.providerId && provider?.providerId) {
       usedProviders.add(provider.providerId);
     }
@@ -226,10 +228,17 @@ function buildWorkstreamStepPlans(
       delegatedRole: label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
+      modelSelection: selection.evidence,
     } satisfies OrchestrationStepPlan;
   });
 
-  const finalProvider = selectProviderForRole("synthesizer", capabilities, input.prefs, usedProviders);
+  const finalSelection = selectOrchestrationModel({
+    role: "synthesizer",
+    capabilities,
+    prefs: input.prefs,
+    usedProviders,
+  });
+  const finalProvider = finalSelection.selected;
   return [
     ...workstreamSteps,
     {
@@ -247,6 +256,7 @@ function buildWorkstreamStepPlans(
       delegatedRole: "Synthesis",
       providerId: finalProvider?.providerId ?? input.prefs.providerId,
       model: finalProvider?.model ?? input.prefs.model,
+      modelSelection: finalSelection.evidence,
     },
   ];
 }
@@ -280,7 +290,8 @@ function buildStepPlans(
   const useStageDependencies = parallelStages && input.workflowTemplate === "cowork.research.synthesize.critic";
   const stages = resolveWorkflowStages(roles, input.workflowTemplate, useStageDependencies);
   return roles.map((role, index) => {
-    const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
+    const selection = selectOrchestrationModel({ role, capabilities, prefs: input.prefs, usedProviders });
+    const provider = selection.selected;
     if (!input.prefs.providerId && provider?.providerId) {
       usedProviders.add(provider.providerId);
     }
@@ -316,6 +327,7 @@ function buildStepPlans(
       delegatedRole: input.prefs.mode === "chat" ? undefined : label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
+      modelSelection: selection.evidence,
     };
   });
 }
@@ -515,101 +527,6 @@ function hasArtifactNegation(normalized: string): boolean {
   return /\b(?:do\s+not|don't|dont|no|without)\s+(?:create|make|build|generate|save|write|produce|deliver|export|file|artifact)\b/.test(
     normalized,
   );
-}
-
-function selectProviderForRole(
-  role: OrchestrationRole,
-  capabilities: ProviderCapabilityRecord[],
-  prefs: ChatSessionPrefsRecord,
-  usedProviders: Set<string>,
-): ProviderCapabilityRecord | undefined {
-  if (prefs.providerId) {
-    return (
-      capabilities.find((item) => item.providerId === prefs.providerId) ??
-      (prefs.model
-        ? {
-            providerId: prefs.providerId,
-            model: prefs.model,
-            qualityScore: 0.75,
-            speedScore: 0.75,
-            costScore: 0.75,
-            reliabilityScore: 0.75,
-            reasoningScore: 0.75,
-            codingScore: 0.75,
-            reviewScore: 0.75,
-            synthesisScore: 0.75,
-            researchScore: 0.75,
-            jsonScore: 0.75,
-            toolScore: 0.75,
-            longContextScore: 0.75,
-          }
-        : undefined)
-    );
-  }
-
-  const ranked = [...capabilities]
-    .map((candidate) => ({
-      candidate,
-      score: scoreCandidateForRole(
-        candidate,
-        role,
-        prefs.orchestrationProviderPreference,
-        usedProviders.has(candidate.providerId),
-      ),
-    }))
-    .sort((left, right) => right.score - left.score);
-  return ranked.at(0)?.candidate;
-}
-
-function scoreCandidateForRole(
-  candidate: ProviderCapabilityRecord,
-  role: OrchestrationRole,
-  providerPreference: ChatOrchestrationProviderPreference,
-  alreadyUsed: boolean,
-): number {
-  let roleScore = candidate.qualityScore;
-  switch (role) {
-    case "answerer":
-      roleScore = (candidate.reasoningScore + candidate.synthesisScore) / 2;
-      break;
-    case "researcher":
-      roleScore = (candidate.researchScore + candidate.reasoningScore) / 2;
-      break;
-    case "planner":
-      roleScore = (candidate.reasoningScore + candidate.synthesisScore) / 2;
-      break;
-    case "worker":
-      roleScore = (candidate.reasoningScore + candidate.toolScore) / 2;
-      break;
-    case "synthesizer":
-      roleScore = candidate.synthesisScore;
-      break;
-    case "critic":
-    case "reviewer":
-      roleScore = candidate.reviewScore;
-      break;
-    case "coder":
-      roleScore = candidate.codingScore;
-      break;
-    case "qa-validator":
-      roleScore = (candidate.reviewScore + candidate.reasoningScore) / 2;
-      break;
-  }
-
-  const preferenceBonus = (() => {
-    switch (providerPreference) {
-      case "speed":
-        return candidate.speedScore * 0.18;
-      case "quality":
-        return candidate.qualityScore * 0.18;
-      case "low_cost":
-        return candidate.costScore * 0.18;
-      default:
-        return candidate.qualityScore * 0.08 + candidate.speedScore * 0.05 + candidate.costScore * 0.05;
-    }
-  })();
-  const diversityPenalty = alreadyUsed ? 0.03 : 0;
-  return roleScore + preferenceBonus + candidate.reliabilityScore * 0.12 - diversityPenalty;
 }
 
 function clampVisibility(

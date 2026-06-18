@@ -267,8 +267,20 @@ describe("orchestration router", () => {
         role: step.label ?? step.role,
         providerId: step.providerId,
         model: step.model,
+        modelSelection: step.modelSelection,
       })),
     );
+    expect(plan.steps[0]?.modelSelection).toMatchObject({
+      mode: "report_only",
+      role: plan.steps[0]?.role,
+      providerPreference: "balanced",
+      inputs: {
+        capabilityCount: input.capabilities.length,
+        explicitProviderPin: false,
+      },
+    });
+    expect(plan.steps[0]?.modelSelection?.candidates.length).toBeGreaterThan(0);
+    expect(plan.steps[0]?.modelSelection?.candidates.some((candidate) => candidate.selected)).toBe(true);
     expectPlanDependenciesValid(plan);
   });
 
@@ -469,6 +481,8 @@ describe("orchestration router", () => {
     ]);
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.providerId === "moonshot")).toBe(true);
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.model === "kimi-k2.6")).toBe(true);
+    expect(plan.steps.every((step) => step.modelSelection?.reasons.includes("explicit_provider_pin"))).toBe(true);
+    expect(plan.steps.every((step) => step.modelSelection?.inputs.explicitModelPin)).toBe(true);
   });
 
   it("keeps dependencies valid after maxSteps truncation", () => {
