@@ -73,9 +73,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
       fetchObserveRunTrace(runId).then((value) => value as unknown as RunTracePayload),
       buildEmptyRunTrace(runId),
     );
-    const orchestrationTrace = await fetchOrchestrationRunTrace(runId)
-      .then((value) => value as unknown as RunTracePayload)
-      .catch(() => null);
+    const orchestrationTrace = await fetchOrchestrationRunTrace(runId).catch(() => null);
     return {
       issues: nativeLoadIssues([trace]),
       trace: trace.data,
