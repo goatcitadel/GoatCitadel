@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
-import { __internal } from "./app.js";
+import { __internal, buildApp } from "./app.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 
@@ -183,6 +187,13 @@ describe("gateway app config helpers", () => {
     expect(__internal.isLoopbackRateLimitAllowlisted("::ffff:7f00:1")).toBe(true);
     expect(__internal.isLoopbackRateLimitAllowlisted("192.168.1.5")).toBe(false);
   });
+
+  it("calculates request durations only when a start timestamp is present", () => {
+    expect(__internal.calculateRequestDurationMs({})).toBeUndefined();
+    expect(__internal.calculateRequestDurationMs({ requestStartedAtMs: performance.now() - 5 })).toBeGreaterThanOrEqual(
+      0,
+    );
+  });
 });
 
 describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
@@ -247,3 +258,96 @@ describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
     expect(reply.getHeader("Strict-Transport-Security")).toBe("max-age=63072000; includeSubDomains");
   });
 });
+
+describe("gateway request diagnostics", () => {
+  const envKeys = [
+    "GATEWAY_HOST",
+    "GOATCITADEL_ALLOWED_ORIGINS",
+    "GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS",
+    "GOATCITADEL_AUTH_MODE",
+    "GOATCITADEL_DATABASE_DRIVER",
+    "GOATCITADEL_DEV_DIAGNOSTICS_ENABLED",
+    "GOATCITADEL_RATE_LIMIT_ENABLED",
+    "GOATCITADEL_ROOT_DIR",
+  ] as const;
+  const originalEnv = new Map<string, string | undefined>(envKeys.map((key) => [key, process.env[key]]));
+  const tempRoots: string[] = [];
+
+  afterEach(async () => {
+    for (const key of envKeys) {
+      const original = originalEnv.get(key);
+      if (original === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = original;
+      }
+    }
+    for (const root of tempRoots.splice(0)) {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records request finish diagnostics with duration and correlation evidence", async () => {
+    configureDiagnosticsGateway(tempRoots);
+    const app = await buildApp();
+    try {
+      const correlationId = "diag-corr-1";
+      const health = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: {
+          "x-goatcitadel-correlation-id": correlationId,
+        },
+      });
+      expect(health.statusCode).toBe(200);
+
+      const diagnostics = await app.inject({
+        method: "GET",
+        url: "/api/v1/dev/diagnostics?category=api&limit=20",
+      });
+      expect(diagnostics.statusCode).toBe(200);
+      const body = diagnostics.json() as {
+        items: Array<{
+          event: string;
+          route?: string;
+          correlationId?: string;
+          durationMs?: number;
+          context?: Record<string, unknown>;
+        }>;
+      };
+      const finish = body.items.find(
+        (item) => item.event === "request.finish" && item.route === "/health" && item.correlationId === correlationId,
+      );
+
+      expect(finish).toBeDefined();
+      expect(finish?.durationMs).toEqual(expect.any(Number));
+      expect(finish?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(finish?.context).toMatchObject({
+        method: "GET",
+        statusCode: 200,
+        durationMs: finish?.durationMs,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+function configureDiagnosticsGateway(tempRoots: string[]): void {
+  process.env.GATEWAY_HOST = "127.0.0.1";
+  process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
+  process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS = "false";
+  process.env.GOATCITADEL_AUTH_MODE = "none";
+  process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
+  process.env.GOATCITADEL_DEV_DIAGNOSTICS_ENABLED = "true";
+  process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
+  process.env.GOATCITADEL_ROOT_DIR = createDiagnosticsConfigRoot(tempRoots);
+}
+
+function createDiagnosticsConfigRoot(tempRoots: string[]): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-diagnostics-"));
+  const repoRoot = path.resolve(process.cwd(), "../..");
+  fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
+  tempRoots.push(root);
+  return root;
+}

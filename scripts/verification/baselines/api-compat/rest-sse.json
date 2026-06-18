@@ -109,7 +109,7 @@
     },
     "/health": {
       "get": {
-        "responses": ["200"]
+        "responses": ["200", "503"]
       }
     }
   },

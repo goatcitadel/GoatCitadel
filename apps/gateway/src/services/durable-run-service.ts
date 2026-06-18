@@ -21,6 +21,7 @@ import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.
 export interface DurableRunServiceContext {
   readonly config: GatewayRuntimeConfig;
   readonly storage: Storage;
+  readonly logger?: DurableRunServiceLogger;
   publishRealtime(
     eventType: string,
     source: string,
@@ -28,6 +29,13 @@ export interface DurableRunServiceContext {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+}
+
+export interface DurableRunServiceLogger {
+  info(data: unknown, msg: string): void;
+  debug(data: unknown, msg: string): void;
+  warn(data: unknown, msg: string): void;
+  error(data: unknown, msg: string): void;
 }
 
 const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
@@ -279,15 +287,9 @@ export class DurableRunService {
     }
   }
 
-  private resolveLogger(): {
-    info: (data: unknown, msg: string) => void;
-    debug: (data: unknown, msg: string) => void;
-    warn: (data: unknown, msg: string) => void;
-    error: (data: unknown, msg: string) => void;
-  } {
-    const candidate = (this.ctx as unknown as { logger?: unknown }).logger;
-    if (candidate && typeof (candidate as { info?: unknown }).info === "function") {
-      return candidate as ReturnType<DurableRunService["resolveLogger"]>;
+  private resolveLogger(): DurableRunServiceLogger {
+    if (this.ctx.logger) {
+      return this.ctx.logger;
     }
     return {
       info: () => {},
