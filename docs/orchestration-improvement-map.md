@@ -1,6 +1,6 @@
 # Orchestration Improvement Map
 
-Last updated: 2026-06-18
+Last updated: 2026-06-17
 
 This map turns the external orchestration-layer research into GoatCitadel-native work. The important conclusion is that GoatCitadel should strengthen its existing TypeScript/Gateway runtime instead of replacing it with a new orchestration framework.
 
