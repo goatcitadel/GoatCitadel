@@ -266,9 +266,15 @@ function buildGetRequestCoalescingKey(path: string, method: string, init?: Reque
     return undefined;
   }
   const headers = init?.headers ? Array.from(new Headers(init.headers).entries()).sort() : [];
+  // Auth headers are injected later by buildGatewayHeaders() at dispatch time, so they are
+  // absent from `init` here. They MUST be part of the coalescing key: otherwise two callers
+  // with different auth state — e.g. an unauthenticated preflight still in flight when the
+  // user signs in — would share one in-flight promise and receive each other's response.
+  const authHeaders = Object.entries(readGatewayAuthHeaders(path)).sort();
   return JSON.stringify({
     path,
     headers,
+    authHeaders,
     cache: init?.cache,
     credentials: init?.credentials,
     mode: init?.mode,

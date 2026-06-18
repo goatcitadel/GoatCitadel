@@ -368,4 +368,58 @@ describe("client-core", () => {
       startupTiming: { outcome: "ready" },
     });
   });
+
+  it("coalesces concurrent identical GET requests into a single fetch", async () => {
+    const resolvers: Array<(value: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = request<{ ok: boolean }>("/api/v1/coalesce/concurrent");
+    const second = request<{ ok: boolean }>("/api/v1/coalesce/concurrent");
+
+    // Both callers share one in-flight network request.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolvers.forEach((resolve) => resolve(jsonResponse({ success: true, data: { ok: true } })));
+    await expect(first).resolves.toEqual({ ok: true });
+    await expect(second).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not coalesce GET requests across an auth state change", async () => {
+    const resolvers: Array<(value: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Fired while unauthenticated; stays in flight.
+    const unauthenticated = request<{ ok: boolean }>("/api/v1/coalesce/auth-change");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // User signs in while the first request is still pending.
+    persistGatewayAuthState({ mode: "token", token: "session-token" }, "persistent");
+
+    // Same path, now authenticated — must NOT receive the unauthenticated in-flight promise.
+    const authenticated = request<{ ok: boolean }>("/api/v1/coalesce/auth-change");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const firstHeaders = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    const secondHeaders = (fetchMock.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
+    expect(firstHeaders.Authorization).toBeUndefined();
+    expect(secondHeaders.Authorization).toBe("Bearer session-token");
+
+    resolvers.forEach((resolve) => resolve(jsonResponse({ success: true, data: { ok: true } })));
+    await Promise.all([unauthenticated, authenticated]);
+  });
+
+  it("clears the coalescing entry once a GET settles so later calls re-fetch", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { seq: 1 } }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { seq: 2 } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request<{ seq: number }>("/api/v1/coalesce/sequential")).resolves.toEqual({ seq: 1 });
+    await expect(request<{ seq: number }>("/api/v1/coalesce/sequential")).resolves.toEqual({ seq: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
