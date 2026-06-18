@@ -1834,21 +1834,22 @@ export class GatewayService {
         closedLeaseCount,
       });
     }
-    const flushedTranscriptCount = await this.eventIngestService.flushPendingTranscriptOutbox();
+    const [flushedTranscriptCount, restartedChannelDeliveries] = await Promise.all([
+      this.eventIngestService.flushPendingTranscriptOutbox(),
+      this.drainDueChannelDeliveries(),
+    ]);
     if (flushedTranscriptCount > 0) {
       log.info("flushed pending transcript outbox entries", {
         flushedTranscriptCount,
       });
     }
-    const restartedChannelDeliveries = await this.drainDueChannelDeliveries();
     if (restartedChannelDeliveries.length > 0) {
       log.info("drained due channel deliveries after restart", {
         deliveryCount: restartedChannelDeliveries.length,
       });
     }
-    await this.discordRuntimeService.sync();
     this.improvementService.markInterruptedDecisionReplayRuns();
-    await this.loadCronJobsFromConfig();
+    await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
     this.improvementService.ensureWeeklyImprovementCronJob();
     this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
@@ -1856,8 +1857,7 @@ export class GatewayService {
     this.ensureCostReportCronJob();
     this.ensureUpdateReviewCronJob();
     this.meshService.init();
-    await this.npuSidecar.init();
-    await this.llamaCppRuntime.init();
+    await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
     if (this.closing) {
       return;
     }
@@ -2326,14 +2326,32 @@ export class GatewayService {
     if (this.closing) {
       return;
     }
-    await this.runPrivateBetaBackupSchedulerIfDue();
-    await this.runMemoryFlushSchedulerIfDue();
-    await this.runCostReportSchedulerIfDue();
-    await this.runUpdateReviewSchedulerIfDue();
-    await this.curatorService.runCuratorWeeklyIfDue();
-    await this.cronAutomationService.runDueTaskCronJobs();
-    await this.memoryLifecycleService.runDueEvaluation();
-    await this.drainDueChannelDeliveries();
+    const tasks = [
+      { label: "private beta backups", run: () => this.runPrivateBetaBackupSchedulerIfDue() },
+      { label: "memory flush", run: () => this.runMemoryFlushSchedulerIfDue() },
+      { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
+      { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
+      { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
+      { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
+      { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
+      { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
+    ];
+    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    const failedLabels: string[] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        return;
+      }
+      const label = tasks[index]?.label ?? "unknown";
+      failedLabels.push(label);
+      log.error("maintenance scheduler task failed", {
+        task: label,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    });
+    if (failedLabels.length > 0) {
+      throw new Error(`Maintenance scheduler tick failed for: ${failedLabels.join(", ")}`);
+    }
   }
 
   /**
