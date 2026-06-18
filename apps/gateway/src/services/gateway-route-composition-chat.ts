@@ -198,7 +198,8 @@ export function composeChatRouteDependencies(
     editChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.editChatTurn(sessionId, turnId, input),
     editChatTurnStream: (sessionId, turnId, input, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input, { abortSignal: signal }),
-    getChatThread: (sessionId) => chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId),
+    getChatThread: (sessionId, options) =>
+      chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId, options),
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),

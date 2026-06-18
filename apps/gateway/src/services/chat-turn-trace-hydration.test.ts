@@ -64,6 +64,36 @@ describe("chat turn trace hydration", () => {
     ]);
   });
 
+  it("only hydrates decision trace records when explicitly requested", () => {
+    const storage = createStorage({
+      traces: [createTrace({ turnId: "turn-1" }), createTrace({ turnId: "turn-2" })],
+    });
+    storage.runtimeDecisionTraces = {
+      list: vi.fn(() => [
+        {
+          decisionId: "decision-1",
+          kind: "workflow_choice",
+          scope: { sessionId: "session-1", turnId: "turn-1" },
+          selected: "Use Cowork orchestration",
+          rationale: "The turn requested supervised implementation.",
+          alternatives: [],
+          signals: [],
+          evidenceRefs: [],
+          createdAt: "2026-06-18T00:00:00.000Z",
+        },
+      ]),
+    } as never;
+
+    const defaultHydrated = listHydratedChatTurnTraces({ storage }, "session-1", 2);
+    const explicitHydrated = listHydratedChatTurnTraces({ storage }, "session-1", 2, {
+      includeDecisionTrace: true,
+    });
+
+    expect(defaultHydrated[0]?.decisionTrace).toBeUndefined();
+    expect(explicitHydrated[0]?.decisionTrace?.[0]?.decisionId).toBe("decision-1");
+    expect(storage.runtimeDecisionTraces.list).toHaveBeenCalledWith({ sessionId: "session-1", limit: 100 });
+  });
+
   it("builds child turn maps and reuses persisted active leaves", () => {
     const storage = createStorage();
     const traces = [
@@ -209,5 +239,6 @@ function createStorage(options: { traces?: ChatTurnTraceRecord[] } = {}) {
     chatTurnTraces: {
       listBySession: vi.fn(() => options.traces ?? []),
     },
+    runtimeDecisionTraces: undefined,
   } as never;
 }

@@ -45,6 +45,24 @@ describe("chat message routes", () => {
     });
   });
 
+  it("requests compact decision trace hydration only when explicitly included", async () => {
+    const getChatThread = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turns: [],
+    }));
+    app = Fastify();
+    app.decorate("services", { chatMessages: { getChatThread } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/thread?includeDecisionTrace=true",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getChatThread).toHaveBeenCalledWith("sess-1", { includeDecisionTrace: true });
+  });
+
   it("returns migration guidance for the removed POST /messages write path", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();

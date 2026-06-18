@@ -9,6 +9,7 @@ export * from "./evidence.js";
 export * from "./memory-write-gate.js";
 export * from "./session.js";
 export * from "./runtime-lifecycle.js";
+export * from "./runtime-decision-trace.js";
 export * from "./policy.js";
 export * from "./approvals.js";
 export * from "./skills.js";

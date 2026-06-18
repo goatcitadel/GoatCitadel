@@ -53,6 +53,17 @@ describe("sqlite schema migrations", () => {
     const toolInvocationIndexes = db.prepare("PRAGMA index_list(tool_invocations)").all() as Array<{ name: string }>;
     assert.ok(toolInvocationIndexes.some((index) => index.name === "idx_tool_invocations_session_time"));
 
+    const decisionTraceColumns = db.prepare("PRAGMA table_info(runtime_decision_traces)").all() as Array<{
+      name: string;
+    }>;
+    assert.ok(decisionTraceColumns.some((column) => column.name === "payload_json"));
+
+    const decisionTraceIndexes = db.prepare("PRAGMA index_list(runtime_decision_traces)").all() as Array<{
+      name: string;
+    }>;
+    assert.ok(decisionTraceIndexes.some((index) => index.name === "idx_runtime_decision_traces_session_turn"));
+    assert.ok(decisionTraceIndexes.some((index) => index.name === "idx_runtime_decision_traces_run"));
+
     const policyBlockIndexes = db.prepare("PRAGMA index_list(policy_blocks)").all() as Array<{ name: string }>;
     assert.ok(policyBlockIndexes.some((index) => index.name === "idx_policy_blocks_session_time"));
 

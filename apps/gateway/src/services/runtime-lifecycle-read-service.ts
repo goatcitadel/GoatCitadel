@@ -11,6 +11,8 @@ import type {
   RuntimeLifecycleFieldSource,
   RuntimeLifecycleQuery,
   RuntimeLifecycleResponse,
+  RuntimeDecisionTraceQuery,
+  RuntimeDecisionTraceRecord,
   SessionMeta,
   SessionSummary,
   TaskRecord,
@@ -56,6 +58,7 @@ export interface RuntimeLifecycleReadHost {
   getSessionSummary(sessionId: string): Promise<SessionSummary>;
   listChatSessionProactiveRuns(sessionId: string, limit: number): ProactiveRunRecord[];
   listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
+  listRuntimeDecisionTraces(query: RuntimeDecisionTraceQuery): RuntimeDecisionTraceRecord[];
 }
 
 export class RuntimeLifecycleReadService {
@@ -233,6 +236,7 @@ export class RuntimeLifecycleReadService {
         : this.host.findDurableRunMaybe(approvalWaitDurableRunId)
       : undefined;
     const approvalEffects = state.approvalId ? this.host.listApprovalEffects(state.approvalId) : [];
+    const decisionTrace = this.loadDecisionTrace(state);
 
     return {
       query: {
@@ -349,6 +353,7 @@ export class RuntimeLifecycleReadService {
         childTurnId: step.childTurnId,
         durableRunId: step.durableRunId,
       })),
+      decisionTrace,
     };
   }
 
@@ -413,6 +418,42 @@ export class RuntimeLifecycleReadService {
       return true;
     }
     return false;
+  }
+
+  private loadDecisionTrace(state: LifecycleResolutionState): RuntimeDecisionTraceRecord[] {
+    const byId = new Map<string, RuntimeDecisionTraceRecord>();
+    const queries: RuntimeDecisionTraceQuery[] = [];
+    if (state.sessionId) {
+      queries.push({ sessionId: state.sessionId, limit: 300 });
+    }
+    if (state.turnId) {
+      queries.push({ turnId: state.turnId, limit: 200 });
+    }
+    if (state.runId) {
+      queries.push({ runId: state.runId, limit: 200 });
+    }
+    if (state.executionPlanId) {
+      queries.push({ planId: state.executionPlanId, limit: 200 });
+    }
+    if (state.approvalId) {
+      queries.push({ approvalId: state.approvalId, limit: 200 });
+    }
+    if (state.taskId) {
+      queries.push({ taskId: state.taskId, limit: 200 });
+    }
+
+    for (const query of queries) {
+      for (const record of this.host.listRuntimeDecisionTraces(query)) {
+        byId.set(record.decisionId, record);
+      }
+    }
+
+    return [...byId.values()]
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.decisionId.localeCompare(right.decisionId),
+      )
+      .slice(0, 300);
   }
 }
 

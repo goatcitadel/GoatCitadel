@@ -28,6 +28,7 @@ describe("RuntimeLifecycleExportService", () => {
       delegationSteps: [{ stepId: "step-1" }],
       proactiveRuns: [{ runId: "proactive-1" }],
       approvalEffects: [{ effectId: "effect-1" }],
+      decisionTrace: [{ decisionId: "decision-1" }],
     }));
     const service = new RuntimeLifecycleExportService({
       getRuntimeLifecycle,
@@ -93,6 +94,7 @@ describe("RuntimeLifecycleExportService", () => {
       delegationStepCount: 1,
       proactiveRunCount: 1,
       approvalEffectCount: 1,
+      decisionTraceCount: 1,
       transcriptEventCount: 1,
       timelineEventCount: 1,
     });
@@ -132,6 +134,7 @@ describe("RuntimeLifecycleExportService", () => {
         delegationSteps: [],
         proactiveRuns: [],
         approvalEffects: [],
+        decisionTrace: [],
       })),
       getTranscript: vi.fn(async () => {
         calls.push("transcript:start");
@@ -210,6 +213,7 @@ describe("RuntimeLifecycleExportService", () => {
         delegationSteps: [],
         proactiveRuns: [],
         approvalEffects: [],
+        decisionTrace: [],
       })),
       getTranscript: vi.fn(async () => []),
       listSessionTimeline: vi.fn(async () => []),

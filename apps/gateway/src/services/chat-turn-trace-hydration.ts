@@ -12,21 +12,30 @@ import { resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 type ChatTurnTraceHydrationStorage = Pick<
   Storage,
   "chatExecutionPlans" | "chatSessionBranchState" | "chatToolRuns" | "chatTurnTraces"
->;
+> &
+  Partial<Pick<Storage, "runtimeDecisionTraces">>;
 
 export interface ChatTurnTraceHydrationDependencies {
   readonly storage: ChatTurnTraceHydrationStorage;
+}
+
+export interface ChatTurnTraceHydrationOptions {
+  includeDecisionTrace?: boolean;
 }
 
 export function createHydratedChatTurnTrace(
   deps: ChatTurnTraceHydrationDependencies,
   turnId: string,
   trace: ChatTurnTraceRecord,
+  options?: ChatTurnTraceHydrationOptions,
 ): ChatTurnTraceRecord {
   return {
     ...trace,
     toolRuns: deps.storage.chatToolRuns.listByTurn(turnId),
     citations: trace.citations ?? [],
+    ...(options?.includeDecisionTrace && deps.storage.runtimeDecisionTraces
+      ? { decisionTrace: deps.storage.runtimeDecisionTraces.list({ turnId, limit: 100 }) }
+      : {}),
   };
 }
 
@@ -34,20 +43,39 @@ export function listHydratedChatTurnTraces(
   deps: ChatTurnTraceHydrationDependencies,
   sessionId: string,
   limit = 200,
+  options?: ChatTurnTraceHydrationOptions,
 ): ChatTurnTraceRecord[] {
   const traces = deps.storage.chatTurnTraces.listBySession(sessionId, limit);
-  return hydrateChatTurnTraces(deps, traces);
+  return hydrateChatTurnTraces(deps, traces, options);
 }
 
 export function hydrateChatTurnTraces(
   deps: ChatTurnTraceHydrationDependencies,
   traces: ChatTurnTraceRecord[],
+  options?: ChatTurnTraceHydrationOptions,
 ): ChatTurnTraceRecord[] {
   const toolRunsByTurnId = deps.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
+  const executionPlansById = loadExecutionPlansById(deps, traces);
+  const decisionTraceByTurnId = options?.includeDecisionTrace ? loadDecisionTraceByTurnId(deps, traces) : new Map();
+
+  return traces.map((trace) => ({
+    ...trace,
+    toolRuns: toolRunsByTurnId.get(trace.turnId) ?? [],
+    citations: trace.citations ?? [],
+    executionPlan: trace.executionPlanId ? executionPlansById.get(trace.executionPlanId) : undefined,
+    decisionTrace: decisionTraceByTurnId.get(trace.turnId) ?? trace.decisionTrace,
+    capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions,
+  }));
+}
+
+function loadExecutionPlansById(
+  deps: ChatTurnTraceHydrationDependencies,
+  traces: ChatTurnTraceRecord[],
+): Map<string, ReturnType<Storage["chatExecutionPlans"]["get"]>> {
   const executionPlanIds = [
     ...new Set(traces.map((trace) => trace.executionPlanId).filter((item): item is string => Boolean(item))),
   ];
-  const executionPlansById = new Map(
+  return new Map(
     executionPlanIds
       .map((executionPlanId) => {
         try {
@@ -56,17 +84,37 @@ export function hydrateChatTurnTraces(
           return undefined;
         }
       })
-      .filter((entry): entry is readonly [string, ReturnType<typeof deps.storage.chatExecutionPlans.get>] =>
-        Boolean(entry),
-      ),
+      .filter((entry): entry is readonly [string, ReturnType<Storage["chatExecutionPlans"]["get"]>] => Boolean(entry)),
   );
-  return traces.map((trace) => ({
-    ...trace,
-    toolRuns: toolRunsByTurnId.get(trace.turnId) ?? [],
-    citations: trace.citations ?? [],
-    executionPlan: trace.executionPlanId ? executionPlansById.get(trace.executionPlanId) : undefined,
-    capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions,
-  }));
+}
+
+function loadDecisionTraceByTurnId(
+  deps: ChatTurnTraceHydrationDependencies,
+  traces: ChatTurnTraceRecord[],
+): Map<string, NonNullable<ChatTurnTraceRecord["decisionTrace"]>> {
+  if (!deps.storage.runtimeDecisionTraces || traces.length === 0) {
+    return new Map();
+  }
+  const sessionId = traces[0]?.sessionId;
+  if (!sessionId) {
+    return new Map();
+  }
+  const records = deps.storage.runtimeDecisionTraces.list({
+    sessionId,
+    limit: Math.max(100, Math.min(traces.length * 40, 500)),
+  });
+  const requestedTurnIds = new Set(traces.map((trace) => trace.turnId));
+  const grouped = new Map<string, NonNullable<ChatTurnTraceRecord["decisionTrace"]>>();
+  for (const record of records) {
+    const turnId = record.scope.turnId;
+    if (!turnId || !requestedTurnIds.has(turnId)) {
+      continue;
+    }
+    const current = grouped.get(turnId) ?? [];
+    current.push(record);
+    grouped.set(turnId, current);
+  }
+  return grouped;
 }
 
 export function buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<string, string[]> {

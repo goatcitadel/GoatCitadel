@@ -26,6 +26,7 @@ import type {
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   MobileContextEnvelope,
+  RuntimeDecisionTraceAppendInput,
   SessionMeta,
 } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
@@ -141,6 +142,7 @@ export interface ChatTurnPrepHost {
     state?: ChatTurnSessionState,
   ): Promise<ChatCompletionRequest["messages"]>;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
 }
 
 export interface PreparedAgentChatTurn {
@@ -484,7 +486,7 @@ export async function prepareAgentChatTurn(
     }
   }
 
-  return {
+  const prepared: PreparedAgentChatTurn = {
     session,
     route,
     workspaceId,
@@ -507,6 +509,113 @@ export async function prepareAgentChatTurn(
     sourceTurnId: options?.sourceTurnId,
     effectiveToolAutonomy,
   };
+  recordPreparedTurnDecisions(host, prepared, {
+    projectId,
+    missingRequiredProjectBinding,
+    guidanceFileCount: resolvedGuidance.globalFilesUsed.length + resolvedGuidance.workspaceFilesUsed.length,
+    threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
+  });
+  return prepared;
+}
+
+function recordPreparedTurnDecisions(
+  host: ChatTurnPrepHost,
+  prepared: PreparedAgentChatTurn,
+  input: {
+    projectId?: string;
+    missingRequiredProjectBinding: boolean;
+    guidanceFileCount: number;
+    threadKnowledgeCitationCount: number;
+  },
+): void {
+  if (!host.recordRuntimeDecision) {
+    return;
+  }
+  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
+  const memoryMode = prepared.normalized.memoryMode ?? prepared.prefs.memoryMode;
+  safeRecordRuntimeDecision(host, {
+    kind: "chat_turn_prepared",
+    scope: {
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+    },
+    selected: `${mode} turn prepared`,
+    rationale:
+      "Gateway normalized operator preferences, branch lineage, model-router hints, guidance, and context before dispatch.",
+    alternatives: [
+      {
+        label: "Code execution posture",
+        outcome: input.missingRequiredProjectBinding ? "blocked" : "deferred",
+        reasonNotChosen: input.missingRequiredProjectBinding
+          ? "Code mode requires a bound project before execution-heavy work."
+          : "Execution posture is governed later by tool, approval, and policy checks.",
+        blockedBy: input.missingRequiredProjectBinding ? "missing_project_binding" : undefined,
+      },
+    ],
+    signals: [
+      { source: "operator_pref", key: "mode", value: mode, weight: "strong" },
+      { source: "operator_pref", key: "web_mode", value: webMode, weight: "informational" },
+      { source: "operator_pref", key: "memory_mode", value: memoryMode, weight: "informational" },
+      { source: "operator_pref", key: "thinking_level", value: prepared.prefs.thinkingLevel, weight: "informational" },
+      { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy, weight: "strong" },
+      {
+        source: "model_router",
+        key: "route",
+        value: prepared.modelRouterDecision.route,
+        weight: prepared.modelRouterDecision.requiresTools ? "strong" : "informational",
+      },
+      {
+        source: "model_router",
+        key: "confidence_score",
+        value: prepared.modelRouterDecision.confidenceScore,
+        weight: "informational",
+      },
+      {
+        source: "context",
+        key: "project_bound",
+        value: Boolean(input.projectId),
+        weight: input.missingRequiredProjectBinding ? "blocking" : "informational",
+      },
+    ],
+    evidenceRefs: [{ refType: "turn", refId: prepared.turnId }],
+  });
+  safeRecordRuntimeDecision(host, {
+    kind: "memory_context",
+    scope: {
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+    },
+    selected: memoryMode === "off" ? "Skip learned memory context" : "Compose scoped runtime context",
+    rationale:
+      memoryMode === "off"
+        ? "Memory mode was off for this turn; runtime guidance and direct conversation context still applied."
+        : "Gateway assembled retrieval posture, thread knowledge citations, and runtime guidance for prompt construction.",
+    signals: [
+      { source: "memory", key: "memory_mode", value: memoryMode, weight: memoryMode === "off" ? "strong" : "weak" },
+      { source: "memory", key: "l0_used", value: prepared.retrievalTrace.l0Used, weight: "informational" },
+      { source: "memory", key: "l1_used", value: prepared.retrievalTrace.l1Used, weight: "informational" },
+      { source: "memory", key: "l2_used", value: prepared.retrievalTrace.l2Used, weight: "informational" },
+      {
+        source: "context",
+        key: "thread_knowledge_citations",
+        value: input.threadKnowledgeCitationCount,
+        weight: "informational",
+      },
+      { source: "context", key: "guidance_file_count", value: input.guidanceFileCount, weight: "informational" },
+    ],
+    evidenceRefs: [{ refType: "turn", refId: prepared.turnId }],
+  });
+}
+
+function safeRecordRuntimeDecision(host: ChatTurnPrepHost, input: RuntimeDecisionTraceAppendInput): void {
+  try {
+    host.recordRuntimeDecision?.(input);
+  } catch {
+    // Decision tracing is diagnostic-only and must not block turn preparation.
+  }
 }
 
 async function buildSideChatSystemInstruction(

@@ -24,6 +24,9 @@ import {
   type OrchestrationRunEventRecord,
   type OrchestrationRunPolicyContext,
   type RealtimeEvent,
+  type RuntimeDecisionTraceAppendInput,
+  type RuntimeDecisionTraceRecord,
+  type RuntimeDecisionTraceQuery,
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { OrchestrationEngine } from "@goatcitadel/orchestration";
@@ -118,6 +121,10 @@ export interface OrchestrationLifecycleHost {
       listCheckpoints(runId: string): OrchestrationCheckpoint[];
       listRunEvents?(runId: string): OrchestrationRunEventRecord[];
       getRun(runId: string): OrchestrationRun;
+    };
+    runtimeDecisionTraces?: {
+      append(input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTraceRecord;
+      list(query: RuntimeDecisionTraceQuery): RuntimeDecisionTraceRecord[];
     };
   };
   readonly orchestrationEngine: Pick<
@@ -283,13 +290,38 @@ function persistCheckpoint(
   checkpointKind: OrchestrationCheckpoint["checkpointKind"],
   details: Record<string, unknown>,
 ): void {
-  host.createCheckpoint({
+  const checkpoint = host.createCheckpoint({
     runId: run.runId,
     planId: plan.planId,
     waveId: run.currentWaveId,
     phaseId: run.currentPhaseId,
     checkpointKind,
     details,
+  });
+  appendOrchestrationRuntimeDecision(host, {
+    kind: "durable_checkpoint",
+    scope: buildOrchestrationDecisionScope(run, plan.planId, run.currentPhaseId),
+    selected: `Recorded orchestration checkpoint ${checkpointKind}`,
+    rationale: "Durable execution persisted an orchestration checkpoint for replay and operator inspection.",
+    signals: [
+      {
+        source: "durable",
+        key: "checkpointKind",
+        value: checkpointKind,
+        weight: "informational",
+      },
+      {
+        source: "orchestration",
+        key: "runStatus",
+        value: run.status,
+        weight: "informational",
+      },
+    ],
+    evidenceRefs: [
+      { refType: "run", refId: run.runId },
+      { refType: "plan", refId: plan.planId },
+      { refType: "checkpoint", refId: checkpoint.checkpointId, label: checkpointKind },
+    ],
   });
 }
 
@@ -300,6 +332,144 @@ function persistRunEvent(
   payload: Record<string, unknown>,
 ): void {
   host.storage.orchestration.appendRunEvent(run.runId, event, payload);
+  const kind = mapRunEventRuntimeDecisionKind(event);
+  if (!kind) {
+    return;
+  }
+  const phaseId = asString(payload.phaseId) ?? run.currentPhaseId;
+  appendOrchestrationRuntimeDecision(host, {
+    kind,
+    scope: buildOrchestrationDecisionScope(run, run.planId, phaseId),
+    selected: summarizeRunEventSelection(event, run),
+    rationale: summarizeRunEventRuntimeRationale(event, payload),
+    signals: [
+      {
+        source: "orchestration",
+        key: "eventType",
+        value: event,
+        weight: "strong",
+      },
+      {
+        source: "orchestration",
+        key: "runStatus",
+        value: run.status,
+        weight: "informational",
+      },
+      ...(phaseId
+        ? [
+            {
+              source: "execution_plan" as const,
+              key: "phaseId",
+              value: phaseId,
+              weight: "informational" as const,
+            },
+          ]
+        : []),
+    ],
+    evidenceRefs: [
+      { refType: "run", refId: run.runId },
+      ...(run.planId ? [{ refType: "plan" as const, refId: run.planId }] : []),
+      ...(phaseId ? [{ refType: "step" as const, refId: phaseId }] : []),
+      ...(run.durableRunId ? [{ refType: "durable_run" as const, refId: run.durableRunId }] : []),
+    ],
+  });
+}
+
+function appendOrchestrationRuntimeDecision(
+  host: OrchestrationLifecycleHost,
+  input: RuntimeDecisionTraceAppendInput,
+): void {
+  try {
+    host.storage.runtimeDecisionTraces?.append(input);
+  } catch {
+    // Decision traces are diagnostic-only; orchestration lifecycle mutations remain authoritative.
+  }
+}
+
+function buildOrchestrationDecisionScope(
+  run: OrchestrationRun,
+  planId: string | undefined,
+  phaseId: string | undefined,
+): RuntimeDecisionTraceAppendInput["scope"] {
+  return {
+    ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+    runId: run.runId,
+    ...(planId ? { planId } : {}),
+    ...(phaseId ? { stepId: phaseId } : {}),
+    ...(run.durableRunId ? { durableRunId: run.durableRunId } : {}),
+  };
+}
+
+function mapRunEventRuntimeDecisionKind(event: string): RuntimeDecisionTraceAppendInput["kind"] | undefined {
+  switch (event) {
+    case "run.started":
+      return "orchestration_run_started";
+    case "phase.advanced":
+      return "orchestration_phase_advanced";
+    case "run.paused_for_approval":
+      return "runtime_paused";
+    case "run.resumed":
+      return "runtime_resumed";
+    case "run.completed":
+    case "run.stopped":
+      return "orchestration_run_completed";
+    case "run.failed":
+      return "orchestration_run_failed";
+    case "run.cancelled":
+      return "orchestration_run_cancelled";
+    default:
+      return undefined;
+  }
+}
+
+function summarizeRunEventSelection(event: string, run: OrchestrationRun): string {
+  switch (event) {
+    case "run.started":
+      return "Started orchestration run";
+    case "phase.advanced":
+      return "Advanced orchestration phase";
+    case "run.paused_for_approval":
+      return "Paused run for approval";
+    case "run.resumed":
+      return "Resumed orchestration run";
+    case "run.completed":
+      return "Completed orchestration run";
+    case "run.stopped":
+      return "Stopped orchestration run at configured limit";
+    case "run.failed":
+      return "Marked orchestration run failed";
+    case "run.cancelled":
+      return "Cancelled orchestration run";
+    default:
+      return `Recorded ${event} for ${run.runId}`;
+  }
+}
+
+function summarizeRunEventRuntimeRationale(event: string, payload: Record<string, unknown>): string {
+  const reason = asString(payload.reason) ?? asString(payload.error) ?? asString(payload.message);
+  if (reason) {
+    return reason;
+  }
+  switch (event) {
+    case "run.started":
+      return "The orchestration engine accepted the run and began durable execution.";
+    case "phase.advanced":
+      return "The current phase completed and the engine selected the next executable phase.";
+    case "run.paused_for_approval":
+      return "Execution reached an approval-gated point and must wait for an operator decision.";
+    case "run.resumed":
+      return "A wait condition cleared and durable execution was re-entered.";
+    case "run.completed":
+      return "All required orchestration phases completed successfully.";
+    case "run.stopped":
+      return "The run stopped after reaching a configured execution limit.";
+    case "run.failed":
+      return "The orchestration lifecycle recorded a terminal failure.";
+    case "run.cancelled":
+      return "The orchestration lifecycle recorded an operator or system cancellation.";
+    default:
+      return "The orchestration lifecycle recorded a retained run event.";
+  }
 }
 
 function persistPolicyGateEvent(
@@ -1741,6 +1911,7 @@ export function getRunTrace(
   if (!host.storage.orchestration.listRunEvents) {
     warnings.push("Run event storage does not expose listRunEvents; trace is checkpoint-only.");
   }
+  const runtimeDecisions = host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 }) ?? [];
 
   const decisions = [
     ...checkpoints.map((checkpoint): OrchestrationDecisionEvent => {
@@ -1775,6 +1946,30 @@ export function getRunTrace(
         details: event.payload,
       };
     }),
+    ...runtimeDecisions.map((decision): OrchestrationDecisionEvent => {
+      const kind = mapRuntimeDecisionKind(decision);
+      return {
+        decisionId: `runtime:${decision.decisionId}`,
+        runId,
+        kind,
+        source: "runtime_decision",
+        sourceId: decision.decisionId,
+        eventType: decision.kind,
+        planId: decision.scope.planId,
+        phaseId: decision.scope.stepId,
+        createdAt: decision.createdAt,
+        summary: summarizeRuntimeDecision(decision),
+        details: sanitizeTraceDetails({
+          kind: decision.kind,
+          selected: decision.selected,
+          rationale: decision.rationale,
+          alternatives: decision.alternatives,
+          signals: decision.signals,
+          evidenceRefs: decision.evidenceRefs,
+          scope: decision.scope,
+        }),
+      };
+    }),
   ].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.decisionId.localeCompare(right.decisionId),
   );
@@ -1784,9 +1979,38 @@ export function getRunTrace(
     checkpoints,
     runEvents,
     decisions,
+    runtimeDecisions,
     generatedAt: new Date().toISOString(),
     warnings,
   };
+}
+
+function mapRuntimeDecisionKind(decision: RuntimeDecisionTraceRecord): OrchestrationDecisionKind {
+  switch (decision.kind) {
+    case "orchestration_run_started":
+      return "run_started";
+    case "orchestration_phase_advanced":
+      return "phase_advanced";
+    case "durable_checkpoint":
+      return "durable_run_linked";
+    case "runtime_resumed":
+      return "run_resumed";
+    case "orchestration_run_completed":
+      return "run_completed";
+    case "orchestration_run_failed":
+      return "run_failed";
+    case "orchestration_run_cancelled":
+      return "run_cancelled";
+    case "approval_requested":
+    case "runtime_paused":
+      return "phase_wait_registered";
+    default:
+      return "unknown";
+  }
+}
+
+function summarizeRuntimeDecision(decision: RuntimeDecisionTraceRecord): string {
+  return capTraceString(`${decision.selected}: ${decision.rationale}`);
 }
 
 function assertRunWorkspaceAccess(run: OrchestrationRun, workspaceId?: string): OrchestrationRun {

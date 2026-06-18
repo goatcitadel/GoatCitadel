@@ -1,4 +1,5 @@
 import type { ToolPolicyActorContext } from "./policy.js";
+import type { RuntimeDecisionTraceRecord } from "./runtime-decision-trace.js";
 
 export type LoopMode = "fresh-context" | "compaction";
 export type RunMode = "auto" | "hitl";
@@ -135,7 +136,7 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   lastError?: string;
 }
 
-export type OrchestrationDecisionSource = "checkpoint" | "run_event";
+export type OrchestrationDecisionSource = "checkpoint" | "run_event" | "runtime_decision";
 
 export type OrchestrationDecisionKind =
   | "run_created"
@@ -199,6 +200,7 @@ export interface OrchestrationDecisionTrace {
   checkpoints: OrchestrationTraceCheckpoint[];
   runEvents: OrchestrationRunEventRecord[];
   decisions: OrchestrationDecisionEvent[];
+  runtimeDecisions?: RuntimeDecisionTraceRecord[];
   generatedAt: string;
   warnings: string[];
 }

@@ -9,6 +9,7 @@ import type {
 } from "./chat.js";
 import type { DurableRunRecord } from "./durable.js";
 import type { SessionMeta, SessionSummary, SessionTimelineItem, TranscriptEvent } from "./session.js";
+import type { RuntimeDecisionTraceRecord } from "./runtime-decision-trace.js";
 import type { TaskRecord } from "./tasks.js";
 import type { ProactiveRunRecord } from "./proactive.js";
 
@@ -175,6 +176,7 @@ export interface RuntimeLifecycleResponse {
   executionPlans?: RuntimeLifecycleExecutionPlanSummary[];
   delegationRuns?: RuntimeLifecycleDelegationRunSummary[];
   delegationSteps?: RuntimeLifecycleDelegationStepSummary[];
+  decisionTrace?: RuntimeDecisionTraceRecord[];
 }
 
 export interface RuntimeLifecycleExportBundleStats {
@@ -190,6 +192,7 @@ export interface RuntimeLifecycleExportBundleStats {
   delegationStepCount: number;
   proactiveRunCount: number;
   approvalEffectCount: number;
+  decisionTraceCount: number;
   transcriptEventCount: number;
   timelineEventCount: number;
 }

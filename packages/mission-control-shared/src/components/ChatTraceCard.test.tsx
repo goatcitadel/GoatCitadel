@@ -218,6 +218,78 @@ describe("ChatTraceCard", () => {
     expect(text).not.toContain("<!-- raw -->");
   });
 
+  it("renders decision trace records as a collapsed readable inspector", async () => {
+    const trace = {
+      ...makeTrace(),
+      decisionTrace: [
+        {
+          decisionId: "decision-1",
+          kind: "routing_choice",
+          scope: {
+            sessionId: "session-1",
+            turnId: "turn-1",
+            runId: "run-1",
+            planId: "plan-1",
+            toolRunId: "tool-1",
+            approvalId: "approval-1",
+          },
+          selected: "Use tool-backed answer",
+          rationale: "The turn asked for live evidence and browser capability was active.",
+          alternatives: [
+            {
+              label: "Answer directly",
+              outcome: "not_chosen",
+              reasonNotChosen: "Fresh source confirmation was required.",
+            },
+          ],
+          signals: [
+            {
+              source: "routing",
+              key: "liveDataIntent",
+              value: true,
+              weight: "strong",
+            },
+            {
+              source: "capability",
+              key: "browser.search",
+              value: "available",
+              weight: "informational",
+            },
+          ],
+          evidenceRefs: [
+            {
+              refType: "tool_run",
+              refId: "tool-1",
+              label: "browser.search",
+            },
+          ],
+          createdAt: "2026-03-08T00:00:04.000Z",
+        },
+      ],
+    } as ChatTurnTraceRecord;
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+
+    const details = renderer.root.findByType("details");
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(details.props.className).toContain("chat-decision-trace");
+    expect(details.props.open).toBeUndefined();
+    expect(text).toMatch(/Decision Trace \( ?1 ?\)/);
+    expect(text).toContain("Routing Choice");
+    expect(text).toContain("Chosen action: Use tool-backed answer");
+    expect(text).toContain("Rationale: The turn asked for live evidence and browser capability was active.");
+    expect(text).toContain(
+      "Alternatives considered: Answer directly (not_chosen): Fresh source confirmation was required.",
+    );
+    expect(text).toContain("Signals: routing:liveDataIntent=true (strong); capability:browser.search=available");
+    expect(text).toContain("Links: session: session-1");
+    expect(text).toContain("tool_run browser.search: tool-1");
+    expect(text).not.toContain('{"decisionId"');
+  });
+
   it("renders memory citation why-used provenance and semantic-hint match signals", async () => {
     const trace = {
       ...makeTrace(),

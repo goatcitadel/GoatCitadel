@@ -65,6 +65,7 @@ export class RuntimeLifecycleExportService {
         delegationStepCount: lifecycle.delegationSteps?.length ?? 0,
         proactiveRunCount: lifecycle.proactiveRuns?.length ?? 0,
         approvalEffectCount: lifecycle.approvalEffects?.length ?? 0,
+        decisionTraceCount: lifecycle.decisionTrace?.length ?? 0,
         transcriptEventCount: transcript?.length ?? 0,
         timelineEventCount: timeline?.length ?? 0,
       },
@@ -97,6 +98,7 @@ function buildTrustReport(bundle: RuntimeLifecycleExportBundle): RuntimeLifecycl
     `${bundle.stats.executionPlanCount} execution plan(s)`,
     `${bundle.stats.delegationRunCount} delegation run(s)`,
     `${bundle.stats.approvalEffectCount} approval effect(s)`,
+    `${bundle.stats.decisionTraceCount} decision trace record(s)`,
   ];
   const latestRoutingTurn = [...bundle.turns].reverse().find((turn) => turn.routing);
   const effectiveRouting = latestRoutingTurn?.routing;

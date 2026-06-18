@@ -16,11 +16,15 @@ import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 
+export interface ChatThreadLoadOptions {
+  includeDecisionTrace?: boolean;
+}
+
 export interface ChatMessageRouteRuntimeHost {
   readonly storage: Storage;
   readonly durableRunService: Pick<DurableRunService, "getDurableRun" | "wakeDurableRun">;
   getSession(sessionId: string): unknown;
-  loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
+  loadChatTurnSessionState(sessionId: string, options?: ChatThreadLoadOptions): Promise<ChatTurnSessionState>;
   publishRealtime(
     eventType: string,
     source: string,
@@ -41,9 +45,12 @@ export interface ChatMessageRouteRuntimeHost {
 export async function getChatThread(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
+  options: ChatThreadLoadOptions = {},
 ): Promise<ChatThreadResponse> {
   runtime.getSession(sessionId);
-  const state = await runtime.loadChatTurnSessionState(sessionId);
+  const state = await runtime.loadChatTurnSessionState(sessionId, {
+    includeDecisionTrace: options.includeDecisionTrace === true,
+  });
   return buildChatThreadFromState(runtime, sessionId, state);
 }
 

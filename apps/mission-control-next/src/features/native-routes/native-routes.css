@@ -3726,6 +3726,17 @@
   letter-spacing: 0.01em;
 }
 
+.mc-next-shell .chat-decision-trace > summary {
+  cursor: pointer;
+  color: var(--fg-primary);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.mc-next-shell .chat-decision-trace[open] > summary {
+  margin-bottom: 0.15rem;
+}
+
 .mc-next-shell .chat-trace-section p {
   margin: 0;
   line-height: 1.45;
