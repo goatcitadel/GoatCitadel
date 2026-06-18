@@ -46,7 +46,15 @@ function buildOpenApiSpec(): Record<string, unknown> {
       },
     ],
     paths: {
-      "/health": { get: { summary: "Health check", responses: { "200": { description: "ok" } } } },
+      "/health": {
+        get: {
+          summary: "Health check",
+          responses: {
+            "200": { description: "ready" },
+            "503": { description: "degraded" },
+          },
+        },
+      },
       "/api/v1/events/stream": {
         get: { summary: "Realtime event stream (SSE)", responses: { "200": { description: "stream" } } },
       },

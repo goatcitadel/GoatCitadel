@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { enterRequestAttribution } from "@goatcitadel/storage";
@@ -97,6 +98,14 @@ const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
 const BASELINE_CONTENT_SECURITY_POLICY =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
+interface GatewayRequestState {
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
+  requestSessionId?: string;
+  requestStartedAtMs?: number;
+}
+
 export async function buildApp() {
   const verbose = isVerboseLoggingEnabled();
   const app = Fastify({
@@ -161,44 +170,18 @@ export async function buildApp() {
   });
 
   app.addHook("onRequest", async (request, reply) => {
+    const requestState = request as typeof request & GatewayRequestState;
     const correlationId = readRequestHeader(request.headers["x-goatcitadel-correlation-id"]) ?? randomUUID();
     const traceId = readTraceId(request.headers.traceparent, correlationId);
     const originSurface = readRequestHeader(request.headers["x-goatcitadel-origin-surface"]);
     const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
     const browserOrigin = readRequestHeader(request.headers.origin);
     const browserIntent = readRequestHeader(request.headers[BROWSER_MUTATION_INTENT_HEADER]);
-    (
-      request as typeof request & {
-        correlationId?: string;
-        traceId?: string;
-        originSurface?: string;
-        requestSessionId?: string;
-      }
-    ).correlationId = correlationId;
-    (
-      request as typeof request & {
-        correlationId?: string;
-        traceId?: string;
-        originSurface?: string;
-        requestSessionId?: string;
-      }
-    ).traceId = traceId;
-    (
-      request as typeof request & {
-        correlationId?: string;
-        traceId?: string;
-        originSurface?: string;
-        requestSessionId?: string;
-      }
-    ).originSurface = originSurface;
-    (
-      request as typeof request & {
-        correlationId?: string;
-        traceId?: string;
-        originSurface?: string;
-        requestSessionId?: string;
-      }
-    ).requestSessionId = sessionId;
+    requestState.correlationId = correlationId;
+    requestState.traceId = traceId;
+    requestState.originSurface = originSurface;
+    requestState.requestSessionId = sessionId;
+    requestState.requestStartedAtMs = performance.now();
     reply.header("x-goatcitadel-correlation-id", correlationId);
     enterRequestAttribution({
       correlationId,
@@ -216,6 +199,7 @@ export async function buildApp() {
       event: "request.start",
       message: `${request.method} ${request.url}`,
       route: request.routeOptions.url || request.url,
+      correlationId,
       sessionId,
       context: {
         method: request.method,
@@ -241,31 +225,41 @@ export async function buildApp() {
   });
 
   app.addHook("onResponse", async (request, reply) => {
+    const requestState = request as typeof request & GatewayRequestState;
+    const durationMs = calculateRequestDurationMs(requestState);
     app.gatewayRuntime?.recordDevDiagnostic({
       level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
       category: "api",
       event: "request.finish",
       message: `${request.method} ${request.url} -> ${reply.statusCode}`,
       route: request.routeOptions.url || request.url,
-      sessionId: (request as typeof request & { requestSessionId?: string }).requestSessionId,
+      correlationId: requestState.correlationId,
+      sessionId: requestState.requestSessionId,
+      durationMs,
       context: {
         statusCode: reply.statusCode,
         method: request.method,
+        durationMs,
       },
     });
   });
 
   app.addHook("onError", async (request, reply, error) => {
+    const requestState = request as typeof request & GatewayRequestState;
+    const durationMs = calculateRequestDurationMs(requestState);
     app.gatewayRuntime?.recordDevDiagnostic({
       level: "error",
       category: "api",
       event: "request.error",
       message: `${request.method} ${request.url} failed`,
       route: request.routeOptions.url || request.url,
-      sessionId: (request as typeof request & { requestSessionId?: string }).requestSessionId,
+      correlationId: requestState.correlationId,
+      sessionId: requestState.requestSessionId,
+      durationMs,
       context: {
         statusCode: reply.statusCode,
         error: error.message,
+        durationMs,
       },
     });
   });
@@ -574,10 +568,18 @@ function resolveAllowTailnetDevOrigins(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+function calculateRequestDurationMs(request: GatewayRequestState): number | undefined {
+  if (typeof request.requestStartedAtMs !== "number") {
+    return undefined;
+  }
+  return Math.max(0, Math.round((performance.now() - request.requestStartedAtMs) * 1000) / 1000);
+}
+
 export const __internal = {
   isLoopbackRateLimitAllowlisted,
   normalizeConfiguredOrigin,
   resolveAllowedOrigins,
   applyBaselineSecurityHeaders,
+  calculateRequestDurationMs,
   BASELINE_CONTENT_SECURITY_POLICY,
 };

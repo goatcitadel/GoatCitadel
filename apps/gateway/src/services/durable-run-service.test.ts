@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DurableRetryRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
-import { DurableRunService } from "./durable-run-service.js";
+import { DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 
 describe("DurableRunService", () => {
   it("preserves caller metadata when creating durable runs", () => {
@@ -1075,16 +1075,16 @@ describe("DurableRunService", () => {
       diskBudgetBytes: 67108864,
     }));
 
-    const ctx = createContext(runs, checkpoints, timeline);
-    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
-
     const infoLogs: Array<{ data: unknown; msg: string }> = [];
-    (ctx as unknown as { logger?: unknown }).logger = {
-      info: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
-      warn: () => {},
-      debug: () => {},
-      error: () => {},
-    };
+    const ctx = createContext(runs, checkpoints, timeline, {
+      logger: {
+        info: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      },
+    });
+    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
 
     const service = new DurableRunService(ctx as unknown as ServiceContext, {
       backgroundTasks,
@@ -1125,16 +1125,17 @@ describe("DurableRunService", () => {
       diskBudgetBytes: 67108864,
     }));
 
-    const ctx = createContext(runs, checkpoints, timeline);
-    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
     const infoLogs: string[] = [];
     const debugLogs: string[] = [];
-    (ctx as unknown as { logger?: unknown }).logger = {
-      info: (_d: unknown, msg: string) => infoLogs.push(msg),
-      debug: (_d: unknown, msg: string) => debugLogs.push(msg),
-      warn: () => {},
-      error: () => {},
-    };
+    const ctx = createContext(runs, checkpoints, timeline, {
+      logger: {
+        info: (_d: unknown, msg: string) => infoLogs.push(msg),
+        debug: (_d: unknown, msg: string) => debugLogs.push(msg),
+        warn: () => {},
+        error: () => {},
+      },
+    });
+    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
 
     const service = new DurableRunService(ctx as unknown as ServiceContext, {
       backgroundTasks,
@@ -1193,6 +1194,7 @@ function createContext(
       payload: Record<string, unknown>,
       options?: Record<string, unknown>,
     ) => void;
+    logger?: DurableRunServiceLogger;
   },
 ) {
   const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
@@ -1426,6 +1428,7 @@ function createContext(
     llmService: {},
     policyEngine: {},
     gatewaySql: {} as never,
+    logger: options?.logger,
     publishRealtime: options?.publishRealtime ?? (() => undefined),
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,

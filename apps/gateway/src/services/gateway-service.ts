@@ -6,10 +6,24 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService, logger } from "@goatcitadel/gateway-core";
+import type { LogContext } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
+const durableRunLogger: DurableRunServiceLogger = {
+  info: (data: unknown, msg: string) => log.info(msg, toLogContext(data)),
+  debug: (data: unknown, msg: string) => log.debug(msg, toLogContext(data)),
+  warn: (data: unknown, msg: string) => log.warn(msg, toLogContext(data)),
+  error: (data: unknown, msg: string) => log.error(msg, toLogContext(data)),
+};
 
 const INIT_STEP_SLOW_WARNING_MS = 10_000;
+
+function toLogContext(data: unknown): LogContext {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    return data as LogContext;
+  }
+  return { value: data };
+}
 
 /**
  * Wrap a step inside the gateway's critical-init path so a hung step is
@@ -512,7 +526,7 @@ import {
 } from "./chat-turn-planning-helpers.js";
 import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
 import { ChatProjectService } from "./chat-project-service.js";
-import { DurableRunService } from "./durable-run-service.js";
+import { DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
 import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
@@ -1101,6 +1115,7 @@ export class GatewayService {
     const serviceCtx = {
       storage: this.storage,
       config: this.config,
+      logger: durableRunLogger,
       llmService: this.llmService,
       policyEngine: this.policyEngine,
       gatewaySql: this.storage.gatewaySql,
