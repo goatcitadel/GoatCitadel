@@ -1641,6 +1641,11 @@ export function getRunTrace(
   workspaceId?: string,
 ): OrchestrationDecisionTrace {
   const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
+  // `lastError` is free-form text that can be large or echo upstream provider errors; bound it
+  // to the same cap as every other trace string. Remaining run fields are ids, numbers, or
+  // closed-enum statuses (e.g. executionState), so there is nothing secret-shaped left to redact.
+  const sanitizedRun: OrchestrationRun =
+    run.lastError === undefined ? run : { ...run, lastError: capTraceString(run.lastError) };
   const checkpoints = host.storage.orchestration.listCheckpoints(runId).map((checkpoint) => ({
     ...checkpoint,
     details: sanitizeTraceDetails(checkpoint.details),
@@ -1693,7 +1698,7 @@ export function getRunTrace(
   );
 
   return {
-    run,
+    run: sanitizedRun,
     checkpoints,
     runEvents,
     decisions,
@@ -1824,7 +1829,7 @@ function sanitizeTraceValue(value: unknown, depth: number): unknown {
     return "[Max depth]";
   }
   if (typeof value === "string") {
-    return value.length > 500 ? `${value.slice(0, 500)}... [truncated]` : value;
+    return capTraceString(value);
   }
   if (typeof value !== "object" || value === null) {
     return value;
@@ -1839,6 +1844,10 @@ function sanitizeTraceValue(value: unknown, depth: number): unknown {
   return sanitized;
 }
 
+function capTraceString(value: string): string {
+  return value.length > 500 ? `${value.slice(0, 500)}... [truncated]` : value;
+}
+
 function shouldRedactTraceKey(key: string): boolean {
-  return /secret|token|api[-_]?key|authorization|password|credential/i.test(key);
+  return /secret|token|api[-_]?key|authorization|password|credential|cookie/i.test(key);
 }

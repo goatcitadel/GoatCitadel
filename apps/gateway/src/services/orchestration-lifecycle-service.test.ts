@@ -840,6 +840,44 @@ describe("orchestration-lifecycle-service", () => {
     expect(trace.decisions[1]?.summary).toContain("phase phase-1");
   });
 
+  it("denies trace reads for a run owned by another workspace", () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    expect(() => getRunTrace(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
+  });
+
+  it("caps the run lastError text included in the trace", () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+            lastError: "e".repeat(700),
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    const trace = getRunTrace(host, "run-1", "workspace-a");
+
+    expect(trace.run.lastError).toContain("[truncated]");
+    expect(trace.run.lastError?.length ?? 0).toBeLessThan(700);
+  });
+
   it("rejects approvals for non-approval phases in auto mode", async () => {
     const plan = {
       ...buildPlan(),
