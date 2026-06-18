@@ -4,7 +4,9 @@ export const mediaRouteMethods = [
   "createMediaJob",
   "getChatAttachmentPreview",
   "getMediaJob",
+  "issueMediaPlaybackToken",
   "listMediaJobs",
+  "validateMediaPlaybackToken",
 ] as const;
 
 export type MediaRouteMethod = (typeof mediaRouteMethods)[number];

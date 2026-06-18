@@ -102,6 +102,55 @@ describe("MediaVoiceService", () => {
     expect(() => service.getMediaJob("missing")).toThrow("Unknown media job: missing");
   });
 
+  it("issues short-lived playback tokens only for streamable chat attachments", () => {
+    const getChatAttachment = vi.fn((attachmentId: string) => ({
+      attachmentId,
+      sessionId: "session-1",
+      fileName: attachmentId === "audio-1" ? "voice.mp3" : "notes.txt",
+      mimeType: attachmentId === "audio-1" ? "audio/mpeg" : "text/plain",
+      mediaType: attachmentId === "audio-1" ? "audio" : "text",
+      sizeBytes: 1024,
+      sha256: "hash",
+      storageRelPath: "chat/default/attachments/file",
+      extractStatus: "ready",
+      createdAt: "2026-06-18T00:00:00.000Z",
+    }));
+    const service = new MediaVoiceService(createDeps({ getChatAttachment }));
+
+    const issued = service.issueMediaPlaybackToken({
+      source: { kind: "chat_attachment", attachmentId: "audio-1" },
+    });
+
+    expect(issued).toMatchObject({
+      source: { kind: "chat_attachment", attachmentId: "audio-1" },
+      variantId: "original",
+    });
+    expect(issued.contentPath).toContain("/api/v1/chat/attachments/audio-1/content");
+    expect(issued.contentPath).toContain("media_token=");
+    expect(
+      service.validateMediaPlaybackToken({
+        token: issued.token,
+        source: { kind: "chat_attachment", attachmentId: "audio-1" },
+      }),
+    ).toBe(true);
+    expect(
+      service.validateMediaPlaybackToken({
+        token: issued.token,
+        source: { kind: "chat_attachment", attachmentId: "other-attachment" },
+      }),
+    ).toBe(false);
+    expect(() =>
+      service.issueMediaPlaybackToken({
+        source: { kind: "chat_attachment", attachmentId: "text-1" },
+      }),
+    ).toThrow(/cannot be streamed as media/i);
+    expect(() =>
+      service.issueMediaPlaybackToken({
+        source: { kind: "media_artifact", artifactId: "artifact-1" },
+      }),
+    ).toThrow(/not available yet/i);
+  });
+
   it("lists media jobs without binding unused parameters when no session filter is provided", () => {
     const all = vi.fn(() => []);
     const prepare = vi.fn((_sql: string) => ({

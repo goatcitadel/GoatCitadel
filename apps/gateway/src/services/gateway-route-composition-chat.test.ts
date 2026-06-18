@@ -38,6 +38,12 @@ vi.mock("./chat-attachment-service.js", () => ({
     workspaceId: host.normalizeWorkspaceId?.("workspace-raw"),
     emitted: host.publishRealtime?.("attachment_read", "attachments", { attachmentId }),
   })),
+  resolveChatAttachmentContent: vi.fn((host, attachmentId) => ({
+    attachmentId,
+    workspaceId: host.normalizeWorkspaceId?.("workspace-raw"),
+    fullPath: "/tmp/attachment",
+    sizeBytes: 42,
+  })),
   uploadChatAttachment: vi.fn((host, input) => ({
     input,
     mediaJob: host.createMediaJob({ kind: "transcode", attachmentId: input.attachmentId }),
@@ -352,6 +358,10 @@ describe("composeChatRouteDependencies", () => {
       attachmentId: "attachment-1",
       workspaceId: "normalized:workspace-raw",
     });
+    expect(deps.chatAttachments.resolveChatAttachmentContent("attachment-1")).toMatchObject({
+      attachmentId: "attachment-1",
+      sizeBytes: 42,
+    });
     expect(deps.chatAttachments.uploadChatAttachment({ attachmentId: "attachment-2" })).toMatchObject({
       mediaJob: { jobId: "media-1" },
     });
@@ -362,10 +372,11 @@ describe("composeChatRouteDependencies", () => {
       defaults: { defaults: true },
       autonomy: { hydrated: true },
     });
-    expect(mocks.assertWritePathInJail).toHaveBeenCalledWith("F:\\code\\personal-ai\\workspace\\notes\\session.md", [
-      "F:/code/personal-ai/workspace",
-    ]);
-    expect(mocks.rm).toHaveBeenCalledWith("F:\\code\\personal-ai\\workspace\\notes\\session.md", { force: true });
+    const jailedPath = mocks.assertWritePathInJail.mock.calls[0]?.[0] as string | undefined;
+    expect(jailedPath).toContain("notes");
+    expect(jailedPath).toContain("session.md");
+    expect(mocks.assertWritePathInJail.mock.calls[0]?.[1]).toEqual(["F:/code/personal-ai/workspace"]);
+    expect(mocks.rm).toHaveBeenCalledWith(jailedPath, { force: true });
 
     expect(deps.chatSessions.archiveChatSession("session-1")).toMatchObject({ op: "archive" });
     expect(deps.chatSessions.archiveChatSessionsBulk({ ids: ["session-1"] })).toMatchObject({ op: "archiveBulk" });

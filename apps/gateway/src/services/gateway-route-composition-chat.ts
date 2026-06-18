@@ -89,6 +89,8 @@ export function composeChatRouteDependencies(
     getChatAttachment: (attachmentId) => chatAttachmentService.getChatAttachment(chatAttachmentHost, attachmentId),
     readChatAttachmentContent: (attachmentId) =>
       chatAttachmentService.readChatAttachmentContent(chatAttachmentHost, attachmentId),
+    resolveChatAttachmentContent: (attachmentId) =>
+      chatAttachmentService.resolveChatAttachmentContent(chatAttachmentHost, attachmentId),
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
   };
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {

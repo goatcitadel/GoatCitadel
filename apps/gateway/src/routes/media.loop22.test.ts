@@ -27,6 +27,19 @@ describe("media route tails", () => {
           throw new Error("job missing");
         }),
       listMediaJobs: vi.fn(() => [{ jobId: "job-1" }]),
+      issueMediaPlaybackToken: vi
+        .fn()
+        .mockReturnValueOnce({
+          token: "playback-token",
+          expiresAt: "2026-06-18T00:00:00.000Z",
+          source: { kind: "chat_attachment", attachmentId: "att-1" },
+          variantId: "original",
+          contentPath: "/api/v1/chat/attachments/att-1/content?disposition=inline&media_token=playback-token",
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("not playable");
+        }),
+      validateMediaPlaybackToken: vi.fn(() => true),
       getChatAttachmentPreview: vi
         .fn()
         .mockReturnValueOnce({ attachmentId: "att-1", preview: "ready" })
@@ -55,6 +68,37 @@ describe("media route tails", () => {
     });
     expect(createFailure.statusCode).toBe(400);
     expect(createFailure.json()).toEqual({ error: "create failed" });
+
+    const token = await app.inject({
+      method: "POST",
+      url: "/api/v1/media/playback-token",
+      payload: { source: { kind: "chat_attachment", attachmentId: "att-1" } },
+    });
+    expect(token.statusCode).toBe(201);
+    expect(token.json()).toMatchObject({
+      token: "playback-token",
+      source: { kind: "chat_attachment", attachmentId: "att-1" },
+      variantId: "original",
+    });
+    expect(media.issueMediaPlaybackToken).toHaveBeenCalledWith({
+      source: { kind: "chat_attachment", attachmentId: "att-1" },
+    });
+
+    const tokenFailure = await app.inject({
+      method: "POST",
+      url: "/api/v1/media/playback-token",
+      payload: { source: { kind: "chat_attachment", attachmentId: "att-2" } },
+    });
+    expect(tokenFailure.statusCode).toBe(400);
+    expect(tokenFailure.json()).toEqual({ error: "not playable" });
+
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/media/playback-token",
+        payload: { source: { kind: "chat_attachment" } },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
 
     const fetched = await app.inject({ method: "GET", url: "/api/v1/media/jobs/job-1" });
     expect(fetched.json()).toEqual({ jobId: "job-1", type: "vision", status: "done" });

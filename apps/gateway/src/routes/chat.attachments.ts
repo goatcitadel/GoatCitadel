@@ -1,5 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import { z } from "zod";
+import {
+  detectAttachmentMediaType,
+  sniffAttachmentBytes,
+  type SniffedMediaClass,
+} from "../services/media-voice-service.js";
 
 const MAX_ATTACHMENT_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES = Math.ceil((MAX_ATTACHMENT_UPLOAD_BYTES * 4) / 3) + 16 * 1024;
@@ -17,6 +24,10 @@ export const CHAT_ATTACHMENT_PASSIVE_INLINE_MIME = new Set<string>([
   "application/pdf",
 ]);
 
+const CHAT_ATTACHMENT_TOKENIZED_MEDIA_INLINE_MIME_PREFIXES = ["audio/", "video/"] as const;
+const SNIFFED_MISMATCH_CLASSES = new Set<SniffedMediaClass>(["image", "audio", "video", "archive", "document", "text"]);
+const MEDIA_PREFIX_SNIFF_BYTES = 64;
+
 const attachmentUploadSchema = z.object({
   sessionId: z.string().min(1),
   projectId: z.string().optional(),
@@ -31,6 +42,7 @@ const attachmentParamsSchema = z.object({
 
 const attachmentContentQuerySchema = z.object({
   disposition: z.enum(["inline", "attachment"]).default("attachment"),
+  media_token: z.string().min(1).optional(),
 });
 
 export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
@@ -77,9 +89,8 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const { record, bytes } = await fastify.services.chatAttachments.readChatAttachmentContent(
-        params.data.attachmentId,
-      );
+      const content = await resolveAttachmentContentForRoute(fastify, params.data.attachmentId);
+      const { record } = content;
       // SECURITY (codex finding #9): Attachments are uploaded with an
       // uploader-supplied MIME type. Without these headers, a `text/html`
       // or `image/svg+xml` attachment opened "inline" executes scripts
@@ -91,18 +102,178 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       //      `application/octet-stream`,
       //   3. force `Content-Disposition: attachment` on the download
       //      path regardless of the upload mime hint.
+      const mediaTokenValid = query.data.media_token
+        ? Boolean(
+            fastify.services.media?.validateMediaPlaybackToken?.({
+              token: query.data.media_token,
+              source: {
+                kind: "chat_attachment",
+                attachmentId: params.data.attachmentId,
+              },
+              variantId: "original",
+            }),
+          )
+        : false;
       const isPassiveInline =
         query.data.disposition === "inline" &&
         CHAT_ATTACHMENT_PASSIVE_INLINE_MIME.has((record.mimeType || "").toLowerCase());
-      const responseContentType = isPassiveInline ? record.mimeType : "application/octet-stream";
-      const responseDisposition = isPassiveInline ? "inline" : "attachment";
+      const isTokenizedInlineMedia =
+        query.data.disposition === "inline" &&
+        mediaTokenValid &&
+        (await isSafeTokenizedInlineMedia(content.fullPath, record.mimeType, record.mediaType));
+      if (query.data.media_token && !isTokenizedInlineMedia) {
+        return reply.code(mediaTokenValid ? 415 : 401).send({
+          error: mediaTokenValid
+            ? "Attachment is not safe for tokenized inline media playback."
+            : "Media playback token is invalid or expired.",
+        });
+      }
+      const isInline = isPassiveInline || isTokenizedInlineMedia;
+      const responseContentType = isInline ? record.mimeType : "application/octet-stream";
+      const responseDisposition = isInline ? "inline" : "attachment";
       reply.header("X-Content-Type-Options", "nosniff");
       reply.header("Content-Security-Policy", "default-src 'none'; sandbox");
       reply.header("Content-Type", responseContentType);
       reply.header("Content-Disposition", `${responseDisposition}; filename="${encodeURIComponent(record.fileName)}"`);
-      return reply.send(bytes);
+      if (content.fullPath && isTokenizedInlineMedia) {
+        return sendRangeAwareFile(reply, request.headers.range, content.fullPath, content.sizeBytes);
+      }
+      return reply.send(content.bytes ?? (content.fullPath ? await fs.readFile(content.fullPath) : Buffer.alloc(0)));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
   });
+}
+
+async function resolveAttachmentContentForRoute(
+  fastify: FastifyInstance,
+  attachmentId: string,
+): Promise<{
+  record: {
+    fileName: string;
+    mimeType: string;
+    mediaType?: string;
+  };
+  fullPath?: string;
+  sizeBytes: number;
+  bytes?: Buffer;
+}> {
+  const resolver = fastify.services.chatAttachments.resolveChatAttachmentContent as
+    | ((id: string) => Promise<{
+        record: {
+          fileName: string;
+          mimeType: string;
+          mediaType?: string;
+        };
+        fullPath: string;
+        sizeBytes: number;
+      }>)
+    | undefined;
+  if (typeof resolver === "function") {
+    return resolver(attachmentId);
+  }
+  const content = await fastify.services.chatAttachments.readChatAttachmentContent(attachmentId);
+  return {
+    record: content.record,
+    fullPath: content.fullPath,
+    sizeBytes: content.bytes.length,
+    bytes: content.bytes,
+  };
+}
+
+async function isSafeTokenizedInlineMedia(
+  fullPath: string | undefined,
+  mimeType: string,
+  storedMediaType?: string,
+): Promise<boolean> {
+  if (!fullPath) {
+    return false;
+  }
+  const normalizedMime = mimeType.toLowerCase();
+  if (!CHAT_ATTACHMENT_TOKENIZED_MEDIA_INLINE_MIME_PREFIXES.some((prefix) => normalizedMime.startsWith(prefix))) {
+    return false;
+  }
+  const mediaType = storedMediaType ?? detectAttachmentMediaType(mimeType);
+  if (mediaType !== "audio" && mediaType !== "video") {
+    return false;
+  }
+  const sniffed = sniffAttachmentBytes(await readFilePrefix(fullPath, MEDIA_PREFIX_SNIFF_BYTES));
+  return sniffed === "unknown" || !SNIFFED_MISMATCH_CLASSES.has(sniffed) || sniffed === mediaType;
+}
+
+async function readFilePrefix(fullPath: string, maxBytes: number): Promise<Buffer> {
+  const file = await fs.open(fullPath, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const result = await file.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, result.bytesRead);
+  } finally {
+    await file.close();
+  }
+}
+
+function sendRangeAwareFile(reply: FastifyReply, rangeHeader: string | undefined, fullPath: string, sizeBytes: number) {
+  reply.header("Accept-Ranges", "bytes");
+  const range = parseRangeHeader(rangeHeader, sizeBytes);
+  if (range.kind === "invalid") {
+    reply.header("Content-Range", `bytes */${sizeBytes}`);
+    return reply.code(416).send();
+  }
+  const start = range.kind === "partial" ? range.start : 0;
+  const end = range.kind === "partial" ? range.end : Math.max(0, sizeBytes - 1);
+  const contentLength = sizeBytes === 0 ? 0 : end - start + 1;
+  reply.header("Content-Length", String(contentLength));
+  if (range.kind === "partial") {
+    reply.header("Content-Range", `bytes ${start}-${end}/${sizeBytes}`);
+    reply.code(206);
+  }
+  if (sizeBytes === 0) {
+    return reply.send(Buffer.alloc(0));
+  }
+  return reply.send(createReadStream(fullPath, { start, end }));
+}
+
+function parseRangeHeader(
+  rangeHeader: string | undefined,
+  sizeBytes: number,
+): { kind: "full" } | { kind: "partial"; start: number; end: number } | { kind: "invalid" } {
+  if (!rangeHeader) {
+    return { kind: "full" };
+  }
+  if (sizeBytes <= 0 || !rangeHeader.startsWith("bytes=") || rangeHeader.includes(",")) {
+    return { kind: "invalid" };
+  }
+  const raw = rangeHeader.slice("bytes=".length).trim();
+  const match = /^(\d*)-(\d*)$/.exec(raw);
+  if (!match) {
+    return { kind: "invalid" };
+  }
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) {
+    return { kind: "invalid" };
+  }
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return { kind: "invalid" };
+    }
+    const start = Math.max(0, sizeBytes - suffixLength);
+    return { kind: "partial", start, end: sizeBytes - 1 };
+  }
+  const start = Number(rawStart);
+  const requestedEnd = rawEnd ? Number(rawEnd) : sizeBytes - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start < 0 ||
+    requestedEnd < start ||
+    start >= sizeBytes
+  ) {
+    return { kind: "invalid" };
+  }
+  return {
+    kind: "partial",
+    start,
+    end: Math.min(requestedEnd, sizeBytes - 1),
+  };
 }

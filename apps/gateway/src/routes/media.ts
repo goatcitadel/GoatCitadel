@@ -8,6 +8,22 @@ const createMediaJobSchema = z.object({
   input: z.record(z.unknown()).optional(),
 });
 
+const mediaPlaybackSourceSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("chat_attachment"),
+    attachmentId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("media_artifact"),
+    artifactId: z.string().min(1),
+  }),
+]);
+
+const mediaPlaybackTokenSchema = z.object({
+  source: mediaPlaybackSourceSchema,
+  variantId: z.enum(["original", "standard", "data_saver", "poster"]).optional(),
+});
+
 const mediaJobParamsSchema = z.object({
   jobId: z.string().min(1),
 });
@@ -21,6 +37,18 @@ const attachmentParamsSchema = z.object({
 });
 
 export const mediaRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.post("/api/v1/media/playback-token", async (request, reply) => {
+    const parsed = mediaPlaybackTokenSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.services.media.issueMediaPlaybackToken(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/media/jobs", async (request, reply) => {
     const parsed = createMediaJobSchema.safeParse(request.body);
     if (!parsed.success) {

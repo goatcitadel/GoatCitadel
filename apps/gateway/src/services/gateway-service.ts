@@ -4872,6 +4872,14 @@ export class GatewayService {
     return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId);
   }
 
+  private async resolveChatAttachmentContent(attachmentId: string): Promise<{
+    record: ChatAttachmentRecord;
+    fullPath: string;
+    sizeBytes: number;
+  }> {
+    return chatAttachmentService.resolveChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId);
+  }
+
   private buildChatAttachmentHost(): chatAttachmentService.ChatAttachmentHost {
     return {
       config: this.config,

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import type {
   ChatAttachmentMediaType,
@@ -18,6 +18,10 @@ import type {
   GoogleMeetTranscriptChunk,
   MediaCreateJobRequest,
   MediaJobRecord,
+  MediaPlaybackSource,
+  MediaPlaybackTokenRequest,
+  MediaPlaybackTokenResponse,
+  MediaPlaybackQuality,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
   VoiceStatus,
@@ -52,6 +56,8 @@ const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp
 const FFMPEG_CONVERT_TIMEOUT_MS = 30_000;
 const WHISPER_TRANSCRIBE_TIMEOUT_MS = 120_000;
 const EXTERNAL_PROCESS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const MEDIA_PLAYBACK_TOKEN_TTL_MS = 2 * 60 * 1000;
+const MEDIA_PLAYBACK_TOKEN_MAX_RECORDS = 300;
 
 const execFileAsync = promisify(execFile);
 
@@ -89,6 +95,13 @@ interface DevDiagnosticInput {
     code?: string;
     retryable?: boolean;
   };
+}
+
+interface MediaPlaybackTokenRecord {
+  token: string;
+  source: MediaPlaybackSource;
+  variantId: MediaPlaybackQuality;
+  expiresAtMs: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +522,8 @@ async function normalizeAudioForWhisper(input: {
 // ---------------------------------------------------------------------------
 
 export class MediaVoiceService {
+  private readonly mediaPlaybackTokens = new Map<string, MediaPlaybackTokenRecord>();
+
   public constructor(private readonly deps: MediaVoiceDeps) {}
 
   // ── Media jobs ──────────────────────────────────────────────────────────
@@ -595,6 +610,66 @@ export class MediaVoiceService {
       transcriptText: record.transcriptText,
       analysisStatus: record.analysisStatus === "pending" ? "queued" : (record.analysisStatus ?? "queued"),
     };
+  }
+
+  public issueMediaPlaybackToken(input: MediaPlaybackTokenRequest): MediaPlaybackTokenResponse {
+    const variantId = input.variantId ?? "original";
+    if (input.source.kind !== "chat_attachment") {
+      throw new Error("Media artifact playback tokens are not available yet.");
+    }
+    if (variantId !== "original") {
+      throw new Error(`Media playback variant is not available yet: ${variantId}`);
+    }
+    const attachment = this.deps.getChatAttachment(input.source.attachmentId);
+    const mediaType = attachment.mediaType ?? detectAttachmentMediaType(attachment.mimeType);
+    if (mediaType !== "audio" && mediaType !== "video") {
+      throw new Error(`Attachment ${attachment.attachmentId} is ${mediaType} and cannot be streamed as media.`);
+    }
+    this.pruneMediaPlaybackTokens();
+    const token = randomBytes(32).toString("base64url");
+    const expiresAtMs = Date.now() + MEDIA_PLAYBACK_TOKEN_TTL_MS;
+    const source: MediaPlaybackSource = {
+      kind: "chat_attachment",
+      attachmentId: attachment.attachmentId,
+    };
+    this.mediaPlaybackTokens.set(token, {
+      token,
+      source,
+      variantId,
+      expiresAtMs,
+    });
+    this.enforceMediaPlaybackTokenCapacity();
+    return {
+      token,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      source,
+      variantId,
+      contentPath: `/api/v1/chat/attachments/${encodeURIComponent(
+        attachment.attachmentId,
+      )}/content?disposition=inline&media_token=${encodeURIComponent(token)}`,
+    };
+  }
+
+  public validateMediaPlaybackToken(input: {
+    token: string;
+    source: MediaPlaybackSource;
+    variantId?: MediaPlaybackQuality;
+  }): boolean {
+    this.pruneMediaPlaybackTokens();
+    const record = this.mediaPlaybackTokens.get(input.token);
+    if (!record || record.expiresAtMs <= Date.now()) {
+      return false;
+    }
+    return (
+      record.variantId === (input.variantId ?? "original") &&
+      record.source.kind === input.source.kind &&
+      ((record.source.kind === "chat_attachment" &&
+        input.source.kind === "chat_attachment" &&
+        record.source.attachmentId === input.source.attachmentId) ||
+        (record.source.kind === "media_artifact" &&
+          input.source.kind === "media_artifact" &&
+          record.source.artifactId === input.source.artifactId))
+    );
   }
 
   // ── Voice transcription ─────────────────────────────────────────────────
@@ -1172,6 +1247,24 @@ export class MediaVoiceService {
         failureReason: record.failureReason,
       },
     });
+  }
+
+  private pruneMediaPlaybackTokens(now = Date.now()): void {
+    for (const [token, record] of this.mediaPlaybackTokens.entries()) {
+      if (record.expiresAtMs <= now) {
+        this.mediaPlaybackTokens.delete(token);
+      }
+    }
+  }
+
+  private enforceMediaPlaybackTokenCapacity(): void {
+    while (this.mediaPlaybackTokens.size > MEDIA_PLAYBACK_TOKEN_MAX_RECORDS) {
+      const oldestToken = this.mediaPlaybackTokens.keys().next().value;
+      if (typeof oldestToken !== "string") {
+        return;
+      }
+      this.mediaPlaybackTokens.delete(oldestToken);
+    }
   }
 
   private processMediaJob(jobId: string): void {

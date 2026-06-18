@@ -123,6 +123,23 @@ export async function readChatAttachmentContent(
   fullPath: string;
   bytes: Buffer;
 }> {
+  const { record, fullPath } = await resolveChatAttachmentContent(deps, attachmentId);
+  const bytes = await fs.readFile(fullPath);
+  return {
+    record,
+    fullPath,
+    bytes,
+  };
+}
+
+export async function resolveChatAttachmentContent(
+  deps: Pick<ChatAttachmentHost, "config" | "storage">,
+  attachmentId: string,
+): Promise<{
+  record: ChatAttachmentRecord;
+  fullPath: string;
+  sizeBytes: number;
+}> {
   const record = deps.storage.chatAttachments.get(attachmentId);
   const fullPath = path.resolve(deps.config.rootDir, deps.config.assistant.workspaceDir, record.storageRelPath);
   assertExistingPathRealpathAllowed(
@@ -130,11 +147,14 @@ export async function readChatAttachmentContent(
     deps.config.toolPolicy.sandbox.writeJailRoots,
     deps.config.toolPolicy.sandbox.readOnlyRoots,
   );
-  const bytes = await fs.readFile(fullPath);
+  const stat = await fs.stat(fullPath);
+  if (!stat.isFile()) {
+    throw new Error(`Attachment content is not a regular file: ${attachmentId}`);
+  }
   return {
     record,
     fullPath,
-    bytes,
+    sizeBytes: stat.size,
   };
 }
 
