@@ -106,6 +106,7 @@ describe("orchestration performance gates", () => {
           details: "fake-provider run recorded no duplicate dispatches",
         },
       ],
+      generatedAt: "2026-06-17T00:00:03.000Z",
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(4);

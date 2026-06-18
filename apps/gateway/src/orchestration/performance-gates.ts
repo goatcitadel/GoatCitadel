@@ -104,6 +104,9 @@ export function buildOrchestrationPerformanceReport(input: {
   };
 }
 
+// Ceiling "nearest-rank" percentile over an ascending-sorted input: index = ceil(n*p) - 1
+// (clamped to [0, n-1]). Not interpolated, so for even-count inputs p50 is the lower-middle
+// element (e.g. p50 of [100, 300] is 100, not 200). Chosen for determinism over smoothness.
 function percentile(values: number[], percentileValue: number): number {
   if (values.length === 0) {
     return 0;
