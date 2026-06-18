@@ -140,6 +140,11 @@ describe("OrchestrationPhaseExecutionService", () => {
       childTurnId: "turn-1",
       childRunId: "child-run-1",
       outputSummary: "Phase completed with evidence.",
+      prompt: {
+        promptId: "orchestration.durable.phase.execute",
+        promptVersion: "v1",
+        promptHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      },
     });
     expect(createChatSession).toHaveBeenCalledWith(expect.objectContaining({ mode: "cowork", origin: "system" }));
     expect(updateChatSessionPrefs).toHaveBeenCalledWith(

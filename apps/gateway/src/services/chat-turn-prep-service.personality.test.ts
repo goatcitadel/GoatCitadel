@@ -724,7 +724,16 @@ describe("prepareAgentChatTurn personality overlay", () => {
       modePolicy: "cowork",
       routeDecision,
       stepResults: [
-        createStepResult({ stepId: "completed", status: "completed", summary: "done" }),
+        createStepResult({
+          stepId: "completed",
+          status: "completed",
+          summary: "done",
+          prompt: {
+            promptId: "orchestration.turn.step.execute",
+            promptVersion: "v1",
+            promptHash: "sha256:abc",
+          },
+        }),
         createStepResult({ stepId: "failed", status: "failed", error: "timeout" }),
       ],
       finalSummary: "partial result",
@@ -740,7 +749,16 @@ describe("prepareAgentChatTurn personality overlay", () => {
       }),
     );
     expect(partial.steps).toEqual([
-      expect.objectContaining({ stepId: "completed", status: "completed", summary: "done" }),
+      expect.objectContaining({
+        stepId: "completed",
+        status: "completed",
+        summary: "done",
+        prompt: {
+          promptId: "orchestration.turn.step.execute",
+          promptVersion: "v1",
+          promptHash: "sha256:abc",
+        },
+      }),
       expect.objectContaining({ stepId: "failed", status: "failed", error: "timeout" }),
     ]);
   });
@@ -892,6 +910,11 @@ function createStepResult(overrides: {
   summary?: string;
   output?: string;
   error?: string;
+  prompt?: {
+    promptId: string;
+    promptVersion: string;
+    promptHash: string;
+  };
 }) {
   return {
     stepId: overrides.stepId,
@@ -907,5 +930,6 @@ function createStepResult(overrides: {
     summary: overrides.summary,
     output: overrides.output,
     error: overrides.error,
+    prompt: overrides.prompt,
   };
 }

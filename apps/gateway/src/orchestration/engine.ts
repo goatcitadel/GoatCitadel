@@ -12,6 +12,7 @@ import type {
   OrchestrationStepExecutionResult,
   OrchestrationTaskInput,
 } from "./types.js";
+import { renderVersionedChatMessagesPrompt } from "./prompt-registry.js";
 
 const DEFAULT_ORCHESTRATION_CONCURRENCY = 4;
 const PRIOR_OUTPUT_EXCERPT_CHAR_LIMIT = 3_000;
@@ -298,6 +299,18 @@ async function executeStep(input: {
     });
     return withDegradedHandoffStepIds(delegatedResult, degradedHandoffStepIds);
   }
+  const prompt = renderVersionedChatMessagesPrompt({
+    promptId: "orchestration.turn.step.execute",
+    promptVersion: "v1",
+    messages: buildStepMessages({
+      task: input.task,
+      plan: input.plan,
+      stepIndex: input.stepIndex,
+      priorSteps: input.priorSteps,
+      step: input.step,
+      specialistCandidate: input.step.specialistCandidate,
+    }),
+  });
   try {
     const response = await input.callbacks.createChatCompletion({
       providerId: input.step.providerId,
@@ -308,14 +321,7 @@ async function executeStep(input: {
         mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
         sessionId: input.task.sessionId,
       },
-      messages: buildStepMessages({
-        task: input.task,
-        plan: input.plan,
-        stepIndex: input.stepIndex,
-        priorSteps: input.priorSteps,
-        step: input.step,
-        specialistCandidate: input.step.specialistCandidate,
-      }),
+      messages: prompt.messages,
     });
     const finishedAt = new Date().toISOString();
     const output = extractCompletionText(response).trim() || "(no output returned)";
@@ -338,6 +344,7 @@ async function executeStep(input: {
       degradedHandoffStepIds: degradedHandoffStepIds.length > 0 ? degradedHandoffStepIds : undefined,
       citations: readCompletionCitations(response),
       routing: readCompletionRouting(response),
+      prompt: prompt.reference,
     };
   } catch (error) {
     const finishedAt = new Date().toISOString();
@@ -358,6 +365,7 @@ async function executeStep(input: {
       summary: `${toTitleCase(input.step.role)} failed`,
       error: (error as Error).message,
       degradedHandoffStepIds: degradedHandoffStepIds.length > 0 ? degradedHandoffStepIds : undefined,
+      prompt: prompt.reference,
       citations: [],
     };
   }
@@ -746,15 +754,9 @@ async function tryRepairFinalSynthesis(input: {
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
   try {
     const startedAt = new Date().toISOString();
-    const response = await input.callbacks.createChatCompletion({
-      providerId: repairSourceStep.providerId,
-      model: repairSourceStep.model,
-      stream: false,
-      memory: {
-        enabled: input.task.prefs.memoryMode !== "off",
-        mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
-        sessionId: input.task.sessionId,
-      },
+    const prompt = renderVersionedChatMessagesPrompt({
+      promptId: "orchestration.turn.final_synthesis.repair",
+      promptVersion: "v1",
       messages: [
         {
           role: "system",
@@ -781,6 +783,17 @@ async function tryRepairFinalSynthesis(input: {
         },
       ],
     });
+    const response = await input.callbacks.createChatCompletion({
+      providerId: repairSourceStep.providerId,
+      model: repairSourceStep.model,
+      stream: false,
+      memory: {
+        enabled: input.task.prefs.memoryMode !== "off",
+        mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
+        sessionId: input.task.sessionId,
+      },
+      messages: prompt.messages,
+    });
     const output = extractCompletionText(response).trim();
     if (!output) {
       return undefined;
@@ -803,6 +816,7 @@ async function tryRepairFinalSynthesis(input: {
         summary: summarizeOutput(output),
         model: response.model ?? repairSourceStep.model,
         repairedFromStepId: repairSourceStep.stepId,
+        prompt: prompt.reference,
         citations: dedupeCitations([...repairSourceStep.citations, ...readCompletionCitations(response)]),
       },
     };

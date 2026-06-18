@@ -15,6 +15,7 @@ import type {
   OrchestrationRun,
   OrchestrationRunPolicyContext,
 } from "@goatcitadel/contracts";
+import { renderVersionedTextPrompt } from "../orchestration/prompt-registry.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
@@ -78,28 +79,32 @@ export class OrchestrationPhaseExecutionService {
       subagentPolicy: "off",
     });
 
-    const prompt = [
-      "You are executing one GoatCitadel Cowork orchestration phase.",
-      "",
-      `Goal: ${input.plan.goal}`,
-      `Run: ${input.run.runId}`,
-      `Durable run: ${input.durableRun.runId}`,
-      `Phase: ${input.phase.phaseId}`,
-      `Owner agent: ${input.phase.ownerAgentId}`,
-      `Loop mode: ${input.phase.loopMode}`,
-      `Spec path: ${input.phase.specPath}`,
-      "",
-      "Phase spec:",
-      specText || "(The phase spec file was not readable; proceed from the plan metadata above.)",
-      "",
-      "Return the concrete phase output. Include decisions, files or artifacts touched, validation performed, blockers, and the next handoff if applicable. Do not claim later phases are complete.",
-    ].join("\n");
+    const prompt = renderVersionedTextPrompt({
+      promptId: "orchestration.durable.phase.execute",
+      promptVersion: "v1",
+      content: [
+        "You are executing one GoatCitadel Cowork orchestration phase.",
+        "",
+        `Goal: ${input.plan.goal}`,
+        `Run: ${input.run.runId}`,
+        `Durable run: ${input.durableRun.runId}`,
+        `Phase: ${input.phase.phaseId}`,
+        `Owner agent: ${input.phase.ownerAgentId}`,
+        `Loop mode: ${input.phase.loopMode}`,
+        `Spec path: ${input.phase.specPath}`,
+        "",
+        "Phase spec:",
+        specText || "(The phase spec file was not readable; proceed from the plan metadata above.)",
+        "",
+        "Return the concrete phase output. Include decisions, files or artifacts touched, validation performed, blockers, and the next handoff if applicable. Do not claim later phases are complete.",
+      ].join("\n"),
+    });
 
     try {
       const response = await this.deps.agentSendChatMessage(
         childSession.sessionId,
         {
-          content: prompt,
+          content: prompt.content,
           mode: "cowork",
           memoryMode: "auto",
           subagentPolicy: "off",
@@ -175,6 +180,7 @@ export class OrchestrationPhaseExecutionService {
         inputTokens,
         outputTokens,
         citations: response.citations,
+        prompt: prompt.reference,
         error:
           traceStatus === "failed"
             ? (failure ?? "Phase chat turn failed.")
@@ -193,6 +199,7 @@ export class OrchestrationPhaseExecutionService {
         startedAt,
         finishedAt: new Date().toISOString(),
         childSessionId: childSession.sessionId,
+        prompt: prompt.reference,
         error: error instanceof Error ? error.message : String(error),
       };
     }

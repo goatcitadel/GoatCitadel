@@ -857,6 +857,7 @@ export function buildChatOrchestrationSummary(input: {
       summary: step.summary,
       error: step.error,
       degradedHandoffStepIds: step.degradedHandoffStepIds,
+      prompt: step.prompt,
     })),
     integritySignals: input.integritySignals,
   };

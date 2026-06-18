@@ -177,6 +177,11 @@ describe("orchestration engine", () => {
     expect(result.finalStep?.role).toBe("synthesizer");
     expect(result.stepResults).toHaveLength(4);
     expect(result.stepResults.every((step) => step.status === "completed")).toBe(true);
+    expect(result.stepResults[0]?.prompt).toEqual({
+      promptId: "orchestration.turn.step.execute",
+      promptVersion: "v1",
+      promptHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
     expect(result.citations).toEqual([{ citationId: "c1", url: "https://example.com/1", title: "Source 1" }]);
   });
 
@@ -553,6 +558,11 @@ describe("orchestration engine", () => {
     expect(result.finalStep?.stepId).toBe("repair-step-3");
     expect(result.finalStep?.label).toBe("Synthesis repair");
     expect(result.finalStep?.repairedFromStepId).toBe("step-3");
+    expect(result.finalStep?.prompt).toEqual({
+      promptId: "orchestration.turn.final_synthesis.repair",
+      promptVersion: "v1",
+      promptHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
     expect(result.integritySignals).toEqual([
       "orchestration_final_synthesis_missing",
       "orchestration_final_synthesis_role_drift",
