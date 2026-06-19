@@ -37,6 +37,17 @@ public sealed class ActivationServiceTests
         Assert.AreEqual("/ops/approvals?ApprovalId=ap-1", route);
     }
 
+    [TestMethod]
+    public void DoesNotDuplicateExistingApprovalIdWithDifferentCasingInverse()
+    {
+        var parsed = ActivationRouteParser.TryGetRouteFromProtocolUri(
+            new Uri("goatcitadel://open?route=/ops/approvals%3FapprovalId%3Dap-1&ApprovalId=ap-2"),
+            out var route);
+
+        Assert.IsTrue(parsed);
+        Assert.AreEqual("/ops/approvals?approvalId=ap-1", route);
+    }
+
     [DataTestMethod]
     [DataRow("https://example.com")]
     [DataRow("goatcitadel://bad?route=/ops/activity")]
