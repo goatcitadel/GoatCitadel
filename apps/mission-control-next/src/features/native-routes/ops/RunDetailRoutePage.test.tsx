@@ -4,6 +4,7 @@ import { RunDetailRoutePage } from "./RunDetailRoutePage";
 
 const runTraceHarness = vi.hoisted(() => ({
   exportObserveRunTrace: vi.fn(),
+  fetchEvidenceReceipt: vi.fn(),
   fetchObserveRunTrace: vi.fn(),
   fetchOrchestrationRunTrace: vi.fn(),
 }));
@@ -15,6 +16,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
   return {
     ...actual,
     exportObserveRunTrace: runTraceHarness.exportObserveRunTrace,
+    fetchEvidenceReceipt: runTraceHarness.fetchEvidenceReceipt,
     fetchObserveRunTrace: runTraceHarness.fetchObserveRunTrace,
     fetchOrchestrationRunTrace: runTraceHarness.fetchOrchestrationRunTrace,
   };
@@ -22,6 +24,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
 
 beforeEach(() => {
   runTraceHarness.exportObserveRunTrace.mockReset();
+  runTraceHarness.fetchEvidenceReceipt.mockReset();
   runTraceHarness.fetchObserveRunTrace.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockRejectedValue(new Error("not an orchestration run"));
@@ -438,6 +441,92 @@ describe("RunDetailRoutePage", () => {
     expect(runTraceHarness.exportObserveRunTrace).toHaveBeenCalledWith("run-export");
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('{"runId":"run-export"}');
     expect(collectText(renderer!.root)).toContain("Copied trace export goatcitadel-run-trace-run-export.json.");
+    act(() => {
+      renderer!.unmount();
+    });
+  });
+
+  it("downloads a signed evidence receipt as pretty-printed JSON", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      runId: "run-receipt",
+      status: "completed",
+      mode: "chat",
+      request: { summary: "Prove the run.", requestedAt: "2026-05-02T19:00:00.000Z" },
+      artifacts: [],
+      errors: [],
+    });
+    const receipt = {
+      manifest: { schemaVersion: "1.0.0", runId: "run-receipt", generatedAt: "2026-05-02T19:01:00.000Z" },
+      contentHash: "abc123",
+      hashAlgorithm: "sha256",
+      signatureAlgorithm: "ed25519",
+      signature: "sig==",
+      publicKey: "pub==",
+    };
+    runTraceHarness.fetchEvidenceReceipt.mockResolvedValueOnce(receipt);
+
+    // This suite runs in the Node test environment (no jsdom), so the component's browser-download
+    // path has no DOM. Provide the minimal document/URL surface the handler touches, then restore it.
+    const click = vi.fn();
+    const anchor = { href: "", download: "", click } as unknown as HTMLAnchorElement;
+    const appendChild = vi.fn((node: unknown) => node);
+    const removeChild = vi.fn((node: unknown) => node);
+    const createElement = vi.fn(() => anchor);
+    const createObjectURL = vi.fn().mockReturnValue("blob:receipt");
+    const revokeObjectURL = vi.fn();
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const urlDescriptor = Object.getOwnPropertyDescriptor(globalThis, "URL");
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { createElement, body: { appendChild, removeChild } },
+    });
+    Object.defineProperty(globalThis, "URL", {
+      configurable: true,
+      value: { createObjectURL, revokeObjectURL },
+    });
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <RunDetailRoutePage
+          route={{ area: "ops", section: "sessions", view: "run-detail", runId: "run-receipt", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Download evidence receipt").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runTraceHarness.fetchEvidenceReceipt).toHaveBeenCalledWith("run-receipt");
+    expect(createElement).toHaveBeenCalledWith("a");
+    expect(anchor.download).toBe("evidence-receipt-run-receipt.json");
+    expect(anchor.href).toBe("blob:receipt");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(appendChild).toHaveBeenCalledWith(anchor);
+    expect(removeChild).toHaveBeenCalledWith(anchor);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:receipt");
+    expect(collectText(renderer!.root)).toContain("Downloaded signed evidence receipt evidence-receipt-run-receipt.json.");
+
+    if (documentDescriptor) {
+      Object.defineProperty(globalThis, "document", documentDescriptor);
+    } else {
+      delete (globalThis as Record<string, unknown>).document;
+    }
+    if (urlDescriptor) {
+      Object.defineProperty(globalThis, "URL", urlDescriptor);
+    } else {
+      delete (globalThis as Record<string, unknown>).URL;
+    }
     act(() => {
       renderer!.unmount();
     });
