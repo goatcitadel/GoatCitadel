@@ -153,7 +153,7 @@ describe("sqlite schema migrations", () => {
     const tempStore = db.prepare("PRAGMA temp_store;").get() as { temp_store: number };
     const walAutoCheckpoint = db.prepare("PRAGMA wal_autocheckpoint;").get() as { wal_autocheckpoint: number };
 
-    assert.equal(cacheSize.cache_size, -4096);
+    assert.equal(cacheSize.cache_size, -2048);
     assert.equal(tempStore.temp_store, 2);
     assert.equal(walAutoCheckpoint.wal_autocheckpoint, 1000);
     db.close();
