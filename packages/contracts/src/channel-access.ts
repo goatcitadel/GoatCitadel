@@ -5,11 +5,18 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 //
 // A per-connection sender allowlist for inbound channel messages (Slack,
-// WhatsApp, LINE, Nextcloud Talk, Telegram, Discord, ...). New connections
-// should set `inboundAccessMode: "allowlist"`, where an empty allowlist denies
-// inbound messages. Existing installs that do not have the mode keep the
-// legacy-open posture so upgrades do not strand operators, but callers get a
-// diagnostic warning they can surface in Settings/Ops.
+// WhatsApp, LINE, Nextcloud Talk, Telegram, Discord, ...). New inbound-capable
+// connections are default-safe: they set `inboundAccessMode: "allowlist"`,
+// where an empty allowlist DENIES inbound messages until an operator explicitly
+// allows a sender. This is the trust posture OpenClaw/Hermes tightened to —
+// unknown senders are never trusted by default.
+//
+// Backward compatibility, NOT the new default: existing installs that were
+// persisted before this change (no mode + no allowedSenders) keep the
+// legacy-open posture so an upgrade does not strand operators, but callers get
+// a diagnostic warning (`legacy_open_unset`) they can surface in Settings/Ops
+// and migrate. New connections never take that legacy path because the service
+// stamps an explicit `allowlist` mode at creation time.
 //
 // Matching is intentionally forgiving: entries and the inbound actor id are
 // trimmed and compared case-insensitively so operators do not have to worry
