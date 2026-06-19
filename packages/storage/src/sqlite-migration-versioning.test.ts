@@ -137,15 +137,19 @@ describe("sqlite schema migrations", () => {
     migrated.close();
   });
 
-  it("applies requested SQLite tuning pragmas", () => {
+  it("clamps requested SQLite tuning pragmas to supported floors", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-tuning-${randomUUID()}.db`);
     createdFiles.push(dbPath);
+    const requestedCacheSizeBelowFloorKb = 2_048;
+    const cacheSizeFloorKb = 4_096;
+    const requestedWalCheckpointBelowFloorPages = 500;
+    const walCheckpointFloorPages = 1_000;
     const db = createDatabase({
       dbPath,
       tuning: {
-        cacheSizeKb: 2_048,
+        cacheSizeKb: requestedCacheSizeBelowFloorKb,
         tempStoreMemory: true,
-        walAutoCheckpointPages: 500,
+        walAutoCheckpointPages: requestedWalCheckpointBelowFloorPages,
       },
     });
 
@@ -153,9 +157,9 @@ describe("sqlite schema migrations", () => {
     const tempStore = db.prepare("PRAGMA temp_store;").get() as { temp_store: number };
     const walAutoCheckpoint = db.prepare("PRAGMA wal_autocheckpoint;").get() as { wal_autocheckpoint: number };
 
-    assert.equal(cacheSize.cache_size, -4096);
+    assert.equal(cacheSize.cache_size, -cacheSizeFloorKb);
     assert.equal(tempStore.temp_store, 2);
-    assert.equal(walAutoCheckpoint.wal_autocheckpoint, 1000);
+    assert.equal(walAutoCheckpoint.wal_autocheckpoint, walCheckpointFloorPages);
     db.close();
   });
 

@@ -148,50 +148,59 @@ function parseArgs(argv) {
   const parsed = {
     requireSuccess: false,
   };
-  for (let index = 0; index < argv.length; index += 1) {
+  let index = 0;
+  const takeOptionValue = (flag) => {
+    if (index + 1 >= argv.length) {
+      throw new Error(`Missing value for argument: ${flag}`);
+    }
+    index += 1;
+    return argv[index];
+  };
+  while (index < argv.length) {
     const value = argv[index];
     if (value === "--version") {
-      parsed.version = argv[index + 1];
+      parsed.version = takeOptionValue("--version");
       index += 1;
       continue;
     }
     if (value === "--tag") {
-      parsed.tag = argv[index + 1];
+      parsed.tag = takeOptionValue("--tag");
       index += 1;
       continue;
     }
     if (value === "--commit") {
-      parsed.commit = argv[index + 1];
+      parsed.commit = takeOptionValue("--commit");
       index += 1;
       continue;
     }
     if (value === "--repository") {
-      parsed.repository = argv[index + 1];
+      parsed.repository = takeOptionValue("--repository");
       index += 1;
       continue;
     }
     if (value === "--artifacts-dir") {
-      parsed.artifactsDir = argv[index + 1];
+      parsed.artifactsDir = takeOptionValue("--artifacts-dir");
       index += 1;
       continue;
     }
     if (value === "--proof-zip") {
-      parsed.proofZip = argv[index + 1];
+      parsed.proofZip = takeOptionValue("--proof-zip");
       index += 1;
       continue;
     }
     if (value === "--out-file") {
-      parsed.outFile = argv[index + 1];
+      parsed.outFile = takeOptionValue("--out-file");
       index += 1;
       continue;
     }
     if (value === "--hostile-sandbox-proof") {
-      parsed.hostileSandboxProof = argv[index + 1];
+      parsed.hostileSandboxProof = takeOptionValue("--hostile-sandbox-proof");
       index += 1;
       continue;
     }
     if (value === "--require-success") {
       parsed.requireSuccess = true;
+      index += 1;
       continue;
     }
     throw new Error(`Unknown argument: ${value}`);
@@ -232,13 +241,7 @@ async function resolveRequiredLanes({ commit, repository }) {
 
 async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
   if (!repository || !commit || !process.env.GITHUB_TOKEN) {
-    return {
-      status: "unavailable",
-      conclusion: null,
-      html_url: null,
-      id: null,
-      head_sha: null,
-    };
+    return createWorkflowRunResult("unavailable");
   }
   const encodedWorkflow = encodeURIComponent(workflowFile);
   const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=10`;
@@ -251,41 +254,33 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       },
     });
     if (!response.ok) {
-      return {
-        status: `github-api-${response.status}`,
-        conclusion: null,
-        html_url: null,
-        id: null,
-        head_sha: null,
-      };
+      return createWorkflowRunResult(`github-api-${response.status}`);
     }
     const payload = await response.json();
     const run = payload.workflow_runs?.[0];
     if (!run) {
-      return {
-        status: "missing",
-        conclusion: null,
-        html_url: null,
-        id: null,
-        head_sha: null,
-      };
+      return createWorkflowRunResult("missing");
     }
-    return {
-      status: run.conclusion ?? run.status ?? "unknown",
+    return createWorkflowRunResult(run.conclusion ?? run.status ?? "unknown", {
       conclusion: run.conclusion ?? null,
       html_url: run.html_url ?? null,
       id: run.id ?? null,
       head_sha: run.head_sha ?? null,
-    };
+    });
   } catch (error) {
-    return {
-      status: `github-api-error:${error instanceof Error ? error.message : "unknown"}`,
-      conclusion: null,
-      html_url: null,
-      id: null,
-      head_sha: null,
-    };
+    return createWorkflowRunResult(`github-api-error:${error instanceof Error ? error.message : "unknown"}`);
   }
+}
+
+function createWorkflowRunResult(status, overrides = {}) {
+  return {
+    status,
+    conclusion: null,
+    html_url: null,
+    id: null,
+    head_sha: null,
+    ...overrides,
+  };
 }
 
 function formatRequiredLaneFailure(blocking, commit) {
@@ -338,7 +333,7 @@ function summarizeRequiredLaneExactSha(requiredLanes, commit) {
   let matched = 0;
   let checked = 0;
   for (const lane of requiredLanes) {
-    const proofRun = lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+    const proofRun = selectProofRun(lane);
     const headSha = proofRun?.headSha ?? null;
     if (!headSha) {
       missingProof.push(lane.name);
@@ -364,6 +359,10 @@ function summarizeRequiredLaneExactSha(requiredLanes, commit) {
     mismatched,
     missingProof,
   };
+}
+
+function selectProofRun(lane) {
+  return lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
 }
 
 function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLanes }) {

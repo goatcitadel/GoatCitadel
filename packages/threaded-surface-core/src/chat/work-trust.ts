@@ -129,6 +129,10 @@ function formatCompactPolicySummary(policySummary?: string | null, overrideActiv
   return overrideActive ? `Policy: ${profile} · override` : `Policy: ${profile}`;
 }
 
+function formatCostDisplay(cost: number): string {
+  return `$${cost.toFixed(cost >= 10 ? 1 : 2)}`;
+}
+
 export function formatWorkloadSummaryDescriptor(input: {
   approvalsCount: number;
   activeAgentsCount: number;
@@ -136,6 +140,7 @@ export function formatWorkloadSummaryDescriptor(input: {
   dailyCostUsd: number;
 }): WorkloadSummaryDescriptor {
   const { approvalsCount, activeAgentsCount, openTasksCount, dailyCostUsd } = input;
+  const formattedDailyCost = formatCostDisplay(dailyCostUsd);
   if (approvalsCount > 0) {
     return {
       tone: "warning",
@@ -145,17 +150,17 @@ export function formatWorkloadSummaryDescriptor(input: {
   if (activeAgentsCount > 0) {
     return {
       tone: "live",
-      label: `${activeAgentsCount} agent${activeAgentsCount === 1 ? "" : "s"} live · ${openTasksCount} task${openTasksCount === 1 ? "" : "s"} · $${dailyCostUsd.toFixed(dailyCostUsd >= 10 ? 1 : 2)}`,
+      label: `${activeAgentsCount} agent${activeAgentsCount === 1 ? "" : "s"} live · ${openTasksCount} task${openTasksCount === 1 ? "" : "s"} · ${formattedDailyCost}`,
     };
   }
   if (openTasksCount > 0) {
     return {
       tone: "muted",
-      label: `${openTasksCount} open task${openTasksCount === 1 ? "" : "s"} · $${dailyCostUsd.toFixed(dailyCostUsd >= 10 ? 1 : 2)}`,
+      label: `${openTasksCount} open task${openTasksCount === 1 ? "" : "s"} · ${formattedDailyCost}`,
     };
   }
   return {
     tone: "muted",
-    label: dailyCostUsd > 0 ? `$${dailyCostUsd.toFixed(dailyCostUsd >= 10 ? 1 : 2)} today` : "Workload clear",
+    label: dailyCostUsd > 0 ? `${formattedDailyCost} today` : "Workload clear",
   };
 }

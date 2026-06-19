@@ -27,7 +27,7 @@ public sealed class ActivationServiceTests
     }
 
     [TestMethod]
-    public void DoesNotDuplicateExistingApprovalIdWithDifferentCasing()
+    public void IgnoresDuplicateApprovalIdParameterWhenPresentInRoute()
     {
         var parsed = ActivationRouteParser.TryGetRouteFromProtocolUri(
             new Uri("goatcitadel://open?route=/ops/approvals%3FApprovalId%3Dap-1&approvalId=ap-2"),
@@ -35,6 +35,17 @@ public sealed class ActivationServiceTests
 
         Assert.IsTrue(parsed);
         Assert.AreEqual("/ops/approvals?ApprovalId=ap-1", route);
+    }
+
+    [TestMethod]
+    public void DoesNotDuplicateExistingApprovalIdWithDifferentCasingInverse()
+    {
+        var parsed = ActivationRouteParser.TryGetRouteFromProtocolUri(
+            new Uri("goatcitadel://open?route=/ops/approvals%3FapprovalId%3Dap-1&ApprovalId=ap-2"),
+            out var route);
+
+        Assert.IsTrue(parsed);
+        Assert.AreEqual("/ops/approvals?approvalId=ap-1", route);
     }
 
     [DataTestMethod]
@@ -51,6 +62,7 @@ public sealed class ActivationServiceTests
     [DataRow("\"C:\\Program Files\\GoatCitadel\\app.exe\" \"goatcitadel://open?route=/ops/approvals&approvalId=ap-9\"")]
     [DataRow("app.exe goatcitadel://open?route=/ops/approvals&approvalId=ap-9")]
     [DataRow("app.exe goatcitadel://bad?route=/ops/activity goatcitadel://open?route=/ops/approvals&approvalId=ap-9")]
+    [DataRow("app.exe goatcitadel://open?route=/ops/approvals&approvalId=ap-9 goatcitadel://open?route=/ops/activity")]
     public void ParsesGoatcitadelRouteFromRawLaunchArguments(string commandLine)
     {
         var parsed = ActivationRouteParser.TryGetRouteFromCommandLineArguments(commandLine, out var route);
