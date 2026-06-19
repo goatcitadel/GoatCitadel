@@ -9,7 +9,6 @@ import type { DurableRunRecord } from "@goatcitadel/contracts";
 import {
   EvidenceReceiptService,
   canonicalJsonBytes,
-  signManifest,
   verifyEvidenceReceipt,
   EVIDENCE_RECEIPT_HASH_ALGORITHM,
   EVIDENCE_RECEIPT_SIGNATURE_ALGORITHM,

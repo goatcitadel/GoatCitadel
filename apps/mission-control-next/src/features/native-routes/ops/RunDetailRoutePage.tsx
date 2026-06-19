@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ClipboardCopy, Download, FileText, GitBranch, RefreshCw, ShieldCheck } from "lucide-react";
+import { ClipboardCopy, FileText, GitBranch, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   exportObserveRunTrace,
   fetchEvidenceReceipt,
