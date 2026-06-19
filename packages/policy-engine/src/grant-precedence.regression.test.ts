@@ -75,8 +75,6 @@ const baseConfig: ToolPolicyConfig = {
 function grant(overrides: Partial<ToolGrantRecord> & Pick<ToolGrantRecord, "toolPattern" | "decision">): ToolGrantRecord {
   return {
     grantId: overrides.grantId ?? `grant-${overrides.toolPattern}-${overrides.decision}`,
-    toolPattern: overrides.toolPattern,
-    decision: overrides.decision,
     scope: overrides.scope ?? "session",
     scopeRef: overrides.scopeRef ?? "session-1",
     grantType: overrides.grantType ?? "persistent",
