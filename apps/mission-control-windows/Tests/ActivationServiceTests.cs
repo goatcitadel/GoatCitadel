@@ -27,7 +27,7 @@ public sealed class ActivationServiceTests
     }
 
     [TestMethod]
-    public void DoesNotDuplicateExistingApprovalIdWithDifferentCasing()
+    public void IgnoresDuplicateApprovalIdParameterWhenPresentInRoute()
     {
         var parsed = ActivationRouteParser.TryGetRouteFromProtocolUri(
             new Uri("goatcitadel://open?route=/ops/approvals%3FApprovalId%3Dap-1&approvalId=ap-2"),
