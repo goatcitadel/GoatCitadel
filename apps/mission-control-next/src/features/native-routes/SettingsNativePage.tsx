@@ -192,7 +192,7 @@ import {
   requestConfigFromDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
-import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useUiPreferences, type UiDensity } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList, StatusChip } from "./primitives";
@@ -527,8 +527,24 @@ function formatLocalAiBytes(value: number | undefined): string {
   return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GiB`;
 }
 
+function normalizeDensity(value: string): UiDensity {
+  return value === "comfortable" || value === "compact" ? value : "default";
+}
+
+function labelForDensity(value: UiDensity): string {
+  if (value === "comfortable") {
+    return "Comfortable";
+  }
+  if (value === "compact") {
+    return "Compact";
+  }
+  return "Default";
+}
+
 function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const {
+    density,
+    setDensity,
     notifications,
     setNotificationDesktopEnabled,
     setNotificationOnlyWhenUnfocused,
@@ -712,6 +728,30 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
               ]}
             />
+          </NativeCard>
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Interface"
+            subtitle="Tune how dense the operator surfaces feel. The choice persists on this device."
+            stats={[{ label: "Density", value: labelForDensity(density) }]}
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="Display density">
+                <select
+                  className="mc-next-settings-input"
+                  value={density}
+                  onChange={(event) => setDensity(normalizeDensity(event.target.value))}
+                >
+                  <option value="comfortable">Comfortable</option>
+                  <option value="default">Default</option>
+                  <option value="compact">Compact</option>
+                </select>
+                <p className="mc-next-settings-field-note">
+                  Comfortable enlarges type and controls; Compact tightens them for dense, evidence-heavy work.
+                </p>
+              </SettingsField>
+            </SettingsFieldGrid>
           </NativeCard>
           <NativeCard
             density="compact"

@@ -17,14 +17,9 @@
   --wa-font-family-body: var(--mc-font-sans);
   --wa-font-family-heading: var(--mc-font-sans);
   --wa-font-family-code: var(--mc-font-mono);
-  /* SYS-02: --mc-radius-* are deprecated aliases over the canonical --r-* scale
-     (mission-control-next-tokens.css) so there is a single radius source of
-     truth and the old --mc-radius-md 1rem vs --r-md 0.9rem drift cannot recur. */
-  --mc-radius-sm: var(--r-sm);
-  --mc-radius-md: var(--r-md);
-  --mc-radius-lg: var(--r-lg);
-  --mc-radius-xl: var(--r-lg);
-  --mc-radius-pill: var(--r-pill);
+  /* SYS-02: radius is a single source of truth — the canonical --r-* scale
+     (mission-control-next-tokens.css). The deprecated --mc-radius-* aliases were
+     removed once nothing referenced them. */
   --mc-shadow-soft: 0 18px 44px rgba(15, 23, 42, 0.08);
   --mc-shadow-strong: 0 28px 60px rgba(15, 23, 42, 0.18);
   --background: oklch(0.18 0.01 255);
