@@ -322,6 +322,10 @@ function formatLaneFailure(lane) {
   return `${lane.name}=${lane.status} via ${workflow}${url}`;
 }
 
+function selectProofRun(lane) {
+  return lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+}
+
 function summarizeRequiredLaneExactSha(requiredLanes, commit) {
   if (!commit) {
     return {
@@ -338,7 +342,7 @@ function summarizeRequiredLaneExactSha(requiredLanes, commit) {
   let matched = 0;
   let checked = 0;
   for (const lane of requiredLanes) {
-    const proofRun = lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+    const proofRun = selectProofRun(lane);
     const headSha = proofRun?.headSha ?? null;
     if (!headSha) {
       missingProof.push(lane.name);
