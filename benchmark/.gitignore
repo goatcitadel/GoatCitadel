@@ -1,0 +1,6 @@
+# Local benchmark configuration with real base URLs / auth tokens / competitor
+# binary paths. Never commit this — it is the user-provided "edges" wiring.
+targets.json
+
+# Generated scorecards and run artifacts.
+out/

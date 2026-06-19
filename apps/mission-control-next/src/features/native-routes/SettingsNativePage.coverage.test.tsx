@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsNativePage } from "./SettingsNativePage";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 
 const settingsMocks = vi.hoisted(() => {
   const fn = (value: unknown = {}) => vi.fn(async () => value);
@@ -1070,6 +1071,12 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(access.root, "Generate install token"));
     expect(collectText(access.root)).toContain("install-token");
     await click(findButton(access.root, "Revoke"));
+    const revokeModal = access.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Revoke device access?");
+    await act(async () => {
+      await revokeModal?.props.onConfirm();
+    });
     expect(settingsMocks.revokeDeviceAccessGrant).toHaveBeenCalledWith("device-1");
 
     const setActiveWorkspaceId = vi.fn();
@@ -1248,6 +1255,12 @@ describe("SettingsNativePage broad native sections", () => {
       }),
     );
     await click(findButton(tools.root, "Revoke"));
+    const toolRevokeModal = tools.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Revoke tool grant?");
+    await act(async () => {
+      await toolRevokeModal?.props.onConfirm();
+    });
     expect(settingsMocks.revokeToolGrant).toHaveBeenCalledWith("grant-1");
 
     const addons = await mount("addons");

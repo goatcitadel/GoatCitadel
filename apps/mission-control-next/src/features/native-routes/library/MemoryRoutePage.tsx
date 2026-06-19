@@ -10,7 +10,7 @@ import type {
   MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
-import { EmptyState, FilterPillGroup, NativeButton, StatusChip, type FilterPillOption } from "../primitives";
+import { EmptyState, FilterPillGroup, NativeButton, NoticeBanner, StatusChip, type FilterPillOption } from "../primitives";
 import {
   describeQmdImpact,
   formatBytes,
@@ -361,11 +361,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         { label: "Workspace", value: activeWorkspaceName },
       ]}
     >
-      {memory.notice ? (
-        <div className={`mc-next-runtime-notice tone-${memory.notice.tone}`}>
-          <span>{memory.notice.message}</span>
-        </div>
-      ) : null}
+      {memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
       {sectionErrors?.settings ? (
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}

@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://goatcitadel/benchmark/targets.schema.json",
+  "title": "GoatCitadel benchmark targets",
+  "description": "Pluggable target configuration for benchmark/run.mjs. Copy targets.example.json to targets.json (gitignored) and fill in the seams. Absent targets are skipped, not failed.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "goatcitadel": {
+      "type": "object",
+      "description": "The local GoatCitadel gateway. In-process scenarios need neither baseUrl nor keys.",
+      "additionalProperties": true,
+      "properties": {
+        "baseUrl": {
+          "type": ["string", "null"],
+          "description": "Base URL of a running gateway, e.g. http://127.0.0.1:8787. Null = HTTP scenarios skip unless --spin is passed."
+        },
+        "auth": { "$ref": "#/$defs/auth" }
+      }
+    },
+    "openclaw": { "$ref": "#/$defs/competitor" },
+    "hermes": { "$ref": "#/$defs/competitor" }
+  },
+  "$defs": {
+    "auth": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "loopback", "token"],
+          "description": "none/loopback need no header; token sends Authorization: Bearer <token>."
+        },
+        "token": { "type": ["string", "null"] }
+      }
+    },
+    "competitor": {
+      "type": "object",
+      "description": "A competitor target. Provide a command (binary to spawn) OR a baseUrl (running instance). Absent both = skipped.",
+      "additionalProperties": true,
+      "properties": {
+        "command": {
+          "type": ["string", "null"],
+          "description": "Path/command to the competitor binary the runner can spawn."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Arguments passed to the command."
+        },
+        "baseUrl": {
+          "type": ["string", "null"],
+          "description": "Base URL of an already-running competitor instance."
+        },
+        "auth": { "$ref": "#/$defs/auth" }
+      }
+    }
+  }
+}

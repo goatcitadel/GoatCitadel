@@ -8,7 +8,7 @@ import {
   validateCitadelBlueprint,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -163,7 +163,7 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
             </NativeButton>
           </div>
 
-          {importState.error ? <p className="mc-next-mason-error">{importState.error}</p> : null}
+          {importState.error ? <NoticeBanner tone="error" message={importState.error} /> : null}
           {importState.done ? <p className="mc-next-blueprint-ok">Blueprint imported.</p> : null}
           {importState.validation ? (
             importState.validation.ok ? (

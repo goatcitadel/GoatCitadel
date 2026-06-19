@@ -9,7 +9,7 @@ import {
   sendMasonMessage,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -179,7 +179,7 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
             ) : undefined
           }
         >
-          {sessionState.error ? <p className="mc-next-mason-error">{sessionState.error}</p> : null}
+          {sessionState.error ? <NoticeBanner tone="error" message={sessionState.error} /> : null}
           {!session ? (
             <div className="mc-next-mason-start">
               <p>Start a session and tell the Mason what this Citadel is for.</p>
@@ -239,7 +239,7 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
           </NativeCard>
         ) : review.error ? (
           <NativeCard title="Blueprint review" subtitle="The draft could not be reviewed.">
-            <p className="mc-next-mason-error">{review.error}</p>
+            <NoticeBanner tone="error" message={review.error} />
           </NativeCard>
         ) : null}
       </NativeGrid>

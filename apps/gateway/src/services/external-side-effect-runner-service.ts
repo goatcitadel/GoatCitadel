@@ -6,9 +6,11 @@ import type {
   IntegrationExternalWritebackResumeState,
   IntegrationExternalWritebackReplayOutcome,
   IntegrationExternalWritebackReplayPolicy,
+  WardEffect,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+import { wardRequiresDryRun } from "./dry-run-commit-service.js";
 
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
 
@@ -183,6 +185,13 @@ export interface ExternalSideEffectExecutionContext extends ExternalSideEffectCl
 export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
   label: string;
   output?: Record<string, unknown>;
+  /**
+   * The Citadel Ward effect resolved for this action (via evaluateWards()). When it is
+   * `require_dry_run`, a direct execute is REFUSED before the boundary — the side-effect must
+   * instead go through the provable dry-run → approve → commit flow (see dry-run-commit-service).
+   * Absent / any other effect → behaves exactly as before (backward-compatible).
+   */
+  wardEffect?: WardEffect;
   execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
 }
 
@@ -348,6 +357,48 @@ export async function runReplaySafeExternalSideEffectWorker<TValue>(
 export async function runIdempotentExternalSideEffect<TValue>(
   input: IdempotentExternalSideEffectRunInput<TValue>,
 ): Promise<IdempotentExternalSideEffectRunResult<TValue>> {
+  // Citadel Ward enforcement: a `require_dry_run` Ward forbids executing this side-effect directly.
+  // It must instead be routed through the provable dry-run → approve → commit flow. We refuse here,
+  // BEFORE the idempotency claim or any boundary work, so a direct `execute` can never slip through.
+  if (wardRequiresDryRun(input.wardEffect)) {
+    const claim = recordExternalSideEffectRun(input, {
+      replayPolicy: "idempotent_external",
+      replayOutcome: "idempotency_unavailable",
+      replayAttempt: "blocked",
+      resumable: false,
+      resumeState: "not_resumable",
+      idempotencyKey:
+        input.idempotencyKey?.trim() ||
+        hashStableIntentParts([
+          input.boundary,
+          input.catalogId,
+          input.connectionId,
+          input.actionId,
+          hashStableJson(input.payload),
+        ]),
+      payloadHash: hashStableJson(input.payload),
+      actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
+      routePath: [
+        "external_side_effect",
+        input.boundary,
+        input.catalogId ?? "unknown_catalog",
+        input.connectionId ?? "unknown_connection",
+        input.actionId ?? "unknown_action",
+      ].join(":"),
+    });
+    return {
+      status: "blocked",
+      claim,
+      message: `${input.label} requires a provable dry-run → approved commit (Citadel Ward "require_dry_run"); direct execution was refused before the external boundary.`,
+      blockedReason: "external_side_effect_dry_run_required",
+      output: buildExternalSideEffectReplayOutput(claim, {
+        ...input.output,
+        wardEffect: input.wardEffect,
+        dryRunRequired: true,
+      }),
+    };
+  }
+
   const claim = claimIdempotentExternalSideEffect(input);
   if (claim.replayOutcome !== "claimed") {
     return {

@@ -182,7 +182,22 @@ export class IntegrationChannelService {
   }
 }
 
-const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
+/**
+ * Channel keys that intentionally stay open (no inbound sender allowlist) on a
+ * NEW connection. These are channels with no per-sender inbound model, so an
+ * allowlist would be meaningless or would break their normal operation:
+ *
+ *   - `tui`  : local terminal; the operator is the local user, there is no
+ *              remote sender `actorId` to gate on.
+ *   - `ntfy` : outbound-only notification delivery (no inbound messages).
+ *
+ * Every other inbound-capable channel (Discord, Telegram, Slack, WhatsApp,
+ * LINE, Nextcloud Talk, Signal, Matrix, Mattermost, Teams, ...) is default-safe
+ * (allowlist) so unknown senders are denied until an operator explicitly allows
+ * them. An operator who genuinely wants an open posture for one of those
+ * channels must opt in via `inboundAccessMode: "open_legacy"`.
+ */
+const OPEN_INBOUND_CHANNELS = new Set(["tui", "ntfy"]);
 
 export function listIntegrationConnections(
   deps: IntegrationChannelPort,
@@ -376,6 +391,22 @@ export function updateIntegrationConnection(
   return updated;
 }
 
+/**
+ * Stamp a default inbound trust posture onto a connection's config.
+ *
+ * New connections default-safe: every inbound-capable channel gets
+ * `inboundAccessMode: "allowlist"` (empty allowlist = deny-until-allowed), so an
+ * unknown sender can never open a session by default. An operator must
+ * explicitly choose an open posture (`open_legacy`) per connection.
+ *
+ * Legacy stays open-with-warning until migrated: this only stamps a mode when
+ * the incoming config does NOT already carry one. EXISTING connections that
+ * were persisted before this default (unset mode + empty senders) are never
+ * rewritten here, so `evaluateChannelInboundAccess` keeps returning
+ * `legacy_open_unset` + a migration warning for them rather than locking out
+ * current users. When replacing config on such a connection we also carry the
+ * existing mode forward so an update does not silently change its posture.
+ */
 function applyChannelInboundAccessDefaults(
   kind: IntegrationKind,
   key: string,
@@ -389,12 +420,21 @@ function applyChannelInboundAccessDefaults(
     return config;
   }
   if (typeof existingConfig?.inboundAccessMode === "string") {
+    // Preserve the posture an existing connection already had (including a
+    // legacy connection that was migrated to an explicit mode), instead of
+    // re-defaulting it on a config replacement.
     return {
       ...config,
       inboundAccessMode: existingConfig.inboundAccessMode,
     };
   }
-  if (kind !== "channel" || !GENERIC_ALLOWLIST_INBOUND_CHANNELS.has(key)) {
+  // Replacing the config of an EXISTING connection that never had a mode: leave
+  // it unset so the legacy open-with-warning path stays in effect until the
+  // operator migrates it. Only NEW connections get the default-safe mode.
+  if (existingConfig !== undefined) {
+    return config;
+  }
+  if (kind !== "channel" || OPEN_INBOUND_CHANNELS.has(key)) {
     return config;
   }
   return {

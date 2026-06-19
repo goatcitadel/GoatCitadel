@@ -1,12 +1,44 @@
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
+import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
+import type { EvidenceReceiptDataPort } from "./evidence-receipt-service.js";
+import type { ComplianceExportDataPort } from "./compliance-export-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 
 export function composeMemoryKnowledgeRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
-  "capabilities" | "capabilityPacks" | "curator" | "evidence" | "improvement" | "knowledge" | "memory" | "skills"
+  | "capabilities"
+  | "capabilityPacks"
+  | "compliance"
+  | "curator"
+  | "evidence"
+  | "evidenceReceipts"
+  | "improvement"
+  | "knowledge"
+  | "memory"
+  | "skills"
 > {
+  // Evidence Receipt data port: read-only lineage sources, all from storage repos.
+  const evidenceReceiptData: EvidenceReceiptDataPort = {
+    getDurableRun: (runId) => gateway.storage.durableRuns.getRun(runId),
+    findCodeModeRun: (runId) => gateway.storage.codeModeRuns.find(runId),
+    listApprovalEffects: (approvalId) => gateway.storage.approvalEffects.listByApproval(approvalId),
+    listSideEffectsForWorkspace: (workspaceId) =>
+      gateway.storage.externalSideEffectRuns.listByWorkspace(workspaceId),
+  };
+  // Signing key lives in the OS keychain (same store the Vault master key uses). Generated lazily
+  // on first receipt; the public key is derived and embedded in each receipt for offline verify.
+  const evidenceReceiptSigningKeys = new KeychainEvidenceReceiptSigningKeyProvider({
+    secretStore: gateway.secretStore,
+  });
+  // C3 Compliance Export reuses the B1 receipt data port + signing key, adding only a range-listing
+  // source. durable_runs has no time/workspace index, so we list recent runs (newest first) and the
+  // service filters in-memory by range/workspace; see ComplianceExportService for the bound.
+  const complianceData: ComplianceExportDataPort = {
+    ...evidenceReceiptData,
+    listDurableRunsForExport: (scanLimit) => gateway.storage.durableRuns.listRuns(scanLimit),
+  };
   const knowledgeFacade = new KnowledgeFacadeService({
     invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),
   });
@@ -39,6 +71,14 @@ export function composeMemoryKnowledgeRouteDependencies(
     },
     evidence: {
       listEnvelopes: (input) => gateway.evidenceEnvelopeService.listEnvelopes(input),
+    },
+    evidenceReceipts: {
+      data: evidenceReceiptData,
+      signingKeys: evidenceReceiptSigningKeys,
+    },
+    compliance: {
+      data: complianceData,
+      signingKeys: evidenceReceiptSigningKeys,
     },
     improvement: {
       audit: {

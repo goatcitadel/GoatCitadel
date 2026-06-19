@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { evaluateChannelInboundAccess, type IntegrationConnection } from "@goatcitadel/contracts";
 import {
   createIntegrationConnection,
   updateIntegrationConnection,
@@ -129,7 +129,7 @@ describe("integration-channel-service inbound access defaults", () => {
     expect(connection.config.inboundAccessMode).toBe("open_legacy");
   });
 
-  it("does not add the generic allowlist mode to channels with stronger pairing posture", () => {
+  it("defaults new Telegram and Discord connections to allowlist (deny unknown senders)", () => {
     const deps = createDeps();
 
     const telegram = createIntegrationConnection(deps, {
@@ -149,8 +149,85 @@ describe("integration-channel-service inbound access defaults", () => {
       },
     });
 
-    expect(telegram.config.inboundAccessMode).toBeUndefined();
-    expect(discord.config.inboundAccessMode).toBeUndefined();
+    expect(telegram.config.inboundAccessMode).toBe("allowlist");
+    expect(discord.config.inboundAccessMode).toBe("allowlist");
+
+    // Default-safe: an unknown sender is denied until explicitly allowlisted.
+    expect(
+      evaluateChannelInboundAccess({ config: telegram.config, actorId: "tg-stranger" }),
+    ).toMatchObject({ allowed: false, mode: "allowlist", reason: "allowlist_empty" });
+    expect(
+      evaluateChannelInboundAccess({ config: discord.config, actorId: "dc-stranger" }),
+    ).toMatchObject({ allowed: false, mode: "allowlist", reason: "allowlist_empty" });
+  });
+
+  it("keeps outbound-only and local channels open (tui, ntfy do not get an allowlist)", () => {
+    const deps = createDeps();
+
+    const tui = createIntegrationConnection(deps, {
+      catalogId: "channel.tui",
+      label: "Terminal",
+      config: {},
+    });
+    const ntfy = createIntegrationConnection(deps, {
+      catalogId: "channel.ntfy",
+      label: "ntfy",
+      config: {
+        baseUrl: "https://ntfy.sh",
+        topic: "goatcitadel-ops",
+      },
+    });
+
+    expect(tui.config.inboundAccessMode).toBeUndefined();
+    expect(ntfy.config.inboundAccessMode).toBeUndefined();
+  });
+
+  it("lets an operator pick an explicit open ('allow all') posture for an inbound channel", () => {
+    const deps = createDeps();
+
+    const discord = createIntegrationConnection(deps, {
+      catalogId: "channel.discord",
+      label: "Discord",
+      config: {
+        runtimeMode: "gateway",
+        botTokenEnv: "DISCORD_BOT_TOKEN",
+        inboundAccessMode: "open_legacy",
+      },
+    });
+
+    expect(discord.config.inboundAccessMode).toBe("open_legacy");
+    expect(evaluateChannelInboundAccess({ config: discord.config, actorId: "anyone" })).toMatchObject({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_explicit",
+    });
+  });
+
+  it("does not retroactively lock out a legacy connection persisted without a mode", () => {
+    const deps = createDeps();
+
+    // Simulate a pre-existing connection that predates default-safe inbound
+    // access: no inboundAccessMode was ever stamped on it.
+    const legacy = deps.storage.integrationConnections.create({
+      catalogId: "channel.slack",
+      kind: "channel",
+      key: "slack",
+      label: "Legacy Slack",
+      config: { botTokenEnv: "SLACK_BOT_TOKEN" },
+    });
+    expect(legacy.config.inboundAccessMode).toBeUndefined();
+
+    // Replacing its config (without choosing a mode) must NOT silently flip it
+    // to a denying allowlist — it stays legacy-open with a migration warning.
+    const updated = updateIntegrationConnection(deps, legacy.connectionId, {
+      config: { botTokenEnv: "SLACK_BOT_TOKEN_V2" },
+    });
+    expect(updated.config.inboundAccessMode).toBeUndefined();
+    expect(evaluateChannelInboundAccess({ config: updated.config, actorId: "anyone" })).toMatchObject({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_unset",
+    });
   });
 
   it("preserves an existing inbound access mode when replacing connection config", () => {

@@ -24,7 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import { ThreePartChip, EmptyState, ErrorState, NativeButton, type ChipTone } from "../primitives";
+import { ThreePartChip, EmptyState, ErrorState, NativeButton, NoticeBanner, type ChipTone } from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -483,13 +483,9 @@ export function SettingsEmptyState({ label }: { label: string }) {
 }
 
 export function SettingsNotice({ notice }: { notice: Notice }) {
-  // Error-toned notices use the shared ErrorState (role=alert); info/success/
-  // warning tones fold onto the app's consistent runtime-notice channel rather
-  // than the bespoke .mc-next-settings-notice class.
-  if (notice.tone === "error") {
-    return <ErrorState size="inline" description={notice.message} />;
-  }
-  return <div className={`mc-next-runtime-notice tone-${notice.tone}`}>{notice.message}</div>;
+  // Routed through the shared NoticeBanner: error/warning -> ErrorState
+  // (role=alert), success/info -> the polite runtime-notice channel (role=status).
+  return <NoticeBanner tone={notice.tone} message={notice.message} />;
 }
 
 // ---------------------------------------------------------------------------

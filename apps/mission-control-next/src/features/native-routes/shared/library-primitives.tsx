@@ -2,7 +2,7 @@ import type React from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NativeMetricGrid, NativeSelectableList, NoticeBanner } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 
 export function LibrarySectionShell({
@@ -229,7 +229,10 @@ export function LibraryEmptyState({ label }: { label: string }) {
 }
 
 export function LibraryNotice({ notice }: { notice: Notice }) {
-  return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
+  // Routed through the shared NoticeBanner so library notices share the same
+  // a11y-correct surfaces as routes/settings (error/warning -> role=alert,
+  // success/info -> polite runtime-notice channel).
+  return <NoticeBanner tone={notice.tone} message={notice.message} />;
 }
 
 export function LibraryLoadWarnings({ issues, onRetry }: { issues: NativeLoadIssue[]; onRetry?: () => void }) {

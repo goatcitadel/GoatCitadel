@@ -816,6 +816,44 @@ export function CoworkNativePage({
       </NativeGrid>
     );
 
+  // WS-D2: lead with the active run's next action or top blocker, reusing the
+  // continuation summary the route already derives. The blocker path reuses the
+  // in-page task selection; the continue path reuses the Cowork navigate. When
+  // no task is visible there is no active run, so the lead is suppressed.
+  const hasActiveRun = tasks.length > 0 || deletedTasks.length > 0;
+  const leadIsBlocker = coworkContinuation.blockerCount > 0 && Boolean(coworkContinuation.firstBlockedTaskId);
+  const leadContent = hasActiveRun ? (
+    <article
+      className="mc-next-cowork-attention-strip"
+      data-tone={leadIsBlocker ? "blocked" : "attention"}
+      aria-label="Cowork next action"
+    >
+      <div>
+        {leadIsBlocker ? (
+          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+        ) : (
+          <Workflow className="h-4 w-4" aria-hidden="true" />
+        )}
+        <strong>{leadIsBlocker ? "Blocked" : `Next: ${coworkContinuation.nextActionLabel}`}</strong>
+      </div>
+      <p>{coworkContinuation.nextActionDetail}</p>
+      {leadIsBlocker ? (
+        <NativeButton
+          variant="secondary"
+          onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}
+        >
+          <AlertTriangle className="h-4 w-4" />
+          Open blocker
+        </NativeButton>
+      ) : (
+        <NativeButton variant="default" onClick={() => navigate({ area: "cowork", theme: route.theme })}>
+          <Workflow className="h-4 w-4" />
+          Continue Cowork
+        </NativeButton>
+      )}
+    </article>
+  ) : undefined;
+
   return (
     <NativePageFrame
       area="cowork"
@@ -828,6 +866,7 @@ export function CoworkNativePage({
       }
       loading={state.loading}
       error={state.error}
+      lead={leadContent}
       metrics={
         state.data
           ? [

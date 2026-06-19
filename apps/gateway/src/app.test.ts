@@ -2,10 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { __internal, buildApp } from "./app.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
+
+// Anchor on this file's location, not process.cwd(), so the diagnostics config
+// fixture resolves regardless of where the test runner is launched from.
+// src -> repo root is three levels up.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 describe("assertDeploymentProfileStartupSafety", () => {
   const originalAllowedOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
@@ -354,8 +360,7 @@ function configureDiagnosticsGateway(tempRoots: string[]): void {
 
 function createDiagnosticsConfigRoot(tempRoots: string[]): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-diagnostics-"));
-  const repoRoot = path.resolve(process.cwd(), "../..");
-  fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
+  fs.cpSync(path.join(REPO_ROOT, "config"), path.join(root, "config"), { recursive: true });
   tempRoots.push(root);
   return root;
 }

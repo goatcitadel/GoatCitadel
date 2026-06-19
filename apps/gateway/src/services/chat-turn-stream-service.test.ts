@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
+import { routeWithModelRouter } from "./model-router-decision-service.js";
 
 vi.mock("./chat-turn-helpers.js", () => ({
   buildDelegationFailureGuidance: () => "fallback guidance",
@@ -929,6 +930,7 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; norm
       workspaceFilesUsed: [],
       truncated: false,
     },
+    modelRouterDecision: routeWithModelRouter({ prompt: "hello" }),
   } as never;
 }
 

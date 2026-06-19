@@ -165,3 +165,61 @@ describe("evaluateChannelInboundAccess", () => {
     });
   });
 });
+
+describe("evaluateChannelInboundAccess default-safe posture for new connections", () => {
+  // A NEW inbound-capable connection is stamped with inboundAccessMode:
+  // "allowlist" at creation time (see applyChannelInboundAccessDefaults). With
+  // an empty allowlist that means deny-until-allowed for unknown senders. These
+  // tests pin that posture at the contract boundary, independent of the
+  // service, for the channel shapes Discord/Telegram now produce.
+  const newConnectionConfig = { inboundAccessMode: "allowlist", allowedSenders: [] as string[] };
+
+  it("denies an unknown sender on a fresh Discord/Telegram-shaped connection", () => {
+    expect(evaluateChannelInboundAccess({ config: newConnectionConfig, actorId: "dc-stranger" })).toEqual({
+      allowed: false,
+      mode: "allowlist",
+      reason: "allowlist_empty",
+      allowedSenders: [],
+    });
+  });
+
+  it("allows the sender once an operator adds it to the allowlist", () => {
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner"] },
+        actorId: "u-owner",
+      }),
+    ).toEqual({
+      allowed: true,
+      mode: "allowlist",
+      reason: "allowlist_match",
+      allowedSenders: ["u-owner"],
+    });
+  });
+
+  it("allows everyone when the operator deliberately picks an open ('allow all') posture", () => {
+    expect(
+      evaluateChannelInboundAccess({
+        config: { inboundAccessMode: "open_legacy" },
+        actorId: "dc-stranger",
+      }),
+    ).toEqual({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_explicit",
+      allowedSenders: [],
+      legacyWarning: "Connection explicitly permits all inbound senders through open_legacy mode.",
+    });
+  });
+
+  it("still treats a legacy connection (no mode, no senders) as open-with-warning for compatibility", () => {
+    expect(evaluateChannelInboundAccess({ config: {}, actorId: "anyone" })).toEqual({
+      allowed: true,
+      mode: "open_legacy",
+      reason: "legacy_open_unset",
+      allowedSenders: [],
+      legacyWarning:
+        "Connection has no inboundAccessMode and no allowedSenders, so it is using legacy default-open inbound access.",
+    });
+  });
+});

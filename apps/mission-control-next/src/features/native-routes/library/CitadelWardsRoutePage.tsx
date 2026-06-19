@@ -7,7 +7,7 @@ import {
   listCitadelWards,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { NativeButton } from "../primitives";
+import { NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -129,7 +129,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
             subtitle="Define a pattern and the effect it should enforce."
             density="compact"
           >
-            {draft.error ? <p className="mc-next-mason-error">{draft.error}</p> : null}
+            {draft.error ? <NoticeBanner tone="error" message={draft.error} /> : null}
             <label className="mc-next-mason-field" htmlFor={nameId}>
               <span>Name</span>
               <input

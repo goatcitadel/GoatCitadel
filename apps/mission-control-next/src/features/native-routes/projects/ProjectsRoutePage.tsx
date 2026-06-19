@@ -32,7 +32,7 @@ import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, FilterPillGroup, ModeBar, NativeButton, NativeSelectableList } from "../primitives";
+import { EmptyState, FilterPillGroup, ModeBar, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -478,6 +478,46 @@ export function ProjectsRoutePage({
 
   const totalProjectSessions = state.sessions.filter((session) => session.projectId).length;
 
+  // WS-D2: "Continue where you left off" lead built from the already-selected
+  // project and its derived home. The Open action reuses the most-recent session
+  // (via the same navigate shape the thread groups use) or falls back to
+  // continuing the project's freshest surface. Suppressed when no project exists
+  // so the existing guided empty state leads instead.
+  const recentLeadSession = projectHome?.recentSessions[0] ?? null;
+  const leadContent =
+    selectedProject && projectHome ? (
+      <article className="mc-next-project-card is-selected" aria-label="Continue where you left off">
+        <div className="mc-next-settings-selectable-head">
+          <strong>{selectedProject.name}</strong>
+          <span>{projectHome.healthLabel}</span>
+        </div>
+        <p>
+          {`Last activity ${projectHome.lastActivityLabel} · ${projectHome.activeCount} active ${
+            projectHome.activeCount === 1 ? "thread" : "threads"
+          } · ${selectedProject.description?.trim() || selectedProject.workspacePath}`}
+        </p>
+        <div className="mc-next-settings-button-row">
+          <NativeButton
+            onClick={() => {
+              if (recentLeadSession) {
+                navigate({
+                  area: recentLeadSession.mode ?? "chat",
+                  sessionId: recentLeadSession.sessionId,
+                  projectId: selectedProject.projectId,
+                  theme: route.theme,
+                });
+                return;
+              }
+              navigate({ area: "projects", projectId: selectedProject.projectId, theme: route.theme });
+            }}
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            {recentLeadSession ? "Open latest thread" : "Open project"}
+          </NativeButton>
+        </div>
+      </article>
+    ) : undefined;
+
   return (
     <NativePageFrame
       area="projects"
@@ -486,6 +526,7 @@ export function ProjectsRoutePage({
       description={`Cross-surface project threads for ${activeWorkspaceName}.`}
       loading={state.loading}
       error={state.error}
+      lead={leadContent}
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
         { label: "Project sessions", value: String(totalProjectSessions) },
@@ -653,11 +694,12 @@ export function ProjectsRoutePage({
             ),
           }))}
         >
-          {actionError ? <div className="mc-next-settings-notice error">{actionError}</div> : null}
+          {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
           {state.artifactIssue ? (
-            <div className="mc-next-settings-notice warning">
-              Project artifact records could not load: {state.artifactIssue}
-            </div>
+            <NoticeBanner
+              tone="warning"
+              message={`Project artifact records could not load: ${state.artifactIssue}`}
+            />
           ) : null}
           {selectedProject && projectHome ? (
             <ProjectHomeBasePanel

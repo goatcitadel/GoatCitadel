@@ -130,6 +130,151 @@ describe("mcp routes", () => {
     });
   });
 
+  it("fails closed and skips invokeMcpTool when the target MCP server needs re-auth", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [
+        {
+          serverId: "srv-oauth",
+          label: "Remote OAuth MCP",
+          authType: "oauth2",
+          authState: { authType: "oauth2", readiness: "needs_auth" },
+        },
+      ]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-oauth", toolName: "remote.read", agentId: "operator" },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("needs re-authentication"),
+    });
+    expect(service.invokeMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the target MCP server's OAuth token is expired", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [
+        {
+          serverId: "srv-oauth",
+          label: "Remote OAuth MCP",
+          authType: "oauth2",
+          authState: { authType: "oauth2", readiness: "expired" },
+        },
+      ]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-oauth", toolName: "remote.read" },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("expired"),
+    });
+    expect(service.invokeMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("invokes a ready MCP server through the auth gate", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [
+        {
+          serverId: "srv-oauth",
+          label: "Remote OAuth MCP",
+          authType: "oauth2",
+          authState: { authType: "oauth2", readiness: "ready" },
+        },
+      ]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-oauth", toolName: "remote.read" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.invokeMcpTool).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv-oauth", toolName: "remote.read" }),
+    );
+  });
+
+  it("rejects an ambiguous bare tool name exposed by more than one connected MCP server", async () => {
+    const connectedServer = (serverId: string, label: string) => ({
+      serverId,
+      label,
+      authType: "none" as const,
+      enabled: true,
+      status: "connected" as const,
+      trustTier: "restricted" as const,
+    });
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [connectedServer("srv-a", "Server A"), connectedServer("srv-b", "Server B")]),
+      listMcpTools: vi.fn((serverId: string) => [{ serverId, toolName: "read_file", enabled: true }]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-a", toolName: "read_file" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("mcp__srv-a__read_file"),
+    });
+    expect(service.invokeMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves a namespaced mcp__<serverId>__<tool> name to its server and strips the prefix", async () => {
+    const connectedServer = (serverId: string, label: string) => ({
+      serverId,
+      label,
+      authType: "none" as const,
+      enabled: true,
+      status: "connected" as const,
+      trustTier: "restricted" as const,
+    });
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [connectedServer("srv-a", "Server A"), connectedServer("srv-b", "Server B")]),
+      listMcpTools: vi.fn((serverId: string) => [{ serverId, toolName: "read_file", enabled: true }]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "ignored", toolName: "mcp__srv-b__read_file" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.invokeMcpTool).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv-b", toolName: "read_file" }),
+    );
+  });
+
+  it("returns 404 for a namespaced tool that targets an unknown MCP server", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [{ serverId: "srv-a", label: "Server A" }]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-a", toolName: "mcp__srv-missing__read_file" },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("srv-missing"),
+    });
+    expect(service.invokeMcpTool).not.toHaveBeenCalled();
+  });
+
   it("awaits async MCP connect responses", async () => {
     const connectMcpServer = vi.fn(async () => ({
       serverId: "srv-1",
