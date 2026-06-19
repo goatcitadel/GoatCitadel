@@ -6,7 +6,7 @@ import { createCronRoutePort } from "./cron-route-service.js";
 import { createDashboardRoutePort } from "./dashboard-route-service.js";
 import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
-import { createLocalAiRouteService } from "./local-ai-route-service.js";
+import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
