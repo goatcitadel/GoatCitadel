@@ -59,6 +59,11 @@ import {
 } from "./channel-setup-route-service.js";
 import { createCommsRouteService, type CommsRoutePort, type CommsRouteService } from "./comms-route-service.js";
 import {
+  createComplianceRouteService,
+  type ComplianceRouteService,
+} from "./compliance-export-route-service.js";
+import type { ComplianceExportServiceDeps } from "./compliance-export-service.js";
+import {
   createConnectorsRouteService,
   type ConnectorsRoutePort,
   type ConnectorsRouteService,
@@ -186,6 +191,7 @@ export interface GatewayRouteServices {
   authAdmin: AuthAdminRouteService;
   approvals: ApprovalsRouteService;
   citadels: CitadelsRouteService;
+  compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
   capabilityPacks: CapabilityPacksRouteService;
   chatAttachments: ChatAttachmentsRouteService;
@@ -256,6 +262,7 @@ export interface GatewayRouteServiceDependencies {
   citadels: CitadelsRoutePort;
   masonInterpret?: MasonInterpret;
   vaultKey?: VaultKeyProvider;
+  compliance: ComplianceExportServiceDeps;
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
@@ -325,6 +332,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
     approvals: new ApprovalsRouteService(deps.approvals),
     citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
+    compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
