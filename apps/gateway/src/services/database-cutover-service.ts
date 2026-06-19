@@ -147,7 +147,14 @@ export class DatabaseCutoverService {
           skipStep(steps, "import", "Dry-run mode skipped the import stage.");
         }
 
-        const verification = await verifyAgainstSource(source, sourceSchema, postgres, backup.outputPath);
+        const verification = await verifyAgainstSource(
+          source,
+          sourceSchema,
+          postgres,
+          backup.outputPath,
+          undefined,
+          !input.execute,
+        );
         targetTranscriptEvents = verification.targetTranscriptEventCount ?? targetTranscriptEvents;
         targetAuditEvents = verification.targetAuditEventCount ?? targetAuditEvents;
         if (!verification.verified) {
@@ -350,6 +357,7 @@ async function verifyAgainstSource(
   postgres: PostgresDatabaseClient,
   sourceLabel: string,
   target?: string,
+  dryRun = false,
 ): Promise<DatabaseVerifyResponse> {
   const issues: DatabaseVerifyIssue[] = [];
   const sourceSummary = await summarizeSourceSnapshot(source);
@@ -395,10 +403,15 @@ async function verifyAgainstSource(
     }
   }
 
+  // In dry-run the import stage is skipped, so the freshly-migrated target is intentionally
+  // empty: row-count mismatches are expected and must NOT block (otherwise a dry run against
+  // any populated source always reports "failed" and never reaches the "ready" preview verdict).
+  // Only structural/connectivity problems block a dry run; execute mode enforces strict parity.
+  const blockingIssues = dryRun ? issues.filter((issue) => issue.code === "target_table_missing") : issues;
   return {
     source: sourceLabel,
     target,
-    verified: issues.length === 0,
+    verified: blockingIssues.length === 0,
     sourceSessionCount: sourceSummary.sessions,
     sourceTranscriptEventCount: sourceSummary.transcriptEvents,
     sourceAuditEventCount: sourceSummary.auditEvents,

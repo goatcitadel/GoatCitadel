@@ -131,6 +131,10 @@ export async function stopVerificationStack(stack) {
 export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (handle?.spawnError) {
+      await handle.logsFlushed?.catch(() => undefined);
+      throw handle.spawnError;
+    }
     if (handle?.child?.exitCode !== null) {
       await handle.logsFlushed?.catch(() => undefined);
       const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
@@ -164,24 +168,43 @@ export async function startProcess(context, name, commandArgs, extraEnv) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  const logsFlushed = new Promise((resolve) => {
-    child.once("exit", async () => {
+  const handle = {
+    child,
+    stdoutPath,
+    stderrPath,
+    spawnError: null,
+    logsFlushed: null,
+  };
+  // Without an 'error' listener, an async spawn failure (e.g. ENOENT because the binary is
+  // not on PATH, or EACCES) is re-thrown as an uncaught exception on a later tick — outside
+  // the caller's try/catch — crashing the whole verification run and leaking the temp root.
+  // Record it instead so waiters can surface it as a normal rejected promise.
+  child.once("error", (error) => {
+    handle.spawnError = error;
+  });
+  child.stdout?.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+  child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+  handle.logsFlushed = new Promise((resolve) => {
+    let settled = false;
+    const flush = async () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       try {
         await writeText(stdoutPath, Buffer.concat(stdoutChunks).toString("utf8"));
         await writeText(stderrPath, Buffer.concat(stderrChunks).toString("utf8"));
       } finally {
         resolve();
       }
-    });
+    };
+    // Settle on the first of exit/close/error: a spawn failure never emits 'exit', so keying
+    // only on 'exit' would leave this promise pending forever.
+    child.once("exit", flush);
+    child.once("close", flush);
+    child.once("error", flush);
   });
-  return {
-    child,
-    stdoutPath,
-    stderrPath,
-    logsFlushed,
-  };
+  return handle;
 }
 
 export async function stopProcess(handle) {

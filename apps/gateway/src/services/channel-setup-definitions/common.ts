@@ -144,32 +144,39 @@ export function normalizeSlackTargets(config: Record<string, unknown>): SlackSet
   const explicit = normalizeTargetArray(config.targets, "channel", "slack");
   const targets =
     explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChannel"), "Slack default", "channel");
-  return targets
-    .filter((target): target is NormalizedTargetRecord & { channel: string } => Boolean(target.channel))
-    .map((target, index) => ({
-      id: target.id || `slack-target-${index + 1}`,
-      label: target.label || target.channel || `Slack target ${index + 1}`,
-      channel: target.channel,
-      threadTs: target.threadTs,
-      kind: target.kind,
-      default: index === 0 || target.default === true,
-    }));
+  const channelTargets = targets.filter(
+    (target): target is NormalizedTargetRecord & { channel: string } => Boolean(target.channel),
+  );
+  // Only fall back to "first target is default" when the user did not explicitly mark one,
+  // otherwise a non-first explicit default ends up co-flagged with target[0] and consumers
+  // that pick the first default-flagged entry route to the wrong channel.
+  const hasExplicitDefault = channelTargets.some((target) => target.default === true);
+  return channelTargets.map((target, index) => ({
+    id: target.id || `slack-target-${index + 1}`,
+    label: target.label || target.channel || `Slack target ${index + 1}`,
+    channel: target.channel,
+    threadTs: target.threadTs,
+    kind: target.kind,
+    default: target.default === true || (!hasExplicitDefault && index === 0),
+  }));
 }
 
 export function normalizeTelegramTargets(config: Record<string, unknown>): TelegramSetupTarget[] {
   const explicit = normalizeTargetArray(config.targets, "chatId", "telegram");
   const targets =
     explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChatId"), "Telegram default", "chatId");
-  return targets
-    .filter((target): target is NormalizedTargetRecord & { chatId: string } => Boolean(target.chatId))
-    .map((target, index) => ({
-      id: target.id || `telegram-target-${index + 1}`,
-      label: target.label || target.chatId || `Telegram target ${index + 1}`,
-      chatId: target.chatId,
-      threadId: target.threadId,
-      kind: target.kind,
-      default: index === 0 || target.default === true,
-    }));
+  const chatTargets = targets.filter(
+    (target): target is NormalizedTargetRecord & { chatId: string } => Boolean(target.chatId),
+  );
+  const hasExplicitDefault = chatTargets.some((target) => target.default === true);
+  return chatTargets.map((target, index) => ({
+    id: target.id || `telegram-target-${index + 1}`,
+    label: target.label || target.chatId || `Telegram target ${index + 1}`,
+    chatId: target.chatId,
+    threadId: target.threadId,
+    kind: target.kind,
+    default: target.default === true || (!hasExplicitDefault && index === 0),
+  }));
 }
 
 export function normalizeTargetArray(
@@ -196,7 +203,9 @@ export function normalizeTargetArray(
         threadTs: readString(item, "threadTs"),
         threadId: readString(item, "threadId") ?? readString(item, "messageThreadId"),
         kind: readString(item, "kind"),
-        default: item.default === true || item.default === "true" || index === 0,
+        // Preserve only the user's explicit default here; the "first target is the implicit
+        // default" fallback is applied later (per-provider) so it never overrides a chosen one.
+        default: item.default === true || item.default === "true",
       };
       if (addressKey === "channel") {
         normalized.channel = address;

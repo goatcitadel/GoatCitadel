@@ -815,7 +815,7 @@ async function promptMesh(
     mode === "tailnet"
       ? await confirm({
           message: "Tailnet path enabled?",
-          default: initialState.settings.mesh.tailnetEnabled || true,
+          default: initialState.settings.mesh.tailnetEnabled,
         })
       : initialState.settings.mesh.tailnetEnabled;
 

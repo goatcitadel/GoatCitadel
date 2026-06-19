@@ -251,15 +251,19 @@ export class BackupRetentionService {
 
     const backupDir = this.getBackupDirectory();
     const backupEntries = await listFilesSafe(backupDir);
+    // Backups are written as directories (`<id>.backup`), mirroring listBackups(); filtering
+    // for isFile() here matched nothing, so retention silently never pruned and disk grew
+    // unbounded. Filter for the real backup directories and remove them recursively.
     const sortedBackups = backupEntries
-      .filter((entry) => entry.isFile())
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(".backup"))
       .sort((left, right) => right.mtimeMs - left.mtimeMs);
     const removableBackups = sortedBackups.slice(Math.max(0, policy.backupsKeep));
     const removedBackupFiles = removableBackups.length;
-    reclaimedBytes += removableBackups.reduce((sum, file) => sum + file.size, 0);
-    if (!dryRun) {
-      for (const file of removableBackups) {
-        await fs.rm(path.join(backupDir, file.name), { force: true });
+    for (const backup of removableBackups) {
+      const backupPath = path.join(backupDir, backup.name);
+      reclaimedBytes += await directorySizeBytes(backupPath);
+      if (!dryRun) {
+        await fs.rm(backupPath, { recursive: true, force: true });
       }
     }
 
@@ -389,6 +393,36 @@ async function listFilesSafe(dir: string): Promise<
   } catch {
     return [];
   }
+}
+
+async function directorySizeBytes(dir: string): Promise<number> {
+  let total = 0;
+  const walk = async (current: string): Promise<void> => {
+    let entries: fsSync.Dirent[];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      try {
+        const stats = await fs.stat(fullPath);
+        total += stats.size;
+      } catch {
+        // Unreadable entry; skip it rather than abort the size computation.
+      }
+    }
+  };
+  await walk(dir);
+  return total;
 }
 
 async function pruneFilesOlderThan(

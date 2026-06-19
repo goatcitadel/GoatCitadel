@@ -388,6 +388,25 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         });
         return;
       }
+      // Reject an invalid TTL override rather than letting NaN reach the request, where
+      // JSON.stringify(NaN) === "null" would silently clear the override (the server treats
+      // null as "use default") instead of surfacing the bad input. Mirrors the server schema
+      // (positive integer, max 1 year, or null for default).
+      if (
+        patch.ttlOverrideSeconds !== undefined &&
+        patch.ttlOverrideSeconds !== null &&
+        !(
+          Number.isInteger(patch.ttlOverrideSeconds) &&
+          patch.ttlOverrideSeconds >= 1 &&
+          patch.ttlOverrideSeconds <= 31_536_000
+        )
+      ) {
+        setNotice({
+          tone: "error",
+          message: "TTL override must be a whole number of seconds between 1 and 31536000, or empty for the default.",
+        });
+        return;
+      }
       setBusyKey(`item:${itemId}`);
       setNotice(null);
       try {

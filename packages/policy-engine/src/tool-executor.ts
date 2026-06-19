@@ -1447,7 +1447,13 @@ function normalizePresentationVisualAsset(value: unknown): PresentationVisualAss
 }
 
 function truncateText(value: string, maxLength: number): string {
-  const normalized = value.trim().replace(/\s+/g, " ");
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, " ")
+    // Strip XML-1.0-illegal control chars (\t \n \r were already collapsed above) so the
+    // generated docx/pptx XML stays well-formed on both the styled and fallback render paths.
+    // eslint-disable-next-line no-control-regex -- intentionally matching C0 control chars
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
   return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...` : normalized;
 }
 

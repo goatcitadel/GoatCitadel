@@ -4432,7 +4432,7 @@ export function renderPromptPackMarkdownReport(
       // (Advisory: deterministic providers at temperature 0 can also trigger it.)
       const latestResponseText = run.responseText?.trim() ?? "";
       if (latestResponseText.length > 200) {
-        const occurrenceCount = longResponseOccurrences.get(`${test.testId} ${latestResponseText}`) ?? 0;
+        const occurrenceCount = longResponseOccurrences.get(`${test.testId} ${latestResponseText}`) ?? 0;
         if (occurrenceCount > 1) {
           lines.push(
             `- Determinism alarm: response text is byte-identical to ${occurrenceCount - 1} other run(s) of this test (suspected non-model content).`,

@@ -149,13 +149,21 @@ export class CostLedgerRepository {
         AND agent_id IS NOT NULL
     `);
 
+    // A single MIN() dropped every model but the lexicographically smallest, so a provider/day
+    // that used multiple models surfaced only one in the cost breakdown. Aggregate the DISTINCT
+    // model ids comma-joined (matching splitModelIds), branching on dialect because GROUP_CONCAT
+    // is SQLite-only and string_agg is Postgres-only.
+    const modelIdsAgg =
+      db.dialect === "postgres"
+        ? "string_agg(DISTINCT NULLIF(model_id, ''), ',')"
+        : "GROUP_CONCAT(DISTINCT NULLIF(model_id, ''))";
     this.dailySeriesStmt = db.prepare(
       providerAttributionSupported
         ? `
           SELECT
             day AS iso_date,
             COALESCE(NULLIF(provider_id, ''), 'unattributed') AS provider_key,
-            MIN(NULLIF(model_id, '')) AS model_ids,
+            ${modelIdsAgg} AS model_ids,
             SUM(token_input) AS token_input,
             SUM(token_output) AS token_output,
             SUM(token_cached_input) AS token_cached_input,

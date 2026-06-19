@@ -127,7 +127,15 @@ export async function handlePostgresSyncWorkerRequest(
         throw new Error(`Postgres transaction ${request.txId} is already active`);
       }
       const client = await runtime.pool.connect();
-      await client.query("BEGIN");
+      try {
+        await client.query("BEGIN");
+      } catch (error) {
+        // Release the checked-out client so a failed BEGIN does not leak it from the pool.
+        // Repeated failures would otherwise exhaust the pool and block all DB access for the
+        // worker, not just transactions.
+        client.release();
+        throw error;
+      }
       runtime.transactions.set(request.txId, client);
       return true;
     }

@@ -17,6 +17,7 @@ import type {
   SessionSummary,
   TaskRecord,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface LifecycleLinkedSets {
   sessionIds: Set<string>;
@@ -157,17 +158,43 @@ export class RuntimeLifecycleReadService {
     }
 
     if (state.runId && !durableRun) {
-      durableRun = this.host.getDurableRun(state.runId);
-      applyDurableFallbacks(durableRun, linked, state);
-      linked.runIds.add(durableRun.runId);
+      // state.runId here was resolved via linkage (turn/plan/delegation/task) and may not
+      // correspond to a durable-run record. Tolerate a missing record (degrade to a partial
+      // lifecycle) instead of throwing and failing the whole fetch; the query-supplied runId
+      // at the first lookup still surfaces a hard not-found.
+      try {
+        durableRun = this.host.getDurableRun(state.runId);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+        durableRun = undefined;
+      }
+      if (durableRun) {
+        applyDurableFallbacks(durableRun, linked, state);
+        linked.runIds.add(durableRun.runId);
+      }
     }
     if (state.approvalId && !approval) {
-      approval = this.host.getApproval(state.approvalId);
-      state.preferApprovalCanonical = true;
-      collectLifecycleLinksFromUnknown(linked, approval.linkage);
-      collectLifecycleLinksFromUnknown(linked, approval.payload);
-      collectLifecycleLinksFromUnknown(linked, approval.preview);
-      applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
+      // state.approvalId here was derived via task linkage and may point at a deleted/expired
+      // approval. Tolerate a missing record (degrade to a lifecycle without the approval)
+      // rather than throwing and failing the whole fetch; the user-supplied id at line 104
+      // still surfaces a hard not-found.
+      try {
+        approval = this.host.getApproval(state.approvalId);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+        approval = undefined;
+      }
+      if (approval) {
+        state.preferApprovalCanonical = true;
+        collectLifecycleLinksFromUnknown(linked, approval.linkage);
+        collectLifecycleLinksFromUnknown(linked, approval.payload);
+        collectLifecycleLinksFromUnknown(linked, approval.preview);
+        applyApprovalCanonical(approval, linked, state, this.host.getApprovalWaitRunId.bind(this.host));
+      }
     }
     if (state.taskId && !task) {
       task = this.host.findTask(state.taskId);

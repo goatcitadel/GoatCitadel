@@ -107,14 +107,27 @@ function getDevBootstrapPromise<T>(
     return cached.promise;
   }
 
-  const promise = factory().finally(() => {
-    globalThis.setTimeout(() => {
+  const promise = factory();
+  // Only cache successful results: evict the entry immediately on rejection so a single
+  // transient failure is not replayed from cache for the whole TTL window (which made the
+  // sidebar/runtime catalog appear broken until the entry expired). `promise` itself still
+  // rejects for the caller.
+  promise.then(
+    () => {
+      globalThis.setTimeout(() => {
+        const current = cache.get(key);
+        if (current?.promise === promise && current.expiresAt <= Date.now()) {
+          cache.delete(key);
+        }
+      }, DEV_BOOTSTRAP_CACHE_TTL_MS);
+    },
+    () => {
       const current = cache.get(key);
-      if (current?.promise === promise && current.expiresAt <= Date.now()) {
+      if (current?.promise === promise) {
         cache.delete(key);
       }
-    }, DEV_BOOTSTRAP_CACHE_TTL_MS);
-  });
+    },
+  );
 
   cache.set(key, {
     promise,

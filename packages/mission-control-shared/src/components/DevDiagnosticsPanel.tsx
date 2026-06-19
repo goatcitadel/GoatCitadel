@@ -4,7 +4,6 @@ import {
   buildDevDiagnosticsBundle,
   clearClientDiagnostics,
   isDevDiagnosticsEnabled,
-  listClientDiagnostics,
   useDevDiagnosticsState,
 } from "../state/dev-diagnostics-store";
 import { connectDevDiagnosticsStream, fetchDevDiagnostics } from "../api/client";
@@ -64,7 +63,10 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
   }, [open]);
 
   const mergedItems = useMemo(() => {
-    const localItems = listClientDiagnostics({ limit: 200 });
+    // Read from the store snapshot directly (not listClientDiagnostics()) so the memo actually
+    // depends on it: recordClientDiagnostic yields a fresh items array, invalidating the memo.
+    // The memo re-filters/sorts/slices below, so the helper's own filter/limit is redundant here.
+    const localItems = diagnosticsState.items;
     const items = [...gatewayItems, ...localItems]
       .filter((item) => {
         if (category && item.category !== category) {
@@ -80,7 +82,10 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
       })
       .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
     return items.slice(0, 300);
-  }, [category, correlationIdFilter, gatewayItems, level]);
+    // diagnosticsState.items is included so a newly recorded client diagnostic (which produces
+    // a fresh items array reference) invalidates this memo — otherwise local events never
+    // appear while the gateway is unreachable (gatewayItems stays empty).
+  }, [category, correlationIdFilter, gatewayItems, level, diagnosticsState.items]);
 
   const selectedEvent = mergedItems.find((item) => item.id === selectedEventId) ?? mergedItems[0] ?? null;
 

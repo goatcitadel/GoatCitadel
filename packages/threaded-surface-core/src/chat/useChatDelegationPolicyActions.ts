@@ -828,6 +828,7 @@ export function useChatDelegationPolicyActions(input: {
     }
     subagentRecommendationKeyRef.current = recommendationKey;
     let cancelled = false;
+    let didSetSending = false;
     void (async () => {
       try {
         const suggested = await suggestChatDelegation(selectedSession.sessionId, { objective });
@@ -839,6 +840,7 @@ export function useChatDelegationPolicyActions(input: {
           return;
         }
         setSending(true);
+        didSetSending = true;
         pushLocalNotice("Subagent policy is auto. Starting a delegated run because this task looks parallelizable.");
         const accepted = await runDelegationAction(
           selectedSession.sessionId,
@@ -855,7 +857,10 @@ export function useChatDelegationPolicyActions(input: {
           setError((err as Error).message);
         }
       } finally {
-        if (!cancelled && subagentPolicy === "auto_when_useful") {
+        // Always release the flag THIS invocation set, even if the effect was cancelled
+        // (deps changed / unmount) mid-run — otherwise the parent-owned `sending` stays stuck
+        // true with no operation running and wedges the composer.
+        if (didSetSending) {
           setSending(false);
         }
       }

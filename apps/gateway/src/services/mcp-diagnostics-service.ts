@@ -54,7 +54,11 @@ export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateD
       });
     }
     const missingCommand = checks.some((check) => check.key === "command" && check.status === "fail");
-    const missingUrl = checks.some((check) => check.key === "url" && check.status === "fail");
+    // The url check is only ever pushed as "pass"/"warn", never "fail", so deriving missingUrl
+    // from a "fail" status was always false and the "needs_url" readiness was unreachable —
+    // an http/sse template with no URL was wrongly reported "ready". Derive it from the actual
+    // condition instead.
+    const missingUrl = (template.transport === "http" || template.transport === "sse") && !template.url?.trim();
     const readiness = missingCommand
       ? "needs_command"
       : missingUrl

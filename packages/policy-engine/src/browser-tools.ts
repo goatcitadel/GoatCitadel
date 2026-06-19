@@ -877,8 +877,11 @@ async function executeBrowserStorageGet(
       browserSessionId,
       origin: normalizedOrigin,
       storage,
-      localStorage: { ...(state.localStorage[normalizedOrigin] ?? {}) },
-      sessionStorage: { ...(state.sessionStorage[normalizedOrigin] ?? {}) },
+      // Honor the requested storage kind, mirroring the no-origin branch below; previously the
+      // origin path returned both buckets regardless of `storage`, over-disclosing the bucket
+      // the caller did not ask for.
+      localStorage: storage === "session" ? {} : { ...(state.localStorage[normalizedOrigin] ?? {}) },
+      sessionStorage: storage === "local" ? {} : { ...(state.sessionStorage[normalizedOrigin] ?? {}) },
     };
   }
 
@@ -2952,7 +2955,10 @@ function decodeHtmlEntities(input: string): string {
         return "/";
       }
       const numeric = Number(normalized.slice(1));
-      return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
+      // Use fromCodePoint (not fromCharCode, which truncates to 16 bits) so astral-plane
+      // entities like &#128512; (😀) decode correctly. The range guard prevents fromCodePoint
+      // from throwing RangeError on out-of-range values.
+      return Number.isInteger(numeric) && numeric >= 0 && numeric <= 0x10ffff ? String.fromCodePoint(numeric) : "";
     }
     return namedEntities[normalized] ?? "";
   });

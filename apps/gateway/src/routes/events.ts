@@ -114,12 +114,23 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       parseSequenceCursor(parsed.data.afterCursor) ??
       parseSequenceCursor(readLastEventId(request.headers["last-event-id"]));
     const clientId = parsed.data.clientId?.trim() || randomUUID();
-    const lease = fastify.services.realtimeEvents.openRealtimeStreamLease({
-      streamName: "events",
-      clientId,
-      requestedCursor,
-      connectedAt: new Date().toISOString(),
-    });
+    // Open inside an IIFE so a throw here (e.g. a storage-layer failure) releases the per-IP
+    // connection slot that was incremented above. Without this, a failed open would skip the
+    // disconnect handlers wired further down, leaking the slot permanently and eventually
+    // 429-ing every future stream from this IP.
+    const lease = (() => {
+      try {
+        return fastify.services.realtimeEvents.openRealtimeStreamLease({
+          streamName: "events",
+          clientId,
+          requestedCursor,
+          connectedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        releaseConnection();
+        throw error;
+      }
+    })();
     let closed = false;
     let writeChain = Promise.resolve();
     let unsubscribe = () => undefined;

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IntegrationFieldSchema, IntegrationFormSchema } from "@goatcitadel/contracts";
 import { SelectOrCustom } from "./SelectOrCustom";
 import { globalCopy } from "../content/copy";
@@ -118,7 +118,11 @@ function FieldInput({
     );
   }
 
-  const inputType = field.type === "password" ? "password" : field.type === "number" ? "number" : "text";
+  if (field.type === "number") {
+    return <NumberFieldInput field={field} value={value} onChange={onChange} />;
+  }
+
+  const inputType = field.type === "password" ? "password" : "text";
   return (
     <input
       id={`integration-field-${field.key}`}
@@ -126,14 +130,60 @@ function FieldInput({
       type={inputType}
       value={stringifyValue(value)}
       placeholder={field.placeholder}
-      onChange={(event) => {
-        if (field.type === "number") {
-          const parsed = Number(event.target.value);
-          onChange(Number.isFinite(parsed) ? parsed : undefined);
-          return;
-        }
-        onChange(event.target.value);
-      }}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function NumberFieldInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: IntegrationFieldSchema;
+  value: unknown;
+  onChange: (next: unknown) => void;
+}) {
+  // Keep the user's raw text locally so the displayed value is exactly what was typed.
+  // Re-deriving the input from the parsed number dropped in-progress input such as a trailing
+  // "." (Number("1.") === 1 re-rendered to "1"), making decimals, a leading "-", and
+  // scientific notation impossible to type. The committed value stays numeric.
+  const [draft, setDraft] = useState<string>(() => stringifyValue(value));
+  const committedRef = useRef<unknown>(value);
+
+  useEffect(() => {
+    // Resync only when the value changes from outside (e.g. form reset/load), not our own edits.
+    if (!Object.is(value, committedRef.current)) {
+      committedRef.current = value;
+      setDraft(stringifyValue(value));
+    }
+  }, [value]);
+
+  const handleChange = (raw: string) => {
+    setDraft(raw);
+    const trimmed = raw.trim();
+    if (trimmed === "") {
+      committedRef.current = undefined;
+      onChange(undefined);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      committedRef.current = parsed;
+      onChange(parsed);
+    }
+    // In-progress/invalid input ("1.", "-", "1e") is kept in the draft but not committed.
+  };
+
+  return (
+    <input
+      id={`integration-field-${field.key}`}
+      className="mc-next-settings-input"
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      placeholder={field.placeholder}
+      onChange={(event) => handleChange(event.target.value)}
     />
   );
 }

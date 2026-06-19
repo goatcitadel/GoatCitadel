@@ -301,19 +301,20 @@ export function useNavigateGuard<Route>(
   );
 
   const confirmDiscard = useCallback(() => {
-    setPending((current) => {
-      if (!current) {
-        return null;
-      }
-      clearAllDirty();
-      if (current.options === undefined) {
-        rawNavigate(current.route);
-      } else {
-        rawNavigate(current.route, current.options);
-      }
-      return null;
-    });
-  }, [rawNavigate]);
+    // Run side effects in the handler body (not inside a setState updater, which React may
+    // invoke twice under StrictMode — double-firing clearAllDirty/rawNavigate). pending is
+    // reliably current because the confirm modal only renders/fires this while it is non-null.
+    if (!pending) {
+      return;
+    }
+    clearAllDirty();
+    if (pending.options === undefined) {
+      rawNavigate(pending.route);
+    } else {
+      rawNavigate(pending.route, pending.options);
+    }
+    setPending(null);
+  }, [pending, rawNavigate]);
 
   const cancelDiscard = useCallback(() => {
     setPending(null);

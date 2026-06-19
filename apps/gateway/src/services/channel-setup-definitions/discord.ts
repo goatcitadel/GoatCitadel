@@ -350,9 +350,16 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           runtimeMode === "gateway" ? (readString(draft.draft, "inboundDmPolicy") ?? "pairing") : undefined,
         guildPolicy: runtimeMode === "gateway" ? (readString(draft.draft, "guildPolicy") ?? "allowlist") : undefined,
         botToken: readString(draft.draft, "botToken") ?? readLegacyString(draft, "botToken", "token"),
+        // Do NOT fall back to webhookUrlEnv for webhookUrl — that leaks the env-var NAME into the
+        // literal URL field. Preserve webhookUrlEnv as its own field so env-backed bridge
+        // delivery (resolved via secretFrom(config,"webhookUrl","webhookUrlEnv")) still works.
         webhookUrl:
           runtimeMode === "bridge"
-            ? (readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl", "webhookUrlEnv"))
+            ? (readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl"))
+            : undefined,
+        webhookUrlEnv:
+          runtimeMode === "bridge"
+            ? (readString(draft.draft, "webhookUrlEnv") ?? readLegacyString(draft, "webhookUrlEnv"))
             : undefined,
       });
     },

@@ -2644,10 +2644,14 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           }
         })
         .finally(() => {
-          if (!cancelled) {
-            if (codexOAuthPollInFlightRef.current === flowId) {
-              codexOAuthPollInFlightRef.current = null;
-            }
+          // Release busy whenever THIS poll settles or is abandoned — not only when !cancelled.
+          // If the effect was cancelled mid-flight, cleanup() already nulled the in-flight ref,
+          // so gate on (ref === flowId) || (ref === null); both mean no live poll owns busy.
+          // Do NOT release when the ref points at a DIFFERENT flowId: a newer flow now owns it.
+          if (codexOAuthPollInFlightRef.current === flowId) {
+            codexOAuthPollInFlightRef.current = null;
+            setCodexOAuthBusy(false);
+          } else if (codexOAuthPollInFlightRef.current === null) {
             setCodexOAuthBusy(false);
           }
         });

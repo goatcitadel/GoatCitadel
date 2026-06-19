@@ -212,7 +212,14 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
           status: res.status,
         },
       });
-      return unwrapApiResponse<T>(await res.json());
+      // 204/205 (and any empty-body 2xx) have no JSON to parse. Calling res.json() on an
+      // empty body rejects with a SyntaxError that the catch below mis-tags as a "network"
+      // error, making successful no-content mutations (e.g. DELETE → 204) surface as failures.
+      if (res.status === 204 || res.status === 205) {
+        return undefined as T;
+      }
+      const bodyText = await res.text();
+      return bodyText ? unwrapApiResponse<T>(JSON.parse(bodyText)) : (undefined as T);
     } catch (error) {
       lastError =
         error instanceof ApiRequestError

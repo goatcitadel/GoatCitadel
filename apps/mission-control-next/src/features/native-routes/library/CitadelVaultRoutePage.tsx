@@ -47,6 +47,9 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
   const [secrets, setSecrets] = useState<SecretsState>({ loading: true, error: null, items: [] });
   const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
+  // Reveal failures are tracked separately from revealed plaintext so an error message is
+  // never rendered inside the secret-value <code> block (which would look like the secret).
+  const [revealErrors, setRevealErrors] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setSecrets((current) => ({ ...current, loading: true, error: null }));
@@ -91,25 +94,43 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
     }
   }, [activeWorkspaceId, draft.name, draft.value, load]);
 
-  const reveal = useCallback(
-    async (secretId: string) => {
-      try {
-        const value = await revealCitadelVaultSecret(activeWorkspaceId, secretId);
-        setRevealed((current) => ({ ...current, [secretId]: value }));
-      } catch (error) {
-        setRevealed((current) => ({ ...current, [secretId]: describeStoreError(error) }));
+  const clearRevealError = useCallback((secretId: string) => {
+    setRevealErrors((current) => {
+      if (current[secretId] === undefined) {
+        return current;
       }
-    },
-    [activeWorkspaceId],
-  );
-
-  const hide = useCallback((secretId: string) => {
-    setRevealed((current) => {
       const next = { ...current };
       delete next[secretId];
       return next;
     });
   }, []);
+
+  const reveal = useCallback(
+    async (secretId: string) => {
+      try {
+        const value = await revealCitadelVaultSecret(activeWorkspaceId, secretId);
+        setRevealed((current) => ({ ...current, [secretId]: value }));
+        clearRevealError(secretId);
+      } catch (error) {
+        // Record the failure separately and leave `revealed` unset so the button stays on
+        // "Reveal" and the error is shown as an error, not as the secret value.
+        setRevealErrors((current) => ({ ...current, [secretId]: describeStoreError(error) }));
+      }
+    },
+    [activeWorkspaceId, clearRevealError],
+  );
+
+  const hide = useCallback(
+    (secretId: string) => {
+      setRevealed((current) => {
+        const next = { ...current };
+        delete next[secretId];
+        return next;
+      });
+      clearRevealError(secretId);
+    },
+    [clearRevealError],
+  );
 
   const remove = useCallback(
     async (secretId: string) => {
@@ -172,6 +193,11 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
                   </div>
                   {revealed[secret.secretId] !== undefined ? (
                     <code className="mc-next-vault-value">{revealed[secret.secretId]}</code>
+                  ) : null}
+                  {revealErrors[secret.secretId] !== undefined ? (
+                    <p className="mc-next-mason-error" role="alert">
+                      {revealErrors[secret.secretId]}
+                    </p>
                   ) : null}
                 </li>
               ))}

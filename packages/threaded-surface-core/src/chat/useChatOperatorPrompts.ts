@@ -48,7 +48,7 @@ export function useChatOperatorPrompts({
   const [userInputPending, setUserInputPending] = useState(false);
   const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
-  const refreshPendingApprovalQueue = useCallback(async (sessionId: string) => {
+  const refreshPendingApprovalQueue = useCallback(async (sessionId: string, isCancelled?: () => boolean) => {
     const response = await fetchChatPendingApprovals(sessionId);
     const activeItems = response.items.filter((item) => !item.stale);
     const riskCounts = activeItems.reduce<Record<string, number>>((counts, item) => {
@@ -69,6 +69,12 @@ export function useChatOperatorPrompts({
       },
     });
     const active = activeItems.find((item) => item.approvalId === response.activeApprovalId) ?? activeItems[0] ?? null;
+    if (isCancelled?.()) {
+      // The selected session moved on while this fetch was in flight; do not apply a stale
+      // session's approval to the now-current session. Effect-driven calls pass isCancelled;
+      // handler-driven calls (approve/deny) omit it so their result is always applied.
+      return;
+    }
     if (!active) {
       setPendingApproval(null);
       return;
@@ -191,7 +197,11 @@ export function useChatOperatorPrompts({
     if (!selectedSession?.sessionId) {
       return;
     }
-    void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
+    let cancelled = false;
+    void refreshPendingApprovalQueue(selectedSession.sessionId, () => cancelled).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [refreshPendingApprovalQueue, selectedSession?.sessionId]);
 
   const handleSelectBranchTurn = useCallback(

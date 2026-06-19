@@ -179,7 +179,10 @@ export function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
     },
     normalize(draft) {
       return compactRecord({
-        webhookUrl: readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl", "webhookUrlEnv"),
+        // Do NOT fall back to webhookUrlEnv here: that copies the env-var NAME into the literal
+        // webhookUrl field, which the runtime would then POST to verbatim. webhookUrlEnv is
+        // preserved independently on the next line for env-backed delivery.
+        webhookUrl: readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl"),
         webhookUrlEnv: readString(draft.draft, "webhookUrlEnv") ?? readLegacyString(draft, "webhookUrlEnv"),
         cardTitle: readString(draft.draft, "cardTitle") ?? "GoatCitadel",
       });

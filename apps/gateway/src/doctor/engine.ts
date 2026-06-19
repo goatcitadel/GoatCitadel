@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Doctor currently centralizes audit and repair checks in one engine while sharing internal helpers across the command flow. */
-import { existsSync } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -924,7 +924,11 @@ async function checkStoragePaths(
   const notWritable: string[] = [];
   for (const item of configuredDirs) {
     const absolute = path.resolve(context.rootDir, item);
-    const writable = await isDirectoryWritable(absolute);
+    // In read-only/audit-only/no-repair modes never mutate the filesystem: use a probe that
+    // does not mkdir or write a temp file (which previously created all configured dirs).
+    const writable = context.repairEnabled
+      ? await isDirectoryWritable(absolute)
+      : await isExistingDirWritable(absolute);
     if (!writable) {
       notWritable.push(absolute);
     }
@@ -1868,6 +1872,21 @@ async function fetchWithTimeout(
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function isExistingDirWritable(dirPath: string): Promise<boolean> {
+  // Non-mutating writability probe for read-only modes. Missing dirs are already reported via
+  // the missing[] list, so do not create or probe them here (treat as not-additionally
+  // unwritable); only check dirs that already exist, without writing a probe file.
+  if (!(await pathExists(dirPath))) {
+    return true;
+  }
+  try {
+    await fs.access(dirPath, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

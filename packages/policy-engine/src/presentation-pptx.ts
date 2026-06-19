@@ -1024,7 +1024,10 @@ function xmlDocument(body: string): string {
 }
 
 function escapeXml(value: string): string {
-  return value.replace(/[<>&"']/g, (char) => {
+  return value
+    // eslint-disable-next-line no-control-regex -- strip C0 control chars illegal in XML 1.0 (tab/newline/CR preserved)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+    .replace(/[<>&"']/g, (char) => {
     switch (char) {
       case "<":
         return "&lt;";

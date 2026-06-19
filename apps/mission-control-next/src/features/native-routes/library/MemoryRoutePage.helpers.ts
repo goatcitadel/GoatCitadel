@@ -119,11 +119,14 @@ export function buildMemoryGraphProjection(input: {
   const entityIds = new Set(input.entities.map((item) => item.id));
   const orphanEntityCount = input.entities.filter((entity) => !linkedEntityIds.has(entity.id)).length;
   const connectedEntityCount = input.entities.filter((entity) => linkedEntityIds.has(entity.id)).length;
-  const danglingRelationCount = input.relations.filter(
-    (relation) => !entityIds.has(relation.fromEntityId) || !entityIds.has(relation.toEntityId),
+  // A relation that is both non-active AND dangling must be counted once, not summed twice
+  // (which let degradedRelationCount exceed the total relation count). Use a single union.
+  const degradedRelationCount = input.relations.filter(
+    (relation) =>
+      relation.status !== "active" ||
+      !entityIds.has(relation.fromEntityId) ||
+      !entityIds.has(relation.toEntityId),
   ).length;
-  const degradedRelationCount =
-    input.relations.filter((relation) => relation.status !== "active").length + danglingRelationCount;
   const provenanceSourceCount = countUniqueSourceRefs([
     ...input.entities.flatMap((item) => item.sourceRefs),
     ...input.relations.flatMap((item) => item.sourceRefs),

@@ -118,7 +118,7 @@ export function PromptPacksHero({
       </section>
 
       {hasReport && passRate !== undefined && passThreshold !== undefined ? (
-        <AssessmentThresholdBar passRate={passRate} threshold={passThreshold} />
+        <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} />
       ) : null}
 
       {error ? (

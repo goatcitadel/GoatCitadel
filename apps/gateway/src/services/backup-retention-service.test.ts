@@ -83,10 +83,15 @@ describe("BackupRetentionService", () => {
       config: createConfig(rootDir),
     });
 
+    // Backups are written as directories in production (createBackup → `<id>.backup` dir), so
+    // the test must use directories too — otherwise it silently exercises a representation the
+    // prune path never sees (which is exactly how the retention bug went unnoticed).
     const oldBackup = path.join(backupDir, "old.backup");
     const newBackup = path.join(backupDir, "new.backup");
-    await fs.writeFile(oldBackup, "old", "utf8");
-    await fs.writeFile(newBackup, "new", "utf8");
+    await fs.mkdir(oldBackup, { recursive: true });
+    await fs.mkdir(newBackup, { recursive: true });
+    await fs.writeFile(path.join(oldBackup, "manifest.json"), "old", "utf8");
+    await fs.writeFile(path.join(newBackup, "manifest.json"), "new", "utf8");
     await setAge(oldBackup, 20);
     await setAge(newBackup, 0);
     const oldTranscript = path.join(rootDir, "data", "transcripts", "old.jsonl");

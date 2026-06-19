@@ -61,11 +61,14 @@ export function assertNoAssembledPromptInjection(prompt: string): void {
 }
 
 function buildRedactedExcerpt(content: string, matchIndex: number, matchLength: number): string {
-  const compact = content.replace(/\s+/g, " ").trim();
+  // matchIndex/matchLength are offsets into the ORIGINAL content, so slice the window from the
+  // original (then collapse whitespace) — slicing a pre-collapsed string with original offsets
+  // shifted the window off the match whenever the content had leading whitespace/newlines.
   const start = Math.max(0, matchIndex - 48);
-  const end = Math.min(compact.length, matchIndex + matchLength + 96);
+  const end = Math.min(content.length, matchIndex + matchLength + 96);
+  const window = content.slice(start, end).replace(/\s+/g, " ").trim();
   return redactPromptwareExcerpt(
-    `${start > 0 ? "..." : ""}${compact.slice(start, end)}${end < compact.length ? "..." : ""}`,
+    `${start > 0 ? "..." : ""}${window}${end < content.length ? "..." : ""}`,
   );
 }
 

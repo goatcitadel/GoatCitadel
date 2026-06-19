@@ -41,20 +41,25 @@ export class ResearchSourceRepository {
     rank: number;
     createdAt?: string;
   }>): ResearchSourceRecord[] {
-    this.deleteByRunStmt.run(runId);
-    const now = new Date().toISOString();
-    for (const source of sources) {
-      this.insertStmt.run({
-        sourceId: source.sourceId,
-        runId,
-        title: source.title ?? null,
-        url: source.url,
-        snippet: source.snippet ?? null,
-        rank: source.rank,
-        createdAt: source.createdAt ?? now,
-      });
-    }
-    return this.listByRun(runId, Math.max(50, sources.length + 10));
+    // Wrap delete + insert in a single immediate transaction so a partial insert failure
+    // (constraint violation, transient IO error) rolls the DELETE back instead of leaving
+    // the run with a partial or empty source set. Matches PromptPackRepository.replacePackTests.
+    return this.db.transaction("immediate", () => {
+      this.deleteByRunStmt.run(runId);
+      const now = new Date().toISOString();
+      for (const source of sources) {
+        this.insertStmt.run({
+          sourceId: source.sourceId,
+          runId,
+          title: source.title ?? null,
+          url: source.url,
+          snippet: source.snippet ?? null,
+          rank: source.rank,
+          createdAt: source.createdAt ?? now,
+        });
+      }
+      return this.listByRun(runId, Math.max(50, sources.length + 10));
+    });
   }
 
   public listByRun(runId: string, limit = 200): ResearchSourceRecord[] {

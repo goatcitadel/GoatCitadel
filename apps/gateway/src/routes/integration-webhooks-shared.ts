@@ -82,6 +82,29 @@ const ALLOWED_SECRET_ENV_PREFIXES = [
   "CHANNEL_SECRET",
 ];
 
+export function isAllowedSecretEnvName(envName: string): boolean {
+  const trimmedEnvName = envName.trim().toUpperCase();
+  return ALLOWED_SECRET_ENV_PREFIXES.some((prefix) => trimmedEnvName.startsWith(prefix));
+}
+
+/**
+ * Resolve an environment-variable secret by name, but only when the name matches the
+ * channel-secret allowlist. Use this whenever the env-var NAME can be influenced by a
+ * request (never resolve a request-supplied env name without this guard, or arbitrary
+ * process env — DATABASE_URL, AWS_SECRET_ACCESS_KEY, GOATCITADEL_*_SECRET, … — can be
+ * exfiltrated to a third-party host).
+ */
+export function resolveAllowlistedEnvSecret(envName: string | undefined): string | undefined {
+  if (typeof envName !== "string" || envName.trim().length === 0) {
+    return undefined;
+  }
+  if (!isAllowedSecretEnvName(envName)) {
+    return undefined;
+  }
+  const resolved = process.env[envName.trim()];
+  return resolved?.trim() ? resolved.trim() : undefined;
+}
+
 export function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
   const direct = config[key];
   if (typeof direct === "string" && direct.trim().length > 0) {
@@ -91,10 +114,5 @@ export function readConfigSecret(config: Record<string, unknown>, key: string, e
   if (typeof envName !== "string" || envName.trim().length === 0) {
     return undefined;
   }
-  const trimmedEnvName = envName.trim().toUpperCase();
-  if (!ALLOWED_SECRET_ENV_PREFIXES.some((prefix) => trimmedEnvName.startsWith(prefix))) {
-    return undefined;
-  }
-  const resolved = process.env[envName.trim()];
-  return resolved?.trim() ? resolved.trim() : undefined;
+  return resolveAllowlistedEnvSecret(envName);
 }

@@ -1240,8 +1240,9 @@ async function downloadUrlToFile(input: {
       sha256,
     };
   } catch (error) {
+    // Only clean up the partial temp file. The atomic rename mutates destinationPath solely
+    // on full success, so a failed (re-)download must never delete a previously-good model.
     await fs.rm(tempPath, { force: true });
-    await fs.rm(destinationPath, { force: true });
     throw error;
   }
 }

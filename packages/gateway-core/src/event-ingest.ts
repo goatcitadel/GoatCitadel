@@ -5,10 +5,12 @@ import type {
   GatewayEventInput,
   GatewayEventResult,
   InboundEventIndexRow,
+  SessionMeta,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { resolveSessionRoute } from "./session-key.js";
+import { resolveSessionRoute, type SessionRouteResolution } from "./session-key.js";
 import { TokenCostLedger } from "./token-cost-ledger.js";
 
 export interface EventIngestOptions {
@@ -59,7 +61,7 @@ export class EventIngestService {
 
     const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
     if (existing) {
-      return this.buildDedupResult(existing, payloadHash);
+      return this.buildDedupResult(existing, payloadHash, route, options.payload.route);
     }
 
     const ingestResult = this.storage.runImmediateTransaction(() => {
@@ -67,7 +69,7 @@ export class EventIngestService {
       if (!inserted) {
         const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
         if (concurrent) {
-          return this.buildDedupResult(concurrent, payloadHash);
+          return this.buildDedupResult(concurrent, payloadHash, route, options.payload.route);
         }
       }
 
@@ -144,8 +146,13 @@ export class EventIngestService {
    *   instead report `accepted: false` so the caller can surface a replay/
    *   conflict instead of losing the message.
    */
-  private buildDedupResult(existing: InboundEventIndexRow, incomingPayloadHash: string): GatewayEventResult {
-    const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
+  private buildDedupResult(
+    existing: InboundEventIndexRow,
+    incomingPayloadHash: string,
+    route: SessionRouteResolution,
+    payloadRoute: GatewayEventInput["route"],
+  ): GatewayEventResult {
+    const session = this.resolveDedupSession(existing, route, payloadRoute);
     const payloadMatches = existing.payloadHash === incomingPayloadHash;
     return {
       accepted: payloadMatches,
@@ -153,6 +160,43 @@ export class EventIngestService {
       session,
       transcriptOffset: 0,
     };
+  }
+
+  /**
+   * Resolve the session for a dedup result. The idempotency index (keyed by
+   * endpoint+key) survives session deletion, so a re-delivered event whose session
+   * row has been pruned must not throw `NotFoundError` and turn a benign idempotent
+   * retry into a 500. When the row is gone we synthesize a minimal `SessionMeta`
+   * (the field is non-optional and dereferenced downstream).
+   */
+  private resolveDedupSession(
+    existing: InboundEventIndexRow,
+    route: SessionRouteResolution,
+    payloadRoute: GatewayEventInput["route"],
+  ): SessionMeta {
+    try {
+      return this.storage.sessions.getBySessionKey(existing.sessionKey);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+      return {
+        sessionId: route.sessionId,
+        sessionKey: existing.sessionKey,
+        kind: route.kind,
+        channel: payloadRoute.channel,
+        account: payloadRoute.account,
+        lastActivityAt: existing.receivedAt,
+        updatedAt: existing.processedAt ?? existing.receivedAt,
+        health: "healthy",
+        tokenInput: 0,
+        tokenOutput: 0,
+        tokenCachedInput: 0,
+        tokenTotal: 0,
+        costUsdTotal: 0,
+        budgetState: "ok",
+      };
+    }
   }
 
   public async flushPendingTranscriptOutbox(limit = 200): Promise<number> {

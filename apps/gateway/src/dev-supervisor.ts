@@ -53,13 +53,17 @@ const gatewayPort = Number(process.env.GATEWAY_PORT ?? 8787);
 // still making forward progress toward readiness.
 const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 180_000);
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
-const pollMs = Number(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS ?? 1200);
+// Parse with readPositiveInt (not raw Number) so a non-numeric/empty/typo'd value falls back
+// to the default instead of NaN. NaN is especially harmful for pollMs — setInterval(fn, NaN)
+// coerces to ~0ms and spins a full recursive FS walk back-to-back, pinning a CPU core — and it
+// also poisons the restart backoff math (Math.max(100, NaN) === NaN).
+const pollMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS, 1200);
 const watchDebounceMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_WATCH_DEBOUNCE_MS, 750);
-const restartWindowMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_WINDOW_MS ?? 60_000);
-const restartMaxFailures = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_FAILURES ?? 5);
-const restartBaseBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS ?? 1000);
-const restartMaxBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS ?? 30_000);
-const restartCircuitOpenMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS ?? 60_000);
+const restartWindowMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_WINDOW_MS, 60_000);
+const restartMaxFailures = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_FAILURES, 5);
+const restartBaseBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS, 1000);
+const restartMaxBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS, 30_000);
+const restartCircuitOpenMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS, 60_000);
 const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
 const useTs7 = shouldUseTs7();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");

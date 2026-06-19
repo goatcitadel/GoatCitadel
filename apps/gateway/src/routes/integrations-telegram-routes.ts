@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { buildTelegramTargetDirectory, resolveChannelTarget } from "../services/channel-target-directory.js";
 import { approveTelegramPairingCode } from "../services/telegram-channel-pairing.js";
 import { discoverTelegramTargets } from "../services/telegram-target-discovery.js";
+import { resolveAllowlistedEnvSecret } from "./integration-webhooks-shared.js";
 import {
   channelTargetDirectoryQuerySchema,
   connectionParamsSchema,
@@ -159,7 +160,10 @@ function resolveTelegramDiscoveryToken(
     return input.botToken.trim();
   }
   if (input.botTokenEnv?.trim()) {
-    return process.env[input.botTokenEnv.trim()];
+    // The env-var NAME is request-supplied; only resolve allowlisted channel-secret
+    // names so an attacker cannot exfiltrate arbitrary process env (e.g. DATABASE_URL,
+    // AWS_SECRET_ACCESS_KEY) by routing it through the api.telegram.org bot-token path.
+    return resolveAllowlistedEnvSecret(input.botTokenEnv);
   }
   if (!input.connectionId) {
     return undefined;
