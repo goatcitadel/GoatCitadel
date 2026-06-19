@@ -2,10 +2,11 @@ import { lookup as nodeDnsLookup } from "node:dns";
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { isIP } from "node:net";
 import type { EgressDecision } from "@goatcitadel/contracts";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { Dispatcher } from "undici";
 
 const DISALLOWED_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
+const DEFAULT_GLOBAL_FETCH = globalThis.fetch;
 
 // SECURITY (codex finding #25b, #26): Channel integrations embed secrets in
 // URLs (BlueBubbles `?password=…`, Telegram `/bot<token>/…`, Zalo path tokens).
@@ -155,6 +156,7 @@ type DnsLookupFunction = (
   options: LookupOptions,
   callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
 ) => void;
+type FetchWithDispatcher = (input: string, init: RequestInit & { dispatcher: Dispatcher }) => Promise<Response>;
 
 // SECURITY (codex finding #11, #12, #14, #22, #23): A single outbound HTTP
 // helper that:
@@ -452,11 +454,14 @@ async function fetchGuardedOnce(
   // safe; if streaming is added later, the body must be fully consumed before
   // the shared Agent is destroyed.
   const dispatcher = getGuardedDispatcher(url, allowlist, dnsLookup);
+  const fetchImpl = (globalThis.fetch === DEFAULT_GLOBAL_FETCH
+    ? undiciFetch
+    : globalThis.fetch) as unknown as FetchWithDispatcher;
   try {
-    return await fetch(url, {
+    return await fetchImpl(url, {
       ...fetchInit,
       dispatcher,
-    } as RequestInit & { dispatcher: Dispatcher });
+    });
   } catch (error) {
     const cause = (error as { cause?: unknown }).cause;
     if (cause instanceof Error && cause.message.includes("resolved address is blocked")) {

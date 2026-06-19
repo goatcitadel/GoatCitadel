@@ -56,6 +56,7 @@
     "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/check-button-types.test.mjs scripts/packaging/macos-packaging.test.mjs scripts/packaging/safe-cleanup.test.mjs scripts/release/release-certificate-proof.test.mjs scripts/verification/lib/scenarios.test.mjs && node scripts/verify-repo-hygiene.mjs",
     "verify:design:quality": "pnpm tsx scripts/verify-design-quality.ts",
     "verify:skills:catalog": "node scripts/check-skill-catalog.mjs",
+    "verify:workflows": "node scripts/verify-workflows.mjs",
     "verify:security:evals": "node scripts/verification/run.mjs security-evals",
     "verify:artifacts:redaction": "node --test scripts/verify-artifact-redaction.test.mjs && node scripts/verify-artifact-redaction.mjs",
     "verify:storage:migration-parity": "node --test scripts/verify-storage-migration-parity.test.mjs && node scripts/verify-storage-migration-parity.mjs",

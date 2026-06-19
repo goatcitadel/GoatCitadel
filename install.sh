@@ -124,7 +124,12 @@ install_workspace_dependencies() {
   if pnpm --dir "${APP_DIR}" install --frozen-lockfile; then
     return 0
   fi
-  echo "Frozen-lockfile install failed. GoatCitadel will retry with --no-frozen-lockfile so it can refresh lock metadata and restore the local toolchain if manifests moved ahead of pnpm-lock.yaml." >&2
+  if [[ "${GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH:-}" != "1" ]]; then
+    echo "Frozen-lockfile install failed. Refusing to refresh pnpm-lock.yaml during install." >&2
+    echo "Review the manifest/lockfile mismatch first, or set GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 for an intentional local recovery." >&2
+    return 1
+  fi
+  echo "Frozen-lockfile install failed. GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 is set; retrying with --no-frozen-lockfile for local recovery." >&2
   pnpm --dir "${APP_DIR}" install --no-frozen-lockfile
 }
 

@@ -986,6 +986,10 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
 
     expect(result.assistantContent).toBe(repairedAnswer);
     expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.turnTrace.completion?.failureCleared).toMatchObject({
+      failureClass: "unknown",
+      message: expect.stringContaining("tool calls were fully assembled"),
+    });
     expect(result.turnTrace.completion).toMatchObject({
       status: "complete",
       repaired: true,

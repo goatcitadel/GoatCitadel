@@ -101,15 +101,11 @@ describe("events stream route", () => {
     const response = await fetch(`${address}/api/v1/events/stream?replay=1`);
 
     expect(response.status).toBe(200);
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await reader!.read();
-    const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"leaseId":"lease-2"'));
     expect(text.includes("id: 42")).toBe(true);
     expect(text.includes('"sequence":42')).toBe(true);
     expect(text.includes("event: stream-ready")).toBe(true);
     expect(text.includes('"leaseId":"lease-2"')).toBe(true);
-    await reader!.cancel();
   });
 
   it("signals replay gaps when the requested cursor falls behind retention", async () => {
@@ -134,13 +130,9 @@ describe("events stream route", () => {
     const response = await fetch(`${address}/api/v1/events/stream?afterCursor=50`);
 
     expect(response.status).toBe(200);
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await reader!.read();
-    const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"oldestCursor":100'));
     expect(text.includes("event: replay-gap")).toBe(true);
     expect(text.includes('"oldestCursor":100')).toBe(true);
-    await reader!.cancel();
   });
 
   it("signals replay gaps when retained replay is truncated before the newest sequence", async () => {
@@ -286,7 +278,7 @@ describe("events stream route", () => {
     const response = await fetch(`${address}/api/v1/events/stream?replay=50`);
     expect(response.status).toBe(200);
 
-    const text = await readSseUntil(response, (buffer) => buffer.includes('"n":3'));
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"replayedEventCount":3'));
 
     // The event published during replay is delivered exactly once...
     expect(occurrences(text, '"sequence":3')).toBe(1);
@@ -366,7 +358,7 @@ describe("events stream route", () => {
     const response = await fetch(`${address}/api/v1/events/stream?afterCursor=10`);
     expect(response.status).toBe(200);
 
-    const text = await readSseUntil(response, (buffer) => buffer.includes('"n":13'));
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"lastSentSequence":13'));
 
     // The overlapping event (seq 12) is delivered exactly once...
     expect(occurrences(text, '"sequence":12')).toBe(1);

@@ -41,6 +41,21 @@ test("repo hygiene ignores deliberate fixture paths in tests", () => {
   assert.equal(findings.length, 0);
 });
 
+test("repo hygiene allows intentional tracked files covered by broad ignore rules", () => {
+  const intentionalTrackedIgnoredFiles = [
+    "scripts/packaging/runtime/ui-static-server.mjs",
+    "skills/bundled/goatcitadel-native-safe-self-improvement/templates/logs/ERRORS.md",
+  ];
+  const findings = collectRepoHygieneFindings({
+    trackedFiles: intentionalTrackedIgnoredFiles,
+    ignoredTrackedFiles: intentionalTrackedIgnoredFiles,
+    fileInfoByPath: new Map(intentionalTrackedIgnoredFiles.map((filePath) => [filePath, { size: 128 }])),
+    readTextFile: () => "",
+  });
+
+  assert.equal(findings.length, 0);
+});
+
 test("repo hygiene flags large tracked archives", () => {
   const findings = collectRepoHygieneFindings({
     trackedFiles: ["release/installer.zip"],

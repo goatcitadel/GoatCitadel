@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
+import fs from "node:fs";
 import type {
   BrowserSessionAccessCheck,
   FilesystemReadAccessMode,
@@ -696,15 +697,12 @@ export class ToolPolicyEngine {
     // flag on, the workspace acts as its Citadel. Default (flag off, no explicit
     // citadelId) → undefined → fully dormant, so existing decisions are unchanged.
     const effectiveCitadelId =
-      request.citadelId ??
-      (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
+      request.citadelId ?? (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
     const scopedRequest =
       effectiveCitadelId === request.citadelId ? request : { ...request, citadelId: effectiveCitadelId };
 
     // Citadel Wards (deny-wins) gate the request before grants.
-    const wardEffect = effectiveCitadelId
-      ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
-      : undefined;
+    const wardEffect = effectiveCitadelId ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName) : undefined;
     if (wardEffect === "deny") {
       return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
     }
@@ -892,9 +890,7 @@ export class ToolPolicyEngine {
    * mirroring Wards into tool-grants (which would be lossy to allow/deny).
    */
   private evaluateCitadelWards(citadelId: string, action: string): WardEffect | undefined {
-    const citadelRepo = this.storage.citadels as
-      | { listWards?: (id: string) => CitadelWardRecord[] }
-      | undefined;
+    const citadelRepo = this.storage.citadels as { listWards?: (id: string) => CitadelWardRecord[] } | undefined;
     if (!citadelRepo?.listWards) {
       return undefined;
     }
@@ -2057,8 +2053,12 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
       if (root.trim() === "*") {
         return true;
       }
-      const resolvedRoot = normalizePathForMatch(root);
-      if (resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`)) {
+      const rootVariants = normalizePathVariantsForMatch(root);
+      if (
+        rootVariants.some(
+          (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
+        )
+      ) {
         return true;
       }
     }
@@ -2070,6 +2070,16 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
 
 function normalizePathForMatch(value: string): string {
   return path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
+}
+
+function normalizePathVariantsForMatch(value: string): string[] {
+  const resolvedValue = normalizePathForMatch(value);
+  try {
+    const realValue = fs.realpathSync(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
+    return realValue === resolvedValue ? [resolvedValue] : [resolvedValue, realValue];
+  } catch {
+    return [resolvedValue];
+  }
 }
 
 function deny(riskLevel: ToolRiskLevel, code: string, reason: string): AccessEvaluation {

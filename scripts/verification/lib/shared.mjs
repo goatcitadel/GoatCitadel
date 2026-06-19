@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -161,6 +162,7 @@ export async function runCommand(command, args, options = {}) {
   const stderrPath = options.stderrPath ?? path.join(options.artifactRoot ?? artifactsRoot, `${logName}.stderr.log`);
   await fs.mkdir(path.dirname(stdoutPath), { recursive: true });
   await fs.mkdir(path.dirname(stderrPath), { recursive: true });
+  const tempDir = await ensureShortVerificationTempDir(options.tempDir);
 
   return await new Promise((resolve, reject) => {
     const stdoutCapture = createBoundedCapture(COMMAND_SUMMARY_CAPTURE_BYTES);
@@ -171,6 +173,9 @@ export async function runCommand(command, args, options = {}) {
       cwd: options.cwd ?? repoRoot,
       env: {
         ...process.env,
+        TMPDIR: tempDir,
+        TMP: tempDir,
+        TEMP: tempDir,
         ...(options.env ?? {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -204,6 +209,17 @@ export async function runCommand(command, args, options = {}) {
       });
     });
   });
+}
+
+async function ensureShortVerificationTempDir(requestedTempDir) {
+  if (requestedTempDir) {
+    await fs.mkdir(requestedTempDir, { recursive: true });
+    return requestedTempDir;
+  }
+  const base = process.platform === "win32" ? os.tmpdir() : "/tmp";
+  const tempDir = path.join(base, `gcv-${process.pid}`);
+  await fs.mkdir(tempDir, { recursive: true });
+  return tempDir;
 }
 
 function createBoundedCapture(maxBytes) {

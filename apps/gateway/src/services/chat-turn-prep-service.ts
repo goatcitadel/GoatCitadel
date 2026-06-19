@@ -418,12 +418,13 @@ export async function prepareAgentChatTurn(
     baseInstruction: undefined,
     goal: sessionMeta.pinnedGoal ?? null,
   });
-  const [resolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([
+  const [rawResolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([
     resolvedGuidancePromise,
     threadKnowledgeContextPromise,
     sideChatSystemInstructionPromise,
     sessionStatePromise,
   ]);
+  const resolvedGuidance = normalizeResolvedRuntimeGuidance(rawResolvedGuidance, workspaceId);
   const guidanceSystemInstruction = mergeChatSystemInstructions(
     goalAdjustedBaseGuidance || undefined,
     resolvedGuidance.systemInstruction,
@@ -516,6 +517,20 @@ export async function prepareAgentChatTurn(
     threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
   });
   return prepared;
+}
+
+function normalizeResolvedRuntimeGuidance(
+  guidance: Partial<ResolvedRuntimeGuidance>,
+  workspaceId: string,
+): ResolvedRuntimeGuidance {
+  return {
+    workspaceId:
+      typeof guidance.workspaceId === "string" && guidance.workspaceId.trim() ? guidance.workspaceId : workspaceId,
+    systemInstruction: guidance.systemInstruction,
+    globalFilesUsed: Array.isArray(guidance.globalFilesUsed) ? guidance.globalFilesUsed : [],
+    workspaceFilesUsed: Array.isArray(guidance.workspaceFilesUsed) ? guidance.workspaceFilesUsed : [],
+    truncated: guidance.truncated === true,
+  };
 }
 
 function recordPreparedTurnDecisions(

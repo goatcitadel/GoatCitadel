@@ -2880,7 +2880,7 @@ export class PromptPackService {
     const readConstraints = buildPromptPackSessionReadGrantConstraints({
       prompt,
       rootDir: this.ctx.config.rootDir,
-      workspaceRoot: path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
+      workspaceRoot: resolvePromptPackWorkspaceRoot(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
       projectWorkspacePath: projectBinding?.workspacePath,
     });
     const now = new Date().toISOString();
@@ -9195,6 +9195,16 @@ function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchm
     (typeof value.failure_signal === "string" || value.failure_signal === null) &&
     typeof value.created_at === "string"
   );
+}
+
+function resolvePromptPackWorkspaceRoot(rootDir: string, workspaceDir: string): string {
+  return isPromptPackWindowsAbsolutePath(rootDir)
+    ? path.win32.resolve(rootDir, workspaceDir)
+    : path.resolve(rootDir, workspaceDir);
+}
+
+function isPromptPackWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value.trim());
 }
 
 function listActivePromptPackToolGrants(

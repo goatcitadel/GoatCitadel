@@ -45,8 +45,21 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Setup Go for actionlint
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify workflow and PowerShell syntax
+        run: pnpm verify:workflows
 
       - name: Run ESLint
         run: pnpm lint --max-warnings 0

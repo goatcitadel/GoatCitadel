@@ -3539,8 +3539,10 @@ describe("CapabilitySystemService", () => {
     const run = await harness.service.createCodeModeRun({
       language: "typescript",
       source: `
-        console.log("x".repeat(70000));
-        console.error("y".repeat(70000));
+        for (let index = 0; index < 8000; index += 1) {
+          console.log("x".repeat(16));
+          console.error("y".repeat(16));
+        }
         return { ok: true };
       `,
       requestedOutputIntent: "Exercise bounded output capture.",

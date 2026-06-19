@@ -84,11 +84,7 @@ iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Power-user one-liner:
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 | iex
-```
+For release installs, prefer a tagged installer URL and review the downloaded script before execution. Avoid pipe-to-shell / `iex` install commands from mutable branches.
 
 Custom install root:
 
@@ -118,11 +114,7 @@ curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/instal
 bash install.sh
 ```
 
-Power-user one-liner:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh | bash
-```
+For release installs, prefer a tagged installer URL and review the downloaded script before execution. Avoid pipe-to-shell install commands from mutable branches.
 
 Custom install root:
 
@@ -135,6 +127,8 @@ Choose a different starter voice model:
 ```bash
 bash install.sh --voice-model small.en
 ```
+
+If dependency install fails because package manifests and `pnpm-lock.yaml` disagree, stop and review the diff. For intentional local recovery only, set `GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1` before rerunning the installer.
 
 ### Verify the installed launcher
 

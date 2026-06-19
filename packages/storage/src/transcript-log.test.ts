@@ -50,6 +50,29 @@ describe("TranscriptLog", () => {
     await assert.rejects(() => log.read(sessionId));
   });
 
+  it("keeps transcript files inside the transcript directory for unsafe session ids", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    const escapedName = `goatcitadel-transcript-escape-${randomUUID()}`;
+    const sessionId = `../${escapedName}`;
+    const escapedPath = path.resolve(root, `${sessionId}.jsonl`);
+    createdDirs.push(root, escapedPath);
+    const log = new TranscriptLog(root);
+
+    await log.append(buildEvent(sessionId, 0));
+
+    assert.equal(fs.existsSync(escapedPath), false);
+    const files = fs.readdirSync(root);
+    assert.equal(files.length, 1);
+    assert.match(files[0] ?? "", /^session-[A-Za-z0-9_-]+\.jsonl$/);
+
+    const events = await log.read(sessionId);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.sessionId, sessionId);
+
+    await log.delete(sessionId);
+    assert.equal(fs.existsSync(path.join(root, files[0] ?? "")), false);
+  });
+
   it("skips malformed transcript lines and continues reading", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
     createdDirs.push(root);

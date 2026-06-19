@@ -22,8 +22,6 @@ export const channelInboundSchema = z.object({
   room: z.string().optional(),
   threadId: z.string().optional(),
   actorId: z.string().min(1),
-  actorType: z.enum(["user", "agent", "system"]).optional(),
-  role: z.enum(["user", "assistant"]).optional(),
   content: z.string().min(1).max(CHANNEL_INBOUND_MAX_CONTENT_CHARS),
   displayName: z.string().optional(),
   usage: z
