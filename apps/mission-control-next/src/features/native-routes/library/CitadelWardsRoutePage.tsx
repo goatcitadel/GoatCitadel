@@ -12,14 +12,7 @@ import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
-const WARD_EFFECTS: WardEffect[] = [
-  "allow",
-  "deny",
-  "require_approval",
-  "require_dry_run",
-  "redact",
-  "route_local",
-];
+const WARD_EFFECTS: WardEffect[] = ["allow", "deny", "require_approval", "require_dry_run", "redact", "route_local"];
 
 interface WardsState {
   loading: boolean;
@@ -110,11 +103,13 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
       title="Wards"
       description={`Access policy for ${activeWorkspaceName}. Wards are evaluated deny-wins — the most restrictive matching effect governs an action.`}
       loading={wards.loading}
-      error={wards.error}    >
-      <NativeGrid>
+      error={wards.error}
+    >
+      <NativeGrid className="mc-next-native-work-pair mc-next-citadel-wards-grid">
         <NativeCard
           title="Active Wards"
           subtitle="Each Ward matches an action pattern (use * as a wildcard) and applies an effect."
+          density="compact"
           stats={[{ label: "Wards", value: String(wards.items.length) }]}
         >
           <NativeList
@@ -128,78 +123,84 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
           />
         </NativeCard>
 
-        <NativeCard title="Add a Ward" subtitle="Define a pattern and the effect it should enforce.">
-          {draft.error ? <p className="mc-next-mason-error">{draft.error}</p> : null}
-          <label className="mc-next-mason-field" htmlFor={nameId}>
-            <span>Name</span>
-            <input
-              id={nameId}
-              className="mc-next-settings-input"
-              value={draft.name}
-              placeholder="Block destructive shell"
-              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-            />
-          </label>
-          <label className="mc-next-mason-field" htmlFor={patternId}>
-            <span>Action pattern</span>
-            <input
-              id={patternId}
-              className="mc-next-settings-input"
-              value={draft.actionPattern}
-              placeholder="shell.*"
-              onChange={(event) => setDraft((current) => ({ ...current, actionPattern: event.target.value }))}
-            />
-          </label>
-          <label className="mc-next-mason-field" htmlFor={effectId}>
-            <span>Effect</span>
-            <select
-              id={effectId}
-              className="mc-next-settings-input"
-              value={draft.effect}
-              onChange={(event) => setDraft((current) => ({ ...current, effect: event.target.value as WardEffect }))}
+        <div className="mc-next-native-stack mc-next-citadel-ward-tools">
+          <NativeCard
+            title="Add a Ward"
+            subtitle="Define a pattern and the effect it should enforce."
+            density="compact"
+          >
+            {draft.error ? <p className="mc-next-mason-error">{draft.error}</p> : null}
+            <label className="mc-next-mason-field" htmlFor={nameId}>
+              <span>Name</span>
+              <input
+                id={nameId}
+                className="mc-next-settings-input"
+                value={draft.name}
+                placeholder="Block destructive shell"
+                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label className="mc-next-mason-field" htmlFor={patternId}>
+              <span>Action pattern</span>
+              <input
+                id={patternId}
+                className="mc-next-settings-input"
+                value={draft.actionPattern}
+                placeholder="shell.*"
+                onChange={(event) => setDraft((current) => ({ ...current, actionPattern: event.target.value }))}
+              />
+            </label>
+            <label className="mc-next-mason-field" htmlFor={effectId}>
+              <span>Effect</span>
+              <select
+                id={effectId}
+                className="mc-next-settings-input"
+                value={draft.effect}
+                onChange={(event) => setDraft((current) => ({ ...current, effect: event.target.value as WardEffect }))}
+              >
+                {WARD_EFFECTS.map((effect) => (
+                  <option key={effect} value={effect}>
+                    {effect}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <NativeButton
+              variant="default"
+              disabled={draft.busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
+              onClick={() => void addWard()}
             >
-              {WARD_EFFECTS.map((effect) => (
-                <option key={effect} value={effect}>
-                  {effect}
-                </option>
-              ))}
-            </select>
-          </label>
-          <NativeButton
-            variant="default"
-            disabled={draft.busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
-            onClick={() => void addWard()}
-          >
-            <ShieldAlert className="h-4 w-4" />
-            {draft.busy ? "Adding…" : "Add Ward"}
-          </NativeButton>
-        </NativeCard>
+              <ShieldAlert className="h-4 w-4" />
+              {draft.busy ? "Adding…" : "Add Ward"}
+            </NativeButton>
+          </NativeCard>
 
-        <NativeCard title="Test an action" subtitle="See which effect the current Wards would apply to an action.">
-          <label className="mc-next-mason-field" htmlFor={probeId}>
-            <span>Action</span>
-            <input
-              id={probeId}
-              className="mc-next-settings-input"
-              value={probe}
-              placeholder="shell.run"
-              onChange={(event) => setProbe(event.target.value)}
-            />
-          </label>
-          <NativeButton
-            variant="default"
-            disabled={probe.trim().length === 0}
-            onClick={() => void evaluate()}
+          <NativeCard
+            title="Test an action"
+            subtitle="See which effect the current Wards would apply."
+            density="compact"
           >
-            <Sparkles className="h-4 w-4" />
-            Evaluate
-          </NativeButton>
-          {probeResult ? (
-            <p className="mc-next-ward-result">
-              <strong>{probeResult.action}</strong> → {probeResult.effect}
-            </p>
-          ) : null}
-        </NativeCard>
+            <label className="mc-next-mason-field" htmlFor={probeId}>
+              <span>Action</span>
+              <input
+                id={probeId}
+                className="mc-next-settings-input"
+                value={probe}
+                placeholder="shell.run"
+                onChange={(event) => setProbe(event.target.value)}
+              />
+            </label>
+            <NativeButton variant="default" disabled={probe.trim().length === 0} onClick={() => void evaluate()}>
+              <Sparkles className="h-4 w-4" />
+              Evaluate
+            </NativeButton>
+            {probeResult ? (
+              <p className="mc-next-ward-result">
+                <strong>{probeResult.action}</strong> → {probeResult.effect}
+              </p>
+            ) : null}
+          </NativeCard>
+        </div>
       </NativeGrid>
     </NativePageFrame>
   );

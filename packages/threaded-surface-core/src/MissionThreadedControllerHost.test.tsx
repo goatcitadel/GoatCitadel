@@ -1396,6 +1396,33 @@ describe("MissionThreadedControllerHost", () => {
     );
   });
 
+  it("uses shell-provided gateway status in threaded trust descriptors", async () => {
+    await renderHost({
+      lockSurface: true,
+      surface: "chat",
+      gatewayStatus: {
+        ready: true,
+        tone: "success",
+        label: "Gateway ready",
+        detail: "Gateway ready. Daemon health is serving.",
+      },
+    });
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.trust).toEqual(
+      expect.objectContaining({
+        gatewayTone: "success",
+        gatewayLabel: "Gateway ready",
+        gatewayDetail: "Gateway ready. Daemon health is serving.",
+      }),
+    );
+    expect(latestSurfaceInput?.contextDockProps?.trust).toEqual(
+      expect.objectContaining({
+        gatewayLabel: "Gateway ready",
+        gatewayDetail: "Gateway ready. Daemon health is serving.",
+      }),
+    );
+  });
+
   it("executes command refresh branches and clears diagnostics without a thread", async () => {
     mockSurfaceMode = "cowork";
     await renderHost({ lockSurface: true, surface: "cowork" });

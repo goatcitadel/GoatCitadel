@@ -30,6 +30,7 @@ const appMocks = vi.hoisted(() => ({
   setNotificationToastsEnabled: vi.fn(),
   setTheme: vi.fn(),
   playOperatorAttentionSound: vi.fn(),
+  threadedRouteProps: null as null | Record<string, unknown>,
   streamCallbacks: {} as {
     onEvent?: (event: unknown) => void;
     onStateChange?: (state: string) => void;
@@ -214,26 +215,25 @@ vi.mock("./lazy-legacy-pages", () => ({
     createElement("div", { className: "mock-native-route" }, `Native ${route.area}/${route.section ?? "root"}`),
   LazyPromptPacksWorkbenchPage: ({ variant }: { variant: string }) =>
     createElement("div", { className: "mock-prompt-packs" }, `Prompt packs ${variant}`),
-  LazyThreadedSurfaceRoute: ({
-    surface,
-    onOpenApprovals,
-    onOpenStartHere,
-  }: {
+  LazyThreadedSurfaceRoute: (props: {
     surface: string;
+    gatewayStatus?: { label?: string };
     onOpenApprovals?: (approvalId?: string) => void;
     onOpenStartHere?: () => void;
-  }) =>
-    createElement(
+  }) => {
+    appMocks.threadedRouteProps = props;
+    return createElement(
       "div",
       { className: "mock-threaded-route" },
-      `Threaded ${surface}`,
+      `Threaded ${props.surface} ${props.gatewayStatus?.label ?? ""}`,
       createElement(
         "button",
-        { type: "button", onClick: () => onOpenApprovals?.("approval-focused-1") },
+        { type: "button", onClick: () => props.onOpenApprovals?.("approval-focused-1") },
         "Open focused approval",
       ),
-      createElement("button", { type: "button", onClick: () => onOpenStartHere?.() }, "Open threaded Start Here"),
-    ),
+      createElement("button", { type: "button", onClick: () => props.onOpenStartHere?.() }, "Open threaded Start Here"),
+    );
+  },
   preloadNativeRoutePages: vi.fn(() => Promise.resolve()),
   preloadPromptPacksWorkbenchPage: vi.fn(() => Promise.resolve()),
   preloadThreadedSurfaceRoute: vi.fn(() => Promise.resolve()),
@@ -331,6 +331,7 @@ describe("MissionControlNextApp", () => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     appMocks.activeWorkspaceId = "workspace-1";
+    appMocks.threadedRouteProps = null;
     appMocks.closeEventStream.mockReset();
     appMocks.connectEventStream.mockImplementation((onEvent, onStateChange, onStatusChange) => {
       appMocks.streamCallbacks.onEvent = onEvent;
@@ -449,6 +450,12 @@ describe("MissionControlNextApp", () => {
     const renderer = await renderApp();
 
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+    expect(appMocks.threadedRouteProps).toMatchObject({
+      gatewayStatus: expect.objectContaining({
+        ready: true,
+        label: "Gateway ready",
+      }),
+    });
     expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400);
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
     expect(appMocks.connectEventStream).toHaveBeenCalled();
@@ -603,6 +610,22 @@ describe("MissionControlNextApp", () => {
       popstateHandler?.();
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+  });
+
+  it("keeps grouped rail labels visible to assistive technology", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/providers");
+    const railSeparators = renderer.root.findAllByProps({ className: "mc-next-rail-separator" });
+    const separatorIds = railSeparators.map((node) => node.props.id);
+
+    expect(readNodeText(renderer.root)).toContain("Identity");
+    expect(separatorIds).toContain("mc-next-rail-group-settings-identity");
+    expect(railSeparators.every((node) => node.props["aria-hidden"] === undefined)).toBe(true);
+    expect(
+      renderer.root.findAllByProps({
+        className: "mc-next-rail-section",
+        "aria-labelledby": "mc-next-rail-group-settings-identity",
+      }),
+    ).toHaveLength(1);
   });
 
   it("does not treat unknown daemon health as an intervention", async () => {

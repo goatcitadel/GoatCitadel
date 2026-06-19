@@ -5,13 +5,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Server } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  NativeCard,
-  NativeList,
-  NativePageFrame,
-  QuickJumpCard,
-  ReleaseScopeBadge,
-} from "./NativeRoutePageLayout";
+import { NativeCard, NativeList, NativePageFrame, QuickJumpCard, ReleaseScopeBadge } from "./NativeRoutePageLayout";
 
 const diagnosticMocks = vi.hoisted(() => ({
   recordClientDiagnostic: vi.fn(),
@@ -126,7 +120,10 @@ describe("NativeRoutePageLayout", () => {
     });
 
     act(() => {
-      renderer.root.findByType("button").props.onClick();
+      const quickJumpButton = renderer.root.findByType("button");
+      expect(quickJumpButton.props["data-variant"]).toBe("secondary");
+      expect(String(quickJumpButton.props.className)).toContain("mc-next-directory-action");
+      quickJumpButton.props.onClick();
     });
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "runtime" });
@@ -139,9 +136,7 @@ describe("NativeRoutePageLayout", () => {
     expect(renderToStaticMarkup(<ReleaseScopeBadge status="ship" />)).toBe("");
     expect(renderToStaticMarkup(<ReleaseScopeBadge status={undefined} />)).toBe("");
     // needs_release_polish carries its own label.
-    expect(renderToStaticMarkup(<ReleaseScopeBadge status="needs_release_polish" />)).toContain(
-      "Needs release polish",
-    );
+    expect(renderToStaticMarkup(<ReleaseScopeBadge status="needs_release_polish" />)).toContain("Needs release polish");
 
     // The frame threads the status through to the header.
     const experimentalFrame = renderToStaticMarkup(

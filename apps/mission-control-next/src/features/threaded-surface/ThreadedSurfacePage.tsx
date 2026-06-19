@@ -35,6 +35,7 @@ import type {
   MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
 import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
+import { buildThreadedSessionStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
 import { StatusChip } from "../native-routes/primitives";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -681,6 +682,12 @@ function ThreadConversationSurface({
     (approvalSignalText.includes("approval") ||
       approvalSignalText.includes("pending") ||
       approvalSignalText.includes("waiting"));
+  const permissionSummary = formatThreadedPermissionSummary(permissionState);
+  const headerStatus = buildThreadedSessionStatusSummary({
+    trust: props.trust,
+    policySummary: permissionSummary,
+    policyOverrideActive: Boolean(permissionState?.localOperatorOverrideId),
+  });
 
   return (
     <div
@@ -702,48 +709,21 @@ function ThreadConversationSurface({
 
         <div className="mc-next-threaded-header-meta">
           <div className="mc-next-threaded-chip-row">
-            {/* plain-English hover explanations for the status jargon. */}
-            <StatusChip tone={props.trust.gatewayTone} title="Gateway reachability and Mission Control access status">
-              {props.trust.gatewayLabel}
+            <StatusChip tone="muted" title="Active provider and model for this session">
+              {headerStatus.providerModelSummary}
+            </StatusChip>
+            <StatusChip tone={props.trust.runtimeTone ?? "muted"} title="Session runtime and active run state">
+              {headerStatus.runtimeRunSummary}
             </StatusChip>
             <StatusChip tone="muted" title="Pending tool and risk approvals waiting on you">
-              {props.trust.approvalsSummary}
-            </StatusChip>
-            <StatusChip
-              tone={props.trust.runtimeTone ?? "muted"}
-              title="Active runtime and serving posture for this session"
-            >
-              {props.trust.runtimeSummary}
-            </StatusChip>
-            {props.trust.fallbackSummary ? (
-              <StatusChip
-                tone={props.trust.fallbackTone ?? "warning"}
-                title="Whether the model is running on a fallback provider"
-              >
-                {props.trust.fallbackSummary}
-              </StatusChip>
-            ) : null}
-          </div>
-          <div className="mc-next-threaded-chip-row">
-            <StatusChip tone="muted" title="Active provider and model for this session">
-              {props.trust.providerModelSummary}
+              {headerStatus.approvalsSummary}
             </StatusChip>
             <StatusChip
               tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}
-              title="Trust policy in effect, including any local operator override (e.g. Trusted Local Power skips normal prompts while safety boundaries stay enforced)"
+              title="Session policy posture"
             >
-              {formatThreadedPermissionSummary(permissionState)}
+              {headerStatus.compactPolicySummary}
             </StatusChip>
-            {props.trust.selectionSourceSummary ? (
-              <StatusChip tone="muted" title="What this session's context selection is scoped to">
-                {props.trust.selectionSourceSummary}
-              </StatusChip>
-            ) : null}
-            {props.trust.runStateSummary ? (
-              <StatusChip tone="muted" title="Current run state for this session">
-                {props.trust.runStateSummary}
-              </StatusChip>
-            ) : null}
           </div>
         </div>
 

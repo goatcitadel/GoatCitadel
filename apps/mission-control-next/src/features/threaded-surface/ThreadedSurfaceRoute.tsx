@@ -5,12 +5,14 @@ import {
   MissionThreadedControllerHost,
   type MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
+import type { ThreadedGatewayStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
 import { ThreadedSurfacePage, type ThreadedPermissionState } from "./ThreadedSurfacePage";
 
 export function ThreadedSurfaceRoute({
   surface,
   workspaceId,
   workspaceName,
+  gatewayStatus,
   approvalsCount,
   lockSurface,
   onOpenCowork,
@@ -24,6 +26,7 @@ export function ThreadedSurfaceRoute({
   surface: ChatMode;
   workspaceId: string;
   workspaceName: string;
+  gatewayStatus?: ThreadedGatewayStatusSummary;
   approvalsCount: number;
   lockSurface?: boolean;
   onOpenCowork?: () => void;
@@ -41,6 +44,7 @@ export function ThreadedSurfaceRoute({
     <MissionThreadedControllerHost
       workspaceId={workspaceId}
       workspaceName={workspaceName}
+      gatewayStatus={gatewayStatus}
       approvalsCount={approvalsCount}
       surface={surface}
       lockSurface={lockSurface}

@@ -49,12 +49,19 @@ describe("ThreadedSurfaceRoute", () => {
     const onOpenStartHere = vi.fn();
     const onOpenUniversalRunDetail = vi.fn();
     const onNavigateSurface = vi.fn();
+    const gatewayStatus = {
+      ready: true,
+      tone: "success",
+      label: "Gateway ready",
+      detail: "Gateway ready. Daemon health is serving.",
+    } as const;
 
     const renderer = create(
       createElement(ThreadedSurfaceRoute, {
         surface: "code",
         workspaceId: "workspace-1",
         workspaceName: "Workspace One",
+        gatewayStatus,
         approvalsCount: 4,
         lockSurface: true,
         onOpenCowork,
@@ -71,6 +78,7 @@ describe("ThreadedSurfaceRoute", () => {
     expect(routeMocks.controllerProps).toMatchObject({
       workspaceId: "workspace-1",
       workspaceName: "Workspace One",
+      gatewayStatus,
       approvalsCount: 4,
       surface: "code",
       lockSurface: true,

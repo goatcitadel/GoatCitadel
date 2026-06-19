@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Plus, RefreshCw, Save, Undo2, Workflow } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleDashed,
+  Eye,
+  PlayCircle,
+  Plus,
+  RefreshCw,
+  Save,
+  Undo2,
+  Workflow,
+} from "lucide-react";
 import {
   addTaskDeliverable,
   createTask,
@@ -535,9 +546,265 @@ export function CoworkNativePage({
               : undefined
           }
         />
+        <section className="mc-next-native-work-pair mc-next-cowork-workbench" aria-label="Cowork task workbench">
+          <NativeCard
+            title="Task board"
+            subtitle="Create, move, restore, and attach deliverables without leaving Cowork."
+            density="compact"
+            className="mc-next-cowork-task-board-card"
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
+            stats={[
+              { label: "Open", value: String(tasks.filter((item) => item.status !== "done").length) },
+              { label: "Workspace", value: activeWorkspaceName },
+            ]}
+          >
+            <LibraryFieldGrid>
+              <LibraryField label="New task title">
+                <input
+                  className="mc-next-settings-input"
+                  value={createDraft.title}
+                  onChange={(event) => setCreateDraft((current) => ({ ...current, title: event.target.value }))}
+                  placeholder="Write release notes"
+                />
+              </LibraryField>
+              <LibraryField label="Priority">
+                <select
+                  className="mc-next-settings-input"
+                  value={createDraft.priority}
+                  onChange={(event) =>
+                    setCreateDraft((current) => ({
+                      ...current,
+                      priority: event.target.value as TaskRecord["priority"],
+                    }))
+                  }
+                >
+                  {TASK_PRIORITY_OPTIONS.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {priority}
+                    </option>
+                  ))}
+                </select>
+              </LibraryField>
+              <LibraryField label="Description" span={2}>
+                <textarea
+                  className="mc-next-settings-textarea"
+                  value={createDraft.description}
+                  onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
+                />
+              </LibraryField>
+            </LibraryFieldGrid>
+            <LibraryButtonRow>
+              <NativeButton variant="default" onClick={() => void handleCreateTask()}>
+                <Plus className="h-4 w-4" />
+                Create task
+              </NativeButton>
+              <NativeButton variant="secondary" onClick={() => void refreshCowork()}>
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </NativeButton>
+            </LibraryButtonRow>
+            <div className="mc-next-task-lanes">
+              <NativeLane
+                title="Planning"
+                count={groupedTasks.planning.length}
+                items={groupedTasks.planning}
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+              <NativeLane
+                title="Active"
+                count={groupedTasks.active.length}
+                items={groupedTasks.active}
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+              <NativeLane
+                title="Review"
+                count={groupedTasks.review.length}
+                items={groupedTasks.review}
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+              <NativeLane
+                title="Done"
+                count={groupedTasks.done.length}
+                items={groupedTasks.done}
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+              <NativeLane
+                title="Deleted"
+                count={deletedTasks.length}
+                items={deletedTasks}
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+            </div>
+          </NativeCard>
+          <NativeCard
+            title={selectedTask?.title ?? "Task detail"}
+            subtitle={selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."}
+            density="compact"
+            className="mc-next-cowork-task-detail-card"
+            scrollBody
+            bodyMaxHeight="min(68vh, 38rem)"
+          >
+            {selectedTask ? (
+              <>
+                <LibraryFieldGrid>
+                  <LibraryField label="Title">
+                    <input
+                      className="mc-next-settings-input"
+                      value={detailDraft.title}
+                      onChange={(event) => setDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                    />
+                  </LibraryField>
+                  <LibraryField label="Status">
+                    <select
+                      className="mc-next-settings-input"
+                      value={detailDraft.status}
+                      onChange={(event) =>
+                        setDetailDraft((current) => ({
+                          ...current,
+                          status: event.target.value as TaskRecord["status"],
+                        }))
+                      }
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    >
+                      {TASK_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </LibraryField>
+                  <LibraryField label="Priority">
+                    <select
+                      className="mc-next-settings-input"
+                      value={detailDraft.priority}
+                      onChange={(event) =>
+                        setDetailDraft((current) => ({
+                          ...current,
+                          priority: event.target.value as TaskRecord["priority"],
+                        }))
+                      }
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    >
+                      {TASK_PRIORITY_OPTIONS.map((priority) => (
+                        <option key={priority} value={priority}>
+                          {priority}
+                        </option>
+                      ))}
+                    </select>
+                  </LibraryField>
+                  <LibraryField label="Description" span={2}>
+                    <textarea
+                      className="mc-next-settings-textarea"
+                      value={detailDraft.description}
+                      onChange={(event) =>
+                        setDetailDraft((current) => ({ ...current, description: event.target.value }))
+                      }
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    />
+                  </LibraryField>
+                </LibraryFieldGrid>
+                <LibraryButtonRow>
+                  <NativeButton
+                    variant="default"
+                    onClick={() => void handleSaveTask()}
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  >
+                    <Save className="h-4 w-4" />
+                    Save task
+                  </NativeButton>
+                  {selectedTask.deletedAt ? (
+                    <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
+                      <Undo2 className="h-4 w-4" />
+                      Restore
+                    </NativeButton>
+                  ) : (
+                    <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
+                      <Undo2 className="h-4 w-4" />
+                      Move to trash
+                    </NativeButton>
+                  )}
+                </LibraryButtonRow>
+                <LibraryCodeBlock label="Task -> deliverables">
+                  {`${selectedTask.title}\n${coworkContinuation.hierarchyDetail}`}
+                </LibraryCodeBlock>
+                {deliverables.error ? (
+                  <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} />
+                ) : null}
+                <LibraryFieldGrid>
+                  <LibraryField label="Deliverable title">
+                    <input
+                      className="mc-next-settings-input"
+                      value={deliverableDraft.title}
+                      onChange={(event) =>
+                        setDeliverableDraft((current) => ({ ...current, title: event.target.value }))
+                      }
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    />
+                  </LibraryField>
+                  <LibraryField label="Type">
+                    <select
+                      className="mc-next-settings-input"
+                      value={deliverableDraft.deliverableType}
+                      onChange={(event) =>
+                        setDeliverableDraft((current) => ({
+                          ...current,
+                          deliverableType: event.target.value as TaskDeliverableRecord["deliverableType"],
+                        }))
+                      }
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    >
+                      {TASK_DELIVERABLE_TYPE_OPTIONS.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </LibraryField>
+                  <LibraryField label="Path or link" span={2}>
+                    <input
+                      className="mc-next-settings-input"
+                      value={deliverableDraft.path}
+                      onChange={(event) => setDeliverableDraft((current) => ({ ...current, path: event.target.value }))}
+                      disabled={Boolean(selectedTask.deletedAt)}
+                    />
+                  </LibraryField>
+                </LibraryFieldGrid>
+                <LibraryButtonRow>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() => void handleAddDeliverable()}
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add deliverable
+                  </NativeButton>
+                </LibraryButtonRow>
+                <NativeList
+                  items={(deliverables.data ?? []).map((item) => ({
+                    title: item.title,
+                    meta: item.deliverableType,
+                    body: item.path ?? item.description ?? "No path or description.",
+                  }))}
+                  emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
+                  density="compact"
+                  maxHeight="12rem"
+                  ariaLabel="Task deliverables"
+                />
+              </>
+            ) : (
+              <LibraryEmptyState label="Create or select a task to edit it." />
+            )}
+          </NativeCard>
+        </section>
         <QuickJumpCard
           title="Cowork routes"
-          subtitle="Keep orchestration surfaces connected from one Cowork route."
+          subtitle="Quiet route jumps for related operator evidence."
           actions={[
             { label: "Open board", route: { area: "cowork", section: "board", theme: route.theme } },
             { label: "Open approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
@@ -546,247 +813,6 @@ export function CoworkNativePage({
           navigate={navigate}
           compact
         />
-        <NativeCard
-          title="Task board"
-          subtitle="Create, move, restore, and attach deliverables without leaving Cowork."
-          density="compact"
-          className="mc-next-cowork-task-board-card"
-          scrollBody
-          bodyMaxHeight="min(72vh, 42rem)"
-          stats={[
-            { label: "Open", value: String(tasks.filter((item) => item.status !== "done").length) },
-            { label: "Workspace", value: activeWorkspaceName },
-          ]}
-        >
-          <LibraryFieldGrid>
-            <LibraryField label="New task title">
-              <input
-                className="mc-next-settings-input"
-                value={createDraft.title}
-                onChange={(event) => setCreateDraft((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Write release notes"
-              />
-            </LibraryField>
-            <LibraryField label="Priority">
-              <select
-                className="mc-next-settings-input"
-                value={createDraft.priority}
-                onChange={(event) =>
-                  setCreateDraft((current) => ({ ...current, priority: event.target.value as TaskRecord["priority"] }))
-                }
-              >
-                {TASK_PRIORITY_OPTIONS.map((priority) => (
-                  <option key={priority} value={priority}>
-                    {priority}
-                  </option>
-                ))}
-              </select>
-            </LibraryField>
-            <LibraryField label="Description" span={2}>
-              <textarea
-                className="mc-next-settings-textarea"
-                value={createDraft.description}
-                onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
-              />
-            </LibraryField>
-          </LibraryFieldGrid>
-          <LibraryButtonRow>
-            <NativeButton variant="default" onClick={() => void handleCreateTask()}>
-              <Plus className="h-4 w-4" />
-              Create task
-            </NativeButton>
-            <NativeButton variant="secondary" onClick={() => void refreshCowork()}>
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </NativeButton>
-          </LibraryButtonRow>
-          <div className="mc-next-task-lanes">
-            <NativeLane
-              title="Planning"
-              count={groupedTasks.planning.length}
-              items={groupedTasks.planning}
-              selectedTaskId={selectedTaskId}
-              onSelect={setSelectedTaskId}
-            />
-            <NativeLane
-              title="Active"
-              count={groupedTasks.active.length}
-              items={groupedTasks.active}
-              selectedTaskId={selectedTaskId}
-              onSelect={setSelectedTaskId}
-            />
-            <NativeLane
-              title="Review"
-              count={groupedTasks.review.length}
-              items={groupedTasks.review}
-              selectedTaskId={selectedTaskId}
-              onSelect={setSelectedTaskId}
-            />
-            <NativeLane
-              title="Done"
-              count={groupedTasks.done.length}
-              items={groupedTasks.done}
-              selectedTaskId={selectedTaskId}
-              onSelect={setSelectedTaskId}
-            />
-            <NativeLane
-              title="Deleted"
-              count={deletedTasks.length}
-              items={deletedTasks}
-              selectedTaskId={selectedTaskId}
-              onSelect={setSelectedTaskId}
-            />
-          </div>
-        </NativeCard>
-        <NativeCard
-          title={selectedTask?.title ?? "Task detail"}
-          subtitle={selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."}
-          density="compact"
-          scrollBody
-          bodyMaxHeight="min(68vh, 38rem)"
-        >
-          {selectedTask ? (
-            <>
-              <LibraryFieldGrid>
-                <LibraryField label="Title">
-                  <input
-                    className="mc-next-settings-input"
-                    value={detailDraft.title}
-                    onChange={(event) => setDetailDraft((current) => ({ ...current, title: event.target.value }))}
-                  />
-                </LibraryField>
-                <LibraryField label="Status">
-                  <select
-                    className="mc-next-settings-input"
-                    value={detailDraft.status}
-                    onChange={(event) =>
-                      setDetailDraft((current) => ({ ...current, status: event.target.value as TaskRecord["status"] }))
-                    }
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  >
-                    {TASK_STATUS_OPTIONS.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </LibraryField>
-                <LibraryField label="Priority">
-                  <select
-                    className="mc-next-settings-input"
-                    value={detailDraft.priority}
-                    onChange={(event) =>
-                      setDetailDraft((current) => ({
-                        ...current,
-                        priority: event.target.value as TaskRecord["priority"],
-                      }))
-                    }
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  >
-                    {TASK_PRIORITY_OPTIONS.map((priority) => (
-                      <option key={priority} value={priority}>
-                        {priority}
-                      </option>
-                    ))}
-                  </select>
-                </LibraryField>
-                <LibraryField label="Description" span={2}>
-                  <textarea
-                    className="mc-next-settings-textarea"
-                    value={detailDraft.description}
-                    onChange={(event) => setDetailDraft((current) => ({ ...current, description: event.target.value }))}
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  />
-                </LibraryField>
-              </LibraryFieldGrid>
-              <LibraryButtonRow>
-                <NativeButton
-                  variant="default"
-                  onClick={() => void handleSaveTask()}
-                  disabled={Boolean(selectedTask.deletedAt)}
-                >
-                  <Save className="h-4 w-4" />
-                  Save task
-                </NativeButton>
-                {selectedTask.deletedAt ? (
-                  <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
-                    <Undo2 className="h-4 w-4" />
-                    Restore
-                  </NativeButton>
-                ) : (
-                  <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
-                    <Undo2 className="h-4 w-4" />
-                    Move to trash
-                  </NativeButton>
-                )}
-              </LibraryButtonRow>
-              <LibraryCodeBlock label="Task -> deliverables">
-                {`${selectedTask.title}\n${coworkContinuation.hierarchyDetail}`}
-              </LibraryCodeBlock>
-              {deliverables.error ? <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} /> : null}
-              <LibraryFieldGrid>
-                <LibraryField label="Deliverable title">
-                  <input
-                    className="mc-next-settings-input"
-                    value={deliverableDraft.title}
-                    onChange={(event) => setDeliverableDraft((current) => ({ ...current, title: event.target.value }))}
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  />
-                </LibraryField>
-                <LibraryField label="Type">
-                  <select
-                    className="mc-next-settings-input"
-                    value={deliverableDraft.deliverableType}
-                    onChange={(event) =>
-                      setDeliverableDraft((current) => ({
-                        ...current,
-                        deliverableType: event.target.value as TaskDeliverableRecord["deliverableType"],
-                      }))
-                    }
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  >
-                    {TASK_DELIVERABLE_TYPE_OPTIONS.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </LibraryField>
-                <LibraryField label="Path or link" span={2}>
-                  <input
-                    className="mc-next-settings-input"
-                    value={deliverableDraft.path}
-                    onChange={(event) => setDeliverableDraft((current) => ({ ...current, path: event.target.value }))}
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  />
-                </LibraryField>
-              </LibraryFieldGrid>
-              <LibraryButtonRow>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void handleAddDeliverable()}
-                  disabled={Boolean(selectedTask.deletedAt)}
-                >
-                  <Plus className="h-4 w-4" />
-                  Add deliverable
-                </NativeButton>
-              </LibraryButtonRow>
-              <NativeList
-                items={(deliverables.data ?? []).map((item) => ({
-                  title: item.title,
-                  meta: item.deliverableType,
-                  body: item.path ?? item.description ?? "No path or description.",
-                }))}
-                emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
-                density="compact"
-                maxHeight="12rem"
-                ariaLabel="Task deliverables"
-              />
-            </>
-          ) : (
-            <LibraryEmptyState label="Create or select a task to edit it." />
-          )}
-        </NativeCard>
       </NativeGrid>
     );
 
@@ -867,6 +893,9 @@ function NativeLane({
               key={item.taskId}
               type="button"
               className={`mc-next-directory-lane-item${selectedTaskId === item.taskId ? " is-selected" : ""}`}
+              data-status={item.status}
+              aria-pressed={selectedTaskId === item.taskId}
+              aria-label={`${item.title}: ${formatTaskStatus(item.status)}, ${item.priority} priority`}
               onClick={() => onSelect?.(item.taskId)}
             >
               <div className="mc-next-directory-lane-meta">
@@ -874,13 +903,13 @@ function NativeLane({
                 <span>{formatDateTime(item.updatedAt)}</span>
               </div>
               <strong title={item.title}>{item.title}</strong>
-              <p title={item.description?.trim() || undefined}>
-                {item.description?.trim() || "No description yet."}
-              </p>
-              <div className="mc-next-directory-lane-status">
-                <CheckCircle2 className="h-4 w-4" />
+              <p title={item.description?.trim() || undefined}>{item.description?.trim() || "No description yet."}</p>
+              <div className="mc-next-directory-lane-status" data-status={item.status}>
+                <TaskStatusIcon status={item.status} />
                 <span>{formatTaskStatus(item.status)}</span>
-                {item.assignedAgentId ? <span>Agent {item.assignedAgentId}</span> : null}
+                {item.assignedAgentId ? (
+                  <span className="mc-next-directory-lane-agent">Agent {item.assignedAgentId}</span>
+                ) : null}
               </div>
             </button>
           ))}
@@ -888,4 +917,20 @@ function NativeLane({
       )}
     </section>
   );
+}
+
+function TaskStatusIcon({ status }: { status: TaskRecord["status"] }) {
+  if (status === "blocked") {
+    return <AlertTriangle className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (status === "review") {
+    return <Eye className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (status === "in_progress" || status === "testing") {
+    return <PlayCircle className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (status === "done") {
+    return <CheckCircle2 className="h-4 w-4" aria-hidden="true" />;
+  }
+  return <CircleDashed className="h-4 w-4" aria-hidden="true" />;
 }

@@ -485,6 +485,20 @@
   align-items: start;
 }
 
+.mc-next-native-work-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.85fr);
+  gap: 0.55rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.mc-next-native-stack {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 .mc-next-directory-grid-native.mc-next-quality-dashboard-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
@@ -666,6 +680,21 @@
 
 .mc-next-directory-quickjump-inline .mc-next-directory-actions {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.mc-next-directory-quickjump-card {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--mc-surface-1) 86%, transparent);
+}
+
+.mc-next-directory-quickjump-card .mc-next-directory-card-head {
+  gap: 0.18rem;
+}
+
+.mc-next-directory-quickjump-card .mc-next-directory-action {
+  min-height: 2rem;
+  padding: 0.34rem 0.48rem;
+  box-shadow: none;
 }
 
 .mc-next-approvals-toolbar,
@@ -1365,7 +1394,11 @@
 }
 
 .mc-next-cowork-task-grid {
-  grid-template-columns: minmax(180px, 0.58fr) minmax(0, 1.35fr) minmax(260px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mc-next-cowork-workbench {
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.85fr);
 }
 
 .mc-next-cowork-execution-card {
@@ -1377,6 +1410,49 @@
   display: grid;
   gap: 0.5rem;
   min-width: 0;
+}
+
+.mc-next-cowork-attention-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.46rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--mc-surface-1));
+}
+
+.mc-next-cowork-attention-strip[data-tone="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 9%, var(--mc-surface-1));
+}
+
+.mc-next-cowork-attention-strip > div {
+  display: inline-flex;
+  gap: 0.32rem;
+  align-items: center;
+  color: var(--foreground);
+}
+
+.mc-next-cowork-attention-strip > div svg {
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+}
+
+.mc-next-cowork-attention-strip[data-tone="blocked"] > div svg {
+  color: color-mix(in oklab, var(--gc-risk-danger) 78%, var(--foreground));
+}
+
+.mc-next-cowork-attention-strip strong {
+  font-size: var(--text-xs);
+  line-height: 1.16;
+}
+
+.mc-next-cowork-attention-strip p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
 }
 
 .mc-next-cowork-execution-kicker {
@@ -1407,6 +1483,45 @@
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 5%, transparent), transparent 68%),
     color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-cowork-phase-title-row {
+  display: flex;
+  gap: 0.34rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.mc-next-cowork-phase-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.08rem 0.32rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-phase-state[data-state="active"] {
+  border-color: color-mix(in oklab, var(--cowork-execution-accent) 34%, var(--border));
+  color: color-mix(in oklab, var(--cowork-execution-accent) 68%, var(--foreground));
+}
+
+.mc-next-cowork-phase-state[data-state="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
+.mc-next-cowork-phase-state[data-state="complete"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-safe) 68%, var(--foreground));
 }
 
 .mc-next-cowork-phase-step[data-state="active"] {
@@ -1453,7 +1568,7 @@
   overflow-wrap: anywhere;
 }
 
-.mc-next-cowork-phase-step span:not(.mc-next-cowork-phase-index),
+.mc-next-cowork-phase-step span:not(.mc-next-cowork-phase-index, .mc-next-cowork-phase-state),
 .mc-next-cowork-checkpoint-card span {
   color: var(--text-muted);
   font-size: var(--text-2xs);
@@ -1521,8 +1636,7 @@
   display: none;
 }
 
-.mc-next-cowork-task-grid .mc-next-directory-lane-meta,
-.mc-next-cowork-task-grid .mc-next-directory-lane-status {
+.mc-next-cowork-task-grid .mc-next-directory-lane-meta {
   display: none;
 }
 
@@ -1537,6 +1651,23 @@
   width: 0.8rem;
   height: 0.8rem;
   flex: 0 0 auto;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status {
+  display: inline-flex;
+  margin-top: 0.04rem;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status[data-status="blocked"] {
+  color: color-mix(in oklab, var(--gc-risk-danger) 74%, var(--foreground));
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status[data-status="review"] {
+  color: color-mix(in oklab, var(--gc-risk-caution) 74%, var(--foreground));
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-agent {
+  display: none;
 }
 
 .mc-next-board-lanes {
@@ -3167,6 +3298,7 @@
   .mc-next-settings-grid.is-balanced,
   .mc-next-settings-grid.is-detail-wide,
   .mc-next-settings-grid.is-three-column,
+  .mc-next-native-work-pair,
   .mc-next-cowork-task-grid,
   .mc-next-task-lanes,
   .mc-next-board-lanes {
@@ -3180,6 +3312,10 @@
 
   .mc-next-cowork-phase-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-next-cowork-attention-strip {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .mc-next-project-intake-grid,
@@ -3314,39 +3450,22 @@
 
 .mc-next-kanban-toolbar {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  margin-bottom: 0.55rem;
   align-items: center;
 }
 
-.mc-next-kanban-toolbar button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: var(--r-xs);
-  border: 1px solid var(--border-default);
-  background: var(--bg-surface-1);
-  color: var(--fg-primary);
-  font-size: var(--text-md);
-  cursor: pointer;
-}
-
-.mc-next-kanban-toolbar button:hover:not(:disabled),
-.mc-next-kanban-toolbar button:focus-visible {
-  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border-default));
-  background: var(--bg-surface-3);
-}
-
-.mc-next-kanban-toolbar button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.mc-next-kanban-action {
+  min-height: 2rem;
+  padding: 0.32rem 0.62rem;
+  font-size: var(--text-xs);
 }
 
 .mc-next-kanban-board {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
+  gap: 0.58rem;
   align-items: flex-start;
   min-width: 0;
 }
@@ -3355,7 +3474,7 @@
   min-width: 0;
   background: var(--mc-surface-1);
   border-radius: var(--r-sm);
-  padding: 0.75rem;
+  padding: 0.55rem;
   min-height: 6rem;
 }
 
@@ -3384,16 +3503,16 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.38rem;
 }
 
 .mc-next-kanban-card {
   background: var(--mc-surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-xs);
-  padding: 0.5rem 0.75rem;
+  padding: 0.46rem 0.55rem;
   color: var(--foreground);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -3493,7 +3612,7 @@
     flex-wrap: wrap;
   }
 
-  .mc-next-kanban-toolbar button {
+  .mc-next-kanban-action {
     flex: 1 1 9rem;
   }
 

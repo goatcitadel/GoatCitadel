@@ -748,6 +748,53 @@ describe("NativeRoutePages Cowork task board", () => {
     expect(text).toContain("Last checkpoint");
     expect(text).toContain("Next checkpoint");
     expect(text).toContain("task-board projection");
+    expect(text).toContain("Quiet route jumps");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("mc-next-native-work-pair mc-next-cowork-workbench");
+  });
+
+  it("renders blocker and review state labels without relying on color alone", async () => {
+    const previousFetchTasksByView = mocks.fetchTasksByView.getMockImplementation();
+    mocks.fetchTasksByView.mockImplementation(async (view: "active" | "trash") => ({
+      view,
+      items:
+        view === "active"
+          ? [
+              {
+                taskId: "task-blocked",
+                title: "Resolve policy blocker",
+                description: "Needs operator review before resume.",
+                status: "blocked",
+                priority: "urgent",
+                createdAt: "2026-05-02T18:00:00.000Z",
+                updatedAt: "2026-05-02T18:05:00.000Z",
+              },
+              {
+                taskId: "task-review",
+                title: "Review synthesis",
+                description: "Output is ready for review.",
+                status: "review",
+                priority: "high",
+                createdAt: "2026-05-02T18:00:00.000Z",
+                updatedAt: "2026-05-02T18:04:00.000Z",
+              },
+            ]
+          : [],
+    }));
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderCoworkTasks();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Blocked");
+    expect(text).toContain("Open blocker");
+    expect(text).toContain("Review");
+    expect(JSON.stringify(renderer!.toJSON())).toContain('"data-status":"blocked"');
+
+    if (previousFetchTasksByView) {
+      mocks.fetchTasksByView.mockImplementation(previousFetchTasksByView);
+    }
   });
 
   it("creates, updates, adds deliverables, and soft-deletes tasks through task APIs", async () => {

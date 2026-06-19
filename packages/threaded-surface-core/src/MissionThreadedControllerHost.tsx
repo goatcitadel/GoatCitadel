@@ -82,7 +82,11 @@ import { describeChatUiError, type ChatErrorSource } from "./chat/chat-error-cop
 import type { OutboundContextBlock } from "./chat/useChatSurfaceOrchestration";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
-import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
+import {
+  formatWorkProviderModelSummary,
+  type ThreadedGatewayStatusSummary,
+  type WorkTrustDescriptor,
+} from "./chat/work-trust";
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
@@ -709,6 +713,7 @@ export function MissionThreadedControllerHost({
   approvalsCount = 0,
   surface,
   lockSurface = false,
+  gatewayStatus,
   workTrust,
   onWorkTrustSummaryChange,
   onOpenCowork = () => undefined,
@@ -724,6 +729,7 @@ export function MissionThreadedControllerHost({
   approvalsCount?: number;
   surface?: ChatMode;
   lockSurface?: boolean;
+  gatewayStatus?: ThreadedGatewayStatusSummary;
   workTrust?: WorkTrustDescriptor;
   onWorkTrustSummaryChange?: (summary: string | null) => void;
   onOpenCowork?: () => void;
@@ -1958,8 +1964,11 @@ export function MissionThreadedControllerHost({
         workspaceLabel: workspaceName,
         // Missing trust state is a signal, not a neutral fact — render it as a
         // warning so it does not blend in with the healthy chips around it.
-        gatewayTone: "warning",
-        gatewayLabel: "Gateway state unavailable",
+        gatewayTone: gatewayStatus?.tone ?? "warning",
+        gatewayLabel: gatewayStatus?.label ?? "Gateway state unavailable",
+        gatewayDetail:
+          gatewayStatus?.detail ??
+          "Mission Control has not received shell gateway status for this threaded surface yet.",
         approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
         runStateSummary: visibleRunStateSummary,
         activeModeLabel: activeModePreset.label,
@@ -1979,6 +1988,9 @@ export function MissionThreadedControllerHost({
       effectiveProviderModelSummary,
       fallbackSummary,
       fallbackTone,
+      gatewayStatus?.detail,
+      gatewayStatus?.label,
+      gatewayStatus?.tone,
       preflightRuntime.summary,
       preflightRuntime.tone,
       requestedProviderModelSummary,
@@ -3423,6 +3435,7 @@ export function MissionThreadedControllerHost({
           selectedTurn,
           activeGeneratedArtifact,
           routePreflight: currentRoutePreflight,
+          trust: sessionTrust,
           providerLabelById,
           showSuggestionsPanel,
           showLearnedMemoryPanel,

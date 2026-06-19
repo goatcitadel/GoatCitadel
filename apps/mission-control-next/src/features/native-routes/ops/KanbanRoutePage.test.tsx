@@ -124,6 +124,11 @@ describe("KanbanRoutePage", () => {
     expect(text).toContain("Working");
     expect(text).toContain("Failed handoff");
     expect(text).toContain("Closed run");
+    expect(renderer.root.findByProps({ "aria-label": "Agentic run bulk actions" }).props.role).toBe("toolbar");
+    expect(findRequiredButton(renderer, "unblock").props["data-variant"]).toBe("default");
+    expect(findRequiredButton(renderer, "retry").props["data-variant"]).toBe("outline");
+    expect(findRequiredButton(renderer, "close").props["data-variant"]).toBe("outline");
+    expect(findRequiredButton(renderer, "refresh").props["data-variant"]).toBe("secondary");
     act(() => renderer.unmount());
   });
 
