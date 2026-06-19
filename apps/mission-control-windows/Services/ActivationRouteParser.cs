@@ -16,13 +16,12 @@ public static class ActivationRouteParser
             return false;
         }
 
-        foreach (var token in Tokenize(commandLine))
+        foreach (var parsedRoute in Tokenize(commandLine)
+                     .Select(TryGetRouteFromToken)
+                     .Where(parsedRoute => parsedRoute is not null))
         {
-            if (Uri.TryCreate(token, UriKind.Absolute, out var uri) &&
-                TryGetRouteFromProtocolUri(uri, out route))
-            {
-                return true;
-            }
+            route = parsedRoute!;
+            return true;
         }
 
         route = "";
@@ -87,6 +86,12 @@ public static class ActivationRouteParser
         var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Replace("+", " ")) : "";
         return new KeyValuePair<string, string>(key, value);
     }
+
+    private static string? TryGetRouteFromToken(string token) =>
+        Uri.TryCreate(token, UriKind.Absolute, out var uri) &&
+        TryGetRouteFromProtocolUri(uri, out var route)
+            ? route
+            : null;
 
     private static IEnumerable<string> Tokenize(string commandLine)
     {
