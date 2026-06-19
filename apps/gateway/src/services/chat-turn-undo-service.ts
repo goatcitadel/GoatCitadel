@@ -7,6 +7,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
+import { assertChatSessionActive } from "./chat-session-utils.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 
 export interface ChatTurnUndoResult {
@@ -20,7 +21,7 @@ export interface ChatTurnUndoResult {
 export interface ChatTurnUndoDependencies {
   readonly storage: Pick<
     Storage,
-    "chatMessages" | "chatSessionBranchState" | "chatTurnTraces" | "runImmediateTransaction"
+    "chatMessages" | "chatSessionBranchState" | "chatSessionMeta" | "chatTurnTraces" | "runImmediateTransaction"
   >;
   getSession(sessionId: string): unknown;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
@@ -52,6 +53,18 @@ export async function undoChatTurns(
   deps.getSession(sessionId);
   const safeCount = Math.max(1, Math.min(20, Math.floor(count)));
   return deps.withChatTurnWriteLease(sessionId, "chat.undo", async () => {
+    // Re-validate the session lifecycle INSIDE the lease. The pre-lease
+    // `getSession(sessionId)` check above only proves the session still exists, not that
+    // it is still active: `archiveChatSession` leaves the session retrievable and merely
+    // patches `lifecycleStatus: "archived"`. Without this re-check, an undo that wins the
+    // write-lease race against a concurrent archive would still mutate the archived
+    // session's turns. Mirror the send/prep path, which asserts the session is active via
+    // `assertChatSessionActive(...)` (see chat-turn-prep-service.ts) before any write.
+    const sessionMeta = deps.storage.chatSessionMeta.get(sessionId);
+    if (sessionMeta) {
+      assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
+    }
+
     const state = await deps.loadChatTurnSessionState(sessionId);
     if (!state.activeLeafTurnId) {
       return emptyUndoResult(safeCount);

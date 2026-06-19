@@ -11,18 +11,19 @@
  * exclusion is exercised for real, and we stub the storage mutators so we can assert that
  * NO delete lands when the guard rejects the write.
  *
- * SEAM NOTE / harder race this suite does NOT (and cannot, with these seams) prove:
+ * SEAM NOTE — the harder "archived mid-lease" race (now closed):
  *   `undoChatTurns` validates session existence by calling `deps.getSession(sessionId)`
- *   *once, before* acquiring the lease, and then never re-reads `lifecycleStatus` after the
- *   lease is held (unlike the send/prep path, which calls `assertChatSessionActive(...)` in
- *   `chat-turn-prep-service.ts`). Archiving a session keeps it retrievable
- *   (`archiveChatSession` only patches `lifecycleStatus: "archived"`; `getSession` still
- *   returns it — see chat-session-service.ts), so the ONLY archive-race protections undo
- *   has are (a) the write lease serialising it against the concurrent archive/turn write
- *   and (b) `getSession` throwing for a fully *deleted* session. A truly faithful
- *   "archived mid-lease" race would need an in-lease `lifecycleStatus` re-check seam that
- *   the undo service does not currently expose; closing that gap is an implementation
- *   change, not a test change. The tests below pin the behaviour the seams DO guarantee.
+ *   *once, before* acquiring the lease. That pre-lease check only proves existence, not
+ *   liveness: archiving a session keeps it retrievable (`archiveChatSession` only patches
+ *   `lifecycleStatus: "archived"`; `getSession` still returns it — see
+ *   chat-session-service.ts). Previously undo never re-read `lifecycleStatus` after the
+ *   lease was held, so an undo that WON the write-lease race against a concurrent archive
+ *   would still mutate the archived session's turns. The undo service now mirrors the
+ *   send/prep path: inside the lease it reads `storage.chatSessionMeta.get(sessionId)` and
+ *   calls `assertChatSessionActive(...)` (the same guard the prep path uses at
+ *   chat-turn-prep-service.ts) BEFORE the mutation transaction. The final test in this
+ *   suite exercises that seam — a session archived *after* the lease is acquired is
+ *   rejected inside the lease with zero mutation.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
@@ -52,6 +53,8 @@ function createDeps(input: {
   deleteTraces?: ReturnType<typeof vi.fn>;
   traces?: ChatTurnTraceRecord[];
   activeLeafTurnId?: string;
+  lifecycleStatus?: "active" | "archived";
+  getSessionMeta?: () => { lifecycleStatus: "active" | "archived" } | undefined;
 }): {
   deps: ChatTurnUndoDependencies;
   deleteMessages: ReturnType<typeof vi.fn>;
@@ -61,6 +64,11 @@ function createDeps(input: {
   const traces = input.traces ?? [singleCompletedTrace()];
   const deleteMessages = input.deleteMessages ?? vi.fn(() => traces.length);
   const deleteTraces = input.deleteTraces ?? vi.fn(() => traces.length);
+  // The in-lease lifecycle re-check reads `storage.chatSessionMeta.get(sessionId)`.
+  // Default to an active session; tests override via `lifecycleStatus` (static) or
+  // `getSessionMeta` (dynamic — e.g. flips to archived mid-lease).
+  const getSessionMeta =
+    input.getSessionMeta ?? (() => ({ lifecycleStatus: input.lifecycleStatus ?? "active" }));
   // Use the REAL registry to enforce the per-session lease; spy on it so we can assert
   // ordering (lease acquired before any mutation).
   const leaseSpy = vi.fn(
@@ -86,6 +94,7 @@ function createDeps(input: {
       chatMessages: { deleteByMessageIds: deleteMessages },
       chatTurnTraces: { deleteByTurnIds: deleteTraces },
       chatSessionBranchState: { setActiveLeaf: vi.fn(), clear: vi.fn() },
+      chatSessionMeta: { get: vi.fn(getSessionMeta) },
     },
     withChatTurnWriteLease: leaseSpy as ChatTurnUndoDependencies["withChatTurnWriteLease"],
   } as ChatTurnUndoDependencies;
@@ -206,6 +215,60 @@ describe("chat-turn write lease — race against session archive/switch", () => 
 
     // Lease was released in the `finally` of withWriteLease — a subsequent archive/switch
     // write can acquire it without hitting a stale-lease conflict.
+    expect(() => registry.acquireWriteLease(SESSION_ID, "archive-session")).not.toThrow();
+  });
+
+  it("rejects an undo that wins the lease right after a concurrent archive released it, with zero mutation (in-lease lifecycle re-check)", async () => {
+    const registry = new ChatTurnExecutionRegistry();
+
+    // The session is ACTIVE when undo's pre-lease `getSession` existence gate runs, but a
+    // concurrent archive write flips `lifecycleStatus` to "archived" — and the write lease
+    // is non-blocking (it throws immediately rather than queuing), so the faithful "undo
+    // wins the race" ordering is: archive takes the lease, patches the meta to archived,
+    // releases the lease, THEN undo acquires the now-free lease and must still observe the
+    // archived state via its in-lease re-check (NOT mutate the archived session).
+    let archived = false;
+    const getSessionMeta = vi.fn(() => ({
+      lifecycleStatus: archived ? ("archived" as const) : ("active" as const),
+    }));
+    const { deps, deleteMessages, deleteTraces } = createDeps({ registry, getSessionMeta });
+
+    // Concurrent archive holds the lease, patches lifecycle, and releases it.
+    await registry.withWriteLease(SESSION_ID, "archive-session", async () => {
+      // Pre-archive, the session reads as active (matching undo's pre-lease gate).
+      expect(getSessionMeta().lifecycleStatus).toBe("active");
+      archived = true;
+    });
+
+    // Now the lease is free; undo acquires it and discovers the session is archived via the
+    // in-lease `chatSessionMeta.get` re-check — rejecting with the SAME error the prep path
+    // raises (`assertChatSessionActive` → "Session <id> is archived"). No mutation lands.
+    await expect(undoChatTurns(deps, SESSION_ID, 1)).rejects.toThrow(`Session ${SESSION_ID} is archived`);
+    expect(getSessionMeta).toHaveBeenCalled();
+    expect(deleteMessages).not.toHaveBeenCalled();
+    expect(deleteTraces).not.toHaveBeenCalled();
+
+    // And the lease was released, so a follow-up write can still take it.
+    expect(() => registry.acquireWriteLease(SESSION_ID, "next-write")).not.toThrow();
+  });
+
+  it("rejects an undo against an already-archived session inside the lease, mutating nothing", async () => {
+    const registry = new ChatTurnExecutionRegistry();
+    // Session is archived before undo runs at all: the pre-lease existence gate still
+    // passes (archived sessions remain retrievable), but the in-lease re-check rejects it.
+    const { deps, deleteMessages, deleteTraces, leaseSpy } = createDeps({
+      registry,
+      lifecycleStatus: "archived",
+    });
+
+    await expect(undoChatTurns(deps, SESSION_ID, 1)).rejects.toThrow(`Session ${SESSION_ID} is archived`);
+
+    // The lease WAS taken (the re-check lives inside it), but no turn data was mutated and
+    // the active-leaf state was never touched.
+    expect(leaseSpy).toHaveBeenCalledWith(SESSION_ID, "chat.undo", expect.any(Function));
+    expect(deleteMessages).not.toHaveBeenCalled();
+    expect(deleteTraces).not.toHaveBeenCalled();
+    // Lease released afterwards so a later archive/switch can still acquire it.
     expect(() => registry.acquireWriteLease(SESSION_ID, "archive-session")).not.toThrow();
   });
 });
