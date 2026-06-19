@@ -8,7 +8,7 @@ overrides:
   '@webgpu/types': link:vendor/webgpu-types-stub
   brace-expansion@^2.0.2: 2.0.3
   brace-expansion@^5.0.0: 5.0.6
-  dompurify: 3.4.10
+  dompurify: 3.4.11
   esbuild: ^0.28.1
   express-rate-limit@8.3.2>ip-address: 10.1.1
   fast-uri: 3.1.2
@@ -3796,8 +3796,8 @@ packages:
     resolution: {integrity: sha512-ZJja9/KBUuFC109sCMzovoq2GR2wCG/AuxivjA+OHj/q0TEgJIm3S7yrlUxIy3B+bV8YDj/BiHfWyrRFmyWpDQ==}
     engines: {node: '>=10'}
 
-  dompurify@3.4.10:
-    resolution: {integrity: sha512-0xzNv0e7oYC6yyuOGZIABPM4qtg3QxLFniDNPP4ZP90wR8Yq3zgwpRbrNiT4N3IKqDbbYFEJLV+JWEs19aZ//w==}
+  dompurify@3.4.11:
+    resolution: {integrity: sha512-zhlUV12GsaRzMsf9q5M254YhA4+VuF0fG+QFqu6aYpoGlKtz+w8//jBcGVYBgQkR5GHjUomejY84AV+/uPbWdw==}
 
   dotenv@17.4.2:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
@@ -9575,7 +9575,7 @@ snapshots:
       xml: 1.0.1
       xml-js: 1.6.11
 
-  dompurify@3.4.10:
+  dompurify@3.4.11:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -10752,7 +10752,7 @@ snapshots:
       d3-sankey: 0.12.3
       dagre-d3-es: 7.0.14
       dayjs: 1.11.20
-      dompurify: 3.4.10
+      dompurify: 3.4.11
       es-toolkit: 1.46.1
       katex: 0.16.45
       khroma: 2.1.0
@@ -11003,7 +11003,7 @@ snapshots:
 
   monaco-editor@0.55.1:
     dependencies:
-      dompurify: 3.4.10
+      dompurify: 3.4.11
       marked: 14.0.0
 
   ms@2.1.3: {}
