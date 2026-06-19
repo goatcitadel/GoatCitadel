@@ -19,6 +19,11 @@ import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
+import {
+  buildMcpStaleAuthInvokeError,
+  isMcpAuthReadinessInvokeBlocked,
+  resolveMcpInvokeAuthReadiness,
+} from "./mcp-oauth-token-service.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import type { PluginToolExecutionContext, PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
@@ -846,6 +851,16 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return {
         ok: false,
         error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
+      };
+    }
+    // Fail closed on stale/missing OAuth (needs_auth/expired) so the shared
+    // agent/chat/durable invoke path matches the HTTP route's gate: a logically
+    // expired-but-still-connected token must not reach the runtime.
+    const authReadiness = resolveMcpInvokeAuthReadiness(server);
+    if (isMcpAuthReadinessInvokeBlocked(authReadiness)) {
+      return {
+        ok: false,
+        error: buildMcpStaleAuthInvokeError(server, authReadiness),
       };
     }
 

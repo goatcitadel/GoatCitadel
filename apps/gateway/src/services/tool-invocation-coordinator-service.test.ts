@@ -669,6 +669,94 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "needs_auth OAuth server",
+      readiness: "needs_auth" as const,
+      expectedErrorFragment: "it has not been authenticated",
+    },
+    {
+      label: "expired OAuth server",
+      readiness: "expired" as const,
+      expectedErrorFragment: "its OAuth token has expired",
+    },
+  ])(
+    "fails closed at the shared invoke chokepoint for a stale-auth $label before runtime",
+    async (scenario) => {
+      const invokeMcpRuntimeTool = vi.fn();
+      const coordinator = new ToolInvocationCoordinatorService(
+        createHost({
+          requireMcpServer: vi.fn(() =>
+            createMcpServer({
+              authType: "oauth2",
+              authState: {
+                authType: "oauth2",
+                readiness: scenario.readiness,
+              },
+            }),
+          ),
+          invokeMcpRuntimeTool,
+        }),
+      );
+
+      const response = await coordinator.invokeMcpTool({
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        arguments: { value: "hello" },
+      });
+
+      expect(response).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("needs re-authentication"),
+      });
+      expect(response.error).toContain(scenario.expectedErrorFragment);
+      expect(response).not.toHaveProperty("output");
+      expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "ready OAuth server",
+      server: createMcpServer({
+        authType: "oauth2",
+        authState: {
+          authType: "oauth2",
+          readiness: "ready",
+          accessTokenRef: "keychain:goatcitadel:mcp:srv-1:access-token",
+        },
+      }),
+    },
+    {
+      label: "not_required (no auth) server",
+      server: createMcpServer(),
+    },
+  ])("still resolves a runtime target for a $label", async (scenario) => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({
+      ok: true,
+      output: { payload: "ok" },
+    }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => scenario.server),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves MCP approval-required policy responses without touching runtime", async () => {
     const invokeMcpRuntimeTool = vi.fn();
     const host = createHost({
