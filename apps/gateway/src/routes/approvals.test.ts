@@ -30,18 +30,24 @@ describe("approvals routes", () => {
   });
 
   it("forwards the workspaceId query filter to the approvals service", async () => {
-    const listApprovals = vi.fn(() => []);
-    const built = buildApp({ listApprovals });
+    const listApprovalsPage = vi.fn(() => ({ items: [], nextCursor: "cursor-next" }));
+    const built = buildApp({ listApprovalsPage });
     app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/approvals?status=pending&workspaceId=workspace-a",
+      url: "/api/v1/approvals?status=pending&workspaceId=workspace-a&limit=25&cursor=cursor-1",
     });
 
     expect(response.statusCode).toBe(200);
-    expect(listApprovals).toHaveBeenCalledWith("pending", 100, "workspace-a");
+    expect(response.json()).toEqual({ items: [], nextCursor: "cursor-next" });
+    expect(listApprovalsPage).toHaveBeenCalledWith({
+      status: "pending",
+      limit: 25,
+      cursor: "cursor-1",
+      workspaceId: "workspace-a",
+    });
   });
 
   it("blocks approval creation for non-loopback callers", async () => {

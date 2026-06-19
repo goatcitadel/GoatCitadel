@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { createHash, randomBytes } from "node:crypto";
 import {
   type ApprovalEffectRecord,
+  type ApprovalListResponse,
   clampInt,
   ConflictError,
   type ApprovalBulkResolveInput,
@@ -190,6 +191,26 @@ export function listApprovals(
     .map((approval) =>
       withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
     );
+}
+
+export function listApprovalsPage(
+  host: ApprovalLifecycleHost,
+  input: {
+    status?: ApprovalRequest["status"];
+    limit?: number;
+    cursor?: string;
+    workspaceId?: string;
+  },
+): ApprovalListResponse {
+  const page = host.storage.approvals.listPage(input);
+  return {
+    items: page.items
+      .filter((approval) => input.status !== "pending" || !isApprovalExpired(approval))
+      .map((approval) =>
+        withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
+      ),
+    nextCursor: page.nextCursor,
+  };
 }
 
 function isApprovalExpired(approval: ApprovalRequest): boolean {

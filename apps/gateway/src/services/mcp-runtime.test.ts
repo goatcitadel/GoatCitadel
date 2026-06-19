@@ -615,6 +615,142 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("rejects oversized remote MCP JSON responses without echoing response bodies", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+                oversized: `secret-token-value-${"x".repeat(__internal.MCP_HTTP_RESPONSE_BODY_MAX_BYTES)}`,
+              },
+            }),
+          );
+          return;
+        }
+        response.writeHead(202).end();
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          {
+            toolName: "remote.search",
+            arguments: {},
+          },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("exceeded");
+        expect(result.error).not.toContain("secret-token-value");
+      },
+    );
+  });
+
+  it("rejects oversized remote MCP SSE responses without unbounded buffering", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress" })}\n\n`);
+        response.write(`data: ${"x".repeat(__internal.MCP_HTTP_RESPONSE_BODY_MAX_BYTES)}\n\n`);
+        response.end();
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          {
+            toolName: "remote.search",
+            arguments: {},
+          },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("exceeded");
+      },
+    );
+  });
+
+  it("returns the matching remote MCP SSE response without waiting for stream close", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(
+          [
+            "event: message",
+            `data: ${JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                content: [{ type: "text", text: "kept-open stream matched" }],
+              },
+            })}`,
+            "",
+          ].join("\n"),
+        );
+        response.write("\n");
+      },
+      async (url) => {
+        const startedAt = Date.now();
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          {
+            toolName: "remote.search",
+            arguments: {},
+          },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.output).toMatchObject({
+          contentText: "kept-open stream matched",
+        });
+        expect(Date.now() - startedAt).toBeLessThan(1000);
+      },
+    );
+  });
+
   it("injects resolved OAuth bearer tokens into remote MCP HTTP calls without echoing secrets", async () => {
     const seenAuthorizations: Array<string | undefined> = [];
     await withRemoteMcpHttpServer(

@@ -73,6 +73,7 @@ const remoteResolveSchema = z.object({
 const listQuerySchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
+  cursor: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
 });
 
@@ -150,7 +151,26 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId) });
+      const pagedApprovals = approvals as typeof approvals & {
+        listApprovalsPage?: (input: {
+          status?: "pending" | "approved" | "rejected" | "edited";
+          limit?: number;
+          cursor?: string;
+          workspaceId?: string;
+        }) => { items: unknown[]; nextCursor?: string };
+      };
+      return reply.send(
+        pagedApprovals.listApprovalsPage
+          ? pagedApprovals.listApprovalsPage({
+              status: parsed.data.status,
+              limit: parsed.data.limit,
+              cursor: parsed.data.cursor,
+              workspaceId: parsed.data.workspaceId,
+            })
+          : {
+              items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),
+            },
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

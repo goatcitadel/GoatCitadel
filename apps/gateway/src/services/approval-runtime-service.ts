@@ -2,6 +2,7 @@ import type {
   ApprovalBulkResolveInput,
   ApprovalBulkResolveResult,
   ApprovalCreateInput,
+  ApprovalListResponse,
   ApprovalRequest,
   ApprovalResolveInput,
   ToolGrantCreateInput,
@@ -44,6 +45,12 @@ export interface ApprovalRuntime {
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
   listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): ApprovalRequest[];
+  listApprovalsPage(input: {
+    status?: ApprovalRequest["status"];
+    limit?: number;
+    cursor?: string;
+    workspaceId?: string;
+  }): ApprovalListResponse;
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
   getApprovalReplay(approvalId: string, replayedBy?: string): ApprovalReplayResult;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
@@ -116,6 +123,15 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
     return approvalLifecycleService.listApprovals(this.host, status, limit, workspaceId);
+  }
+
+  public listApprovalsPage(input: {
+    status?: ApprovalRequest["status"];
+    limit?: number;
+    cursor?: string;
+    workspaceId?: string;
+  }): ApprovalListResponse {
+    return approvalLifecycleService.listApprovalsPage(this.host, input);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateVaultKey, sealValue, openValue } from "./citadel-vault.js";
+import { generateVaultKey, sealValue, openValue } from "./citadel-vault-node.js";
 
 describe("citadel-vault", () => {
   describe("generateVaultKey", () => {

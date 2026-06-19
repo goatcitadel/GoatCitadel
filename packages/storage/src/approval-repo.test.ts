@@ -66,6 +66,43 @@ describe("ApprovalRepository", () => {
     assert.equal(unscoped.length, 3);
   });
 
+  it("lists approval pages with stable cursors and workspace filters", () => {
+    const repo = createRepo();
+    for (const [index, workspaceId] of [
+      "workspace-a",
+      "workspace-b",
+      "workspace-a",
+      "workspace-a",
+      "workspace-b",
+    ].entries()) {
+      repo.create({
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: { command: `command-${index}` },
+        preview: { command: `command-${index}` },
+        linkage: { workspaceId },
+      });
+    }
+
+    const firstPage = repo.listPage({ status: "pending", limit: 2 });
+    assert.equal(firstPage.items.length, 2);
+    assert.equal(typeof firstPage.nextCursor, "string");
+
+    const secondPage = repo.listPage({ status: "pending", limit: 2, cursor: firstPage.nextCursor });
+    assert.equal(secondPage.items.length, 2);
+    assert.deepEqual(
+      firstPage.items.filter((item) => secondPage.items.some((next) => next.approvalId === item.approvalId)),
+      [],
+    );
+
+    const scoped = repo.listPage({ status: "pending", limit: 2, workspaceId: "workspace-a" });
+    assert.equal(scoped.items.length, 2);
+    assert.deepEqual(
+      scoped.items.map((approval) => approval.linkage?.workspaceId),
+      ["workspace-a", "workspace-a"],
+    );
+  });
+
   it("tracks explanation lifecycle state", () => {
     const repo = createRepo();
     const created = repo.create({

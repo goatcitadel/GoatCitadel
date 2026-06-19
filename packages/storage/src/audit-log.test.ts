@@ -68,6 +68,49 @@ describe("AuditLog", () => {
     );
   });
 
+  it("waits for a cross-process audit lock before appending", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const filePath = path.join(root, "tool_invocations.jsonl");
+    const lockDir = `${filePath}.lock`;
+    await fsPromises.mkdir(lockDir, { recursive: true });
+    const log = new AuditLog(root);
+
+    const append = log.append("tool_invocations", {
+      action: "tool.invoke",
+      index: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.equal(fs.existsSync(filePath), false);
+
+    await fsPromises.rm(lockDir, { recursive: true, force: true });
+    await append;
+
+    const records = await log.list("tool_invocations");
+    assert.deepEqual(
+      records.map((record) => record.index),
+      [1],
+    );
+    assert.equal(fs.existsSync(lockDir), false);
+  });
+
+  it("removes stale cross-process audit locks before appending", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const filePath = path.join(root, "policy_blocks.jsonl");
+    const lockDir = `${filePath}.lock`;
+    await fsPromises.mkdir(lockDir, { recursive: true });
+    const staleTime = new Date(Date.now() - 120_000);
+    await fsPromises.utimes(lockDir, staleTime, staleTime);
+    const log = new AuditLog(root);
+
+    await log.append("policy_blocks", { action: "policy.blocked" });
+
+    const records = await log.list("policy_blocks");
+    assert.equal(records[0]?.action, "policy.blocked");
+    assert.equal(fs.existsSync(lockDir), false);
+  });
+
   it("redacts secret-like values before writing audit records", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

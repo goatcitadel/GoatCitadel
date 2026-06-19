@@ -271,6 +271,17 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 })
               )}
             </div>
+            {approvals.hasMoreVisibleApprovals ? (
+              <div className="mc-next-approvals-list-footer">
+                <NativeButton
+                  variant="outline"
+                  disabled={approvals.loadMorePending}
+                  onClick={() => void approvals.loadMoreVisibleApprovals()}
+                >
+                  {approvals.loadMorePending ? "Loading..." : "Load more"}
+                </NativeButton>
+              </div>
+            ) : null}
           </NativeCard>
           <NativeCard
             title={selectedApproval ? selectedApproval.kind || selectedApproval.approvalId : "Approval detail"}

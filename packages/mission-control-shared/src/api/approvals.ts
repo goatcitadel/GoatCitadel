@@ -1,5 +1,6 @@
 import type {
   ApprovalBulkResolveResult,
+  ApprovalRequest,
   LocalOperatorOverrideCreateInput,
   LocalOperatorOverrideRecord,
   PermissionProfileActivationInput,
@@ -21,13 +22,25 @@ type ToolGrantCreateRequestInput = Omit<ToolGrantCreateInput, "createdBy">;
 type PermissionProfileCreateRequestInput = Omit<PermissionProfileCreateInput, "createdBy" | "scope"> & {
   scope?: Exclude<NonNullable<PermissionProfileCreateInput["scope"]>, "global">;
 };
+export interface ApprovalFetchOptions {
+  status?: ApprovalRequest["status"];
+  limit?: number;
+  cursor?: string;
+}
 
 export async function fetchApprovals(
-  status?: "pending" | "approved" | "rejected" | "edited",
+  input?: ApprovalRequest["status"] | ApprovalFetchOptions,
 ): Promise<ApprovalsResponse> {
+  const options = typeof input === "string" ? { status: input } : (input ?? {});
   const query = new URLSearchParams();
-  if (status) {
-    query.set("status", status);
+  if (options.status) {
+    query.set("status", options.status);
+  }
+  if (options.limit !== undefined) {
+    query.set("limit", String(Math.max(1, Math.min(Math.floor(options.limit), 200))));
+  }
+  if (options.cursor?.trim()) {
+    query.set("cursor", options.cursor.trim());
   }
   return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }

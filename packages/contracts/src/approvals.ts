@@ -92,6 +92,11 @@ export interface ApprovalRequest {
   shellExplanations?: readonly ShellCommandExplanation[];
 }
 
+export interface ApprovalListResponse {
+  items: ApprovalRequest[];
+  nextCursor?: string;
+}
+
 export interface ApprovalCreateInput {
   kind: string;
   riskLevel: ApprovalRequest["riskLevel"];

@@ -2,6 +2,7 @@ import type {
   ApprovalCreateInput,
   ApprovalExplanation,
   ApprovalExplanationStatus,
+  ApprovalListResponse,
   ApprovalRequest,
   ApprovalResolveInput,
   ShellCommandExplanation,
@@ -33,10 +34,19 @@ interface ApprovalRow {
   shell_explanations_json: string | null;
 }
 
+interface ApprovalPageCursor {
+  createdAt: string;
+  approvalId: string;
+}
+
 export class ApprovalRepository {
   private readonly createStmt;
   private readonly listStmt;
   private readonly listByStatusStmt;
+  private readonly listPageStmt;
+  private readonly listPageAfterStmt;
+  private readonly listPageByStatusStmt;
+  private readonly listPageByStatusAfterStmt;
   private readonly getStmt;
   private readonly resolveStmt;
   private readonly updatePayloadStmt;
@@ -59,6 +69,30 @@ export class ApprovalRepository {
     this.listByStatusStmt = db.prepare(
       "SELECT * FROM approvals WHERE status = @status ORDER BY created_at DESC LIMIT @limit",
     );
+    this.listPageStmt = db.prepare("SELECT * FROM approvals ORDER BY created_at DESC, approval_id DESC LIMIT @limit");
+    this.listPageAfterStmt = db.prepare(`
+      SELECT * FROM approvals
+      WHERE created_at < @createdAt
+         OR (created_at = @createdAt AND approval_id < @approvalId)
+      ORDER BY created_at DESC, approval_id DESC
+      LIMIT @limit
+    `);
+    this.listPageByStatusStmt = db.prepare(`
+      SELECT * FROM approvals
+      WHERE status = @status
+      ORDER BY created_at DESC, approval_id DESC
+      LIMIT @limit
+    `);
+    this.listPageByStatusAfterStmt = db.prepare(`
+      SELECT * FROM approvals
+      WHERE status = @status
+        AND (
+          created_at < @createdAt
+          OR (created_at = @createdAt AND approval_id < @approvalId)
+        )
+      ORDER BY created_at DESC, approval_id DESC
+      LIMIT @limit
+    `);
     this.getStmt = db.prepare("SELECT * FROM approvals WHERE approval_id = ?");
     this.resolveStmt = db.prepare(`
       UPDATE approvals SET
@@ -170,6 +204,84 @@ export class ApprovalRepository {
     return mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId).slice(0, limit);
   }
 
+  public listPage(input: {
+    status?: ApprovalRequest["status"];
+    limit?: number;
+    cursor?: string;
+    workspaceId?: string;
+  }): ApprovalListResponse {
+    const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 100), 200));
+    const scopedWorkspaceId = input.workspaceId?.trim();
+    const output: ApprovalRequest[] = [];
+    let cursor = decodeApprovalListCursor(input.cursor);
+    let nextCursor: string | undefined;
+
+    do {
+      const remaining = limit - output.length;
+      const fetchLimit = scopedWorkspaceId
+        ? Math.max(Math.min(remaining * 10 + 1, 1000), remaining + 1)
+        : remaining + 1;
+      const mapped = this.readApprovalPage(input.status, fetchLimit, cursor);
+      const accepted = scopedWorkspaceId
+        ? mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId)
+        : mapped;
+      const acceptedCapacity = Math.max(0, limit - output.length);
+      const appended = accepted.slice(0, acceptedCapacity);
+      output.push(...appended);
+
+      const lastReturned = appended.at(-1);
+      const lastScanned = mapped.at(-1);
+      const scannedMoreThanReturned = Boolean(
+        lastReturned && lastScanned && lastReturned.approvalId !== lastScanned.approvalId,
+      );
+      const hasMoreScannedRows = mapped.length === fetchLimit;
+      if (output.length >= limit) {
+        nextCursor =
+          lastReturned && (accepted.length > appended.length || scannedMoreThanReturned || hasMoreScannedRows)
+            ? encodeApprovalListCursor(lastReturned)
+            : undefined;
+        break;
+      }
+      if (!lastScanned || !hasMoreScannedRows) {
+        nextCursor = undefined;
+        break;
+      }
+      nextCursor = encodeApprovalListCursor(lastScanned);
+      cursor = decodeApprovalListCursor(nextCursor);
+    } while (scopedWorkspaceId && output.length < limit && nextCursor);
+
+    return {
+      items: output,
+      nextCursor,
+    };
+  }
+
+  private readApprovalPage(
+    status: ApprovalRequest["status"] | undefined,
+    limit: number,
+    cursor?: ApprovalPageCursor,
+  ): ApprovalRequest[] {
+    const rows = toApprovalRows(
+      status
+        ? cursor
+          ? this.listPageByStatusAfterStmt.all({
+              status,
+              limit,
+              createdAt: cursor.createdAt,
+              approvalId: cursor.approvalId,
+            })
+          : this.listPageByStatusStmt.all({ status, limit })
+        : cursor
+          ? this.listPageAfterStmt.all({
+              limit,
+              createdAt: cursor.createdAt,
+              approvalId: cursor.approvalId,
+            })
+          : this.listPageStmt.all({ limit }),
+    );
+    return rows.map(mapRow);
+  }
+
   public resolve(approvalId: string, input: ApprovalResolveInput): ApprovalRequest {
     const current = this.get(approvalId);
 
@@ -239,6 +351,34 @@ export class ApprovalRepository {
       updatedAt: new Date().toISOString(),
     });
     return this.get(approvalId);
+  }
+}
+
+function encodeApprovalListCursor(approval: Pick<ApprovalRequest, "approvalId" | "createdAt">): string {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: approval.createdAt,
+      approvalId: approval.approvalId,
+    } satisfies ApprovalPageCursor),
+    "utf8",
+  ).toString("base64url");
+}
+
+function decodeApprovalListCursor(cursor?: string): ApprovalPageCursor | undefined {
+  if (!cursor?.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<ApprovalPageCursor>;
+    if (typeof parsed.createdAt !== "string" || typeof parsed.approvalId !== "string") {
+      return undefined;
+    }
+    return {
+      createdAt: parsed.createdAt,
+      approvalId: parsed.approvalId,
+    };
+  } catch {
+    return undefined;
   }
 }
 

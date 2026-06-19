@@ -58,6 +58,7 @@ interface OperatorAttentionPayload {
 }
 
 const RUNTIME_HEALTH_POLL_MS = 10_000;
+const RUNTIME_STATUS_TIMEOUT_MS = 8_000;
 const startup = mustGetElement<HTMLElement>("startup");
 const frame = mustGetElement<HTMLIFrameElement>("mission-control-frame");
 const statusCopy = mustGetElement<HTMLElement>("status-copy");
@@ -73,6 +74,8 @@ const desktopToast = mustGetElement<HTMLElement>("desktop-toast");
 let lastRuntime: DesktopRuntimeStatus | null = null;
 let toastTimer: number | undefined;
 let runtimeStatusPollTimer: number | undefined;
+let runtimeStatusInFlight = false;
+let runtimeStatusRequestSequence = 0;
 
 retryButton.addEventListener("click", () => {
   void launchRuntime();
@@ -195,9 +198,18 @@ function renderStopped(): void {
 }
 
 async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boolean } = {}): Promise<void> {
+  if (runtimeStatusInFlight) {
+    return;
+  }
+  runtimeStatusInFlight = true;
+  const requestId = runtimeStatusRequestSequence + 1;
+  runtimeStatusRequestSequence = requestId;
   const notify = options.notify ?? true;
   try {
-    const result = await invoke<DesktopRuntimeStatus>("read_runtime_status");
+    const result = await readRuntimeStatusWithTimeout();
+    if (runtimeStatusRequestSequence !== requestId) {
+      return;
+    }
     lastRuntime = result;
     const message = `Runtime ${result.status}: gateway ${result.readiness.gateway ? "ready" : "not ready"}, UI ${
       result.readiness.ui ? "ready" : "not ready"
@@ -220,6 +232,28 @@ async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boo
     }
     if (options.syncShell) {
       renderRecovery(`Runtime status check failed: ${message}`);
+    }
+  } finally {
+    if (runtimeStatusRequestSequence === requestId) {
+      runtimeStatusInFlight = false;
+    }
+  }
+}
+
+async function readRuntimeStatusWithTimeout(): Promise<DesktopRuntimeStatus> {
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      invoke<DesktopRuntimeStatus>("read_runtime_status"),
+      new Promise<DesktopRuntimeStatus>((_, reject) => {
+        timeout = window.setTimeout(() => {
+          reject(new Error(`Runtime status check timed out after ${RUNTIME_STATUS_TIMEOUT_MS}ms.`));
+        }, RUNTIME_STATUS_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
     }
   }
 }

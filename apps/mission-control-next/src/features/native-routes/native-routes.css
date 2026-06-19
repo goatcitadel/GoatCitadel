@@ -905,6 +905,11 @@
   gap: 0.42rem;
 }
 
+.mc-next-approvals-list-footer {
+  display: flex;
+  justify-content: center;
+}
+
 .mc-next-approvals-list-item {
   display: grid;
   gap: 0.35rem;

@@ -6,6 +6,7 @@ const lifecycle = vi.hoisted(() => ({
   createToolGrant: vi.fn(),
   getApprovalReplay: vi.fn(),
   listApprovals: vi.fn(),
+  listApprovalsPage: vi.fn(),
   listToolGrants: vi.fn(),
   resolveApproval: vi.fn(),
   resolveApprovalsBulk: vi.fn(),
@@ -30,6 +31,7 @@ describe("ApprovalRuntimeService", () => {
     lifecycle.resolveApprovalWithRemoteToken.mockResolvedValue({ approval: { approvalId: "approval-1" } });
     lifecycle.resolveApprovalWithRemoteTokenId.mockResolvedValue({ approval: { approvalId: "approval-1" } });
     lifecycle.listApprovals.mockReturnValue([{ approvalId: "approval-1" }]);
+    lifecycle.listApprovalsPage.mockReturnValue({ items: [{ approvalId: "approval-1" }], nextCursor: "next" });
     lifecycle.resolveApprovalsBulk.mockResolvedValue({ resolved: 1, failed: [] });
     lifecycle.getApprovalReplay.mockReturnValue({ approval: { approvalId: "approval-1" }, events: [] });
     lifecycle.resolveApproval.mockResolvedValue({ approval: { approvalId: "approval-1", status: "approved" } });
@@ -65,6 +67,10 @@ describe("ApprovalRuntimeService", () => {
       approval: { approvalId: "approval-1" },
     });
     expect(service.listApprovals()).toEqual([{ approvalId: "approval-1" }]);
+    expect(service.listApprovalsPage({ status: "pending", limit: 25, cursor: "cursor-1" })).toEqual({
+      items: [{ approvalId: "approval-1" }],
+      nextCursor: "next",
+    });
     await expect(
       service.resolveApprovalsBulk({ approvalIds: ["approval-1"], decision: "approve" } as never),
     ).resolves.toEqual({
@@ -86,6 +92,11 @@ describe("ApprovalRuntimeService", () => {
     expect(lifecycle.listToolGrants).toHaveBeenCalledWith(host, undefined, undefined, 200);
     expect(lifecycle.revokeToolGrant).toHaveBeenCalledWith(host, "grant-1", "operator-test");
     expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, undefined, 100, undefined);
+    expect(lifecycle.listApprovalsPage).toHaveBeenCalledWith(host, {
+      status: "pending",
+      limit: 25,
+      cursor: "cursor-1",
+    });
     expect(lifecycle.getApprovalReplay).toHaveBeenCalledWith(host, "approval-1", "operator");
   });
 
