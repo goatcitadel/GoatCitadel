@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { generateVaultKey, type CitadelVaultSecretRecord } from "@goatcitadel/contracts";
+import type { CitadelVaultSecretRecord } from "@goatcitadel/contracts";
+import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { CitadelsRouteService, type CitadelsRoutePort } from "./citadels-route-service.js";
 
 function repoStub(overrides: Partial<CitadelsRoutePort>): CitadelsRoutePort {

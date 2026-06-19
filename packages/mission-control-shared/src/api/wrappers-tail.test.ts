@@ -120,6 +120,10 @@ describe("shared API wrapper tail coverage", () => {
     );
 
     await expectCall(approvals.fetchApprovals("pending"), "/api/v1/approvals?status=pending");
+    await expectCall(
+      approvals.fetchApprovals({ status: "pending", limit: 500, cursor: "cursor next" }),
+      "/api/v1/approvals?status=pending&limit=200&cursor=cursor+next",
+    );
     await expectCall(approvals.fetchApprovals(), "/api/v1/approvals");
     await expectCall(approvals.resolveApproval("approval/1", "approve"), "/api/v1/approvals/approval/1/resolve", {
       method: "POST",

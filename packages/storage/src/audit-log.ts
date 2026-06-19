@@ -18,6 +18,10 @@ const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$
 const SECRET_ARG_FLAG_PATTERN =
   /^--?(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|secret|password|authorization|proxy-authorization)(?:=|$)/i;
 const AUDIT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const AUDIT_FILE_LOCK_SUFFIX = ".lock";
+const AUDIT_FILE_LOCK_RETRY_MS = 25;
+const AUDIT_FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
+const AUDIT_FILE_LOCK_STALE_MS = 60_000;
 
 export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
@@ -125,7 +129,7 @@ export class AuditLog {
 
     await previous.catch(() => undefined);
     try {
-      return await operation();
+      return await runWithAuditFileLock(filePath, operation);
     } finally {
       release();
       if (this.streamLocks.get(filePath) === next) {
@@ -145,6 +149,83 @@ export class AuditLog {
       this.lastPrunedAt.set(stream, now);
     }
   }
+}
+
+async function runWithAuditFileLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const lockDir = `${filePath}${AUDIT_FILE_LOCK_SUFFIX}`;
+  await acquireAuditFileLock(lockDir);
+  try {
+    return await operation();
+  } finally {
+    await releaseAuditFileLock(lockDir);
+  }
+}
+
+async function acquireAuditFileLock(lockDir: string): Promise<void> {
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      await fs.mkdir(lockDir);
+      await writeAuditLockOwner(lockDir);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      if (await removeStaleAuditFileLock(lockDir)) {
+        continue;
+      }
+      if (Date.now() - startedAt >= AUDIT_FILE_LOCK_ACQUIRE_TIMEOUT_MS) {
+        throw new Error(
+          `Timed out acquiring audit log file lock for ${path.basename(lockDir, AUDIT_FILE_LOCK_SUFFIX)}.`,
+          {
+            cause: error,
+          },
+        );
+      }
+      await sleep(AUDIT_FILE_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function writeAuditLockOwner(lockDir: string): Promise<void> {
+  try {
+    await fs.appendFile(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+  } catch {
+    // The directory creation is the lock. Owner metadata is best-effort only.
+  }
+}
+
+async function removeStaleAuditFileLock(lockDir: string): Promise<boolean> {
+  let stat: { mtimeMs: number };
+  try {
+    stat = await fs.stat(lockDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+    throw error;
+  }
+  if (Date.now() - stat.mtimeMs < AUDIT_FILE_LOCK_STALE_MS) {
+    return false;
+  }
+  await releaseAuditFileLock(lockDir);
+  return true;
+}
+
+async function releaseAuditFileLock(lockDir: string): Promise<void> {
+  await fs.rm(lockDir, { recursive: true, force: true });
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function pruneAuditStreamIfNeeded(filePath: string): Promise<boolean> {

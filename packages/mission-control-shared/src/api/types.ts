@@ -36,6 +36,7 @@ export interface SessionsResponse {
 
 export interface ApprovalsResponse {
   items: ApprovalRequest[];
+  nextCursor?: string;
 }
 
 export type ApprovalReplayResponse = ApprovalReplaySnapshot;

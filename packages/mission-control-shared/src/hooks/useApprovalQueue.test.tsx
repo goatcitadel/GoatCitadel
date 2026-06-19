@@ -139,6 +139,46 @@ describe("useApprovalQueue", () => {
     expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["expired-1", "approved-1"]);
   });
 
+  it("loads the next visible approval page when the gateway returns a cursor", async () => {
+    apiMocks.fetchApprovals.mockImplementation(
+      async (input: ApprovalRequest["status"] | { status?: ApprovalRequest["status"]; cursor?: string }) => {
+        const status = typeof input === "string" ? input : input.status;
+        if (typeof input === "object" && input.cursor === "cursor-pending") {
+          return {
+            items: [
+              approval({
+                approvalId: "pending-2",
+                createdAt: "2026-01-01T10:30:00.000Z",
+              }),
+            ],
+          };
+        }
+        return {
+          items:
+            status === "pending"
+              ? [
+                  approval({
+                    approvalId: "pending-1",
+                    createdAt: "2026-01-01T11:00:00.000Z",
+                  }),
+                ]
+              : [],
+          nextCursor: status === "pending" ? "cursor-pending" : undefined,
+        };
+      },
+    );
+    const hook = await renderApprovalQueue();
+
+    expect(hook.result.hasMoreVisibleApprovals).toBe(true);
+    await act(async () => {
+      await hook.result.loadMoreVisibleApprovals();
+    });
+
+    expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ status: "pending", cursor: "cursor-pending" });
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-1", "pending-2"]);
+    expect(hook.result.hasMoreVisibleApprovals).toBe(false);
+  });
+
   it("focuses resolved approvals by switching to history instead of selecting an unrelated pending item", async () => {
     const hook = await renderApprovalQueue({ focusedApprovalId: "approved-1" });
 

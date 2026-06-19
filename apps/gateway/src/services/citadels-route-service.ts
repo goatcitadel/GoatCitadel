@@ -38,13 +38,12 @@ import {
   findCitadelTemplate,
   generateBlueprintReviewSummary,
   MASON_SETUP_QUESTIONS,
-  openValue,
   parseMasonInterpretResponse,
-  sealValue,
   summarizeCitadelGatehouse,
   toVaultSecretMetadata,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
+import { openValue, sealValue } from "@goatcitadel/contracts/citadel-vault-node";
 
 /** Interprets a freeform message into raw model output (the Mason's one LLM dependency). */
 export type MasonInterpret = (prompt: string) => Promise<string>;

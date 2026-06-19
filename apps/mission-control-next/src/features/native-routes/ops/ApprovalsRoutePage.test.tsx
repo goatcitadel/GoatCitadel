@@ -62,6 +62,7 @@ const approvalHarness = vi.hoisted(() => {
     loadDurableStatus: vi.fn(),
     resumeFromCheckpoint: vi.fn(),
     onRejectAllPending: vi.fn(async () => undefined),
+    loadMoreVisibleApprovals: vi.fn(async () => undefined),
   };
 });
 
@@ -137,6 +138,8 @@ function buildQueue() {
     failedStatusLanes: [],
     pendingLaneFailed: false,
     hasPendingApprovals: true,
+    hasMoreVisibleApprovals: false,
+    loadMorePending: false,
     bulkResolvePending: false,
     onResolve: approvalHarness.onResolve,
     onReplay: approvalHarness.onReplay,
@@ -144,6 +147,7 @@ function buildQueue() {
     loadDurableStatus: approvalHarness.loadDurableStatus,
     resumeFromCheckpoint: approvalHarness.resumeFromCheckpoint,
     onRejectAllPending: approvalHarness.onRejectAllPending,
+    loadMoreVisibleApprovals: approvalHarness.loadMoreVisibleApprovals,
     summary: "Approvals stay in one operator view now.",
     ...approvalHarness.overrides,
   };
@@ -240,6 +244,7 @@ beforeEach(() => {
   approvalHarness.loadDurableStatus.mockClear();
   approvalHarness.resumeFromCheckpoint.mockClear();
   approvalHarness.onRejectAllPending.mockClear();
+  approvalHarness.loadMoreVisibleApprovals.mockClear();
 });
 
 describe("ApprovalsRoutePage", () => {
@@ -288,6 +293,25 @@ describe("ApprovalsRoutePage", () => {
     expect(errorText).toContain("Pending (3)");
     expect(errorText).toContain("Pending approvals exist, but the queue details could not be loaded.");
     expect(errorText).not.toContain("Loading current route data");
+  });
+
+  it("loads more approvals from the active queue view", async () => {
+    approvalHarness.overrides = {
+      hasMoreVisibleApprovals: true,
+    };
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(renderPage());
+    });
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Load more").props.onClick();
+    });
+
+    expect(approvalHarness.loadMoreVisibleApprovals).toHaveBeenCalledTimes(1);
+    act(() => {
+      renderer!.unmount();
+    });
   });
 
   it("keeps the approval queue visible when an error arrives with a stale loading flag", () => {

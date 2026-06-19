@@ -1,5 +1,5 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
-import { generateVaultKey } from "@goatcitadel/contracts";
+import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createCronRoutePort } from "./cron-route-service.js";

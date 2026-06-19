@@ -33,6 +33,7 @@ export interface ApprovalDurableStatus {
 }
 
 export type ApprovalView = "pending" | "history" | "recovery";
+const APPROVAL_STATUSES = ["pending", "approved", "rejected", "edited"] as const;
 
 function formatApprovalLoadError(
   failures: Array<{ result: PromiseRejectedResult; status: ApprovalRequest["status"] }>,
@@ -75,6 +76,8 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failedStatusLanes, setFailedStatusLanes] = useState<ApprovalRequest["status"][]>([]);
+  const [nextCursorByStatus, setNextCursorByStatus] = useState<Partial<Record<ApprovalRequest["status"], string>>>({});
+  const [loadMorePending, setLoadMorePending] = useState(false);
   const [view, setView] = useState<ApprovalView>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const appliedFocusedApprovalIdRef = useRef<string | undefined>(undefined);
@@ -85,21 +88,22 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const load = useCallback(async () => {
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
-    const statuses = ["pending", "approved", "rejected", "edited"] as const;
-    const results = await Promise.allSettled(statuses.map((status) => fetchApprovals(status)));
+    const results = await Promise.allSettled(APPROVAL_STATUSES.map((status) => fetchApprovals(status)));
     if (loadSequenceRef.current !== loadId) {
       return;
     }
     const fulfilled = results
-      .map((result, index) => ({ result, status: statuses[index] }))
+      .map((result, index) => ({ result, status: APPROVAL_STATUSES[index] }))
       .filter(
-        (entry): entry is { result: PromiseFulfilledResult<ApprovalsResponse>; status: (typeof statuses)[number] } =>
+        (
+          entry,
+        ): entry is { result: PromiseFulfilledResult<ApprovalsResponse>; status: (typeof APPROVAL_STATUSES)[number] } =>
           entry.result.status === "fulfilled",
       );
     const rejected = results
-      .map((result, index) => ({ result, status: statuses[index] }))
+      .map((result, index) => ({ result, status: APPROVAL_STATUSES[index] }))
       .filter(
-        (entry): entry is { result: PromiseRejectedResult; status: (typeof statuses)[number] } =>
+        (entry): entry is { result: PromiseRejectedResult; status: (typeof APPROVAL_STATUSES)[number] } =>
           entry.result.status === "rejected",
       );
 
@@ -117,10 +121,59 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
           items: mergeApprovals([...fulfilledItems, preservedRejectedLaneItems]),
         };
       });
+      setNextCursorByStatus((current) => ({
+        ...current,
+        ...Object.fromEntries(fulfilled.map((entry) => [entry.status, entry.result.value.nextCursor])),
+      }));
     }
     setFailedStatusLanes(rejected.map((entry) => entry.status));
     setError(formatApprovalLoadError(rejected));
   }, []);
+
+  const loadMoreVisibleApprovals = useCallback(async () => {
+    const statuses = approvalStatusesForView(view).filter((status) => nextCursorByStatus[status]);
+    if (statuses.length === 0 || loadMorePending) {
+      return;
+    }
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
+    setLoadMorePending(true);
+    try {
+      const results = await Promise.allSettled(
+        statuses.map((status) => fetchApprovals({ status, cursor: nextCursorByStatus[status] })),
+      );
+      if (loadSequenceRef.current !== loadId) {
+        return;
+      }
+      const fulfilled = results
+        .map((result, index) => ({ result, status: statuses[index] }))
+        .filter(
+          (entry): entry is { result: PromiseFulfilledResult<ApprovalsResponse>; status: ApprovalRequest["status"] } =>
+            entry.result.status === "fulfilled",
+        );
+      const rejected = results
+        .map((result, index) => ({ result, status: statuses[index] }))
+        .filter(
+          (entry): entry is { result: PromiseRejectedResult; status: ApprovalRequest["status"] } =>
+            entry.result.status === "rejected",
+        );
+
+      if (fulfilled.length > 0) {
+        setData((current) => ({
+          items: mergeApprovals([current?.items ?? [], ...fulfilled.map((entry) => entry.result.value.items)]),
+        }));
+        setNextCursorByStatus((current) => ({
+          ...current,
+          ...Object.fromEntries(fulfilled.map((entry) => [entry.status, entry.result.value.nextCursor])),
+        }));
+      }
+      setError(formatApprovalLoadError(rejected));
+    } finally {
+      if (loadSequenceRef.current === loadId) {
+        setLoadMorePending(false);
+      }
+    }
+  }, [loadMorePending, nextCursorByStatus, view]);
 
   useEffect(() => {
     if (options.enabled === false) {
@@ -386,6 +439,10 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     () => (view === "pending" ? pendingItems : view === "history" ? historyItems : recoveryItems),
     [historyItems, pendingItems, recoveryItems, view],
   );
+  const hasMoreVisibleApprovals = useMemo(
+    () => approvalStatusesForView(view).some((status) => Boolean(nextCursorByStatus[status])),
+    [nextCursorByStatus, view],
+  );
   const focusedApproval = useMemo(
     () => allItems.find((approval) => approval.approvalId === options.focusedApprovalId) ?? null,
     [allItems, options.focusedApprovalId],
@@ -483,6 +540,8 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     pendingLaneFailed: failedStatusLanes.includes("pending"),
     pendingRiskCounts,
     hasPendingApprovals: pendingItems.length > 0,
+    hasMoreVisibleApprovals,
+    loadMorePending,
     replayCount: Object.keys(replayById).length,
     resolvePending: resolveAction.pending,
     bulkResolvePending: bulkResolveAction.pending,
@@ -492,7 +551,15 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     loadTracePreview,
     loadDurableStatus,
     resumeFromCheckpoint,
+    loadMoreVisibleApprovals,
   };
+}
+
+function approvalStatusesForView(view: ApprovalView): ApprovalRequest["status"][] {
+  if (view === "pending") {
+    return ["pending"];
+  }
+  return [...APPROVAL_STATUSES];
 }
 
 function formatApprovalFollowUpSummary(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {

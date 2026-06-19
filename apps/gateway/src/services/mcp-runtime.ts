@@ -17,6 +17,10 @@ const log = logger.child("mcp-runtime");
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const MCP_STREAMABLE_HTTP_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
+/** Max bytes GoatCitadel will buffer from a remote MCP HTTP/SSE response. */
+const MCP_HTTP_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+/** Max time to spend reading a remote MCP response body after headers arrive. */
+const MCP_HTTP_RESPONSE_READ_TIMEOUT_MS = DEFAULT_STDIO_TIMEOUT_MS;
 /** Grace period before escalating a POSIX child from SIGTERM to SIGKILL. */
 const MCP_TERMINATE_GRACE_MS = 3000;
 const PLAYWRIGHT_SERVER_PATTERN = /\b(playwright)\b/i;
@@ -876,7 +880,7 @@ async function withHttpMcpClient<T>(
     }
     return {
       response,
-      envelope: await readHttpJsonRpcEnvelope(response, envelope.id),
+      envelope: await readHttpJsonRpcEnvelope(response, envelope.id, timeoutMs),
     };
   };
 
@@ -960,10 +964,30 @@ async function withHttpMcpClient<T>(
   }
 }
 
-async function readHttpJsonRpcEnvelope(response: Response, expectedId?: number): Promise<JsonRpcEnvelope> {
+async function readHttpJsonRpcEnvelope(
+  response: Response,
+  expectedId?: number,
+  timeoutMs = MCP_HTTP_RESPONSE_READ_TIMEOUT_MS,
+): Promise<JsonRpcEnvelope> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const body = await response.text();
   if (contentType.includes("text/event-stream")) {
+    return readSseJsonRpcEnvelope(response, expectedId, timeoutMs);
+  }
+  const body = await readHttpResponseText(response, MCP_HTTP_RESPONSE_BODY_MAX_BYTES, timeoutMs);
+  try {
+    return JSON.parse(body) as JsonRpcEnvelope;
+  } catch (error) {
+    throw new Error(`MCP HTTP response was not valid JSON-RPC: ${(error as Error).message}`, { cause: error });
+  }
+}
+
+async function readSseJsonRpcEnvelope(
+  response: Response,
+  expectedId: number | undefined,
+  timeoutMs: number,
+): Promise<JsonRpcEnvelope> {
+  if (!response.body) {
+    const body = await readHttpResponseText(response, MCP_HTTP_RESPONSE_BODY_MAX_BYTES, timeoutMs);
     const messages = parseSseJsonRpcMessages(body);
     const matched = messages.find((message) => expectedId === undefined || message.id === expectedId);
     if (!matched) {
@@ -971,10 +995,77 @@ async function readHttpJsonRpcEnvelope(response: Response, expectedId?: number):
     }
     return matched;
   }
+
+  assertHttpResponseBodyWithinLimit(response, MCP_HTTP_RESPONSE_BODY_MAX_BYTES);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const deadlineMs = Date.now() + timeoutMs;
+  let receivedBytes = 0;
+  let bufferedText = "";
+  let dataLines: string[] = [];
+
+  const flush = (): JsonRpcEnvelope | undefined => {
+    if (dataLines.length === 0) {
+      return undefined;
+    }
+    const raw = dataLines.join("\n").trim();
+    dataLines = [];
+    if (!raw) {
+      return undefined;
+    }
+    try {
+      const message = JSON.parse(raw) as JsonRpcEnvelope;
+      return expectedId === undefined || message.id === expectedId ? message : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const consumeBufferedLines = (): JsonRpcEnvelope | undefined => {
+    let newlineIndex = bufferedText.search(/\r?\n/);
+    while (newlineIndex >= 0) {
+      const line = bufferedText.slice(0, newlineIndex);
+      const newlineLength =
+        bufferedText.charAt(newlineIndex) === "\r" && bufferedText.charAt(newlineIndex + 1) === "\n" ? 2 : 1;
+      bufferedText = bufferedText.slice(newlineIndex + newlineLength);
+      if (line.trim() === "") {
+        const matched = flush();
+        if (matched) {
+          return matched;
+        }
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+      newlineIndex = bufferedText.search(/\r?\n/);
+    }
+    return undefined;
+  };
+
   try {
-    return JSON.parse(body) as JsonRpcEnvelope;
-  } catch (error) {
-    throw new Error(`MCP HTTP response was not valid JSON-RPC: ${(error as Error).message}`, { cause: error });
+    while (true) {
+      const chunk = await readBodyChunkWithDeadline(reader, deadlineMs);
+      if (chunk.done) {
+        bufferedText += decoder.decode();
+        const matchedFromRemainder = consumeBufferedLines() ?? flush();
+        if (matchedFromRemainder) {
+          return matchedFromRemainder;
+        }
+        throw new Error("MCP HTTP event stream did not include the expected JSON-RPC response.");
+      }
+      receivedBytes += chunk.value.byteLength;
+      if (receivedBytes > MCP_HTTP_RESPONSE_BODY_MAX_BYTES) {
+        await cancelBodyReader(reader);
+        throw createMcpHttpBodyLimitError(MCP_HTTP_RESPONSE_BODY_MAX_BYTES);
+      }
+      bufferedText += decoder.decode(chunk.value, { stream: true });
+      const matched = consumeBufferedLines();
+      if (matched) {
+        await cancelBodyReader(reader);
+        return matched;
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -1008,6 +1099,110 @@ function parseSseJsonRpcMessages(body: string): JsonRpcEnvelope[] {
   }
   flush();
   return messages;
+}
+
+async function readHttpResponseText(response: Response, maxBytes: number, timeoutMs: number): Promise<string> {
+  assertHttpResponseBodyWithinLimit(response, maxBytes);
+  if (!response.body) {
+    const body = await withTimeout(response.text(), timeoutMs);
+    if (Buffer.byteLength(body, "utf8") > maxBytes) {
+      throw createMcpHttpBodyLimitError(maxBytes);
+    }
+    return body;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const deadlineMs = Date.now() + timeoutMs;
+  let receivedBytes = 0;
+  let body = "";
+  try {
+    while (true) {
+      const chunk = await readBodyChunkWithDeadline(reader, deadlineMs);
+      if (chunk.done) {
+        body += decoder.decode();
+        return body;
+      }
+      receivedBytes += chunk.value.byteLength;
+      if (receivedBytes > maxBytes) {
+        await cancelBodyReader(reader);
+        throw createMcpHttpBodyLimitError(maxBytes);
+      }
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function assertHttpResponseBodyWithinLimit(response: Response, maxBytes: number): void {
+  const contentLength = response.headers.get("content-length");
+  if (!contentLength) {
+    return;
+  }
+  const parsed = Number(contentLength);
+  if (Number.isFinite(parsed) && parsed > maxBytes) {
+    throw createMcpHttpBodyLimitError(maxBytes);
+  }
+}
+
+async function readBodyChunkWithDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadlineMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    await cancelBodyReader(reader);
+    throw createMcpHttpBodyTimeoutError();
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+        timer = setTimeout(() => {
+          void cancelBodyReader(reader);
+          reject(createMcpHttpBodyTimeoutError());
+        }, remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(createMcpHttpBodyTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function cancelBodyReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // Best-effort body cleanup only.
+  }
+}
+
+function createMcpHttpBodyLimitError(maxBytes: number): Error {
+  return new Error(`MCP HTTP response body exceeded ${maxBytes} bytes.`);
+}
+
+function createMcpHttpBodyTimeoutError(): Error {
+  return new Error("Timed out reading MCP HTTP response body.");
 }
 
 async function buildMcpHttpAuthHeaders(
@@ -1266,6 +1461,8 @@ function stringifyUnknown(value: unknown): string | undefined {
 
 /** Internal helpers exposed for focused lifecycle tests. Not part of the public API. */
 export const __internal = {
+  MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
+  MCP_HTTP_RESPONSE_READ_TIMEOUT_MS,
   MCP_TERMINATE_GRACE_MS,
   attachChildStdinErrorHandler,
   isChildStdinWritable,

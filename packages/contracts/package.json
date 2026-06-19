@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./citadel-vault-node": {
+      "types": "./dist/citadel-vault-node.d.ts",
+      "default": "./dist/citadel-vault-node.js"
     }
   },
   "repository": {

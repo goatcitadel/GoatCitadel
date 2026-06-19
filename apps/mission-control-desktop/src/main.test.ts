@@ -118,6 +118,35 @@ describe("desktop shell bootstrap", () => {
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });
 
+  it("single-flights native runtime status polling and times out hung reads", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockReturnValueOnce(new Promise(() => undefined));
+
+    await import("./main.js");
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+
+    listeners.get("desktop://runtime-status-requested")?.();
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    await flushPromises();
+    expect(element("status-copy").textContent).toBe(
+      "Runtime status check failed: Runtime status check timed out after 8000ms.",
+    );
+  });
+
   it("renders recovery actions when launch returns a degraded runtime", async () => {
     tauriMocks.invoke.mockResolvedValueOnce(
       createRuntimeStatus({
@@ -491,6 +520,10 @@ function element(id: string): HTMLElement {
 
 function frameElement(): HTMLElement & { src?: string } {
   return element("mission-control-frame") as HTMLElement & { src?: string };
+}
+
+function readRuntimeStatusCalls(): unknown[][] {
+  return tauriMocks.invoke.mock.calls.filter(([command]) => command === "read_runtime_status");
 }
 
 async function flushPromises(): Promise<void> {
