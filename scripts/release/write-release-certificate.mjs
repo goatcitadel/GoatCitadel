@@ -148,50 +148,60 @@ function parseArgs(argv) {
   const parsed = {
     requireSuccess: false,
   };
-  for (let index = 0; index < argv.length; index += 1) {
+  let index = 0;
+  const takeOptionValue = (flag) => {
+    if (index + 1 >= argv.length) {
+      throw new Error(`Missing value for argument: ${flag}`);
+    }
+    index += 1;
+    return argv[index];
+  };
+
+  while (index < argv.length) {
     const value = argv[index];
     if (value === "--version") {
-      parsed.version = argv[index + 1];
+      parsed.version = takeOptionValue("--version");
       index += 1;
       continue;
     }
     if (value === "--tag") {
-      parsed.tag = argv[index + 1];
+      parsed.tag = takeOptionValue("--tag");
       index += 1;
       continue;
     }
     if (value === "--commit") {
-      parsed.commit = argv[index + 1];
+      parsed.commit = takeOptionValue("--commit");
       index += 1;
       continue;
     }
     if (value === "--repository") {
-      parsed.repository = argv[index + 1];
+      parsed.repository = takeOptionValue("--repository");
       index += 1;
       continue;
     }
     if (value === "--artifacts-dir") {
-      parsed.artifactsDir = argv[index + 1];
+      parsed.artifactsDir = takeOptionValue("--artifacts-dir");
       index += 1;
       continue;
     }
     if (value === "--proof-zip") {
-      parsed.proofZip = argv[index + 1];
+      parsed.proofZip = takeOptionValue("--proof-zip");
       index += 1;
       continue;
     }
     if (value === "--out-file") {
-      parsed.outFile = argv[index + 1];
+      parsed.outFile = takeOptionValue("--out-file");
       index += 1;
       continue;
     }
     if (value === "--hostile-sandbox-proof") {
-      parsed.hostileSandboxProof = argv[index + 1];
+      parsed.hostileSandboxProof = takeOptionValue("--hostile-sandbox-proof");
       index += 1;
       continue;
     }
     if (value === "--require-success") {
       parsed.requireSuccess = true;
+      index += 1;
       continue;
     }
     throw new Error(`Unknown argument: ${value}`);
