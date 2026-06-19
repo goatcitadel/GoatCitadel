@@ -67,6 +67,8 @@ function installBrowser() {
       sessionStorage: new MemoryStorage(),
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     },
   });
 }

@@ -387,9 +387,12 @@ async function resolveFastLaneTempBaseRoot(context) {
   if (configuredTempRoot) {
     return path.join(configuredTempRoot, context.runId);
   }
-  const systemTempRoot = os.tmpdir();
+  const systemTempRoot =
+    process.platform === "win32"
+      ? os.tmpdir()
+      : path.join("/tmp", `gcv-${process.pid}`, context.runId.slice(-8));
   if (await hasMinimumFreeSpace(systemTempRoot, FAST_LANE_TEMP_MIN_FREE_BYTES)) {
-    return path.join(systemTempRoot, "goatcitadel-verify", context.runId);
+    return systemTempRoot;
   }
   return path.join(context.artifactRoot, "tmp");
 }

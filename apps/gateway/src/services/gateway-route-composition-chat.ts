@@ -64,7 +64,7 @@ export function composeChatRouteDependencies(
       if (!normalized) {
         return;
       }
-      const fullPath = path.resolve(gateway.config.rootDir, gateway.config.assistant.workspaceDir, normalized);
+      const fullPath = resolvePortablePath(gateway.config.rootDir, gateway.config.assistant.workspaceDir, normalized);
       assertWritePathInJail(fullPath, gateway.config.toolPolicy.sandbox.writeJailRoots);
       await fs.rm(fullPath, { force: true });
     },
@@ -294,4 +294,14 @@ export function composeChatRouteDependencies(
     },
     chatTools,
   };
+}
+
+function resolvePortablePath(rootDir: string, workspaceDir: string, relativePath: string): string {
+  return isWindowsAbsolutePath(rootDir)
+    ? path.win32.resolve(rootDir, workspaceDir, relativePath)
+    : path.resolve(rootDir, workspaceDir, relativePath);
+}
+
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value.trim());
 }

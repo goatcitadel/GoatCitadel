@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import cors from "@fastify/cors";
@@ -136,10 +136,9 @@ export async function buildApp() {
    *    Any origin resolving to 127.0.0.1/::1 on any port is accepted in
    *    non-production environments, enabling local dev tooling on arbitrary ports.
    *
-   * 3. **Tailnet dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
+   * 3. **Tailnet/private dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
    *    Origins matching Tailscale `.ts.net` patterns are accepted when enabled,
-   *    allowing access from other devices on the same tailnet. Enabled by default
-   *    in non-production environments.
+   *    allowing access from other devices on the same tailnet or private network.
    *
    * Requests with no `Origin` header (e.g., server-to-server, curl) are always accepted.
    */
@@ -293,7 +292,7 @@ export async function buildApp() {
       global: false,
       timeWindow: "1 minute",
       keyGenerator: (request) => request.ip,
-      allowList: (_request, key) => isLoopbackRateLimitAllowlisted(String(key)),
+      allowList: (request, key) => isLoopbackRateLimitAllowlisted(String(key), request),
       max: rateLimitConfig.maxGeneral,
       skipOnError: true,
       addHeaders: {
@@ -509,7 +508,10 @@ function normalizeConfiguredOrigin(rawOrigin: string, envName: string): string {
   }
 }
 
-function isLoopbackRateLimitAllowlisted(ip: string): boolean {
+function isLoopbackRateLimitAllowlisted(ip: string, request?: Pick<FastifyRequest, "headers" | "ips">): boolean {
+  if (hasProxyProvenance(request)) {
+    return false;
+  }
   const normalized = ip.trim().toLowerCase().replace(/%.+$/, "");
   return (
     normalized === "::1" ||
@@ -518,6 +520,28 @@ function isLoopbackRateLimitAllowlisted(ip: string): boolean {
     normalized.startsWith("127.") ||
     normalized.startsWith("::ffff:127.")
   );
+}
+
+function hasProxyProvenance(request: Pick<FastifyRequest, "headers" | "ips"> | undefined): boolean {
+  if (!request) {
+    return false;
+  }
+  const forwarded = request.headers.forwarded;
+  const forwardedFor = request.headers["x-forwarded-for"];
+  const realIp = request.headers["x-real-ip"];
+  return (
+    hasNonEmptyHeaderValue(forwarded) ||
+    hasNonEmptyHeaderValue(forwardedFor) ||
+    hasNonEmptyHeaderValue(realIp) ||
+    (Array.isArray(request.ips) && request.ips.length > 1)
+  );
+}
+
+function hasNonEmptyHeaderValue(value: string | string[] | undefined): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => entry.trim().length > 0);
+  }
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function resolveRateLimitConfig(): {
@@ -567,7 +591,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 function resolveAllowTailnetDevOrigins(): boolean {
   const raw = process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS?.trim().toLowerCase();
   if (!raw) {
-    return process.env.NODE_ENV !== "production";
+    return false;
   }
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }

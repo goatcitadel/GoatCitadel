@@ -728,13 +728,27 @@ async function waitForArenaReady(url: string, timeoutMs: number): Promise<ArenaH
 function assertAddonPathWithinRoot(installedPath: string, addonsRootDir: string): string {
   const resolvedRoot = path.resolve(addonsRootDir);
   const resolvedPath = path.resolve(installedPath);
-  const safeRoot = fsSync.existsSync(resolvedRoot) ? fsSync.realpathSync.native(resolvedRoot) : resolvedRoot;
-  const safePath = fsSync.existsSync(resolvedPath) ? fsSync.realpathSync.native(resolvedPath) : resolvedPath;
-  const relative = path.relative(safeRoot, safePath);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    return safePath;
+  const rootVariants = pathVariantsForAddonBoundary(resolvedRoot);
+  const pathVariants = pathVariantsForAddonBoundary(resolvedPath);
+  const allowed = pathVariants.every((candidate) =>
+    rootVariants.some((rootVariant) => {
+      const relative = path.relative(rootVariant, candidate);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    }),
+  );
+  if (allowed) {
+    return resolvedPath;
   }
   throw new Error(`Add-on path escapes add-ons root: ${installedPath}`);
+}
+
+function pathVariantsForAddonBoundary(inputPath: string): string[] {
+  const resolved = path.resolve(inputPath);
+  if (!fsSync.existsSync(resolved)) {
+    return [resolved];
+  }
+  const real = fsSync.realpathSync.native(resolved);
+  return real === resolved ? [resolved] : [resolved, real];
 }
 
 function rollbackAddonRepo(targetDir: string, previousRef: string | undefined): void {

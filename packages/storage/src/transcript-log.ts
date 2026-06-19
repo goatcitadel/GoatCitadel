@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Buffer } from "node:buffer";
 import type { TranscriptEvent } from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
+
+const SAFE_SESSION_FILENAME_RE = /^[A-Za-z0-9._-]+$/u;
 
 export interface TranscriptLogOptions {
   quarantine?: { record: (entry: QuarantineEntry) => unknown };
@@ -32,7 +35,7 @@ export class TranscriptLog {
   }
 
   private async appendInternal(event: TranscriptEvent): Promise<number> {
-    const filePath = path.join(this.transcriptsDir, `${event.sessionId}.jsonl`);
+    const filePath = this.filePathForSession(event.sessionId);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
 
     const handle = await fs.open(filePath, "a+");
@@ -48,7 +51,7 @@ export class TranscriptLog {
   }
 
   public async read(sessionId: string): Promise<TranscriptEvent[]> {
-    const filePath = path.join(this.transcriptsDir, `${sessionId}.jsonl`);
+    const filePath = this.filePathForSession(sessionId);
     const raw = await fs.readFile(filePath, "utf8");
     const events: TranscriptEvent[] = [];
     for (const [index, line] of raw.split("\n").entries()) {
@@ -85,7 +88,26 @@ export class TranscriptLog {
         // Ignore write failures and continue cleanup.
       }
     }
-    const filePath = path.join(this.transcriptsDir, `${sessionId}.jsonl`);
+    const filePath = this.filePathForSession(sessionId);
     await fs.rm(filePath, { force: true });
   }
+
+  private filePathForSession(sessionId: string): string {
+    const fileName = transcriptFileName(sessionId);
+    const root = path.resolve(this.transcriptsDir);
+    const filePath = path.resolve(root, fileName);
+    const relative = path.relative(root, filePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative) || relative === "") {
+      throw new Error("Transcript session path escapes transcript root");
+    }
+    return filePath;
+  }
+}
+
+function transcriptFileName(sessionId: string): string {
+  if (sessionId !== "." && sessionId !== ".." && SAFE_SESSION_FILENAME_RE.test(sessionId)) {
+    return `${sessionId}.jsonl`;
+  }
+  const encodedSessionId = Buffer.from(sessionId, "utf8").toString("base64url") || "empty";
+  return `session-${encodedSessionId}.jsonl`;
 }

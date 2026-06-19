@@ -41,10 +41,51 @@ function buildSideChat(overrides: Partial<MissionThreadedBtwSideChatProps> = {})
   };
 }
 
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+
+  get length(): number {
+    return this.values.size;
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.values.get(String(key)) ?? null;
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(String(key));
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(String(key), String(value));
+  }
+}
+
+function getTestLocalStorage(): Storage {
+  if (window.localStorage) {
+    return window.localStorage;
+  }
+
+  const storage = new MemoryStorage();
+  Object.defineProperty(window, "Storage", { configurable: true, writable: true, value: MemoryStorage });
+  Object.defineProperty(globalThis, "Storage", { configurable: true, writable: true, value: MemoryStorage });
+  Object.defineProperty(window, "localStorage", { configurable: true, writable: true, value: storage });
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, writable: true, value: storage });
+  return storage;
+}
+
 describe("ThreadedBtwSideChatPanel local position", () => {
   beforeEach(() => {
     mediaQueryMock.compact = false;
-    localStorage.clear();
+    getTestLocalStorage().clear();
     Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
   });
@@ -66,10 +107,10 @@ describe("ThreadedBtwSideChatPanel local position", () => {
     writeBtwSideChatPosition("workspace-a", { x: 44, y: 88 });
     expect(readBtwSideChatPosition("workspace-a")).toEqual({ x: 44, y: 88 });
 
-    localStorage.setItem(getBtwSideChatStorageKey("workspace-a"), "{nope");
+    getTestLocalStorage().setItem(getBtwSideChatStorageKey("workspace-a"), "{nope");
     expect(readBtwSideChatPosition("workspace-a")).toBeNull();
 
-    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    const setItem = vi.spyOn(window.Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("blocked");
     });
     expect(() => writeBtwSideChatPosition("workspace-a", { x: 12, y: 14 })).not.toThrow();

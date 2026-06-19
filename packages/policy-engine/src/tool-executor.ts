@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Tool execution policy remains intentionally centralized so grants, approvals, and audit behavior stay in one authoritative path. */
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -46,6 +47,7 @@ import {
 } from "./document-artifacts.js";
 import { generateEmbedding, isEmbeddingCompatible, isEmbeddingCurrent } from "./local-embeddings.js";
 import { terminateProcessTree, type ProcessTreeKillLogger } from "./process-tree-killer.js";
+import { mapWithConcurrency } from "./async-utils.js";
 const execFileAsync = promisify(execFile);
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS = 20000;
 const SHELL_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -89,6 +91,7 @@ const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const MAX_SHELL_OUTPUT_BYTES = 4096;
+const EMBEDDING_CONCURRENCY = 8;
 const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
   trusted_operator: 0,
   trusted_workspace: 1,
@@ -1001,16 +1004,14 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     },
   });
   const chunks = chunkText(content, 1200, 180, 400);
-  const embeddedChunks = await Promise.all(
-    chunks.map(async (chunk) => {
-      const generated = await generateEmbedding(chunk);
-      return {
-        content: chunk,
-        embedding: generated.embedding,
-        embeddingMetadata: generated.metadata,
-      };
-    }),
-  );
+  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
+    const generated = await generateEmbedding(chunk);
+    return {
+      content: chunk,
+      embedding: generated.embedding,
+      embeddingMetadata: generated.metadata,
+    };
+  });
   storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   const attribution = knowledgeDocumentAttribution(doc);
   return {
@@ -1266,29 +1267,23 @@ async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) 
   const generatedQuery = await generateEmbedding(query);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
   const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
-  const scoredItems = await Promise.all(
-    chunks.map(async (chunk) => {
-      const doc = docById.get(chunk.docId);
-      if (!doc) {
-        return undefined;
-      }
-      const compatibleEmbedding = isEmbeddingCompatible(
-        chunk.embedding,
-        chunk.embeddingMetadata,
-        generatedQuery.metadata,
-      )
-        ? chunk.embedding
-        : (await generateEmbedding(chunk.content)).embedding;
-      return {
-        chunkId: chunk.chunkId,
-        docId: chunk.docId,
-        score: cosine(generatedQuery.embedding, compatibleEmbedding),
-        snippet: chunk.content.slice(0, 320),
-        attribution: knowledgeDocumentAttribution(doc),
-        embeddingMetadata: chunk.embeddingMetadata,
-      };
-    }),
-  );
+  const scoredItems = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
+    const doc = docById.get(chunk.docId);
+    if (!doc) {
+      return undefined;
+    }
+    const compatibleEmbedding = isEmbeddingCompatible(chunk.embedding, chunk.embeddingMetadata, generatedQuery.metadata)
+      ? chunk.embedding
+      : (await generateEmbedding(chunk.content)).embedding;
+    return {
+      chunkId: chunk.chunkId,
+      docId: chunk.docId,
+      score: cosine(generatedQuery.embedding, compatibleEmbedding),
+      snippet: chunk.content.slice(0, 320),
+      attribution: knowledgeDocumentAttribution(doc),
+      embeddingMetadata: chunk.embeddingMetadata,
+    };
+  });
   const items = scoredItems
     .filter((item): item is NonNullable<typeof item> => item !== undefined)
     .sort((a, b) => b.score - a.score)
@@ -6044,13 +6039,24 @@ function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {
     if (root.trim() === "*") {
       return true;
     }
-    const resolvedRoot = normalizePathForGrantMatch(root);
-    return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`);
+    return normalizePathVariantsForGrantMatch(root).some(
+      (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
+    );
   });
 }
 
 function normalizePathForGrantMatch(candidate: string): string {
   return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
+}
+
+function normalizePathVariantsForGrantMatch(candidate: string): string[] {
+  const resolvedCandidate = normalizePathForGrantMatch(candidate);
+  try {
+    const realCandidate = fsSync.realpathSync(path.resolve(candidate)).replace(/\\/g, "/").toLowerCase();
+    return realCandidate === resolvedCandidate ? [resolvedCandidate] : [resolvedCandidate, realCandidate];
+  } catch {
+    return [resolvedCandidate];
+  }
 }
 
 // Directory names skipped at every depth during local search traversal.

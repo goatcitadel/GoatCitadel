@@ -17,15 +17,31 @@ const SECRET_KEY_PATTERN =
 const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$/i;
 const SECRET_ARG_FLAG_PATTERN =
   /^--?(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|secret|password|authorization|proxy-authorization)(?:=|$)/i;
+const AUDIT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
 export class AuditLog {
   private readonly streamLocks = new Map<string, Promise<void>>();
+  private readonly writeQueues = new Map<AuditStream, Promise<void>>();
+  private readonly lastPrunedAt = new Map<AuditStream, number>();
 
   public constructor(private readonly auditDir: string) {}
 
   public async append(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
+    const prior = this.writeQueues.get(stream) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(() => this.appendInternal(stream, payload));
+    this.writeQueues.set(stream, next);
+    try {
+      await next;
+    } finally {
+      if (this.writeQueues.get(stream) === next) {
+        this.writeQueues.delete(stream);
+      }
+    }
+  }
+
+  private async appendInternal(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
     const filePath = path.join(this.auditDir, `${stream}.jsonl`);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const attribution = getRequestAttribution();
@@ -65,7 +81,7 @@ export class AuditLog {
         }) + "\n";
     }
     await this.runWithStreamLock(filePath, async () => {
-      await pruneAuditStreamIfNeeded(filePath);
+      await this.pruneAuditStreamIfDue(stream, filePath);
       await fs.appendFile(filePath, line, { encoding: "utf8" });
     });
   }
@@ -117,12 +133,24 @@ export class AuditLog {
       }
     }
   }
+
+  private async pruneAuditStreamIfDue(stream: AuditStream, filePath: string): Promise<void> {
+    const now = Date.now();
+    const lastPrunedAt = this.lastPrunedAt.get(stream) ?? 0;
+    if (now - lastPrunedAt < AUDIT_PRUNE_INTERVAL_MS) {
+      return;
+    }
+    const attempted = await pruneAuditStreamIfNeeded(filePath);
+    if (attempted) {
+      this.lastPrunedAt.set(stream, now);
+    }
+  }
 }
 
-async function pruneAuditStreamIfNeeded(filePath: string): Promise<void> {
+async function pruneAuditStreamIfNeeded(filePath: string): Promise<boolean> {
   const retentionDays = getConfiguredRetentionDays();
   if (retentionDays === undefined) {
-    return;
+    return false;
   }
 
   let content: string;
@@ -130,7 +158,7 @@ async function pruneAuditStreamIfNeeded(filePath: string): Promise<void> {
     content = await fs.readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
+      return true;
     }
     throw error;
   }
@@ -145,11 +173,12 @@ async function pruneAuditStreamIfNeeded(filePath: string): Promise<void> {
   const normalizedExisting = content.trim();
   const normalizedRetained = retainedLines.join("\n");
   if (normalizedExisting === normalizedRetained) {
-    return;
+    return true;
   }
 
   const nextContent = retainedLines.length > 0 ? `${normalizedRetained}\n` : "";
   await fs.writeFile(filePath, nextContent, "utf8");
+  return true;
 }
 
 function shouldRetainAuditLine(line: string, cutoffMs: number): boolean {

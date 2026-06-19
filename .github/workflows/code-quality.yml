@@ -1,10 +1,9 @@
 name: Code Quality
 
-# Always-on code quality gate. The richer "Verification Fast" workflow (which carried
-# both ESLint and TypeScript validation) is disabled, so neither lint nor typecheck was
-# running on push/PR anywhere; this restores both as a fast, dependency-light required
-# check on every change. `pnpm lint` is ESLint; `pnpm typecheck` runs `tsc -b` across
-# every workspace package (the TS lane is separate from ESLint in this repo).
+# Always-on code quality gate. Verification Fast carries the broader release-adjacent
+# proof lanes; this workflow keeps lint, typecheck, and CSS guards fast and focused on
+# every push/PR. `pnpm lint` is ESLint; `pnpm typecheck` runs `tsc -b` across every
+# workspace package (the TS lane is separate from ESLint in this repo).
 
 on:
   push:

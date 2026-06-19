@@ -87,7 +87,10 @@ function Invoke-PnpmInstallWithRecovery {
     Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $RepositoryPath, "install", "--frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies"
     return
   } catch {
-    Write-Warning "Frozen-lockfile install failed. GoatCitadel will retry with --no-frozen-lockfile so it can refresh lock metadata and restore the local toolchain if manifests moved ahead of pnpm-lock.yaml."
+    if ($env:GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH -ne "1") {
+      throw "Frozen-lockfile install failed. Refusing to refresh pnpm-lock.yaml during install. Review the manifest/lockfile mismatch first, or set GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 for an intentional local recovery."
+    }
+    Write-Warning "Frozen-lockfile install failed. GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 is set; retrying with --no-frozen-lockfile for local recovery."
     Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $RepositoryPath, "install", "--no-frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies after lockfile recovery retry"
   }
 }

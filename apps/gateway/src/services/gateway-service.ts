@@ -1796,7 +1796,7 @@ export class GatewayService {
   }
 
   public recordRuntimeDecision(input: RuntimeDecisionTraceAppendInput): void {
-    this.runtimeDecisionRecorder.record(input);
+    (this.runtimeDecisionRecorder as RuntimeDecisionRecorder | undefined)?.record(input);
   }
 
   private buildApprovalDecisionScope(approval: ApprovalRequest): RuntimeDecisionTraceAppendInput["scope"] {

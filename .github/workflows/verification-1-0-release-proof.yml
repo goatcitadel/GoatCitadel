@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   required-lanes:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:

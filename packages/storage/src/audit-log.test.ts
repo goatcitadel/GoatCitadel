@@ -46,6 +46,28 @@ describe("AuditLog", () => {
     assert.equal(warn.mock.callCount(), 0);
   });
 
+  it("serializes concurrent appends on the same audit stream", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new AuditLog(root);
+
+    await Promise.all(
+      Array.from({ length: 40 }, (_, index) =>
+        log.append("tool_invocations", {
+          action: "tool.invoke",
+          index,
+        }),
+      ),
+    );
+
+    const records = await log.list("tool_invocations");
+    assert.equal(records.length, 40);
+    assert.deepEqual(
+      records.map((record) => record.index),
+      Array.from({ length: 40 }, (_, index) => index),
+    );
+  });
+
   it("redacts secret-like values before writing audit records", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

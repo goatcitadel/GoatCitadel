@@ -1,7 +1,7 @@
 # GoatCitadel 1.0 Readiness Manual QA Spreadsheet
 
 Generated: 2026-06-13
-Repo: F:\code\personal-ai
+Repo: <workspace-root>
 Branch: main
 Commit: 8f550da17a09e629100e615965fdfc22a4975559
 

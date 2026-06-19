@@ -22,6 +22,7 @@ import {
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 import { generateEmbedding } from "./local-embeddings.js";
 import { parseNativeFileDocument } from "./native-document-parser.js";
+import { mapWithConcurrency } from "./async-utils.js";
 
 // SECURITY (codex finding #12): `sourceType` is the discriminator that
 // decides whether a URL or a local file is fetched. Previously the field was
@@ -31,6 +32,7 @@ import { parseNativeFileDocument } from "./native-document-parser.js";
 // branch at runtime. Validate strictly here and in policy preflight.
 
 const DEFAULT_URL_CACHE_TTL_SECONDS = 3600;
+const EMBEDDING_CONCURRENCY = 8;
 // Max characters of `source` to embed in the synthesized fallback title when
 // the caller did not provide one and the backend did not return a title.
 const DEFAULT_FALLBACK_TITLE_SOURCE_MAX_LENGTH = 80;
@@ -169,16 +171,14 @@ export async function ingestDocumentViaBackend(input: {
     title,
     metadata,
   });
-  const embeddedChunks = await Promise.all(
-    chunks.map(async (content) => {
-      const generated = await generateEmbedding(content);
-      return {
-        content,
-        embedding: generated.embedding,
-        embeddingMetadata: generated.metadata,
-      };
-    }),
-  );
+  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (content) => {
+    const generated = await generateEmbedding(content);
+    return {
+      content,
+      embedding: generated.embedding,
+      embeddingMetadata: generated.metadata,
+    };
+  });
   const savedChunks = input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
   return {
     backend: buildBackendDescriptor(backendName, cacheTtlSeconds),

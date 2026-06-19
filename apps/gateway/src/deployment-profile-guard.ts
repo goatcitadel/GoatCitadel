@@ -60,7 +60,6 @@ function assertAuthNoneExposureSafety(
   const bindHost = options.bindHost ?? process.env.GATEWAY_HOST ?? "127.0.0.1";
   const explicitOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS?.trim();
   const hasNonLoopbackOrigin = [...allowedOrigins].some((origin) => !isLoopbackDevOrigin(origin));
-  const tailnetExplicitlyEnabled = isTruthy(process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS);
 
   if (!isLoopbackHost(bindHost)) {
     errors.push(`auth.mode=none cannot bind to non-loopback host ${bindHost}.`);
@@ -71,8 +70,8 @@ function assertAuthNoneExposureSafety(
   if (explicitOrigins && hasNonLoopbackOrigin) {
     errors.push("auth.mode=none cannot be combined with non-loopback GOATCITADEL_ALLOWED_ORIGINS.");
   }
-  if (options.tailnetDevOriginsEnabled && tailnetExplicitlyEnabled) {
-    errors.push("auth.mode=none cannot be combined with explicitly enabled tailnet dev origins.");
+  if (options.tailnetDevOriginsEnabled) {
+    errors.push("auth.mode=none cannot be combined with enabled tailnet/private dev origins.");
   }
 
   if (errors.length > 0) {
@@ -80,12 +79,4 @@ function assertAuthNoneExposureSafety(
       `Unsafe auth-none exposure blocked: ${errors.join(" ")} Set ${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true only for an intentional local-only override.`,
     );
   }
-}
-
-function isTruthy(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }

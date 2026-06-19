@@ -132,6 +132,32 @@ describe("assertDeploymentProfileStartupSafety", () => {
     ).toThrow(/Unsafe auth-none exposure blocked/i);
   });
 
+  it("rejects auth-none local dev when tailnet or private dev origins are enabled", () => {
+    delete process.env.GOATCITADEL_ALLOWED_ORIGINS;
+    delete process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS;
+    const config = {
+      assistant: {
+        deploymentProfile: "local_dev",
+        auth: {
+          mode: "none",
+          allowLoopbackBypass: false,
+        },
+      },
+      toolPolicy: {
+        sandbox: {
+          networkAllowlist: ["api.openai.com"],
+        },
+      },
+    } as unknown as GatewayRuntimeConfig;
+
+    expect(() =>
+      assertDeploymentProfileStartupSafety(config, new Set(["http://localhost:5173"]), {
+        bindHost: "127.0.0.1",
+        tailnetDevOriginsEnabled: true,
+      }),
+    ).toThrow(/enabled tailnet\/private dev origins/i);
+  });
+
   it("allows the explicit auth-none local-only override", () => {
     process.env.GOATCITADEL_ALLOWED_ORIGINS = "https://citadel.example.com";
     process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY = "true";
@@ -207,6 +233,27 @@ describe("gateway app config helpers", () => {
     expect(__internal.classifyRateLimitBucket("/api/v1/chat/sessions/session-1/messages/stream", "POST")).toBe(
       "mutation",
     );
+  });
+
+  it("does not allowlist loopback-looking rate-limit keys with proxy provenance", () => {
+    expect(
+      __internal.isLoopbackRateLimitAllowlisted("127.0.0.1", {
+        headers: { "x-forwarded-for": "203.0.113.5" },
+        ips: [],
+      }),
+    ).toBe(false);
+    expect(
+      __internal.isLoopbackRateLimitAllowlisted("::1", {
+        headers: { forwarded: "for=203.0.113.5" },
+        ips: ["127.0.0.1"],
+      }),
+    ).toBe(false);
+    expect(
+      __internal.isLoopbackRateLimitAllowlisted("::ffff:127.0.0.1", {
+        headers: {},
+        ips: ["127.0.0.1", "203.0.113.5"],
+      }),
+    ).toBe(false);
   });
 });
 

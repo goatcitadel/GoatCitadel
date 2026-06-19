@@ -166,7 +166,7 @@ function resolveAbsoluteToolPath(
 
   const resolvedTarget = resolvePathViaExistingAncestor(absoluteTarget);
   if (isWithinWorkspaceBounds(resolvedTarget, context)) {
-    return resolvedTarget;
+    return absoluteTarget;
   }
   if (kind === "read") {
     return resolvedTarget;
@@ -201,8 +201,8 @@ function candidateLooksValid(candidate: string, kind: PathResolutionKind, contex
 function isWithinWorkspaceBounds(resolvedPath: string, context: ToolPathResolutionContext): boolean {
   const normalizedPath = path.resolve(resolvedPath);
   return (
-    isWithinRoot(context.workspaceRoot, normalizedPath) ||
-    (context.projectRoot ? isWithinRoot(context.projectRoot, normalizedPath) : false)
+    isWithinAnyRootVariant(context.workspaceRoot, normalizedPath) ||
+    (context.projectRoot ? isWithinAnyRootVariant(context.projectRoot, normalizedPath) : false)
   );
 }
 
@@ -257,6 +257,20 @@ function isFilesystemRootPath(value: string): boolean {
 function isWithinRoot(root: string, target: string): boolean {
   const rel = path.relative(path.resolve(root), target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function isWithinAnyRootVariant(root: string, target: string): boolean {
+  return rootVariantsForComparison(root).some((rootVariant) => isWithinRoot(rootVariant, target));
+}
+
+function rootVariantsForComparison(root: string): string[] {
+  const resolvedRoot = path.resolve(root);
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    return realRoot === resolvedRoot ? [resolvedRoot] : [resolvedRoot, realRoot];
+  } catch {
+    return [resolvedRoot];
+  }
 }
 
 function resolvePathViaExistingAncestor(targetPath: string): string {

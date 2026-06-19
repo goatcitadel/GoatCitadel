@@ -54,11 +54,23 @@ function isWithin(root: string, target: string): boolean {
 }
 
 function isWithinAnyRoot(target: string, roots: string[]): boolean {
-  return roots.some((root) => isWithin(path.resolve(root), target));
+  return roots.some((root) =>
+    normalizedRootsForComparison(root).some((normalizedRoot) => isWithin(normalizedRoot, target)),
+  );
 }
 
 function matchingLexicalRoots(target: string, roots: string[]): string[] {
   return roots.map((root) => path.resolve(root)).filter((root) => isWithin(root, target));
+}
+
+function normalizedRootsForComparison(root: string): string[] {
+  const resolvedRoot = path.resolve(root);
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    return realRoot === resolvedRoot ? [resolvedRoot] : [resolvedRoot, realRoot];
+  } catch {
+    return [resolvedRoot];
+  }
 }
 
 function assertWithinRoots(target: string, roots: string[], scope: string): void {

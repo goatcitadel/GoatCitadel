@@ -2099,9 +2099,26 @@ function assertWorkbenchMutationScope(
 }
 
 function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {
-  const relative = path.relative(rootDir, targetPath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInsideAnyRootVariant(targetPath, rootDir)) {
     throw new ValidationError({ message: `${label} is outside the project root.` });
+  }
+}
+
+function isPathInsideAnyRootVariant(targetPath: string, rootDir: string): boolean {
+  const resolvedTarget = path.resolve(targetPath);
+  return rootVariantsForComparison(rootDir).some((rootVariant) => {
+    const relative = path.relative(rootVariant, resolvedTarget);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  });
+}
+
+function rootVariantsForComparison(rootDir: string): string[] {
+  const resolvedRoot = path.resolve(rootDir);
+  try {
+    const realRoot = fsSync.realpathSync(resolvedRoot);
+    return realRoot === resolvedRoot ? [resolvedRoot] : [resolvedRoot, realRoot];
+  } catch {
+    return [resolvedRoot];
   }
 }
 
