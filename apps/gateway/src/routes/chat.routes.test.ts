@@ -1341,7 +1341,7 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/thread",
     });
     expect(threadResponse.statusCode).toBe(200);
-    expect(getChatThread).toHaveBeenCalledWith("sess-1");
+    expect(getChatThread).toHaveBeenCalledWith("sess-1", { includeDecisionTrace: false });
 
     const selectResponse = await app.inject({
       method: "POST",
