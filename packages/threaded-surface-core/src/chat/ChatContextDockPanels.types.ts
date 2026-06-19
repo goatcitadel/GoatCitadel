@@ -23,6 +23,7 @@ import type { ChatModelProviderOption } from "@goatcitadel/mission-control-share
 import type { ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions";
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
 import type { ChatVisualStreamMode } from "./chat-streaming-preview";
+import type { WorkTrustDescriptor } from "./work-trust";
 
 export interface ChatContextDockPanelsProps {
   mode: "chat" | "cowork" | "code";
@@ -63,6 +64,7 @@ export interface ChatContextDockPanelsProps {
   selectedTurn: ChatThreadTurnRecord | null;
   activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
   routePreflight?: RoutingPreflightResult | null;
+  trust?: WorkTrustDescriptor;
   providerLabelById?: Map<string, string>;
   showSuggestionsPanel: boolean;
   showLearnedMemoryPanel: boolean;

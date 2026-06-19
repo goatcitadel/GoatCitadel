@@ -274,6 +274,45 @@ describe("ThreadedContextDrawer", () => {
     expect(onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
   });
 
+  it("renders full gateway, policy, and security wording in wrapping context copy", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="code"
+          permissionSummary="Policy: Trusted Local Power · skips normal prompts · override until 20:30 UTC"
+          permissionOverrideActive
+          props={baseProps({
+            trust: {
+              workspaceLabel: "Workspace One",
+              gatewayTone: "success",
+              gatewayLabel: "Gateway ready",
+              gatewayDetail: "Gateway ready. Daemon health is serving.",
+              approvalsSummary: "Decisions clear",
+              runStateSummary: "Run: waiting for approval",
+              activeModeLabel: "Code",
+              providerModelSummary: "OpenAI / gpt-5.4-mini",
+              runtimeSummary: "Provider reachable",
+              requestedProviderModelSummary: "OpenAI / gpt-5.4-mini",
+              effectiveProviderModelSummary: "OpenAI / gpt-5.4-mini",
+              selectionSourceSummary: "Selection: session",
+              fallbackSummary: "Fallback off",
+            },
+          })}
+        />,
+      );
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Policy and security");
+    expect(text).toContain("Gateway ready. Daemon health is serving.");
+    expect(text).toContain("Policy: Trusted Local Power · skips normal prompts · override until 20:30 UTC");
+    expect(text).toContain("Deny-wins policy, approval gates, auth boundaries, path jails");
+    expect(text).toContain("does not claim hostile-code sandboxing");
+    expect(text).toContain("requested OpenAI / gpt-5.4-mini; effective OpenAI / gpt-5.4-mini");
+  });
+
   it("renders failed fallback trace state and the no-selection trace placeholder", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {

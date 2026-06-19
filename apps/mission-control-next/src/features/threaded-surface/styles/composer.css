@@ -1215,6 +1215,18 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   overflow-wrap: anywhere;
 }
 
+.mc-next-context-truth-copy {
+  display: grid;
+  gap: 0.42rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.mc-next-context-truth-copy p {
+  margin: 0;
+}
+
 .mc-next-panel-list-head span,
 .mc-next-panel-list-head button {
   flex: 0 0 auto;

@@ -10,7 +10,6 @@ import {
   LibraryBig,
   Menu,
   MoonStar,
-  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Rocket,
@@ -30,6 +29,10 @@ import {
   type EventStreamConnectionState,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { fetchRuntimeLifecycleExport } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  buildThreadedGatewayStatusSummary,
+  type ThreadedGatewayStatusSummary,
+} from "@goatcitadel/threaded-surface-core/work-trust";
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NotificationStack } from "@goatcitadel/mission-control-shared/components/NotificationStack";
@@ -455,6 +458,23 @@ export function MissionControlNextApp() {
       : daemonHealthKnown
         ? "Needs intervention"
         : "Checking";
+  const threadedGatewayStatus = useMemo(
+    () =>
+      buildThreadedGatewayStatusSummary({
+        gatewayReady,
+        gatewayMessage: gatewayAccess.message,
+        dashboardError: status.dashboardError,
+        healthError: status.healthError,
+        daemonRunning: status.health?.daemonStatus?.running ?? null,
+      }),
+    [
+      gatewayAccess.message,
+      gatewayReady,
+      status.dashboardError,
+      status.health?.daemonStatus?.running,
+      status.healthError,
+    ],
+  );
   const operatorNotificationCount =
     (daemonStatusUnavailable || daemonNeedsIntervention ? 1 : 0) + (notifications.length > 0 ? 1 : 0);
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
@@ -495,7 +515,8 @@ export function MissionControlNextApp() {
   );
   const handleToggleMode = useCallback(() => setMode(mode === "simple" ? "advanced" : "simple"), [mode, setMode]);
   const handleToggleNotificationSound = useCallback(
-    () => setNotificationSoundMode(notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off"),
+    () =>
+      setNotificationSoundMode(notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off"),
     [notificationPreferences.soundMode, setNotificationSoundMode, lastEnabledSoundModeRef],
   );
   const handleToggleTheme = useCallback(() => setTheme(theme === "dark" ? "light" : "dark"), [setTheme, theme]);
@@ -610,6 +631,7 @@ export function MissionControlNextApp() {
     route,
     activeWorkspaceId,
     activeWorkspaceName,
+    gatewayStatus: threadedGatewayStatus,
     pendingApprovals,
     navigate,
     setActiveWorkspaceId,
@@ -808,62 +830,65 @@ export function MissionControlNextApp() {
                 </button>
               </div>
               <div className="mc-next-rail-menu">
-                {groupedRailItems.map((group) => (
-                  <section key={group.id} className="mc-next-rail-section">
-                    {group.label ? (
-                      <div className="mc-next-rail-separator" aria-hidden="true">
-                        <span>{group.label}</span>
+                {groupedRailItems.map((group) => {
+                  const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
+                  return (
+                    <section key={group.id} className="mc-next-rail-section" aria-labelledby={groupLabelId}>
+                      {group.label ? (
+                        <div className="mc-next-rail-separator" id={groupLabelId}>
+                          <span>{group.label}</span>
+                        </div>
+                      ) : null}
+                      <div className="mc-next-rail-group">
+                        {group.items.map((item) => {
+                          const target = buildNavigationTarget(route, item);
+                          const releaseScope = getRouteReleaseScope(target);
+                          const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
+                          const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
+                          const backlogCount =
+                            item.section === "tasks"
+                              ? (status.dashboard?.taskStatusCounts ?? [])
+                                  .filter((entry) => entry.status !== "done")
+                                  .reduce((sum, entry) => sum + entry.count, 0)
+                              : item.section === "approvals"
+                                ? pendingApprovals
+                                : undefined;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
+                              aria-label={`${item.label}: ${item.description}`}
+                              onFocus={() => preloadRouteChunk(target)}
+                              onMouseEnter={() => preloadRouteChunk(target)}
+                              onClick={() => navigate(target)}
+                            >
+                              <div>
+                                <strong>
+                                  {item.label}
+                                  {releaseScope.status === "ship" ? null : (
+                                    <span
+                                      className="mc-next-rail-release-badge"
+                                      data-release-status={releaseScope.status}
+                                      title={releaseScopeOperatorSummary}
+                                      aria-label={releaseScopeOperatorSummary}
+                                    >
+                                      {releaseStatusLabel}
+                                    </span>
+                                  )}
+                                </strong>
+                                <span title={item.description}>{item.description}</span>
+                              </div>
+                              {typeof backlogCount === "number" ? (
+                                <span className="mc-next-rail-count">{backlogCount}</span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ) : null}
-                    <div className="mc-next-rail-group">
-                      {group.items.map((item) => {
-                        const target = buildNavigationTarget(route, item);
-                        const releaseScope = getRouteReleaseScope(target);
-                        const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
-                        const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
-                        const backlogCount =
-                          item.section === "tasks"
-                            ? (status.dashboard?.taskStatusCounts ?? [])
-                                .filter((entry) => entry.status !== "done")
-                                .reduce((sum, entry) => sum + entry.count, 0)
-                            : item.section === "approvals"
-                              ? pendingApprovals
-                              : undefined;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
-                            aria-label={`${item.label}: ${item.description}`}
-                            onFocus={() => preloadRouteChunk(target)}
-                            onMouseEnter={() => preloadRouteChunk(target)}
-                            onClick={() => navigate(target)}
-                          >
-                            <div>
-                              <strong>
-                                {item.label}
-                                {releaseScope.status === "ship" ? null : (
-                                  <span
-                                    className="mc-next-rail-release-badge"
-                                    data-release-status={releaseScope.status}
-                                    title={releaseScopeOperatorSummary}
-                                    aria-label={releaseScopeOperatorSummary}
-                                  >
-                                    {releaseStatusLabel}
-                                  </span>
-                                )}
-                              </strong>
-                              <span title={item.description}>{item.description}</span>
-                            </div>
-                            {typeof backlogCount === "number" ? (
-                              <span className="mc-next-rail-count">{backlogCount}</span>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
+                    </section>
+                  );
+                })}
               </div>
               <div className="mc-next-rail-signal-card">
                 <div className="mc-next-rail-signal-head">
@@ -1013,6 +1038,7 @@ export function renderRouteContent(input: {
   route: AppRoute;
   activeWorkspaceId: string;
   activeWorkspaceName: string;
+  gatewayStatus: ThreadedGatewayStatusSummary;
   pendingApprovals: number;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
   setActiveWorkspaceId: (workspaceId: string) => void;
@@ -1023,6 +1049,7 @@ export function renderRouteContent(input: {
       <LazyThreadedSurfaceRoute
         workspaceId={input.activeWorkspaceId}
         workspaceName={input.activeWorkspaceName}
+        gatewayStatus={input.gatewayStatus}
         approvalsCount={input.pendingApprovals}
         surface="chat"
         lockSurface
@@ -1057,6 +1084,7 @@ export function renderRouteContent(input: {
       <LazyThreadedSurfaceRoute
         workspaceId={input.activeWorkspaceId}
         workspaceName={input.activeWorkspaceName}
+        gatewayStatus={input.gatewayStatus}
         approvalsCount={input.pendingApprovals}
         surface="cowork"
         lockSurface
@@ -1087,6 +1115,7 @@ export function renderRouteContent(input: {
       <LazyThreadedSurfaceRoute
         workspaceId={input.activeWorkspaceId}
         workspaceName={input.activeWorkspaceName}
+        gatewayStatus={input.gatewayStatus}
         approvalsCount={input.pendingApprovals}
         surface="code"
         lockSurface

@@ -2103,8 +2103,32 @@
   }
 
   .mc-next-brand {
-    width: 8.2rem;
-    padding-right: 0.35rem;
+    width: auto;
+    max-width: 6.9rem;
+    padding-left: 1.35rem;
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .mc-next-brand p {
+    display: none;
+  }
+
+  .mc-next-brand h1 {
+    overflow: hidden;
+    font-size: var(--text-2xs);
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mc-next-topbar-divider,
+  .mc-next-topbar-status .mc-next-release-badge {
+    display: none;
+  }
+
+  .mc-next-topbar-status {
+    gap: 0.24rem;
   }
 
   .mc-next-topbar-right > button.mc-next-start-button,

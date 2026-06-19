@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Workflow } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Eye, PlayCircle, Workflow } from "lucide-react";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard } from "../NativeRoutePageLayout";
 import { NativeButton } from "@next/features/native-routes/primitives";
@@ -68,6 +68,8 @@ export function CoworkExecutionGlance({
   onOpenBoard: () => void;
   onOpenBlocker?: () => void;
 }) {
+  const hasOperatorAttention = snapshot.attentionLabel !== "Clear" || continuation.blockerCount > 0;
+
   return (
     <NativeCard
       title="Execution at a glance"
@@ -79,17 +81,30 @@ export function CoworkExecutionGlance({
         { label: "Blockers", value: String(continuation.blockerCount) },
       ]}
     >
+      {hasOperatorAttention ? (
+        <section
+          className="mc-next-cowork-attention-strip"
+          data-tone={snapshot.attentionLabel === "Blocked" ? "blocked" : "attention"}
+          aria-label="Cowork operator attention"
+        >
+          <div>
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            <strong>{snapshot.attentionLabel}</strong>
+          </div>
+          <p>{snapshot.attentionDetail}</p>
+          {onOpenBlocker ? (
+            <NativeButton variant="secondary" onClick={onOpenBlocker}>
+              <AlertTriangle className="h-4 w-4" />
+              Open blocker
+            </NativeButton>
+          ) : null}
+        </section>
+      ) : null}
       <LibraryButtonRow>
         <NativeButton variant="default" onClick={onContinue}>
           <Workflow className="h-4 w-4" />
           Continue Cowork
         </NativeButton>
-        {onOpenBlocker ? (
-          <NativeButton variant="secondary" onClick={onOpenBlocker}>
-            <AlertTriangle className="h-4 w-4" />
-            Open blocker
-          </NativeButton>
-        ) : null}
         <NativeButton variant="secondary" onClick={onOpenApprovals}>
           <CheckCircle2 className="h-4 w-4" />
           Review approvals
@@ -107,7 +122,10 @@ export function CoworkExecutionGlance({
               <article key={phase.id} className="mc-next-cowork-phase-step" data-state={phase.state} role="listitem">
                 <span className="mc-next-cowork-phase-index">{index + 1}</span>
                 <div>
-                  <strong>{phase.label}</strong>
+                  <div className="mc-next-cowork-phase-title-row">
+                    <strong>{phase.label}</strong>
+                    <CoworkPhaseStateBadge phase={phase} />
+                  </div>
                   <span>{phase.count} tasks</span>
                 </div>
                 <p>{phase.detail}</p>
@@ -140,6 +158,17 @@ export function CoworkExecutionGlance({
         <p className="mc-next-cowork-execution-truth">{snapshot.truthNote}</p>
       </section>
     </NativeCard>
+  );
+}
+
+function CoworkPhaseStateBadge({ phase }: { phase: CoworkExecutionPhaseSummary }) {
+  const status = describeCoworkPhaseStateBadge(phase);
+  const Icon = status.icon;
+  return (
+    <span className="mc-next-cowork-phase-state" data-state={phase.state}>
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      {status.label}
+    </span>
   );
 }
 
@@ -330,6 +359,25 @@ function describeCoworkPhase(phaseId: CoworkExecutionPhaseId, count: number, sta
     return "Outputs waiting on review.";
   }
   return "Completed visible work.";
+}
+
+function describeCoworkPhaseStateBadge(phase: CoworkExecutionPhaseSummary): {
+  label: string;
+  icon: typeof AlertTriangle;
+} {
+  if (phase.state === "blocked") {
+    return { label: "Blocked", icon: AlertTriangle };
+  }
+  if (phase.state === "active" && phase.id === "review") {
+    return { label: "Review", icon: Eye };
+  }
+  if (phase.state === "active") {
+    return { label: "Active", icon: PlayCircle };
+  }
+  if (phase.state === "complete") {
+    return { label: "Complete", icon: CheckCircle2 };
+  }
+  return { label: "Idle", icon: CircleDashed };
 }
 
 function describeNextCoworkCheckpoint(nextActionLabel: string): string {

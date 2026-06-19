@@ -133,9 +133,16 @@ describe("MissionControlNextApp shell helpers", () => {
 
   it("dispatches route content helpers and preserves threaded route callbacks", () => {
     const navigate = vi.fn();
+    const gatewayStatus = {
+      ready: true,
+      tone: "success",
+      label: "Gateway ready",
+      detail: "Gateway ready. Daemon health is serving.",
+    } as const;
     const baseInput = {
       activeWorkspaceId: "workspace-1",
       activeWorkspaceName: "Workspace One",
+      gatewayStatus,
       pendingApprovals: 2,
       navigate,
       setActiveWorkspaceId: vi.fn(),
@@ -246,6 +253,12 @@ describe("MissionControlNextApp shell helpers", () => {
         route: route as any,
         activeWorkspaceId: "workspace-1",
         activeWorkspaceName: "Workspace One",
+        gatewayStatus: {
+          ready: true,
+          tone: "success",
+          label: "Gateway ready",
+          detail: "Gateway ready. Daemon health is serving.",
+        },
         pendingApprovals: 0,
         navigate: vi.fn(),
         setActiveWorkspaceId: vi.fn(),

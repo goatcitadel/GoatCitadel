@@ -4,7 +4,7 @@ import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-s
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, StatusChip } from "../primitives";
+import { EmptyState, NativeButton, StatusChip } from "../primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
 import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
@@ -146,19 +146,39 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       error={actionError ?? error}
       releaseStatus={getRouteReleaseScope(props.route).status}
     >
-      <div className="mc-next-kanban-toolbar">
-        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("unblock")}>
+      <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
+        <NativeButton
+          variant="default"
+          className="mc-next-kanban-action"
+          disabled={!hasSelection || bulkBusy}
+          onClick={() => void runBulk("unblock")}
+        >
           Unblock
-        </button>
-        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("retry")}>
+        </NativeButton>
+        <NativeButton
+          variant="outline"
+          className="mc-next-kanban-action"
+          disabled={!hasSelection || bulkBusy}
+          onClick={() => void runBulk("retry")}
+        >
           Retry
-        </button>
-        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("close")}>
+        </NativeButton>
+        <NativeButton
+          variant="outline"
+          className="mc-next-kanban-action"
+          disabled={!hasSelection || bulkBusy}
+          onClick={() => void runBulk("close")}
+        >
           Close
-        </button>
-        <button type="button" disabled={bulkBusy} onClick={() => void load()}>
+        </NativeButton>
+        <NativeButton
+          variant="secondary"
+          className="mc-next-kanban-action"
+          disabled={bulkBusy}
+          onClick={() => void load()}
+        >
           <RefreshCw className="h-3 w-3" /> Refresh
-        </button>
+        </NativeButton>
       </div>
       {notice ? (
         <div className="mc-next-runtime-notice tone-success" data-testid="kanban-notice">

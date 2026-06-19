@@ -292,6 +292,7 @@ export function QuickJumpCard({
       className={[
         "mc-next-directory-card",
         "mc-next-directory-card-compact",
+        "mc-next-directory-quickjump-card",
         compact ? "is-compact mc-next-directory-quickjump-inline" : "",
       ]
         .filter(Boolean)
@@ -305,9 +306,9 @@ export function QuickJumpCard({
       </div>
       <div className="mc-next-directory-actions">
         {actions.map((item) => (
-          <button
+          <NativeButton
             key={item.label}
-            type="button"
+            variant="secondary"
             className="mc-next-directory-action"
             onClick={() => {
               item.onSelect?.();
@@ -316,7 +317,7 @@ export function QuickJumpCard({
           >
             <span>{item.label}</span>
             <ArrowRight className="h-4 w-4" />
-          </button>
+          </NativeButton>
         ))}
       </div>
     </article>

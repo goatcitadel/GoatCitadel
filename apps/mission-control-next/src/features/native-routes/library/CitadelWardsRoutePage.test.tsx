@@ -77,7 +77,14 @@ describe("CitadelWardsRoutePage", () => {
 
   it("lists existing wards", async () => {
     apiMocks.listCitadelWards.mockResolvedValue([
-      { wardId: "w0", citadelId: "default", name: "Seal finance", actionPattern: "finance.*", effect: "deny", createdAt: "t" },
+      {
+        wardId: "w0",
+        citadelId: "default",
+        name: "Seal finance",
+        actionPattern: "finance.*",
+        effect: "deny",
+        createdAt: "t",
+      },
     ]);
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -85,6 +92,9 @@ describe("CitadelWardsRoutePage", () => {
     });
     expect(apiMocks.listCitadelWards).toHaveBeenCalledWith("default");
     expect(treeString(renderer!)).toContain("Seal finance");
+    expect(treeString(renderer!)).toContain("mc-next-native-work-pair mc-next-citadel-wards-grid");
+    expect(buttonByLabel(renderer!, "Add Ward").props["data-variant"]).toBe("default");
+    expect(buttonByLabel(renderer!, "Evaluate").props["data-variant"]).toBe("default");
   });
 
   it("adds a ward and appends it to the list", async () => {

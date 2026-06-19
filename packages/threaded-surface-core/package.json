@@ -14,6 +14,10 @@
     "./pure-helpers": {
       "types": "./dist/pure-helpers.d.ts",
       "default": "./dist/pure-helpers.js"
+    },
+    "./work-trust": {
+      "types": "./dist/chat/work-trust.d.ts",
+      "default": "./dist/chat/work-trust.js"
     }
   },
   "files": [

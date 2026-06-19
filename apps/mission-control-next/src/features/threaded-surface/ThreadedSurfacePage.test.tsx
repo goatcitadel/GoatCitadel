@@ -539,7 +539,7 @@ describe("ThreadedSurfacePage", () => {
     }
   });
 
-  it("shows the effective permission state directly above the composer", () => {
+  it("keeps header status chips compact and session-specific", () => {
     const markup = renderToStaticMarkup(
       <ThreadedSurfacePage
         surface="code"
@@ -560,11 +560,17 @@ describe("ThreadedSurfacePage", () => {
     );
 
     // The composer-policy chip was deduplicated against the header chip; the
-    // permission state now renders exactly once near the surface header.
+    // header now keeps only compact session-specific status, while full policy
+    // and security wording lives in the context drawer.
     expect(markup).not.toContain('aria-label="Composer policy state"');
-    const policyChipMatches = markup.match(/Policy: Trusted Local Power/g) ?? [];
+    expect(markup).not.toContain("Gateway ready");
+    expect(markup).not.toContain("Gateway state unavailable");
+    expect(markup).not.toContain("skips normal prompts");
+    const policyChipMatches = markup.match(/Policy: Trusted Local Power · override/g) ?? [];
     expect(policyChipMatches.length).toBe(1);
-    expect(markup).toContain("skips normal prompts");
+    expect(markup).toContain("OpenAI / gpt-test");
+    expect(markup).toContain("Runtime ready");
+    expect(markup).toContain("Decisions clear");
   });
 
   it("renders a quick restore action for archived sessions", () => {

@@ -52,6 +52,26 @@ function formatRouteSummary(props: MissionThreadedContextDockProps): string {
   return parts.length > 0 ? parts.join(" / ") : "Route pending";
 }
 
+function formatThreadedSecuritySummary(permissionOverrideActive?: boolean): string {
+  const overrideCopy = permissionOverrideActive
+    ? "A local operator override is active for this session, so normal prompts may be reduced while the override lasts."
+    : "No local operator override is active for this session.";
+  return `${overrideCopy} Deny-wins policy, approval gates, auth boundaries, path jails, provenance, and health checks remain enforced. Code Mode is a governed trusted-code surface; this drawer does not claim hostile-code sandboxing.`;
+}
+
+function formatTrustRouteSummary(props: MissionThreadedContextDockProps): string | null {
+  if (!props.trust?.requestedProviderModelSummary && !props.trust?.effectiveProviderModelSummary) {
+    return null;
+  }
+  const requested = props.trust.requestedProviderModelSummary
+    ? `requested ${props.trust.requestedProviderModelSummary}`
+    : "requested route pending";
+  const effective = props.trust.effectiveProviderModelSummary
+    ? `effective ${props.trust.effectiveProviderModelSummary}`
+    : "effective route pending";
+  return `${requested}; ${effective}`;
+}
+
 export function ThreadedContextDrawer({
   surface,
   props,
@@ -71,6 +91,7 @@ export function ThreadedContextDrawer({
   const subagentPolicy: ChatSubagentPolicy = props.prefs?.subagentPolicy ?? "ask_when_useful";
   const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
   const planningEnabled = planningMode === "advisory";
+  const trustRouteSummary = formatTrustRouteSummary(props);
   const handleSubagentPolicyChange = (next: ChatSubagentPolicy) => {
     if (next === "auto_when_useful" && !readSubagentAutoAckFromStorage(props.selectedSessionId)) {
       setPendingSubagentAuto(next);
@@ -160,6 +181,39 @@ export function ThreadedContextDrawer({
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}
           </section>
+
+          {props.trust ? (
+            <section className="mc-next-context-card">
+              <p className="mc-next-panel-kicker">Policy and security</p>
+              <h4>{props.trust.gatewayLabel}</h4>
+              <div className="mc-next-context-truth-copy">
+                <p>
+                  <strong>Gateway:</strong> {props.trust.gatewayDetail ?? props.trust.gatewayLabel}
+                </p>
+                <p>
+                  <strong>Policy:</strong> {permissionSummary ?? "Policy state unavailable."}
+                </p>
+                <p>
+                  <strong>Security:</strong> {formatThreadedSecuritySummary(permissionOverrideActive)}
+                </p>
+                {props.trust.selectionSourceSummary ? (
+                  <p>
+                    <strong>Selection:</strong> {props.trust.selectionSourceSummary}
+                  </p>
+                ) : null}
+                {props.trust.fallbackSummary ? (
+                  <p>
+                    <strong>Fallback:</strong> {props.trust.fallbackSummary}
+                  </p>
+                ) : null}
+                {trustRouteSummary ? (
+                  <p>
+                    <strong>Route:</strong> {trustRouteSummary}
+                  </p>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           {props.activeGeneratedArtifact ? (
             <section className="mc-next-context-card">
