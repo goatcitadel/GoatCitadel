@@ -6,7 +6,7 @@ import {
   fetchOrchestrationRunTrace,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
@@ -139,7 +139,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
+      {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-run-detail-grid">
         <NativeCard

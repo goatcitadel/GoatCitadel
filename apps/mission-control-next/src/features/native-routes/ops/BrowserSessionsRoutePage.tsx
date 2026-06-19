@@ -20,7 +20,7 @@ import {
   rotateBrowserSessionGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton, StatusChip } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import { routeKicker } from "@next/app/route-model";
@@ -194,7 +194,7 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
       }
     >
       <LibraryLoadWarnings issues={[...(data?.issues ?? []), ...detail.issues]} onRetry={() => void reload()} />
-      {notice ? <div className="mc-next-runtime-notice tone-success">{notice}</div> : null}
+      {notice ? <NoticeBanner tone="success" message={notice} /> : null}
       <NativeGrid>
         <NativeCard
           title="Sessions"

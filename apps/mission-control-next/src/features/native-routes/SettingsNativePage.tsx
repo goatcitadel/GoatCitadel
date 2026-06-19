@@ -3511,6 +3511,8 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
+  const [revokePending, setRevokePending] = useState(false);
   const [form, setForm] = useState({
     mode: "none",
     allowLoopbackBypass: false,
@@ -3582,15 +3584,15 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   };
 
   const handleRevokeGrant = async (grantId: string) => {
-    if (!window.confirm("Revoke this device access grant?")) {
-      return;
-    }
+    setRevokePending(true);
     try {
       await revokeDeviceAccessGrant(grantId);
       setNotice({ tone: "success", message: "Device access revoked." });
       await reload();
     } catch (revokeError) {
       setNotice({ tone: "error", message: getErrorMessage(revokeError) });
+    } finally {
+      setRevokePending(false);
     }
   };
 
@@ -3765,7 +3767,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                   (typeof grant.metadata.origin === "string" ? grant.metadata.origin : undefined) ||
                   grant.platform ||
                   "Unknown origin",
-                onClick: grant.revokedAt ? undefined : () => void handleRevokeGrant(grant.grantId),
+                onClick: grant.revokedAt ? undefined : () => setPendingRevokeGrantId(grant.grantId),
                 actionLabel: grant.revokedAt ? "Revoked" : "Revoke",
               }))}
               emptyLabel="No device grants found."
@@ -3773,6 +3775,21 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingRevokeGrantId !== null}
+        danger
+        title="Revoke device access?"
+        message="This device will lose gateway access. This cannot be undone."
+        confirmLabel="Revoke"
+        pending={revokePending}
+        onCancel={() => setPendingRevokeGrantId(null)}
+        onConfirm={() => {
+          if (pendingRevokeGrantId !== null) {
+            void handleRevokeGrant(pendingRevokeGrantId);
+          }
+          setPendingRevokeGrantId(null);
+        }}
+      />
     </SettingsSectionShell>
   );
 }
@@ -6703,6 +6720,8 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
+  const [revokePending, setRevokePending] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("safe");
   const [profileDraft, setProfileDraft] = useState<PermissionProfileEditorDraft>(createEmptyPermissionProfileDraft);
   const [profileEditDraft, setProfileEditDraft] = useState<PermissionProfileEditorDraft>(
@@ -7245,16 +7264,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 label: grant.grantId,
                 description: `${grant.workspaceId} · ${grant.surfaces.join(", ")} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
                 meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}`,
-                onClick:
-                  grant.status === "active"
-                    ? () =>
-                        void runServerActionForPermissions(async () => {
-                          await revokeAutonomousActivationGrant(grant.grantId, {
-                            revokedBy: "operator",
-                            reason: "Revoked from Settings.",
-                          });
-                        }, "Autonomous activation grant revoked.")
-                    : undefined,
+                onClick: grant.status === "active" ? () => setPendingRevokeGrantId(grant.grantId) : undefined,
                 actionLabel: grant.status === "active" ? "Revoke" : undefined,
               }))}
               emptyLabel="No autonomous activation grants recorded."
@@ -7262,6 +7272,29 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingRevokeGrantId !== null}
+        danger
+        title="Revoke autonomous activation grant?"
+        message="This grant will no longer permit agentic activation. This cannot be undone."
+        confirmLabel="Revoke"
+        pending={revokePending}
+        onCancel={() => setPendingRevokeGrantId(null)}
+        onConfirm={() => {
+          const grantId = pendingRevokeGrantId;
+          setPendingRevokeGrantId(null);
+          if (grantId === null) {
+            return;
+          }
+          setRevokePending(true);
+          void runServerActionForPermissions(async () => {
+            await revokeAutonomousActivationGrant(grantId, {
+              revokedBy: "operator",
+              reason: "Revoked from Settings.",
+            });
+          }, "Autonomous activation grant revoked.").finally(() => setRevokePending(false));
+        }}
+      />
     </SettingsSectionShell>
   );
 }
@@ -7406,6 +7439,8 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
+  const [revokePending, setRevokePending] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
   const [approvalModeDraft, setApprovalModeDraft] = useState<ToolApprovalMode>("approve_risky");
@@ -7492,12 +7527,15 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   const handleRevokeGrant = async (grantId: string) => {
+    setRevokePending(true);
     try {
       await revokeToolGrant(grantId);
       setNotice({ tone: "success", message: "Tool grant revoked." });
       await reload();
     } catch (revokeError) {
       setNotice({ tone: "error", message: getErrorMessage(revokeError) });
+    } finally {
+      setRevokePending(false);
     }
   };
 
@@ -7737,7 +7775,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     item.revokedBy ? ` · revoked by ${item.revokedBy}` : ""
                   }`,
                   meta: describeToolGrantAvailability(item),
-                  onClick: item.revokedAt ? undefined : () => void handleRevokeGrant(item.grantId),
+                  onClick: item.revokedAt ? undefined : () => setPendingRevokeGrantId(item.grantId),
                   actionLabel: item.revokedAt ? "Revoked" : "Revoke",
                 }))}
               emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
@@ -7746,6 +7784,21 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingRevokeGrantId !== null}
+        danger
+        title="Revoke tool grant?"
+        message="This tool grant will be revoked. This cannot be undone."
+        confirmLabel="Revoke"
+        pending={revokePending}
+        onCancel={() => setPendingRevokeGrantId(null)}
+        onConfirm={() => {
+          if (pendingRevokeGrantId !== null) {
+            void handleRevokeGrant(pendingRevokeGrantId);
+          }
+          setPendingRevokeGrantId(null);
+        }}
+      />
     </SettingsSectionShell>
   );
 }

@@ -4,7 +4,7 @@ import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-s
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton, StatusChip } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
 import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
@@ -181,8 +181,8 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
         </NativeButton>
       </div>
       {notice ? (
-        <div className="mc-next-runtime-notice tone-success" data-testid="kanban-notice">
-          <span>{notice}</span>
+        <div data-testid="kanban-notice">
+          <NoticeBanner tone="success" message={notice} />
         </div>
       ) : null}
       <div className="mc-next-kanban-board" data-testid="kanban-board">

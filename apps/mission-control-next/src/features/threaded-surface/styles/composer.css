@@ -2336,3 +2336,22 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 .mc-queue-bar-list > li > button {
   flex: 0 0 auto;
 }
+
+/* WS-B: touch (coarse-pointer) tap-target floors for the composer controls,
+   mirroring the shell-side block in mission-control-next-foundation.css. Primary
+   square icon triggers grow to the 44px (2.75rem) minimum; the secondary inline
+   button grows to 40px (2.5rem). Padding stays as-is so pointer/desktop density
+   is unaffected; flex centering keeps the square glyphs centred when taller. */
+@media (pointer: coarse) {
+  .mc-next-composer-icon-button,
+  .chat-plus-trigger {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mc-next-composer-inline-button {
+    min-height: 2.5rem;
+  }
+}

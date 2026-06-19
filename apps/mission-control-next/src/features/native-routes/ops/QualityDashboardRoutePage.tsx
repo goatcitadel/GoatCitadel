@@ -18,7 +18,7 @@ import {
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import {
   formatBytes,
   formatDateTime,
@@ -306,7 +306,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
+      {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-quality-dashboard-grid">
         <NativeCard
@@ -443,7 +443,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {data?.securityEvalWarnings?.[0] ? (
-            <div className="mc-next-runtime-notice tone-info">{data.securityEvalWarnings[0]}</div>
+            <NoticeBanner tone="info" message={data.securityEvalWarnings[0]} />
           ) : null}
           <NativeList
             density="compact"
@@ -511,7 +511,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {data?.securityGateWarnings?.[0] ? (
-            <div className="mc-next-runtime-notice tone-info">{data.securityGateWarnings[0]}</div>
+            <NoticeBanner tone="info" message={data.securityGateWarnings[0]} />
           ) : null}
           <NativeList
             density="compact"
@@ -566,7 +566,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           {designQuality?.error ? (
             <ErrorState size="inline" description={designQuality.error} />
           ) : data?.designQuality?.warnings[0] ? (
-            <div className="mc-next-runtime-notice tone-info">{data.designQuality.warnings[0]}</div>
+            <NoticeBanner tone="info" message={data.designQuality.warnings[0]} />
           ) : null}
           <div className="mc-next-approvals-chip-row">
             <StatusChip tone={designQuality?.state === "available" ? "success" : "warning"}>
@@ -620,7 +620,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {data?.securityExecutionWarnings?.[0] ? (
-            <div className="mc-next-runtime-notice tone-info">{data.securityExecutionWarnings[0]}</div>
+            <NoticeBanner tone="info" message={data.securityExecutionWarnings[0]} />
           ) : null}
           <NativeList
             density="compact"

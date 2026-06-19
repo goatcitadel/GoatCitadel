@@ -28,6 +28,9 @@ export type { EmptyStateProps, EmptyStateSize, EmptyStateTone } from "./EmptySta
 export { ErrorState } from "./ErrorState";
 export type { ErrorStateProps, ErrorStateSize, ErrorStateTone } from "./ErrorState";
 
+export { NoticeBanner } from "./Notice";
+export type { NoticeBannerProps, NoticeTone } from "./Notice";
+
 export { NativeSelectableList } from "./NativeSelectableList";
 export type { NativeSelectableListItem, NativeSelectableListProps } from "./NativeSelectableList";
 

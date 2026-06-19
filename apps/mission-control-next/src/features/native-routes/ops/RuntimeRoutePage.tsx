@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- RuntimeRoutePage co-locates Ops route panels while native route extraction continues. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   AutomationRecipeDraftResponse,
@@ -18,6 +18,7 @@ import {
   EmptyState,
   ErrorState,
   NativeButton,
+  NoticeBanner,
   StatusChip,
   ThreePartChip,
   type ChipTone,
@@ -470,7 +471,7 @@ export function RuntimeRoutePage({
               subtitle="Create a cron-backed job without leaving the schedules route."
               density="compact"
             >
-              {scheduleNotice ? <div className="mc-next-runtime-notice">{scheduleNotice}</div> : null}
+              {scheduleNotice ? <NoticeBanner tone="info" message={scheduleNotice} /> : null}
               <div className="mc-next-settings-field-grid">
                 <label className="mc-next-settings-field">
                   <span>Name</span>
@@ -531,7 +532,7 @@ export function RuntimeRoutePage({
                 { label: "Cron created", value: "No" },
               ]}
             >
-              {automationNotice ? <div className="mc-next-runtime-notice">{automationNotice}</div> : null}
+              {automationNotice ? <NoticeBanner tone="info" message={automationNotice} /> : null}
               <div className="mc-next-settings-field-grid">
                 <label className="mc-next-settings-field span-2">
                   <span>Task description</span>
@@ -821,9 +822,7 @@ export function RuntimeRoutePage({
               ]}
             >
               {runtime.notice ? (
-                <div className={`mc-next-runtime-notice tone-${runtime.notice.tone}`}>
-                  <span>{runtime.notice.message}</span>
-                </div>
+                <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} />
               ) : null}
               <div className="mc-next-runtime-chip-row">
                 <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
@@ -1352,6 +1351,16 @@ export function RuntimeRoutePage({
     [data, section],
   );
 
+  // WS-D2: hero posture lead — the single most important runtime truth already
+  // computed for this section. Suppressed when the page is in its error or
+  // degraded state so a gateway-down view never leads with a healthy posture.
+  const leadContent = useMemo<ReactNode>(() => {
+    if (!data || runtime.error || degradedSources.length > 0) {
+      return undefined;
+    }
+    return <RuntimeHeroLead data={data} pendingApprovals={pendingApprovals} />;
+  }, [data, degradedSources.length, pendingApprovals, runtime.error]);
+
   return (
     <NativePageFrame
       area="ops"
@@ -1361,6 +1370,7 @@ export function RuntimeRoutePage({
       loading={runtime.loading}
       error={runtime.error}
       metrics={headMetrics}
+      lead={leadContent}
       releaseStatus={getRouteReleaseScope(route).status}
     >
       <OpsDegradedSourcesStrip
@@ -1370,6 +1380,79 @@ export function RuntimeRoutePage({
       />
       {content}
     </NativePageFrame>
+  );
+}
+
+/**
+ * WS-D2 hero posture lead. Surfaces the single most important runtime truth the
+ * route already computes — gateway/runtime readiness — with serving posture and
+ * day spend as supporting facts. Reuses the same daemon/health/cost fields the
+ * Runtime posture card and head metrics render; it adds no new data source.
+ */
+function RuntimeHeroLead({
+  data,
+  pendingApprovals,
+}: {
+  data: OpsRuntimeData;
+  pendingApprovals: number;
+}) {
+  const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
+  const daemonRunning = daemonRuntimeUnavailable
+    ? null
+    : (data.daemon?.running ?? data.health?.daemonStatus.running ?? null);
+  const daemonHost = daemonRuntimeUnavailable
+    ? "unavailable"
+    : (data.daemon?.host ?? data.health?.daemonStatus.host ?? "Unknown");
+  const daemonState = daemonRuntimeUnavailable
+    ? "unavailable"
+    : (data.daemon?.state ?? data.health?.daemonStatus.state ?? "unknown");
+  const mcpCount = data.mcpServers.length;
+  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
+  const daySpend = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
+
+  const readinessLine = daemonRuntimeUnavailable
+    ? "Runtime control truth is unavailable — inspect the daemon and health sources."
+    : daemonRunning
+      ? "Gateway runtime is serving and under operator control."
+      : "Gateway runtime is reachable, but the daemon is stopped.";
+  const readinessTone: StatusChipTone = daemonRuntimeUnavailable
+    ? "critical"
+    : daemonRunning
+      ? "success"
+      : "warning";
+
+  return (
+    <>
+      <div className="mc-next-runtime-chip-row">
+        <StatusChip tone={readinessTone}>
+          {daemonRuntimeUnavailable ? "Runtime unavailable" : daemonRunning ? "Runtime ready" : "Daemon stopped"}
+        </StatusChip>
+        <StatusChip tone={mcpCount > 0 ? "default" : "muted"}>{mcpCount} MCP connected</StatusChip>
+        <StatusChip tone={pendingApprovalCount > 0 ? "warning" : "muted"}>
+          {pendingApprovalCount} pending {pendingApprovalCount === 1 ? "approval" : "approvals"}
+        </StatusChip>
+      </div>
+      <p className="mc-next-settings-field-note">{readinessLine}</p>
+      <MetricGrid
+        items={[
+          {
+            label: "Serving posture",
+            value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
+            meta: `${daemonHost} · ${daemonState}`,
+          },
+          {
+            label: "Day spend",
+            value: daySpend,
+            meta: "Dashboard daily total",
+          },
+          {
+            label: "Connectors",
+            value: String(mcpCount),
+            meta: "MCP runtime servers",
+          },
+        ]}
+      />
+    </>
   );
 }
 
@@ -1425,11 +1508,7 @@ function ReleaseProofDashboardPanel({
           {missingOrStaleLanes} stale or missing lanes
         </StatusChip>
       </div>
-      {error ? (
-        <div className="mc-next-runtime-notice tone-error">
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <NoticeBanner tone="error" message={error} /> : null}
       <div className="mc-next-release-proof-grid">
         <ReleaseProofCard
           label="Build identity"
@@ -1593,11 +1672,7 @@ function ReviewReadinessPanel({
         </NativeButton>
       }
     >
-      {error ? (
-        <div className="mc-next-runtime-notice tone-error">
-          <span>{error}</span>
-        </div>
-      ) : null}
+      {error ? <NoticeBanner tone="error" message={error} /> : null}
       {loading && !summary ? <EmptyState size="compact" title="Loading review readiness." /> : null}
       {summary ? (
         <div className="mc-next-directory-lane-list" aria-label="Review readiness lanes">

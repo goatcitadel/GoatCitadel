@@ -8,8 +8,9 @@ import {
   revealCitadelVaultSecret,
   storeCitadelVaultSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -47,6 +48,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
   const [secrets, setSecrets] = useState<SecretsState>({ loading: true, error: null, items: [] });
   const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     setSecrets((current) => ({ ...current, loading: true, error: null }));
@@ -163,7 +165,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
                       <NativeButton
                         variant="outline"
                         className="danger"
-                        onClick={() => void remove(secret.secretId)}
+                        onClick={() => setPendingDelete({ id: secret.secretId, name: secret.secretName })}
                         aria-label={`Delete ${secret.secretName}`}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -180,7 +182,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
         </NativeCard>
 
         <NativeCard title="Store a secret" subtitle="It is sealed before it leaves the request and never written in plaintext.">
-          {draft.error ? <p className="mc-next-mason-error">{draft.error}</p> : null}
+          {draft.error ? <NoticeBanner tone="error" message={draft.error} /> : null}
           <label className="mc-next-mason-field" htmlFor={nameId}>
             <span>Name</span>
             <input
@@ -212,6 +214,19 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
           </NativeButton>
         </NativeCard>
       </NativeGrid>
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        danger
+        title="Delete secret?"
+        message={`Delete "${pendingDelete?.name}"? This permanently removes the stored secret and cannot be undone.`}
+        confirmLabel="Delete"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (pendingDelete) void remove(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      />
 
       <p className="mc-next-citadel-footnote">
         <Lock className="h-3 w-3" aria-hidden="true" />

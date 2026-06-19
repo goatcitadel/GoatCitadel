@@ -66,9 +66,33 @@ body {
    therefore redundant and was removed. */
 
 body {
-  min-height: 100vh;
+  min-height: 100dvh;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
+}
+
+/* WS-B: on touch (coarse-pointer) devices, grow the primary shell tap targets to
+   the 44px (2.75rem) accessibility minimum and secondary inline chips to 40px
+   (2.5rem). Padding is left untouched so the visual density is preserved on
+   pointer/desktop; only min-height/min-width floors are raised here. The square
+   icon buttons keep their content centred when taller via flex centering. */
+@media (pointer: coarse) {
+  .mc-next-rail-link,
+  .mc-next-nav-toggle,
+  .mc-next-icon-button {
+    min-height: 2.75rem;
+  }
+
+  .mc-next-nav-toggle,
+  .mc-next-icon-button {
+    min-width: 2.75rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mc-next-panel-button {
+    min-height: 2.5rem;
+  }
 }
 
 button,
