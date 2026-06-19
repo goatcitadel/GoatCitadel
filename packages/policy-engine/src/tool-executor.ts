@@ -45,7 +45,45 @@ import {
   type DocumentArtifactSection,
 } from "./document-artifacts.js";
 import { generateEmbedding, isEmbeddingCompatible, isEmbeddingCurrent } from "./local-embeddings.js";
+import { terminateProcessTree, type ProcessTreeKillLogger } from "./process-tree-killer.js";
 const execFileAsync = promisify(execFile);
+const SHELL_EXEC_DEFAULT_TIMEOUT_MS = 20000;
+const SHELL_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
+let shellExecTimeoutMs = SHELL_EXEC_DEFAULT_TIMEOUT_MS;
+
+/**
+ * Test-only override for the shell.exec hard-kill timeout. Production keeps the
+ * 20s default; tests use this to exercise the timeout/tree-kill path quickly.
+ * Pass no argument (or the default) to restore the production value.
+ */
+export function setShellExecTimeoutMsForTesting(ms: number = SHELL_EXEC_DEFAULT_TIMEOUT_MS): void {
+  shellExecTimeoutMs = Math.max(1, Math.floor(ms));
+}
+
+/**
+ * Default diagnostic sink for hard-kill failures. The policy-engine package has
+ * no shared logger, so route best-effort warnings through Node's built-in
+ * process warning channel rather than introducing a console dependency.
+ */
+const processKillLogger: ProcessTreeKillLogger = {
+  warn(message, context) {
+    process.emitWarning(context ? `${message} ${JSON.stringify(context)}` : message, {
+      type: "ShellProcessKillWarning",
+    });
+  },
+};
+
+interface BackgroundProcessEntry {
+  pid: number;
+  command: string;
+  cwd?: string;
+  child: import("node:child_process").ChildProcess;
+  startedAt: number;
+}
+
+// Module-level registry of detached background shell processes so the session/
+// turn lifecycle can terminate orphaned jobs that would otherwise run forever.
+const backgroundProcesses = new Map<number, BackgroundProcessEntry>();
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
@@ -544,37 +582,140 @@ async function shellExec(request: ToolInvokeRequest, config: ToolPolicyConfig, s
   }
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
-  try {
-    const { stdout, stderr } = await execFileAsync(executable.file, executable.args, {
-      timeout: 20000,
+  const outcome = await runShellExecToCompletion(executable, cwd, request.signal);
+  return {
+    command,
+    cwd,
+    executable: parsed.file,
+    argv: parsed.args,
+    ...(typeof outcome.pid === "number" ? { pid: outcome.pid } : {}),
+    stdout: scrubSensitiveOutput(outcome.stdout),
+    stderr: scrubSensitiveOutput(outcome.stderr),
+    exitCode: outcome.exitCode,
+  };
+}
+
+interface ShellExecOutcome {
+  pid?: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/**
+ * Runs a resolved shell command via a manual spawn so the whole process TREE can
+ * be killed on timeout or abort. On non-Windows we spawn detached to obtain a
+ * killable process group; on Windows the tree is reaped with `taskkill /T`.
+ * Output is capped at {@link SHELL_EXEC_MAX_BUFFER_BYTES} per stream, matching
+ * the previous execFile maxBuffer behavior.
+ */
+function runShellExecToCompletion(
+  executable: { file: string; args: string[] },
+  cwd: string | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ShellExecOutcome> {
+  return new Promise<ShellExecOutcome>((resolve) => {
+    const posixProcessGroup = process.platform !== "win32";
+    const child = spawn(executable.file, executable.args, {
+      cwd,
       windowsHide: true,
-      maxBuffer: 1024 * 1024,
-      cwd,
+      detached: posixProcessGroup,
     });
-    return {
-      command,
-      cwd,
-      executable: parsed.file,
-      argv: parsed.args,
-      stdout: scrubSensitiveOutput(stdout),
-      stderr: scrubSensitiveOutput(stderr),
-      exitCode: 0,
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutCapped = false;
+    let stderrCapped = false;
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+
+    const collect = (chunk: Buffer, isStdout: boolean) => {
+      if (isStdout) {
+        if (stdoutCapped) {
+          return;
+        }
+        stdout += chunk.toString("utf8");
+        if (Buffer.byteLength(stdout, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
+          stdout = stdout.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
+          stdoutCapped = true;
+        }
+        return;
+      }
+      if (stderrCapped) {
+        return;
+      }
+      stderr += chunk.toString("utf8");
+      if (Buffer.byteLength(stderr, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
+        stderr = stderr.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
+        stderrCapped = true;
+      }
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const stdout = (error as { stdout?: string })?.stdout;
-    const stderr = (error as { stderr?: string })?.stderr;
-    const code = (error as { code?: number | string })?.code;
-    return {
-      command,
-      cwd,
-      executable: parsed.file,
-      argv: parsed.args,
-      stdout: scrubSensitiveOutput(stdout ?? ""),
-      stderr: scrubSensitiveOutput(stderr ?? message),
-      exitCode: typeof code === "number" ? code : -1,
+    child.stdout?.on("data", (chunk: Buffer) => collect(chunk, true));
+    child.stderr?.on("data", (chunk: Buffer) => collect(chunk, false));
+
+    const killTree = (label: string) => {
+      terminateProcessTree({
+        child,
+        label,
+        logger: processKillLogger,
+        posixProcessGroup,
+        context: { command: executable.file, cwd },
+      });
     };
-  }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree("shell.exec timeout");
+    }, shellExecTimeoutMs);
+    timer.unref?.();
+
+    const onAbort = () => {
+      aborted = true;
+      killTree("shell.exec abort");
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    const finish = (exitCode: number, extraStderr?: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve({
+        ...(typeof child.pid === "number" ? { pid: child.pid } : {}),
+        stdout,
+        stderr: extraStderr ? (stderr ? `${stderr}\n${extraStderr}` : extraStderr) : stderr,
+        exitCode,
+      });
+    };
+
+    child.once("error", (error) => {
+      finish(-1, error instanceof Error ? error.message : String(error));
+    });
+    child.once("close", (code, closeSignal) => {
+      if (timedOut) {
+        finish(-1, `shell.exec timed out after ${shellExecTimeoutMs}ms; process tree killed.`);
+        return;
+      }
+      if (aborted) {
+        finish(-1, "shell.exec aborted; process tree killed.");
+        return;
+      }
+      if (typeof code === "number") {
+        finish(code);
+        return;
+      }
+      finish(-1, closeSignal ? `Process terminated by signal ${closeSignal}.` : undefined);
+    });
+  });
 }
 
 async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
@@ -593,11 +734,35 @@ async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolic
   return await new Promise<Record<string, unknown>>((resolve, reject) => {
     const child = spawn(executable.file, executable.args, {
       cwd,
-      detached: true,
+      detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     });
     child.once("error", reject);
+    const pid = child.pid;
+    if (typeof pid === "number") {
+      backgroundProcesses.set(pid, { pid, command, cwd, child, startedAt: Date.now() });
+      // Drop the registry entry once the job exits on its own so the map does
+      // not accumulate stale, already-dead pids.
+      child.once("exit", () => {
+        const entry = backgroundProcesses.get(pid);
+        if (entry && entry.child === child) {
+          backgroundProcesses.delete(pid);
+        }
+      });
+    }
+    const onAbort = () => {
+      if (typeof pid === "number") {
+        killBackgroundProcess(pid);
+      }
+    };
+    if (request.signal) {
+      if (request.signal.aborted) {
+        onAbort();
+      } else {
+        request.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
     child.unref();
     setTimeout(() => {
       resolve({
@@ -611,6 +776,43 @@ async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolic
       });
     }, 20);
   });
+}
+
+/**
+ * Terminates a single registered background shell process and its descendants.
+ * Returns true when a matching live registry entry was found. Safe to call with
+ * an unknown pid (no-op, returns false).
+ */
+export function killBackgroundProcess(pid: number): boolean {
+  const entry = backgroundProcesses.get(pid);
+  if (!entry) {
+    return false;
+  }
+  backgroundProcesses.delete(pid);
+  terminateProcessTree({
+    child: entry.child,
+    label: "shell.exec_background kill",
+    logger: processKillLogger,
+    posixProcessGroup: process.platform !== "win32",
+    context: { pid, command: entry.command, cwd: entry.cwd },
+  });
+  return true;
+}
+
+/**
+ * Terminates every registered background shell process. Intended to be called
+ * from the session/turn lifecycle so leaked detached jobs do not survive past
+ * the agent turn that started them. Returns the number of pids terminated.
+ */
+export function killAllBackgroundProcesses(): number {
+  const pids = [...backgroundProcesses.keys()];
+  let killed = 0;
+  for (const pid of pids) {
+    if (killBackgroundProcess(pid)) {
+      killed += 1;
+    }
+  }
+  return killed;
 }
 
 async function gitStatus() {

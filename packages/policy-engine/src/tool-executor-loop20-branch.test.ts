@@ -1,9 +1,48 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+
+// shell.exec executes through a manual spawn (so process trees can be killed on
+// timeout/abort). Provide a controllable fake child driven by `mocked.spawnResult`.
+type SpawnResult = { stdout?: string; stderr?: string; exitCode?: number | null; error?: Error };
+
+function makeSpawnChild(result: SpawnResult): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    exitCode: number | null;
+    signalCode: null;
+    kill: () => boolean;
+    unref: () => void;
+  };
+  child.pid = 4343;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  child.unref = () => {};
+  queueMicrotask(() => {
+    if (result.error) {
+      child.emit("error", result.error);
+      return;
+    }
+    if (result.stdout) {
+      child.stdout.emit("data", Buffer.from(result.stdout, "utf8"));
+    }
+    if (result.stderr) {
+      child.stderr.emit("data", Buffer.from(result.stderr, "utf8"));
+    }
+    const code = result.exitCode === undefined ? 0 : result.exitCode;
+    child.emit("close", code, null);
+  });
+  return child;
+}
 
 const mocked = vi.hoisted(() => {
   const execFileAsync = vi.fn();
@@ -15,6 +54,7 @@ const mocked = vi.hoisted(() => {
     execFile,
     execFileAsync,
     spawn: vi.fn(),
+    spawnResult: { stdout: "ok", stderr: "", exitCode: 0 } as SpawnResult,
     isBrowserToolName: vi.fn<(name: string) => boolean>(),
     executeBrowserTool: vi.fn(),
   };
@@ -40,7 +80,9 @@ describe("tool executor loop 20 branch tails", () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-loop20-"));
     config = createConfig(tempRoot);
     mocked.execFile.mockClear();
-    mocked.spawn.mockClear();
+    mocked.spawn.mockReset();
+    mocked.spawnResult = { stdout: "ok", stderr: "", exitCode: 0 };
+    mocked.spawn.mockImplementation(() => makeSpawnChild(mocked.spawnResult));
     mocked.execFileAsync.mockReset();
     mocked.execFileAsync.mockResolvedValue({ stdout: "ok", stderr: "" });
     mocked.isBrowserToolName.mockReset();
@@ -68,24 +110,25 @@ describe("tool executor loop 20 branch tails", () => {
       cwd: path.resolve(cwd),
       exitCode: 0,
     });
-    expect(mocked.execFileAsync).toHaveBeenCalledWith(
+    expect(mocked.spawn).toHaveBeenCalledWith(
       "runner",
       ["two words", "bare value"],
       expect.objectContaining({ cwd: path.resolve(cwd), windowsHide: true }),
     );
 
-    mocked.execFileAsync.mockRejectedValueOnce(
-      Object.assign(new Error("failed with SECRET_TOKEN=abcdefghijklmnopqrstuvwxyz"), {
-        stdout: "Bearer abcdefghijklmnopqrstuvwxyz",
-        code: "EFAIL",
-      }),
-    );
+    // A non-zero exit with secret-bearing output is scrubbed and the real exit
+    // code flows through the manual spawn pipeline.
+    mocked.spawnResult = {
+      stdout: "Bearer abcdefghijklmnopqrstuvwxyz",
+      stderr: "failed with SECRET_TOKEN=abcdefghijklmnopqrstuvwxyz",
+      exitCode: 3,
+    };
 
     const failed = await executeTool(request("shell.exec", { command: "runner fail" }), config, storageStub());
     expect(failed).toMatchObject({
       executable: "runner",
       argv: ["fail"],
-      exitCode: -1,
+      exitCode: 3,
       stdout: "[REDACTED]",
       stderr: "failed with [REDACTED]",
     });

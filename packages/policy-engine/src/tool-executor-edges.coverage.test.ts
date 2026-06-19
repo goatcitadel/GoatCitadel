@@ -1,9 +1,49 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+
+// shell.exec executes through a manual spawn (so process trees can be killed on
+// timeout/abort). Provide a controllable fake child whose stdout/stderr/exit are
+// driven per-test via `mocked.spawnResult`.
+type SpawnResult = { stdout?: string; stderr?: string; exitCode?: number | null; error?: Error };
+
+function makeSpawnChild(result: SpawnResult): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    exitCode: number | null;
+    signalCode: null;
+    kill: () => boolean;
+    unref: () => void;
+  };
+  child.pid = 4242;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  child.unref = () => {};
+  queueMicrotask(() => {
+    if (result.error) {
+      child.emit("error", result.error);
+      return;
+    }
+    if (result.stdout) {
+      child.stdout.emit("data", Buffer.from(result.stdout, "utf8"));
+    }
+    if (result.stderr) {
+      child.stderr.emit("data", Buffer.from(result.stderr, "utf8"));
+    }
+    const code = result.exitCode === undefined ? 0 : result.exitCode;
+    child.emit("close", code, null);
+  });
+  return child;
+}
 
 const mocked = vi.hoisted(() => {
   const execFileAsync = vi.fn();
@@ -15,6 +55,7 @@ const mocked = vi.hoisted(() => {
     execFile,
     execFileAsync,
     spawn: vi.fn(),
+    spawnResult: { stdout: "shell-ok", stderr: "", exitCode: 0 } as SpawnResult,
     isBrowserToolName: vi.fn<(name: string) => boolean>(),
     executeBrowserTool: vi.fn(),
   };
@@ -41,7 +82,9 @@ describe("tool executor edge coverage", () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-edges-"));
     config = createConfig(tempRoot);
     mocked.execFile.mockClear();
-    mocked.spawn.mockClear();
+    mocked.spawn.mockReset();
+    mocked.spawnResult = { stdout: "shell-ok", stderr: "", exitCode: 0 };
+    mocked.spawn.mockImplementation(() => makeSpawnChild(mocked.spawnResult));
     mocked.isBrowserToolName.mockReset();
     mocked.isBrowserToolName.mockReturnValue(false);
     mocked.executeBrowserTool.mockReset();
@@ -758,7 +801,7 @@ describe("tool executor edge coverage", () => {
   });
 
   it("covers shell command parsing and boolean coercion edge cases", async () => {
-    mocked.execFileAsync.mockResolvedValue({ stdout: "shell-ok", stderr: "" });
+    mocked.spawnResult = { stdout: "shell-ok", stderr: "", exitCode: 0 };
 
     await expect(
       executeTool(request("shell.exec", { command: "node\u0000bad" }), config, storageStub()),
@@ -794,7 +837,9 @@ describe("tool executor edge coverage", () => {
   });
 
   it("normalizes shell failures and restricted command defaults", async () => {
-    mocked.execFileAsync.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "ENOEXEC" }));
+    // A spawn that emits an error is normalized to exitCode -1 with the error
+    // message routed to stderr (collected stderr is empty here).
+    mocked.spawnResult = { error: new Error("boom") };
 
     await expect(
       executeTool(request("shell.exec", { command: "node fail.js" }), config, storageStub()),
@@ -806,6 +851,7 @@ describe("tool executor edge coverage", () => {
       exitCode: -1,
     });
 
+    mocked.spawnResult = { stdout: "shell-ok", stderr: "", exitCode: 0 };
     mocked.execFileAsync.mockResolvedValue({ stdout: "restricted-ok", stderr: "" });
     await expect(executeTool(request("tests.run", {}), config, storageStub())).resolves.toMatchObject({
       manager: "pnpm",
