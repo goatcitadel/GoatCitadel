@@ -8,6 +8,7 @@ import type {
   McpServerModeToolDescriptor,
   McpServerRecord,
   McpServerTemplateRecord,
+  McpToolRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { z } from "zod";
@@ -18,6 +19,16 @@ import {
   isRuntimeSupportedMcpDefinition,
 } from "../services/mcp-template-visibility.js";
 import { MCP_APPROVAL_INBOX_URL } from "../services/mcp-approval-inbox.js";
+import {
+  buildMcpStaleAuthInvokeError,
+  isMcpAuthReadinessInvokeBlocked,
+  resolveMcpInvokeAuthReadiness,
+} from "../services/mcp-oauth-token-service.js";
+import {
+  buildMcpToolCollisionError,
+  findServersExposingTool,
+  parseNamespacedMcpToolName,
+} from "../services/mcp-tool-namespace.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -370,6 +381,18 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    // Resolve the concrete (serverId, toolName) target, honoring mcp__<serverId>__<tool>
+    // namespacing and rejecting ambiguous bare-name collisions BEFORE dispatch.
+    const target = resolveMcpInvokeTarget(fastify.services.mcp, parsed.data.serverId, parsed.data.toolName);
+    if (!target.ok) {
+      return reply.code(target.statusCode).send({ error: target.error });
+    }
+    // Fail closed on stale / missing OAuth: never reach invokeMcpTool when the
+    // server still needs (re)authentication.
+    const authBlock = evaluateMcpInvokeAuthGate(fastify.services.mcp, target.serverId);
+    if (authBlock) {
+      return reply.code(401).send({ error: authBlock });
+    }
     try {
       const actorId = request.authActorId?.trim() || parsed.data.agentId?.trim() || "operator";
       const policyContext = fastify.services.tools?.resolveToolPolicyContext?.({
@@ -398,6 +421,8 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(
         await fastify.services.mcp.invokeMcpTool({
           ...parsed.data,
+          serverId: target.serverId,
+          toolName: target.toolName,
           policyContext,
           consentContext: {
             operatorId: actorId,
@@ -443,6 +468,98 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+/** Minimal read surface of the MCP service used by the invoke-time gates. */
+interface McpInvokeGatePort {
+  listMcpServers(): McpServerRecord[];
+  listMcpTools(serverId: string): McpToolRecord[];
+}
+
+type McpInvokeTargetResolution =
+  | { ok: true; serverId: string; toolName: string }
+  | { ok: false; statusCode: number; error: string };
+
+/**
+ * Resolve the concrete server + tool to dispatch for an `/invoke` request.
+ *
+ * - `mcp__<serverId>__<toolName>` namespaced names resolve directly to that
+ *   server (explicit disambiguation; the body `serverId` is overridden so the
+ *   namespace is authoritative). Unknown namespaced servers fail closed (404).
+ * - Bare tool names dispatch to the requested `serverId`, but only after a
+ *   collision check: if the same bare name is exposed by more than one connected
+ *   server, the request is ambiguous and is rejected (409) with guidance to use
+ *   the namespaced form, rather than silently invoking an arbitrary server.
+ *
+ * Single-server / unique-tool invocations resolve unchanged.
+ */
+export function resolveMcpInvokeTarget(
+  mcp: McpInvokeGatePort,
+  requestedServerId: string,
+  requestedToolName: string,
+): McpInvokeTargetResolution {
+  const servers = safeListMcpServers(mcp);
+  const namespaced = parseNamespacedMcpToolName(requestedToolName);
+  if (namespaced) {
+    const exists = servers.some((server) => server.serverId === namespaced.serverId);
+    if (!exists) {
+      return {
+        ok: false,
+        statusCode: 404,
+        error: `Unknown MCP server: ${namespaced.serverId} (resolved from namespaced tool ${requestedToolName}).`,
+      };
+    }
+    return { ok: true, serverId: namespaced.serverId, toolName: namespaced.toolName };
+  }
+
+  const exposingServers = findServersExposingTool(requestedToolName, servers, (serverId) =>
+    safeListMcpTools(mcp, serverId),
+  );
+  if (exposingServers.length > 1 && !exposingServers.every((serverId) => serverId === requestedServerId)) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: buildMcpToolCollisionError(requestedToolName, exposingServers),
+    };
+  }
+  return { ok: true, serverId: requestedServerId, toolName: requestedToolName };
+}
+
+/**
+ * Invoke-time auth gate: returns an actionable error string when the target
+ * server's OAuth is stale/missing (`needs_auth` / `expired`) so the route can
+ * fail closed before reaching `invokeMcpTool`; returns `undefined` when the
+ * server is `ready` / `not_required` or cannot be resolved here (the downstream
+ * service still performs its own checks).
+ */
+export function evaluateMcpInvokeAuthGate(mcp: McpInvokeGatePort, serverId: string): string | undefined {
+  const server = safeListMcpServers(mcp).find((candidate) => candidate.serverId === serverId);
+  if (!server) {
+    return undefined;
+  }
+  const readiness = resolveMcpInvokeAuthReadiness(server);
+  if (isMcpAuthReadinessInvokeBlocked(readiness)) {
+    return buildMcpStaleAuthInvokeError(server, readiness);
+  }
+  return undefined;
+}
+
+function safeListMcpServers(mcp: McpInvokeGatePort): McpServerRecord[] {
+  try {
+    return mcp.listMcpServers() ?? [];
+  } catch {
+    // A failure to list servers must not crash the route; downstream invoke
+    // still enforces its own server-resolution and policy checks.
+    return [];
+  }
+}
+
+function safeListMcpTools(mcp: McpInvokeGatePort, serverId: string): McpToolRecord[] {
+  try {
+    return mcp.listMcpTools(serverId) ?? [];
+  } catch {
+    return [];
+  }
+}
 
 export function buildMcpRemotePreview(input: {
   servers: McpServerRecord[];
