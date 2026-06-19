@@ -51,6 +51,7 @@ public sealed class ActivationServiceTests
     [DataRow("\"C:\\Program Files\\GoatCitadel\\app.exe\" \"goatcitadel://open?route=/ops/approvals&approvalId=ap-9\"")]
     [DataRow("app.exe goatcitadel://open?route=/ops/approvals&approvalId=ap-9")]
     [DataRow("app.exe goatcitadel://bad?route=/ops/activity goatcitadel://open?route=/ops/approvals&approvalId=ap-9")]
+    [DataRow("app.exe goatcitadel://open?route=/ops/approvals&approvalId=ap-9 goatcitadel://open?route=/ops/activity")]
     public void ParsesGoatcitadelRouteFromRawLaunchArguments(string commandLine)
     {
         var parsed = ActivationRouteParser.TryGetRouteFromCommandLineArguments(commandLine, out var route);
