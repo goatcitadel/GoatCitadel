@@ -90,6 +90,11 @@ import {
   type EvidenceRouteService,
 } from "./evidence-route-service.js";
 import {
+  createEvidenceReceiptsRouteService,
+  type EvidenceReceiptsRouteService,
+} from "./evidence-receipts-route-service.js";
+import type { EvidenceReceiptServiceDeps } from "./evidence-receipt-service.js";
+import {
   createGatewayEventsRouteService,
   type GatewayEventsRoutePort,
   type GatewayEventsRouteService,
@@ -202,6 +207,7 @@ export interface GatewayRouteServices {
   devVerification: DevVerificationRouteService;
   durable: DurableRouteService;
   evidence: EvidenceRouteService;
+  evidenceReceipts: EvidenceReceiptsRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
   health: HealthRouteService;
@@ -271,6 +277,7 @@ export interface GatewayRouteServiceDependencies {
   devVerification: DevVerificationRouteDependencies;
   durable: DurableOperatorService;
   evidence: EvidenceRoutePort;
+  evidenceReceipts: EvidenceReceiptServiceDeps;
   files: FilesRoutePort;
   gatewayEvents: GatewayEventsRoutePort;
   health: HealthRoutePort;
@@ -339,6 +346,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     devVerification: new DevVerificationRouteService(deps.devVerification),
     durable: new DurableRouteService(deps.durable),
     evidence: createEvidenceRouteService(deps.evidence),
+    evidenceReceipts: createEvidenceReceiptsRouteService(deps.evidenceReceipts),
     files: createFilesRouteService(deps.files),
     gatewayEvents: createGatewayEventsRouteService(deps.gatewayEvents),
     health: createHealthRouteService(deps.health),

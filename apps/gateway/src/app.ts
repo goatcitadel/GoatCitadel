@@ -58,6 +58,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { addonsRoutes } from "./routes/addons.js";
 import { capabilityPacksRoutes } from "./routes/capability-packs.js";
 import { evidenceRoutes } from "./routes/evidence.js";
+import { evidenceReceiptsRoutes } from "./routes/evidence-receipts.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { mediaRoutes } from "./routes/media.js";
 import { daemonRoutes } from "./routes/daemon.js";
@@ -375,6 +376,7 @@ export async function buildApp() {
   await app.register(addonsRoutes);
   await app.register(capabilityPacksRoutes);
   await app.register(evidenceRoutes);
+  await app.register(evidenceReceiptsRoutes);
   await app.register(adminRoutes);
   await app.register(docsRoutes);
   await app.register(devDiagnosticsRoutes);
