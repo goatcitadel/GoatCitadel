@@ -69,3 +69,13 @@ reports/visual-rebaseline-*/
 # Local runtime state and run logs (process PIDs, gateway/UI logs, curator run reports)
 runtime/
 logs/
+
+# design-sync (claude.ai/design): staged converter, build output, machine state, and
+# the generated combined stylesheet. The durable sync inputs under .design-sync/
+# (config.json, NOTES.md, conventions.md, previews/, ds-provider.tsx) ARE committed.
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+apps/mission-control-next/.ds-sync-styles.css
