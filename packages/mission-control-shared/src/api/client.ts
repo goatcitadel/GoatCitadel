@@ -184,7 +184,7 @@ import type {
   TaskSubagentSession,
 } from "./types.js";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
-import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState } from "./client-core.js";
+import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState, request } from "./client-core.js";
 import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
@@ -258,6 +258,102 @@ export async function runUiAction<T>(operation: () => Promise<T>): Promise<UiAct
       error: (error as Error).message,
     };
   }
+}
+
+/**
+ * The lineage view inside an Evidence Receipt manifest. Mirrors the gateway's
+ * `EvidenceReceiptLineage` so the receipt is fully self-describing for the
+ * operator-facing download. Fields the gateway could not source are absent.
+ */
+export interface EvidenceReceiptLineage {
+  runId: string;
+  workflowKey: string;
+  status: string;
+  attemptCount: number;
+  maxAttempts: number;
+  outcome: "succeeded" | "failed" | "in_progress" | "unknown";
+  lastError?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  updatedAt: string;
+  sessionId?: string;
+  turnId?: string;
+  approvalId?: string;
+  workspaceId?: string;
+}
+
+export interface EvidenceReceiptApprovalEffect {
+  effectId: string;
+  approvalId: string;
+  effectKind: string;
+  targetKind: string;
+  targetId: string;
+  status: string;
+  attemptCount: number;
+  completedAt?: string;
+}
+
+export interface EvidenceReceiptSideEffect {
+  runId: string;
+  boundary: string;
+  routePath: string;
+  status: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  externalReferenceId?: string;
+  attemptCount: number;
+  externalCallStartedAt?: string;
+  completedAt?: string;
+}
+
+export interface EvidenceReceiptArtifact {
+  source: string;
+  artifactId: string;
+  relPath: string;
+  sha256: string;
+  bytes: number;
+  mimeType: string;
+}
+
+/** The signed proof manifest. This object — and only this object — is hashed and signed. */
+export interface EvidenceReceiptManifest {
+  schemaVersion: string;
+  runId: string;
+  generatedAt: string;
+  lineage: EvidenceReceiptLineage;
+  approvalEffects: EvidenceReceiptApprovalEffect[];
+  sideEffects: EvidenceReceiptSideEffect[];
+  artifacts: EvidenceReceiptArtifact[];
+  notes: string[];
+}
+
+/**
+ * A signed, portable, offline-verifiable Evidence Receipt for a run. Mirrors the gateway
+ * `EvidenceReceipt` shape returned by `POST /api/v1/runs/:runId/evidence-receipt`. The
+ * `publicKey` travels with the receipt so anyone can verify the Ed25519 `signature` over the
+ * canonical manifest bytes without a GoatCitadel install.
+ */
+export interface EvidenceReceipt {
+  manifest: EvidenceReceiptManifest;
+  /** sha256 of the canonical manifest bytes, hex-encoded. */
+  contentHash: string;
+  hashAlgorithm: "sha256";
+  signatureAlgorithm: "ed25519";
+  /** Ed25519 signature over the canonical manifest bytes, base64-encoded. */
+  signature: string;
+  /** SPKI DER public key, base64-encoded. Travels with the receipt for offline verification. */
+  publicKey: string;
+}
+
+/**
+ * Build + fetch the signed Evidence Receipt for a run (operator-only on the gateway). Uses the
+ * shared `request` transport so auth/error handling matches every other mutating call.
+ */
+export async function fetchEvidenceReceipt(runId: string): Promise<EvidenceReceipt> {
+  return request<EvidenceReceipt>(`/api/v1/runs/${encodeURIComponent(runId)}/evidence-receipt`, {
+    method: "POST",
+  });
 }
 
 export * from "./types.js";

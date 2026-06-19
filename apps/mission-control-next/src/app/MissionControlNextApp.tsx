@@ -305,6 +305,11 @@ export function MissionControlNextApp() {
   // JS placement and the responsive stylesheet stay in lockstep. Falls back to
   // the roomy inline layout when matchMedia is unavailable (SSR / test renderer).
   const isCompactTopbar = useMediaQuery("(max-width: 1279px)");
+  // WS-E: below the rail breakpoint the `.mc-next-rail` becomes the hamburger
+  // drawer (areas live in the topbar on desktop, which is hidden here). Mirror
+  // the `@media (max-width: 1023px)` CSS tier so the in-drawer area switcher
+  // only renders on mobile and never duplicates the desktop topbar nav.
+  const isMobileNav = useMediaQuery("(max-width: 1023px)");
   const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
@@ -678,6 +683,7 @@ export function MissionControlNextApp() {
                       key={area}
                       type="button"
                       className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
+                      aria-current={route.area === area ? "page" : undefined}
                       onFocus={() => preloadRouteChunk(target)}
                       onMouseEnter={() => preloadRouteChunk(target)}
                       onClick={() => navigate(target)}
@@ -745,14 +751,6 @@ export function MissionControlNextApp() {
               </label>
               <span className="mc-next-topbar-divider" aria-hidden="true" />
               <div className="mc-next-topbar-status">
-                <span
-                  className="mc-next-badge mc-next-release-badge"
-                  data-release-status={currentReleaseScope.status}
-                  title={currentReleaseScopeOperatorSummary}
-                  aria-label={currentReleaseScopeOperatorSummary}
-                >
-                  {currentReleaseStatusLabel}
-                </span>
                 {/* F2: realtime status lives canonically in the always-visible
                     footer strip ("Live updates"). Surface the topbar badge only
                     as the degraded/fallback escalation, so the healthy path shows
@@ -829,6 +827,25 @@ export function MissionControlNextApp() {
                   <X size={16} />
                 </button>
               </div>
+              {isMobileNav ? (
+                <div className="mc-next-rail-areas">
+                  {PRIMARY_NAV.map(({ area, icon: Icon }) => (
+                    <button
+                      key={area}
+                      type="button"
+                      className={`mc-next-rail-area-link${route.area === area ? " active" : ""}`}
+                      aria-current={route.area === area ? "page" : undefined}
+                      onClick={() => {
+                        navigate(buildPrimaryAreaRoute(area));
+                        setNavOpen(false);
+                      }}
+                    >
+                      <Icon size={16} />
+                      <span>{AREA_META[area].label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="mc-next-rail-menu">
                 {groupedRailItems.map((group) => {
                   const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;

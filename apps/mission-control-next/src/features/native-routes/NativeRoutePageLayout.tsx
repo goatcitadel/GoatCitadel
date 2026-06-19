@@ -43,6 +43,7 @@ export function NativePageFrame({
   area,
   metrics,
   actions,
+  lead,
   releaseStatus,
 }: {
   icon?: React.ComponentType<{ className?: string }>;
@@ -56,6 +57,11 @@ export function NativePageFrame({
   area?: AreaSlug;
   metrics?: NativePageMetric[];
   actions?: ReactNode;
+  /**
+   * Optional promoted focal card rendered between the header and the body grid.
+   * Use for a single, high-priority surface that should lead the route.
+   */
+  lead?: ReactNode;
   /** F-M11: renders an on-surface "Experimental" badge for experimental routes. */
   releaseStatus?: ReleaseSurfaceStatus;
 }) {
@@ -144,6 +150,7 @@ export function NativePageFrame({
           </div>
         ) : null}
       </header>
+      {lead ? <div className="mc-next-directory-lead">{lead}</div> : null}
       {error ? (
         <ErrorState
           size="inline"

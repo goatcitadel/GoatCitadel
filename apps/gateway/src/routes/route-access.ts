@@ -72,6 +72,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/addons", accessClass: "operator" },
   { prefix: "/api/v1/capability-packs", accessClass: "operator" },
   { prefix: "/api/v1/evidence", accessClass: "operator" },
+  { prefix: "/api/v1/compliance", accessClass: "operator" },
   { prefix: "/api/v1/capabilities", accessClass: "operator" },
   { prefix: "/api/v1/code-mode", accessClass: "operator" },
   { prefix: "/api/v1/costs", accessClass: "operator" },

@@ -158,6 +158,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   };
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
+    runtimeDecisionRecorder: { record: vi.fn() },
     backgroundTasks: new Set<Promise<unknown>>(),
     chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     closing: false,

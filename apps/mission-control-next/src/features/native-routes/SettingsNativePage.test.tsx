@@ -2,6 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 
 const mocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(async () => ({
@@ -3757,7 +3758,15 @@ describe("SettingsNativePage access", () => {
         findButton(renderer!.root, "Revoke").props.onClick();
       });
       await flushAsyncUpdates();
-      expect(confirmSpy).toHaveBeenCalledWith("Revoke this device access grant?");
+      // Device revoke now opens a ConfirmModal instead of window.confirm; drive the modal's confirm.
+      const revokeModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Revoke device access?");
+      expect(revokeModal?.props.open).toBe(true);
+      await act(async () => {
+        await revokeModal!.props.onConfirm();
+      });
+      await flushAsyncUpdates();
       expect(mocks.revokeDeviceAccessGrant).toHaveBeenCalledWith("grant-active");
       expect(collectText(renderer!.root)).toContain("Device access revoked.");
     } finally {

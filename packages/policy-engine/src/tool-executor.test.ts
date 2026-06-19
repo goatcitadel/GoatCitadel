@@ -32,9 +32,12 @@ vi.mock("./browser-tools.js", () => ({
 
 import {
   executeTool,
+  killAllBackgroundProcesses,
+  killBackgroundProcess,
   resolveExecutableCommand,
   resolveFixedOutboundHostsForTool,
   resolveRestrictedCommand,
+  setShellExecTimeoutMsForTesting,
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 
@@ -5552,7 +5555,146 @@ describe("executeTool", () => {
       executeTool(toolRequest("session.status", { token: "sk-123456789012345678901234" }), policyConfig, storageStub),
     ).rejects.toThrow(/secret-like material/i);
   });
+
+  it("hard-kills a shell.exec command tree that exceeds the timeout", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    // A child that holds an interval open forever; only a tree kill (taskkill /T
+    // on Windows or a process-group SIGKILL on POSIX) stops it.
+    const longLived = `"${process.execPath}" -e "setInterval(() => {}, 1000)"`;
+    setShellExecTimeoutMsForTesting(300);
+    let result: Record<string, unknown>;
+    try {
+      result = await executeTool(toolRequest("shell.exec", { command: longLived }), policyConfig, storageStub);
+    } finally {
+      setShellExecTimeoutMsForTesting();
+    }
+
+    expect(result).toMatchObject({ exitCode: -1 });
+    expect(String(result.stderr ?? "")).toMatch(/timed out/i);
+    // The spawned process must be gone after the executor returns.
+    await expectPidDead(extractPid(result));
+  }, 15_000);
+
+  it("registers a shell.exec_background pid and kills it via killBackgroundProcess", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const result = await executeTool(
+      toolRequest("shell.exec_background", {
+        command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
+      }),
+      policyConfig,
+      storageStub,
+    );
+
+    const pid = result.pid as number;
+    expect(typeof pid).toBe("number");
+    expect(isPidAlive(pid)).toBe(true);
+
+    expect(killBackgroundProcess(pid)).toBe(true);
+    await expectPidDead(pid);
+    // Idempotent: a second kill of the same (now unregistered) pid is a no-op.
+    expect(killBackgroundProcess(pid)).toBe(false);
+  }, 15_000);
+
+  it("kills all registered background processes via killAllBackgroundProcesses", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const first = (await executeTool(
+      toolRequest("shell.exec_background", {
+        command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
+      }),
+      policyConfig,
+      storageStub,
+    )) as { pid: number };
+    const second = (await executeTool(
+      toolRequest("shell.exec_background", {
+        command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
+      }),
+      policyConfig,
+      storageStub,
+    )) as { pid: number };
+
+    expect(isPidAlive(first.pid)).toBe(true);
+    expect(isPidAlive(second.pid)).toBe(true);
+
+    const killed = killAllBackgroundProcesses();
+    expect(killed).toBeGreaterThanOrEqual(2);
+    await expectPidDead(first.pid);
+    await expectPidDead(second.pid);
+  }, 15_000);
+
+  it("kills a background shell process tree when its abort signal fires", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const controller = new AbortController();
+    const result = (await executeTool(
+      {
+        toolName: "shell.exec_background",
+        args: { command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"` },
+        agentId: "agent",
+        sessionId: "sess-bg-abort",
+        signal: controller.signal,
+      },
+      policyConfig,
+      storageStub,
+    )) as { pid: number };
+
+    expect(isPidAlive(result.pid)).toBe(true);
+    controller.abort();
+    await expectPidDead(result.pid);
+  }, 15_000);
+
+  it("kills a shell.exec command tree when its abort signal fires", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const controller = new AbortController();
+    const pending = executeTool(
+      {
+        toolName: "shell.exec",
+        args: { command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"` },
+        agentId: "agent",
+        sessionId: "sess-exec-abort",
+        signal: controller.signal,
+      },
+      policyConfig,
+      storageStub,
+    );
+    // Give the child a moment to spawn, then abort.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    controller.abort();
+    const result = await pending;
+
+    expect(result).toMatchObject({ exitCode: -1 });
+    expect(String(result.stderr ?? "")).toMatch(/abort/i);
+    await expectPidDead(extractPid(result));
+  }, 15_000);
 });
+
+function extractPid(result: Record<string, unknown>): number | undefined {
+  return typeof result.pid === "number" ? result.pid : undefined;
+}
+
+function isPidAlive(pid: number | undefined): boolean {
+  if (typeof pid !== "number") {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH => no such process. EPERM => exists but not ours (still alive).
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function expectPidDead(pid: number | undefined): Promise<void> {
+  if (typeof pid !== "number") {
+    return;
+  }
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (!isPidAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`process ${pid} still alive after kill`);
+}
 
 function toolRequest(toolName: string, args: Record<string, unknown>): ToolInvokeRequest {
   return {

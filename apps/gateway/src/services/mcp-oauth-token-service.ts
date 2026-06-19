@@ -1,4 +1,4 @@
-import type { McpOAuthConfig, McpServerRecord } from "@goatcitadel/contracts";
+import type { McpOAuthConfig, McpOAuthReadiness, McpServerRecord } from "@goatcitadel/contracts";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { SecretStoreService } from "./secret-store-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
@@ -224,6 +224,58 @@ export function buildPublicMcpAuthState(
     lastRefreshedAt: stateRecord.lastRefreshedAt,
     error: stateRecord.error,
   };
+}
+
+/**
+ * Readiness states that MUST fail closed at invoke time: the operator has to
+ * (re)connect before any tool call can run. `missing_oauth_config` is treated
+ * as a configuration error rather than a stale-auth condition — it cannot be
+ * fixed by reconnecting — so it is surfaced separately. `not_required` and
+ * `ready` flow through to the runtime unchanged.
+ */
+const INVOKE_BLOCKED_AUTH_READINESS: ReadonlySet<McpOAuthReadiness> = new Set<McpOAuthReadiness>([
+  "needs_auth",
+  "expired",
+]);
+
+/**
+ * Whether the given OAuth readiness must block a tool invocation (fail-closed on
+ * stale or missing auth). Returns `true` for `needs_auth` / `expired`.
+ */
+export function isMcpAuthReadinessInvokeBlocked(readiness: McpOAuthReadiness | undefined): boolean {
+  return readiness !== undefined && INVOKE_BLOCKED_AUTH_READINESS.has(readiness);
+}
+
+/**
+ * Resolve the effective OAuth readiness for an MCP server at invoke time.
+ *
+ * Prefers the already-projected public `authState.readiness` (populated when the
+ * server record is read), falling back to recomputing it from the live auth-state
+ * record so callers that only hold a raw record still fail closed correctly.
+ */
+export function resolveMcpInvokeAuthReadiness(
+  server: McpServerRecord,
+  stateRecord?: McpAuthStateRecord,
+): McpOAuthReadiness {
+  if (server.authState?.readiness) {
+    return server.authState.readiness;
+  }
+  return buildPublicMcpAuthState(server, stateRecord).readiness;
+}
+
+/**
+ * Build the actionable, fail-closed error message shown when an MCP tool
+ * invocation is rejected because the server's auth is stale or missing.
+ */
+export function buildMcpStaleAuthInvokeError(
+  server: Pick<McpServerRecord, "serverId" | "label">,
+  readiness: McpOAuthReadiness,
+): string {
+  const reason = readiness === "expired" ? "its OAuth token has expired" : "it has not been authenticated";
+  return (
+    `MCP server ${server.label} (${server.serverId}) needs re-authentication because ${reason}; ` +
+    `reconnect it from Settings before invoking its tools.`
+  );
 }
 
 function requireOAuthConfig(server: McpServerRecord): Required<Pick<McpOAuthConfig, "tokenUrl">> & McpOAuthConfig {

@@ -1,0 +1,45 @@
+{
+  "$schema": "./targets.schema.json",
+  "$comment": [
+    "Copy this file to benchmark/targets.json (gitignored) and fill in the seams.",
+    "Anything left null/absent is treated as 'not configured' and its scenarios are",
+    "skipped with a clear note rather than failing the run. Env vars override file",
+    "values (see benchmark/lib/targets.mjs for the precedence + the exact var names)."
+  ],
+
+  "goatcitadel": {
+    "$comment": [
+      "The local GoatCitadel gateway. If baseUrl is null the runner can auto-spin an",
+      "isolated verification stack (scripts/verification/lib/runtime.mjs) for the HTTP",
+      "scenarios when invoked with --spin. The in-process TRUST/RELIABILITY scenarios",
+      "(deny-wins Ward, dry-run hash mismatch, unknown-sender allowlist, orphan child)",
+      "import the SHIPPED dist/ logic and need neither a baseUrl nor keys."
+    ],
+    "baseUrl": "http://127.0.0.1:8787",
+    "auth": {
+      "$comment": "mode 'loopback' relies on GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS; 'token' sends Authorization: Bearer <token>.",
+      "mode": "loopback",
+      "token": null
+    }
+  },
+
+  "openclaw": {
+    "$comment": [
+      "Competitor build. Drop the binary somewhere and point 'command' at it (the",
+      "runner spawns it) OR point 'baseUrl' at an already-running instance. Absent =",
+      "every openclaw scenario is reported 'skipped: openclaw not configured'."
+    ],
+    "command": null,
+    "args": [],
+    "baseUrl": null,
+    "auth": { "mode": "none", "token": null }
+  },
+
+  "hermes": {
+    "$comment": "Same shape as openclaw. Drop the Hermes binary path or a running baseUrl here.",
+    "command": null,
+    "args": [],
+    "baseUrl": null,
+    "auth": { "mode": "none", "token": null }
+  }
+}

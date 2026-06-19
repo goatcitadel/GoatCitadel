@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 import { Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { EmptyState, ErrorState, NativeButton, StatusChip, ThreePartChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,
@@ -610,18 +610,21 @@ function ApprovalInspectorCard(props: {
       ) : null}
 
       {approval.followUp && approval.followUp.status !== "none" ? (
-        <div className="mc-next-directory-alert">
-          <Clock className="h-4 w-4" />
-          <div>
-            <strong>{formatApprovalFollowUp(approval.followUp.status)}</strong>
-            <span>
-              {approval.followUp.reason ??
-                `${approval.followUp.effectKind ?? "Follow-up"} for ${approval.followUp.targetKind ?? "target"} ${
-                  approval.followUp.targetId ?? ""
-                }`.trim()}
+        <NoticeBanner
+          tone="info"
+          message={
+            <span className="mc-next-approvals-followup">
+              <Clock className="h-4 w-4" aria-hidden="true" />
+              <span>
+                <strong>{formatApprovalFollowUp(approval.followUp.status)}</strong>{" "}
+                {approval.followUp.reason ??
+                  `${approval.followUp.effectKind ?? "Follow-up"} for ${approval.followUp.targetKind ?? "target"} ${
+                    approval.followUp.targetId ?? ""
+                  }`.trim()}
+              </span>
             </span>
-          </div>
-        </div>
+          }
+        />
       ) : null}
 
       <div className="mc-next-approvals-support-grid">

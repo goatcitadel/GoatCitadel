@@ -2,6 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { CitadelVaultRoutePage } from "./CitadelVaultRoutePage";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -57,6 +58,26 @@ function inputByPlaceholder(renderer: ReactTestRenderer, placeholder: string): R
     throw new Error(`No input "${placeholder}"`);
   }
   return node;
+}
+
+function deleteButtonFor(renderer: ReactTestRenderer, secretName: string): ReactTestInstance {
+  const [node] = renderer.root.findAll(
+    (n) => n.type === "button" && n.props?.["aria-label"] === `Delete ${secretName}`,
+  );
+  if (!node) {
+    throw new Error(`No delete button for "${secretName}"`);
+  }
+  return node;
+}
+
+function deleteSecretModal(renderer: ReactTestRenderer): ReactTestInstance {
+  // Mirror CuratorRoutePage.test.tsx: locate the secret-delete ConfirmModal by its
+  // title so the assertion stays correct even if other ConfirmModals are added later.
+  const modal = renderer.root.findAllByType(ConfirmModal).find((m) => m.props.title === "Delete secret?");
+  if (!modal) {
+    throw new Error('No ConfirmModal titled "Delete secret?"');
+  }
+  return modal;
 }
 
 describe("CitadelVaultRoutePage", () => {
@@ -115,5 +136,64 @@ describe("CitadelVaultRoutePage", () => {
       buttonByLabel(renderer!, "Seal & store").props.onClick();
     });
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledWith("default", "openai", "sk-secret");
+  });
+
+  // P0-4 governance/safety regression: deleting a Vault secret is irreversible, so the
+  // row Delete must NOT call the API directly — it must route through the ConfirmModal.
+  it("does not delete the secret directly when the row Delete is clicked", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
+    });
+
+    expect(deleteSecretModal(renderer!).props.open).toBe(false);
+
+    await act(async () => {
+      deleteButtonFor(renderer!, "stripe").props.onClick();
+    });
+
+    // The destructive API call is gated: clicking Delete only arms the modal.
+    expect(apiMocks.deleteCitadelVaultSecret).not.toHaveBeenCalled();
+    expect(deleteSecretModal(renderer!).props.open).toBe(true);
+  });
+
+  it("deletes the secret only after the confirm modal is confirmed", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
+    });
+
+    await act(async () => {
+      deleteButtonFor(renderer!, "stripe").props.onClick();
+    });
+    expect(apiMocks.deleteCitadelVaultSecret).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await deleteSecretModal(renderer!).props.onConfirm();
+    });
+
+    expect(apiMocks.deleteCitadelVaultSecret).toHaveBeenCalledTimes(1);
+    expect(apiMocks.deleteCitadelVaultSecret).toHaveBeenCalledWith("default", "s1");
+    // Confirming closes the modal again.
+    expect(deleteSecretModal(renderer!).props.open).toBe(false);
+  });
+
+  it("cancelling the confirm modal leaves the secret untouched", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
+    });
+
+    await act(async () => {
+      deleteButtonFor(renderer!, "stripe").props.onClick();
+    });
+    expect(deleteSecretModal(renderer!).props.open).toBe(true);
+
+    await act(async () => {
+      deleteSecretModal(renderer!).props.onCancel();
+    });
+
+    expect(apiMocks.deleteCitadelVaultSecret).not.toHaveBeenCalled();
+    expect(deleteSecretModal(renderer!).props.open).toBe(false);
   });
 });

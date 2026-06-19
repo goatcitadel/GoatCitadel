@@ -5,7 +5,7 @@ import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitade
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -31,23 +31,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
   }
 
   useEffect(() => {
-    let cancelled = false;
-    void fetchCuratorStatus()
-      .then((result) => {
-        if (!cancelled) {
-          setData(result);
-          setLoading(false);
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) {
-          setError(err.message);
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+    void load();
   }, [activeWorkspaceId]);
 
   function handleArchive(item: CuratorSkillStatusItem) {
@@ -101,6 +85,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
       description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
       loading={loading}
       error={error}
+      onRetry={() => void load()}
       releaseStatus={getRouteReleaseScope(route).status}
     >
       <NativeGrid>
@@ -126,17 +111,12 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
           }
         >
           {notice ? (
-            <div className="mc-next-runtime-notice tone-success" data-testid="curator-notice">
-              <span>{notice}</span>
+            <div data-testid="curator-notice">
+              <NoticeBanner tone="success" message={notice} />
             </div>
           ) : null}
           {!notice ? (
-            <EmptyState
-              size="compact"
-              title={
-                loading ? "Loading curator status…" : "Use the actions above to refresh or generate a curator report."
-              }
-            />
+            <EmptyState size="compact" title="Use the actions above to refresh or generate a curator report." />
           ) : null}
         </NativeCard>
       </NativeGrid>
@@ -146,9 +126,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
           title="Skills (ranked by usage)"
           subtitle={data ? `${data.items.length} skills · generated ${data.generatedAt}` : "Loading…"}
         >
-          {loading && !data ? (
-            <EmptyState size="compact" title="Loading curator status…" />
-          ) : data && data.items.length > 0 ? (
+          {data && data.items.length > 0 ? (
             <div className="mc-next-approvals-list">
               {data.items.map((item) => (
                 <div key={item.skillId} className="mc-next-directory-list-item" data-testid="curator-row">
@@ -186,7 +164,16 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
               ))}
             </div>
           ) : (
-            <EmptyState size="compact" title="No skills found." />
+            <EmptyState
+              size="compact"
+              title="No skills found."
+              primaryAction={
+                <NativeButton variant="outline" className="subtle" onClick={handleRun} disabled={loading || actionBusy}>
+                  <ShieldCheck className="h-4 w-4" />
+                  Generate report
+                </NativeButton>
+              }
+            />
           )}
         </NativeCard>
       </NativeGrid>

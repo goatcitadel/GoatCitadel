@@ -89,7 +89,13 @@ function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partia
         "- Boundary: This overlay changes voice and framing only.",
       ].join("\n"),
     ),
-    resolveRuntimeGuidance: vi.fn(async () => ({ systemInstruction: "Base Chat guidance." })),
+    resolveRuntimeGuidance: vi.fn(async () => ({
+      workspaceId: "workspace-1",
+      systemInstruction: "Base Chat guidance.",
+      globalFilesUsed: [],
+      workspaceFilesUsed: [],
+      truncated: false,
+    })),
     resolveThreadKnowledgeContext: vi.fn(async () => ({ systemInstruction: "Thread knowledge.", citations: [] })),
     loadChatTurnSessionState: vi.fn(async () => ({
       traces: [],

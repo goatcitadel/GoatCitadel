@@ -10,6 +10,7 @@ import { GatewayService } from "./gateway-service.js";
 function createGatewayHarness() {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   gateway.config = { assistant: { deploymentProfile: "local_dev" } };
+  gateway.runtimeDecisionRecorder = { record: vi.fn() };
   return gateway;
 }
 

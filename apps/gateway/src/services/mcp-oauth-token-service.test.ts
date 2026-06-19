@@ -1,7 +1,13 @@
 import http from "node:http";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildPublicMcpAuthState, McpOAuthTokenService } from "./mcp-oauth-token-service.js";
+import {
+  buildMcpStaleAuthInvokeError,
+  buildPublicMcpAuthState,
+  isMcpAuthReadinessInvokeBlocked,
+  McpOAuthTokenService,
+  resolveMcpInvokeAuthReadiness,
+} from "./mcp-oauth-token-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 
@@ -201,6 +207,43 @@ describe("McpOAuthTokenService", () => {
       authType: "token",
       readiness: "not_required",
     });
+  });
+
+  it("flags only stale/missing-auth readiness as invoke-blocked", () => {
+    expect(isMcpAuthReadinessInvokeBlocked("needs_auth")).toBe(true);
+    expect(isMcpAuthReadinessInvokeBlocked("expired")).toBe(true);
+    expect(isMcpAuthReadinessInvokeBlocked("ready")).toBe(false);
+    expect(isMcpAuthReadinessInvokeBlocked("not_required")).toBe(false);
+    expect(isMcpAuthReadinessInvokeBlocked("missing_oauth_config")).toBe(false);
+    expect(isMcpAuthReadinessInvokeBlocked(undefined)).toBe(false);
+  });
+
+  it("resolves invoke readiness from the projected authState when present", () => {
+    const server = {
+      ...createOAuthServer("https://mcp.example/oauth/token", {
+        oauth: { authorizationUrl: "https://mcp.example/oauth/authorize", tokenUrl: "https://mcp.example/oauth/token" },
+      }),
+      authState: { authType: "oauth2" as const, readiness: "expired" as const },
+    };
+    expect(resolveMcpInvokeAuthReadiness(server)).toBe("expired");
+  });
+
+  it("recomputes invoke readiness from the live auth-state record when authState is absent", () => {
+    const server = createOAuthServer("https://mcp.example/oauth/token", {
+      oauth: { authorizationUrl: "https://mcp.example/oauth/authorize", tokenUrl: "https://mcp.example/oauth/token" },
+    });
+    expect(resolveMcpInvokeAuthReadiness(server, undefined)).toBe("needs_auth");
+  });
+
+  it("builds an actionable stale-auth invoke error per readiness", () => {
+    const expired = buildMcpStaleAuthInvokeError({ serverId: "srv-1", label: "Remote OAuth MCP" }, "expired");
+    expect(expired).toContain("Remote OAuth MCP");
+    expect(expired).toContain("srv-1");
+    expect(expired).toContain("expired");
+    expect(expired).toContain("reconnect");
+
+    const needsAuth = buildMcpStaleAuthInvokeError({ serverId: "srv-1", label: "Remote OAuth MCP" }, "needs_auth");
+    expect(needsAuth).toContain("not been authenticated");
   });
 
   it("deletes stored OAuth token refs without surfacing stale keychain failures", () => {

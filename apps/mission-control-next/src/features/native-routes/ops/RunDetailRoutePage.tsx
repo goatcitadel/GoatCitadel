@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { ClipboardCopy, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { ClipboardCopy, Download, FileText, GitBranch, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   exportObserveRunTrace,
+  fetchEvidenceReceipt,
   fetchObserveRunTrace,
   fetchOrchestrationRunTrace,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeButton, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
@@ -61,6 +62,9 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [downloadingReceipt, setDownloadingReceipt] = useState(false);
+  const [receiptNotice, setReceiptNotice] = useState<string | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     if (!runId) {
       return {
@@ -111,6 +115,41 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
     }
   };
 
+  const downloadEvidenceReceipt = async () => {
+    if (!runId) {
+      return;
+    }
+    if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+      setReceiptError("Receipt download is not available in this environment.");
+      setReceiptNotice(null);
+      return;
+    }
+    setDownloadingReceipt(true);
+    setReceiptError(null);
+    setReceiptNotice(null);
+    let objectUrl: string | null = null;
+    try {
+      const receipt = await fetchEvidenceReceipt(runId);
+      const filename = `evidence-receipt-${runId}.json`;
+      const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: "application/json" });
+      objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setReceiptNotice(`Downloaded signed evidence receipt ${filename}.`);
+    } catch (err) {
+      setReceiptError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      setDownloadingReceipt(false);
+    }
+  };
+
   return (
     <NativePageFrame
       area="ops"
@@ -127,6 +166,14 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       ]}
       actions={
         <>
+          <NativeButton
+            variant="default"
+            onClick={() => void downloadEvidenceReceipt()}
+            disabled={!runId || downloadingReceipt}
+          >
+            <ShieldCheck className="h-4 w-4" />
+            {downloadingReceipt ? "Preparing receipt..." : "Download evidence receipt"}
+          </NativeButton>
           <NativeButton variant="secondary" onClick={() => void copyTraceExport()} disabled={!runId || exporting}>
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy trace export"}
@@ -139,7 +186,9 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
+      {receiptNotice ? <NoticeBanner tone="success" message={receiptNotice} /> : null}
+      {receiptError ? <ErrorState size="inline" description={receiptError} /> : null}
+      {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-run-detail-grid">
         <NativeCard

@@ -41,6 +41,7 @@ function createDeps(
       chatMessages: { deleteByMessageIds: deleteMessages },
       chatTurnTraces: { deleteByTurnIds: deleteTraces },
       chatSessionBranchState: { setActiveLeaf, clear: clearBranch },
+      chatSessionMeta: { get: vi.fn(() => ({ lifecycleStatus: "active" })) },
     },
     withChatTurnWriteLease: vi.fn(async (_sessionId, _operation, task) => task()),
   } as ChatTurnUndoDependencies;

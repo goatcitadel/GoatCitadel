@@ -59,6 +59,11 @@ import {
 } from "./channel-setup-route-service.js";
 import { createCommsRouteService, type CommsRoutePort, type CommsRouteService } from "./comms-route-service.js";
 import {
+  createComplianceRouteService,
+  type ComplianceRouteService,
+} from "./compliance-export-route-service.js";
+import type { ComplianceExportServiceDeps } from "./compliance-export-service.js";
+import {
   createConnectorsRouteService,
   type ConnectorsRoutePort,
   type ConnectorsRouteService,
@@ -89,6 +94,11 @@ import {
   type EvidenceRoutePort,
   type EvidenceRouteService,
 } from "./evidence-route-service.js";
+import {
+  createEvidenceReceiptsRouteService,
+  type EvidenceReceiptsRouteService,
+} from "./evidence-receipts-route-service.js";
+import type { EvidenceReceiptServiceDeps } from "./evidence-receipt-service.js";
 import {
   createGatewayEventsRouteService,
   type GatewayEventsRoutePort,
@@ -181,6 +191,7 @@ export interface GatewayRouteServices {
   authAdmin: AuthAdminRouteService;
   approvals: ApprovalsRouteService;
   citadels: CitadelsRouteService;
+  compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
   capabilityPacks: CapabilityPacksRouteService;
   chatAttachments: ChatAttachmentsRouteService;
@@ -202,6 +213,7 @@ export interface GatewayRouteServices {
   devVerification: DevVerificationRouteService;
   durable: DurableRouteService;
   evidence: EvidenceRouteService;
+  evidenceReceipts: EvidenceReceiptsRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
   health: HealthRouteService;
@@ -250,6 +262,7 @@ export interface GatewayRouteServiceDependencies {
   citadels: CitadelsRoutePort;
   masonInterpret?: MasonInterpret;
   vaultKey?: VaultKeyProvider;
+  compliance: ComplianceExportServiceDeps;
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
@@ -271,6 +284,7 @@ export interface GatewayRouteServiceDependencies {
   devVerification: DevVerificationRouteDependencies;
   durable: DurableOperatorService;
   evidence: EvidenceRoutePort;
+  evidenceReceipts: EvidenceReceiptServiceDeps;
   files: FilesRoutePort;
   gatewayEvents: GatewayEventsRoutePort;
   health: HealthRoutePort;
@@ -318,6 +332,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
     approvals: new ApprovalsRouteService(deps.approvals),
     citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
+    compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
@@ -339,6 +354,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     devVerification: new DevVerificationRouteService(deps.devVerification),
     durable: new DurableRouteService(deps.durable),
     evidence: createEvidenceRouteService(deps.evidence),
+    evidenceReceipts: createEvidenceReceiptsRouteService(deps.evidenceReceipts),
     files: createFilesRouteService(deps.files),
     gatewayEvents: createGatewayEventsRouteService(deps.gatewayEvents),
     health: createHealthRouteService(deps.health),
