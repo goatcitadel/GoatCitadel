@@ -230,15 +230,20 @@ async function resolveRequiredLanes({ commit, repository }) {
   );
 }
 
+function createWorkflowRunResult(status, overrides = {}) {
+  return {
+    status,
+    conclusion: null,
+    html_url: null,
+    id: null,
+    head_sha: null,
+    ...overrides,
+  };
+}
+
 async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
   if (!repository || !commit || !process.env.GITHUB_TOKEN) {
-    return {
-      status: "unavailable",
-      conclusion: null,
-      html_url: null,
-      id: null,
-      head_sha: null,
-    };
+    return createWorkflowRunResult("unavailable");
   }
   const encodedWorkflow = encodeURIComponent(workflowFile);
   const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=10`;
@@ -251,40 +256,21 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       },
     });
     if (!response.ok) {
-      return {
-        status: `github-api-${response.status}`,
-        conclusion: null,
-        html_url: null,
-        id: null,
-        head_sha: null,
-      };
+      return createWorkflowRunResult(`github-api-${response.status}`);
     }
     const payload = await response.json();
     const run = payload.workflow_runs?.[0];
     if (!run) {
-      return {
-        status: "missing",
-        conclusion: null,
-        html_url: null,
-        id: null,
-        head_sha: null,
-      };
+      return createWorkflowRunResult("missing");
     }
-    return {
-      status: run.conclusion ?? run.status ?? "unknown",
+    return createWorkflowRunResult(run.conclusion ?? run.status ?? "unknown", {
       conclusion: run.conclusion ?? null,
       html_url: run.html_url ?? null,
       id: run.id ?? null,
       head_sha: run.head_sha ?? null,
-    };
+    });
   } catch (error) {
-    return {
-      status: `github-api-error:${error instanceof Error ? error.message : "unknown"}`,
-      conclusion: null,
-      html_url: null,
-      id: null,
-      head_sha: null,
-    };
+    return createWorkflowRunResult(`github-api-error:${error instanceof Error ? error.message : "unknown"}`);
   }
 }
 
