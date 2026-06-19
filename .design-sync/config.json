@@ -1,0 +1,28 @@
+{
+  "pkg": "@goatcitadel/mission-control-next",
+  "globalName": "MissionControlUI",
+  "shape": "package",
+  "projectId": "dfae9843-d05c-46bd-a566-a1b70ae8b139",
+  "srcDir": "src/features/native-routes",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": ".ds-sync-styles.css",
+  "extraFonts": "node_modules/@fontsource-variable/geist/index.css",
+  "extraEntries": ["../../.design-sync/ds-provider.tsx"],
+  "provider": { "component": "ThemeWrapper", "props": {} },
+  "readmeHeader": ".design-sync/conventions.md",
+  "componentSrcMap": {
+    "NativeButton": "src/features/native-routes/primitives/NativeButton.tsx",
+    "StatusChip": "src/features/native-routes/primitives/StatusChip.tsx",
+    "EmptyState": "src/features/native-routes/primitives/EmptyState.tsx",
+    "ErrorState": "src/features/native-routes/primitives/ErrorState.tsx",
+    "FilterPill": "src/features/native-routes/primitives/FilterPill.tsx",
+    "FilterPillGroup": "src/features/native-routes/primitives/FilterPillGroup.tsx",
+    "ModeBar": "src/features/native-routes/primitives/ModeBar.tsx",
+    "StageHeader": "src/features/native-routes/primitives/StageHeader.tsx",
+    "ThreePartChip": "src/features/native-routes/primitives/ThreePartChip.tsx",
+    "ContextStrip": "src/features/native-routes/primitives/ContextStrip.tsx",
+    "NativeMetricGrid": "src/features/native-routes/primitives/NativeMetricGrid.tsx",
+    "NativeSelectableList": "src/features/native-routes/primitives/NativeSelectableList.tsx",
+    "KbdHint": "src/features/native-routes/primitives/KbdHint.tsx"
+  }
+}
