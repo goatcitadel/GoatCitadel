@@ -191,7 +191,10 @@ import {
   draftFromRequestConfig,
   requestConfigFromDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
-import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import {
+  buildUniversalModelPickerOptions,
+  useProviderModelCatalog,
+} from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences, type UiDensity } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -825,10 +828,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
-              <NativeButton
-                variant="secondary"
-                onClick={() => void requestBrowserNotificationPermission()}
-              >
+              <NativeButton variant="secondary" onClick={() => void requestBrowserNotificationPermission()}>
                 <Bell size={16} />
                 Check permission
               </NativeButton>
@@ -945,6 +945,57 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
           />
           <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
+          {data.setupReadiness ? (
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Remote profile readiness"
+              subtitle="Gateway-owned setup profile for local, LAN, tailnet, and remote-hardened use."
+              scrollBody
+              bodyMaxHeight="min(58vh, 34rem)"
+              stats={[
+                { label: "Gateway", value: data.setupReadiness.profile.gatewayUrl },
+                { label: "Auth", value: data.setupReadiness.profile.authMode },
+                { label: "Posture", value: data.setupReadiness.profile.deploymentPosture.replaceAll("_", " ") },
+                {
+                  label: "Blocked",
+                  value: `${data.setupReadiness.summary.blocked} / ${data.setupReadiness.summary.needsInput} input`,
+                },
+              ]}
+            >
+              <SettingsWizardSteps
+                steps={data.setupReadiness.items.slice(0, 6).map((item) => ({
+                  label: item.label,
+                  description: `${item.value}: ${item.detail}`,
+                  state:
+                    item.status === "ready"
+                      ? "complete"
+                      : item.status === "blocked"
+                        ? "active"
+                        : item.status === "needs_input"
+                          ? "active"
+                          : "pending",
+                }))}
+              />
+              <SettingsActionList
+                items={data.setupReadiness.items.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.detail,
+                  meta: `${item.status.replaceAll("_", " ")} · ${item.value}`,
+                  actionLabel:
+                    item.status === "ready"
+                      ? "Ready"
+                      : item.status === "blocked"
+                        ? "Blocked"
+                        : item.status === "needs_input"
+                          ? "Needs input"
+                          : "Needs proof",
+                }))}
+                maxHeight="min(42vh, 24rem)"
+              />
+            </NativeCard>
+          ) : null}
           <EcosystemProofLanePanel route={route} navigate={navigate} />
           <NativeCard
             density="compact"
@@ -1751,11 +1802,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsButtonRow>
-                  <NativeButton
-                    variant="default"
-                    onClick={() => void savePersonality()}
-                    disabled={!canSave}
-                  >
+                  <NativeButton variant="default" onClick={() => void savePersonality()} disabled={!canSave}>
                     <Save size={16} />
                     {editorMode === "new" ? "Create personality" : "Save edits"}
                   </NativeButton>
@@ -2197,6 +2244,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [providerTransportDraft, setProviderTransportDraft] = useState(createEmptyLlmTransportDraft);
   const [providerSaveBusy, setProviderSaveBusy] = useState(false);
   const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
+  const [modelPickerQuery, setModelPickerQuery] = useState("");
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
   const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(
     readStoredOpenAICodexOAuthFlow,
@@ -2364,6 +2412,16 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
         request: selectedProviderConfig?.request,
       })
     : [];
+  const universalModelOptions = useMemo(
+    () =>
+      buildUniversalModelPickerOptions({
+        providers,
+        query: modelPickerQuery,
+        activeProviderId: config?.activeProviderId,
+        activeModel: config?.activeModel,
+      }),
+    [config?.activeModel, config?.activeProviderId, modelPickerQuery, providers],
+  );
 
   useEffect(() => {
     if (!providers.length) {
@@ -2948,6 +3006,74 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
+            title="Universal model picker"
+            subtitle="Search configured provider catalogs with runtime fallback and availability evidence."
+            scrollBody
+            bodyMaxHeight="min(58vh, 34rem)"
+            stats={[
+              { label: "Matches", value: String(universalModelOptions.length) },
+              {
+                label: "Ready",
+                value: String(universalModelOptions.filter((item) => item.availability === "ready").length),
+              },
+              {
+                label: "Blocked",
+                value: String(universalModelOptions.filter((item) => item.availability === "blocked").length),
+              },
+            ]}
+          >
+            <SettingsField label="Search provider or model">
+              <input
+                className="mc-next-settings-input"
+                value={modelPickerQuery}
+                onChange={(event) => setModelPickerQuery(event.target.value)}
+                placeholder="gpt, claude, local, fallback, blocked"
+              />
+            </SettingsField>
+            <SettingsActionList
+              items={universalModelOptions.slice(0, 12).map((item) => ({
+                id: item.id,
+                label: item.label,
+                description: item.availabilityReason,
+                meta: [
+                  item.availability,
+                  item.credentialStatus,
+                  item.contextWindowTokens ? `${item.contextWindowTokens.toLocaleString()} tokens` : undefined,
+                  item.contextLimitSource,
+                  item.endpointIdentity,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+                actionLabel:
+                  item.providerId === config?.activeProviderId && item.model === config?.activeModel
+                    ? "Active"
+                    : item.availability === "blocked"
+                      ? "Blocked"
+                      : "Select",
+                onClick:
+                  item.availability === "blocked"
+                    ? undefined
+                    : () => {
+                        setRoutingProviderId(item.providerId);
+                        setRoutingModel(item.model);
+                        setEditorMode("selected");
+                        setSelectedProviderId(item.providerId);
+                      },
+              }))}
+              emptyLabel="No provider models match this search."
+              maxHeight="min(42vh, 24rem)"
+            />
+            <SettingsNotice
+              notice={{
+                tone: "info",
+                message:
+                  "Selecting here stages the provider/model in Active routing; Save routing is still required before runtime changes.",
+              }}
+            />
+          </NativeCard>
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
             stats={[
@@ -3099,11 +3225,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   Add provider and continue
                 </NativeButton>
               ) : codexOAuthFlow ? (
-                <NativeButton
-                  variant="default"
-                  onClick={handleOpenCodexOAuthVerification}
-                  disabled={codexOAuthBusy}
-                >
+                <NativeButton variant="default" onClick={handleOpenCodexOAuthVerification} disabled={codexOAuthBusy}>
                   <ExternalLink size={16} />
                   Open OpenAI page
                 </NativeButton>
@@ -3118,11 +3240,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </NativeButton>
               )}
               {codexOAuthFlow ? (
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void handlePollCodexOAuth()}
-                  disabled={codexOAuthBusy}
-                >
+                <NativeButton variant="secondary" onClick={() => void handlePollCodexOAuth()} disabled={codexOAuthBusy}>
                   <RefreshCw size={16} />I approved, check now
                 </NativeButton>
               ) : null}
@@ -3423,11 +3541,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               error={providerRequestValidation.error}
             />
             <SettingsButtonRow>
-              <NativeButton
-                variant="default"
-                disabled={providerSaveBusy}
-                onClick={() => void handleSaveProvider()}
-              >
+              <NativeButton variant="default" disabled={providerSaveBusy} onClick={() => void handleSaveProvider()}>
                 <Save size={16} />
                 {providerSaveBusy ? "Saving..." : "Save provider"}
               </NativeButton>
@@ -3729,10 +3843,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                   <Save size={16} />
                   Save access settings
                 </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void handleGenerateInstallToken()}
-                >
+                <NativeButton variant="secondary" onClick={() => void handleGenerateInstallToken()}>
                   <RefreshCw size={16} />
                   Generate install token
                 </NativeButton>
@@ -4613,10 +4724,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
                   <Save size={16} />
                   Save changes
                 </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}
-                >
+                <NativeButton variant="secondary" onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}>
                   <CheckCircle2 size={16} />
                   Make active
                 </NativeButton>
@@ -4977,10 +5085,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                   <Plus size={16} />
                   Create connection
                 </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => setShowCreateJson((current) => !current)}
-                >
+                <NativeButton variant="secondary" onClick={() => setShowCreateJson((current) => !current)}>
                   <SlidersHorizontal size={16} />
                   {showCreateJson ? "Use guided fields" : "Advanced JSON"}
                 </NativeButton>
@@ -5111,10 +5216,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                     <RefreshCw size={16} />
                     Run diagnostics
                   </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() => setShowDetailJson((current) => !current)}
-                  >
+                  <NativeButton variant="secondary" onClick={() => setShowDetailJson((current) => !current)}>
                     <SlidersHorizontal size={16} />
                     {showDetailJson ? "Use guided fields" : "Advanced JSON"}
                   </NativeButton>
@@ -5165,10 +5267,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                             </SettingsField>
                           ) : null}
                           <SettingsButtonRow>
-                            <NativeButton
-                              variant="default"
-                              onClick={() => void handleOperatorAction(action)}
-                            >
+                            <NativeButton variant="default" onClick={() => void handleOperatorAction(action)}>
                               <Play size={16} />
                               Run
                             </NativeButton>
@@ -5234,6 +5333,14 @@ function OperatorActionResultPanel({ result }: { result: IntegrationActionInvoke
             label: "Replay",
             value: durableWriteback?.replayOutcome ?? readOutputText(output, "replayOutcome") ?? "not recorded",
             meta: `Resume: ${durableWriteback?.resumeState ?? readOutputText(output, "resumeState") ?? "unknown"}`,
+          },
+          {
+            label: "Undo",
+            value: result.reversibility?.label ?? durableWriteback?.reversibility?.label ?? "Cannot undo",
+            meta:
+              result.reversibility?.detail ??
+              durableWriteback?.reversibility?.detail ??
+              "No durable inverse operation is registered for this action.",
           },
           {
             label: "Idempotency",
@@ -5391,6 +5498,7 @@ function ExternalSideEffectLedgerPanel({
             ].join(" · "),
             meta: [
               `Resume: ${labelForExternalSideEffectResumeState(run.resumeState)}`,
+              `Undo: ${run.reversibility?.label ?? labelForExternalSideEffectReversibility(run)}`,
               `Replay: ${run.replayOutcome ?? "not recorded"}`,
               ...workflowEvidence,
               run.errorText ? `Error: ${run.errorText}` : undefined,
@@ -5413,10 +5521,7 @@ function ExternalSideEffectLedgerPanel({
           Start replay audit
         </NativeButton>
         {lastReplayAuditRunId ? (
-          <NativeButton
-            variant="secondary"
-            onClick={() => onOpenReplayAudit(lastReplayAuditRunId)}
-          >
+          <NativeButton variant="secondary" onClick={() => onOpenReplayAudit(lastReplayAuditRunId)}>
             <ExternalLink size={16} />
             Open replay audit
           </NativeButton>
@@ -5521,6 +5626,21 @@ function labelForExternalSideEffectResumeState(state: ExternalSideEffectRunRecor
     default:
       return "not resumable";
   }
+}
+
+function labelForExternalSideEffectReversibility(run: ExternalSideEffectRunRecord): string {
+  if (run.status === "unknown_external_outcome" || run.resumeState === "manual_review_unknown_external_outcome") {
+    return "Manual reconciliation";
+  }
+  if (
+    run.replayPolicy === "idempotent_external" &&
+    (run.status === "claimed_not_sent" ||
+      run.status === "failed_before_boundary" ||
+      run.resumeState === "manual_retry_after_recorded_failure")
+  ) {
+    return "Replay audit only";
+  }
+  return "Cannot undo";
 }
 
 function formatActivepiecesWorkflowEvidence(run: ExternalSideEffectRunRecord): string[] {
@@ -6066,10 +6186,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
                     </NativeButton>
                   ) : null}
                   {selectedDraft.catalogId === "channel.telegram" ? (
-                    <NativeButton
-                      variant="secondary"
-                      onClick={() => void handleDiscoverTelegramTargets()}
-                    >
+                    <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
                       <RefreshCw size={16} />
                       Detect Telegram Chats
                     </NativeButton>
@@ -7134,10 +7251,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     <Save size={16} />
                     Save profile
                   </NativeButton>
-                  <NativeButton
-                    variant="destructive"
-                    onClick={() => void handleArchiveSelectedProfile()}
-                  >
+                  <NativeButton variant="destructive" onClick={() => void handleArchiveSelectedProfile()}>
                     <Trash2 size={16} />
                     Archive profile
                   </NativeButton>

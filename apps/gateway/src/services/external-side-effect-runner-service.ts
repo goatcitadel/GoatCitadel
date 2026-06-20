@@ -6,6 +6,7 @@ import type {
   IntegrationExternalWritebackResumeState,
   IntegrationExternalWritebackReplayOutcome,
   IntegrationExternalWritebackReplayPolicy,
+  OperatorActionReversibility,
   WardEffect,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -77,6 +78,7 @@ export interface ExternalSideEffectIntentInput {
   inputKeys?: string[];
   outputKeys?: string[];
   externalReferenceId?: string;
+  reversibility?: OperatorActionReversibility;
 }
 
 export function recordAuditOnlyExternalSideEffectIntent(
@@ -87,6 +89,15 @@ export function recordAuditOnlyExternalSideEffectIntent(
   const replayPolicy = input.replayPolicy ?? "audit_only";
   const resumable = input.resumable ?? false;
   const resumeState = input.resumeState ?? "not_resumable";
+  const reversibility =
+    input.reversibility ??
+    deriveExternalSideEffectReversibility({
+      replayPolicy,
+      resumable,
+      resumeState,
+      status: input.status,
+      intentId,
+    });
   const common = {
     intentId,
     idempotencyKey,
@@ -95,6 +106,7 @@ export function recordAuditOnlyExternalSideEffectIntent(
     payloadHash: input.payloadHash,
     resumable,
     resumeState,
+    reversibility,
     checkedAt: input.checkedAt,
   };
   if (!input.evidenceEnvelopeService) {
@@ -117,6 +129,9 @@ export function recordAuditOnlyExternalSideEffectIntent(
         payloadHash: input.payloadHash,
         resumable,
         resumeState,
+        reversibilityStatus: reversibility.status,
+        reversibilityDetail: reversibility.detail,
+        reversibilityEvidenceRef: reversibility.evidenceRef,
         connectionId: input.connectionId,
         catalogId: input.catalogId,
         integrationKey: input.integrationKey,
@@ -147,6 +162,46 @@ export function recordAuditOnlyExternalSideEffectIntent(
       reason: error instanceof Error ? error.message : "external_side_effect_envelope_failed",
     };
   }
+}
+
+export function deriveExternalSideEffectReversibility(input: {
+  replayPolicy: IntegrationExternalWritebackReplayPolicy;
+  resumable: boolean;
+  resumeState: IntegrationExternalWritebackResumeState;
+  status: string;
+  intentId?: string;
+}): OperatorActionReversibility {
+  if (input.resumeState === "manual_review_unknown_external_outcome") {
+    return {
+      status: "manual_reconciliation",
+      label: "Manual reconciliation",
+      detail:
+        "The external boundary may have been crossed. GoatCitadel cannot safely undo or retry without operator/provider confirmation.",
+      evidenceRef: input.intentId,
+    };
+  }
+  if (
+    input.replayPolicy === "idempotent_external" &&
+    (input.resumable ||
+      input.resumeState === "manual_retry_after_recorded_failure" ||
+      input.status === "claimed_not_sent" ||
+      input.status === "failed_before_boundary")
+  ) {
+    return {
+      status: "replay_audit_only",
+      label: "Replay audit only",
+      detail:
+        "No inverse operation is available. Gateway can audit pre-boundary eligibility before any operator-triggered retry.",
+      evidenceRef: input.intentId,
+    };
+  }
+  return {
+    status: "irreversible",
+    label: "Cannot undo",
+    detail:
+      "No durable inverse operation is registered for this external action; completed or post-boundary effects remain provider/manual work.",
+    evidenceRef: input.intentId,
+  };
 }
 
 export interface ExternalSideEffectClaimInput {

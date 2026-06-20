@@ -3,6 +3,7 @@ import type {
   ExternalSideEffectRunRecord,
   ExternalSideEffectRunStatus,
   IntegrationExternalWritebackReplayOutcome,
+  OperatorActionReversibility,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
@@ -318,11 +319,55 @@ function mapExternalSideEffectRunRow(row: ExternalSideEffectRunRow): ExternalSid
     externalReferenceId: row.external_reference_id ?? undefined,
     envelopeId: row.envelope_id ?? undefined,
     errorText: row.error_text ?? undefined,
+    reversibility: deriveExternalSideEffectRunReversibility({
+      status: row.status,
+      replayPolicy: row.replay_policy,
+      resumeState: row.resume_state,
+      runId: row.run_id,
+    }),
     attemptCount: row.attempt_count,
     externalCallStartedAt: row.external_call_started_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function deriveExternalSideEffectRunReversibility(input: {
+  status: ExternalSideEffectRunStatus;
+  replayPolicy: ExternalSideEffectRunRecord["replayPolicy"];
+  resumeState: ExternalSideEffectRunRecord["resumeState"];
+  runId: string;
+}): OperatorActionReversibility {
+  if (input.status === "unknown_external_outcome" || input.resumeState === "manual_review_unknown_external_outcome") {
+    return {
+      status: "manual_reconciliation",
+      label: "Manual reconciliation",
+      detail:
+        "The external boundary may have been crossed. GoatCitadel cannot safely undo or retry without operator/provider confirmation.",
+      evidenceRef: input.runId,
+    };
+  }
+  if (
+    input.replayPolicy === "idempotent_external" &&
+    (input.status === "claimed_not_sent" ||
+      input.status === "failed_before_boundary" ||
+      input.resumeState === "manual_retry_after_recorded_failure")
+  ) {
+    return {
+      status: "replay_audit_only",
+      label: "Replay audit only",
+      detail:
+        "No inverse operation is available. Gateway can audit pre-boundary eligibility before any operator-triggered retry.",
+      evidenceRef: input.runId,
+    };
+  }
+  return {
+    status: "irreversible",
+    label: "Cannot undo",
+    detail:
+      "No durable inverse operation is registered for this external action; completed or post-boundary effects remain provider/manual work.",
+    evidenceRef: input.runId,
   };
 }
 

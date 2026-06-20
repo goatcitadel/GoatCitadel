@@ -1,9 +1,11 @@
+import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
 import type {
   AuthRuntimeSettings,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
   OnboardingFirstRunChecklistItem,
+  OnboardingSetupReadiness,
   OnboardingState,
   OnboardingStartupState,
   RealtimeEvent,
@@ -33,10 +35,23 @@ export interface OnboardingStateHost {
 }
 
 export function getOnboardingStartupState(runtime: OnboardingStateHost): OnboardingStartupState {
+  const auth = runtime.getAuthRuntimeSettings();
+  const profile = buildSetupReadinessProfile(runtime, auth);
+  const summary = summarizeSetupReadiness([
+    buildAuthReadinessItem(auth),
+    buildRemotePostureReadinessItem(runtime, profile),
+    buildCorsReadinessItem(runtime, profile),
+    buildOutboundAllowlistReadinessItem(runtime),
+  ]);
   return {
     completed: Boolean(runtime.onboardingMarker.completedAt),
     completedAt: runtime.onboardingMarker.completedAt,
     completedBy: runtime.onboardingMarker.completedBy,
+    setupReadiness: {
+      generatedAt: new Date().toISOString(),
+      profile,
+      summary,
+    },
   };
 }
 
@@ -160,6 +175,14 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
       activeModel: llm.activeModel,
       localRuntimeReady: Boolean(activeProvider && isProviderLikelyLocal(activeProvider.baseUrl)),
     }),
+    setupReadiness: buildSetupReadiness(runtime, {
+      auth,
+      providerReady: llmReady,
+      runtimeReady,
+      firstRunComplete: Boolean(runtime.onboardingMarker.completedAt),
+      activeProviderLabel: activeProvider?.label ?? llm.activeProviderId,
+      activeModel: llm.activeModel,
+    }),
     settings: {
       toolApprovalMode,
       defaultToolProfile,
@@ -232,6 +255,275 @@ export function markOnboardingComplete(runtime: OnboardingStateHost, completedBy
     completedBy: runtime.onboardingMarker.completedBy,
   });
   return getOnboardingState(runtime);
+}
+
+function buildSetupReadiness(
+  runtime: OnboardingStateHost,
+  input: {
+    auth: AuthRuntimeSettings;
+    providerReady: boolean;
+    runtimeReady: boolean;
+    firstRunComplete: boolean;
+    activeProviderLabel: string;
+    activeModel: string;
+  },
+): OnboardingSetupReadiness {
+  const profile = buildSetupReadinessProfile(runtime, input.auth);
+  const items: OnboardingSetupReadiness["items"] = [
+    buildGatewayUrlReadinessItem(profile.gatewayUrl),
+    buildAuthReadinessItem(input.auth),
+    buildRemotePostureReadinessItem(runtime, profile),
+    buildCorsReadinessItem(runtime, profile),
+    buildTailnetReadinessItem(runtime, profile),
+    buildOutboundAllowlistReadinessItem(runtime),
+    buildStorageRootReadinessItem(runtime),
+    {
+      id: "provider",
+      label: "Provider and model",
+      status: input.providerReady ? "ready" : "needs_input",
+      value: input.providerReady
+        ? `${input.activeProviderLabel || "Provider"} / ${input.activeModel || "model"}`
+        : "not ready",
+      detail: input.providerReady
+        ? "Active provider, model, and credential/local endpoint posture are sufficient for a first send."
+        : "Configure a provider key, OAuth credential, or local endpoint before public readiness claims.",
+      proofRefs: [{ kind: "route", label: "Providers", ref: "/settings/providers" }],
+    },
+    {
+      id: "desktop_credentials",
+      label: "Desktop credentials",
+      status: "unknown",
+      value: "desktop host evidence required",
+      detail:
+        "Mission Control must use the desktop launcher/SSE bridge credential path; Gateway does not expose bearer tokens to browser storage.",
+      proofRefs: [
+        { kind: "route", label: "Access", ref: "/settings/access" },
+        { kind: "verification_lane", label: "Desktop verification", ref: "pnpm verify:desktop" },
+      ],
+    },
+    {
+      id: "first_run",
+      label: "First-run path",
+      status: input.firstRunComplete ? "ready" : input.runtimeReady ? "needs_input" : "blocked",
+      value: input.firstRunComplete ? "complete" : "open",
+      detail: input.firstRunComplete
+        ? "Onboarding completion is recorded in the Gateway-owned marker."
+        : "Complete the guided Chat, Cowork, Code, and Run Detail path before claiming setup parity.",
+      proofRefs: [{ kind: "route", label: "Onboarding", ref: "/settings/onboarding" }],
+    },
+    {
+      id: "release_proof",
+      label: "Release proof",
+      status: "unknown",
+      value: "exact-SHA certificate required",
+      detail:
+        "A parity-ready release claim requires exact commit, lane, workflow, installer, and caveat evidence in the release certificate.",
+      proofRefs: [
+        {
+          kind: "verification_lane",
+          label: "Release certificate",
+          ref: "scripts/release/write-release-certificate.mjs",
+        },
+        { kind: "verification_lane", label: "1.0 evidence", ref: "docs/1_0_RELEASE_EVIDENCE.md" },
+      ],
+    },
+  ];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    profile,
+    summary: summarizeSetupReadiness(items),
+    items,
+  };
+}
+
+function buildSetupReadinessProfile(
+  runtime: OnboardingStateHost,
+  auth: AuthRuntimeSettings,
+): OnboardingSetupReadiness["profile"] {
+  const deploymentProfile = runtime.config.assistant.deploymentProfile;
+  const gatewayUrl = resolveGatewayUrl();
+  const host = resolveGatewayHost(gatewayUrl);
+  const nonLoopback = host ? !isLoopbackHost(host) : false;
+  const deploymentPosture =
+    deploymentProfile === "remote_hardened" ? "remote_hardened" : nonLoopback ? "local_network" : "local_trusted";
+  const mesh = runtime.config.assistant.mesh;
+  const tailnetMode = mesh.security.tailnet.enabled ? "enabled" : mesh.mode === "tailnet" ? "disabled" : "not_required";
+  return {
+    gatewayUrl,
+    authMode: auth.mode,
+    deploymentPosture,
+    tailnetMode,
+  };
+}
+
+function buildGatewayUrlReadinessItem(gatewayUrl: string): OnboardingSetupReadiness["items"][number] {
+  const host = resolveGatewayHost(gatewayUrl);
+  return {
+    id: "gateway_url",
+    label: "Gateway URL",
+    status: host ? "ready" : "unknown",
+    value: gatewayUrl,
+    detail: host
+      ? `Mission Control should connect to ${gatewayUrl}; tokens stay on Gateway/desktop credential paths.`
+      : "Gateway URL could not be parsed from environment defaults.",
+  };
+}
+
+function buildAuthReadinessItem(auth: AuthRuntimeSettings): OnboardingSetupReadiness["items"][number] {
+  const configured = isAuthConfiguredForMode(auth);
+  return {
+    id: "auth_mode",
+    label: "Auth mode",
+    status: configured ? "ready" : "blocked",
+    value: auth.mode,
+    detail: configured
+      ? `Gateway auth mode ${auth.mode} is configured for this profile.`
+      : "Configure token/basic credentials, or explicitly choose none for a local trusted profile.",
+    proofRefs: [{ kind: "route", label: "Access", ref: "/settings/access" }],
+  };
+}
+
+function buildRemotePostureReadinessItem(
+  runtime: OnboardingStateHost,
+  profile: OnboardingSetupReadiness["profile"],
+): OnboardingSetupReadiness["items"][number] {
+  const profileName = runtime.config.assistant.deploymentProfile;
+  const ready = profileName === "remote_hardened" || profile.deploymentPosture === "local_trusted";
+  return {
+    id: "remote_posture",
+    label: "Local/remote posture",
+    status: ready ? "ready" : "needs_input",
+    value: profile.deploymentPosture,
+    detail:
+      profileName === "remote_hardened"
+        ? "Remote Hardened profile is active; prompt-skipping defaults remain unavailable."
+        : profile.deploymentPosture === "local_network"
+          ? "Gateway appears reachable beyond loopback; review auth, CORS, allowlist, and tailnet posture."
+          : "Loopback/local trusted posture is active.",
+    proofRefs: [{ kind: "route", label: "Runtime", ref: "/settings/runtime" }],
+  };
+}
+
+function buildCorsReadinessItem(
+  runtime: OnboardingStateHost,
+  profile: OnboardingSetupReadiness["profile"],
+): OnboardingSetupReadiness["items"][number] {
+  const allowedOrigins = splitCsvEnv(process.env.GOATCITADEL_ALLOWED_ORIGINS);
+  const needsExplicitOrigins =
+    runtime.config.assistant.deploymentProfile === "remote_hardened" || profile.deploymentPosture === "local_network";
+  return {
+    id: "cors",
+    label: "CORS origins",
+    status: !needsExplicitOrigins || allowedOrigins.length > 0 ? "ready" : "needs_input",
+    value: allowedOrigins.length ? String(allowedOrigins.length) : "default loopback",
+    detail:
+      allowedOrigins.length > 0
+        ? `Allowed origins are explicitly configured for ${allowedOrigins.join(", ")}.`
+        : needsExplicitOrigins
+          ? "Remote or LAN profiles should pin browser origins before exposing Mission Control."
+          : "Default loopback developer origins are sufficient for this local profile.",
+  };
+}
+
+function buildTailnetReadinessItem(
+  runtime: OnboardingStateHost,
+  profile: OnboardingSetupReadiness["profile"],
+): OnboardingSetupReadiness["items"][number] {
+  const mesh = runtime.config.assistant.mesh;
+  const remote = profile.deploymentPosture === "remote_hardened" || profile.deploymentPosture === "local_network";
+  return {
+    id: "tailnet",
+    label: "Tailnet posture",
+    status: profile.tailnetMode === "enabled" || !remote ? "ready" : "needs_input",
+    value: profile.tailnetMode,
+    detail:
+      profile.tailnetMode === "enabled"
+        ? "Tailnet mesh security is enabled for this runtime profile."
+        : remote
+          ? `Mesh mode is ${mesh.mode}; enable tailnet or document the private-network boundary before remote use.`
+          : "Tailnet is not required for loopback/local trusted use.",
+    proofRefs: [{ kind: "route", label: "Runtime", ref: "/settings/runtime" }],
+  };
+}
+
+function buildOutboundAllowlistReadinessItem(runtime: OnboardingStateHost): OnboardingSetupReadiness["items"][number] {
+  const allowlist = runtime.config.toolPolicy.sandbox.networkAllowlist.map((item) => item.trim()).filter(Boolean);
+  const hasWildcard = allowlist.includes("*");
+  const remoteHardened = runtime.config.assistant.deploymentProfile === "remote_hardened";
+  return {
+    id: "outbound_allowlist",
+    label: "Outbound allowlist",
+    status: hasWildcard && remoteHardened ? "blocked" : allowlist.length > 0 ? "ready" : "needs_input",
+    value: allowlist.length ? `${allowlist.length} host${allowlist.length === 1 ? "" : "s"}` : "empty",
+    detail: hasWildcard
+      ? "Wildcard outbound host allowlists are not acceptable for Remote Hardened release posture."
+      : allowlist.length > 0
+        ? "Gateway network tools are constrained by an explicit outbound host allowlist."
+        : "Add outbound hosts before remote/provider setup claims that rely on network tools.",
+    proofRefs: [{ kind: "route", label: "Trust policy", ref: "/settings/trust-policy" }],
+  };
+}
+
+function buildStorageRootReadinessItem(runtime: OnboardingStateHost): OnboardingSetupReadiness["items"][number] {
+  const root = path.resolve(runtime.config.rootDir, runtime.config.assistant.dataDir);
+  return {
+    id: "storage_root",
+    label: "Storage root",
+    status: "ready",
+    value: root,
+    detail: "Gateway owns runtime storage under this root; Mission Control must remain an API client.",
+    proofRefs: [{ kind: "route", label: "Runtime", ref: "/settings/runtime" }],
+  };
+}
+
+function summarizeSetupReadiness(
+  items: Array<Pick<OnboardingSetupReadiness["items"][number], "status">>,
+): OnboardingSetupReadiness["summary"] {
+  return items.reduce(
+    (summary, item) => {
+      if (item.status === "ready") {
+        summary.ready += 1;
+      } else if (item.status === "blocked") {
+        summary.blocked += 1;
+      } else if (item.status === "needs_input") {
+        summary.needsInput += 1;
+      } else {
+        summary.unknown += 1;
+      }
+      return summary;
+    },
+    { ready: 0, needsInput: 0, blocked: 0, unknown: 0 },
+  );
+}
+
+function resolveGatewayUrl(): string {
+  const explicit = process.env.GOATCITADEL_GATEWAY_URL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const host = process.env.GATEWAY_HOST?.trim() || "127.0.0.1";
+  const port = process.env.GATEWAY_PORT?.trim() || "8787";
+  return `http://${host}:${port}`;
+}
+
+function resolveGatewayHost(gatewayUrl: string): string | undefined {
+  try {
+    return new URL(gatewayUrl).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function splitCsvEnv(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function buildFirstRunChecklist(input: {

@@ -60,6 +60,8 @@ describe("rankMemoryCandidates", () => {
     expect(ranked[0]?.candidateId).toBe("m:embedding-match");
     expect(ranked[0]?.rankSignals).toMatchObject({
       embeddingScore: 0.35,
+      embeddingStatus: "used",
+      embeddingDimensions: { query: 3, candidate: 3 },
       semanticVectorScore: 0.35,
     });
   });
@@ -86,6 +88,47 @@ describe("rankMemoryCandidates", () => {
     );
 
     expect(ranked[0]?.candidateId).toBe("m:missing");
+    expect(ranked.every((candidate) => candidate.rankSignals.embeddingScore === undefined)).toBe(true);
+    expect(ranked.map((candidate) => candidate.rankSignals.embeddingStatus)).toEqual(["missing", "dimension_mismatch"]);
+    expect(ranked[1]?.rankSignals.embeddingDimensions).toEqual({ query: 3, candidate: 2 });
+  });
+
+  it("keeps search-after-write deterministic when embedding providers fail or change dimensions", () => {
+    const ranked = rankMemoryCandidates(
+      "operator rollback evidence",
+      [
+        {
+          candidateId: "m:fresh-write",
+          sourceType: "memory_item",
+          sourceRef: "fresh-write",
+          text: "Operator rollback evidence was written after approval.",
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+        {
+          candidateId: "m:stale-vector",
+          sourceType: "memory_item",
+          sourceRef: "stale-vector",
+          text: "Rollback note from old embedding index.",
+          timestamp: "2026-05-07T11:00:00.000Z",
+          embedding: [1, 0],
+        },
+        {
+          candidateId: "m:invalid-vector",
+          sourceType: "memory_item",
+          sourceRef: "invalid-vector",
+          text: "Other approval note.",
+          embedding: [Number.NaN, 0, 1],
+        },
+      ],
+      { maxCandidates: 3, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:fresh-write");
+    expect(ranked.map((candidate) => candidate.rankSignals.embeddingStatus)).toEqual([
+      "missing",
+      "dimension_mismatch",
+      "invalid",
+    ]);
     expect(ranked.every((candidate) => candidate.rankSignals.embeddingScore === undefined)).toBe(true);
   });
 

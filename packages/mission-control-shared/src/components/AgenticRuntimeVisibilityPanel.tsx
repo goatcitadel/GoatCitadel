@@ -220,6 +220,9 @@ function pluginProviderToPostureItem(item: AgenticPluginProviderRuntimeStatus): 
         ? `Integrity is ${item.integrityStatus}.`
         : undefined,
       item.permissions.length > 0 ? `Permissions: ${item.permissions.join(", ")}.` : undefined,
+      item.secretReadiness?.missing.length
+        ? `Missing SecretRefs: ${item.secretReadiness.missing.join(", ")}.`
+        : undefined,
       item.secretsRequired.length > 0 ? `Secrets required: ${item.secretsRequired.join(", ")}.` : undefined,
     ].filter((reason): reason is string => Boolean(reason)),
     meta: item.rollbackRef ? `Rollback ${item.rollbackRef}.` : undefined,

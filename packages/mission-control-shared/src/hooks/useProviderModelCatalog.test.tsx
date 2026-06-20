@@ -3,6 +3,7 @@ import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildUniversalModelPickerOptions,
   dedupeProviderModels,
   previewProviderModels,
   resetProviderModelCatalogCacheForTests,
@@ -147,6 +148,83 @@ describe("useProviderModelCatalog", () => {
     apiMocks.previewLlmModels.mockResolvedValueOnce({ source: "fallback", items: [] });
     await expect(previewProviderModels({ providerId: "custom", baseUrl: "http://local" })).resolves.toMatchObject({
       source: "fallback",
+    });
+  });
+
+  it("builds searchable universal model picker options with availability and fallback evidence", () => {
+    const options = buildUniversalModelPickerOptions({
+      activeProviderId: "openai",
+      activeModel: "gpt-live",
+      query: "fallback",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          defaultModel: "gpt-default",
+          apiStyle: "openai-responses",
+          resolvedApiStyle: "openai-responses",
+          hasApiKey: true,
+          models: ["gpt-live", "gpt-fallback"],
+          sanitizedEndpointIdentity: "https://api.openai.com",
+          modelProbeState: "fallback",
+          modelProbeSource: "template_fallback",
+          contextWindowTokens: 128000,
+          contextLimitSource: "provider_config",
+        },
+        {
+          providerId: "local",
+          label: "Local",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          defaultModel: "local-model",
+          apiStyle: "openai-chat-completions",
+          hasApiKey: false,
+          models: ["local-model"],
+          sanitizedEndpointIdentity: "http://127.0.0.1:11434",
+          localCostPosture: "zero_cost_local_runtime",
+          modelProbeState: "not_checked",
+        },
+        {
+          providerId: "remote",
+          label: "Remote missing key",
+          baseUrl: "https://remote.example/v1",
+          defaultModel: "remote-model",
+          apiStyle: "openai-responses",
+          hasApiKey: false,
+          models: ["remote-model"],
+          sanitizedEndpointIdentity: "https://remote.example",
+          modelProbeState: "error",
+          modelProbeSource: "error_fallback",
+          modelProbeWarning: "401",
+        },
+      ] as never,
+    });
+
+    expect(options.map((item) => item.model)).toEqual(["gpt-live", "gpt-fallback"]);
+    expect(options[0]).toMatchObject({
+      providerId: "openai",
+      model: "gpt-live",
+      availability: "suggested",
+      credentialStatus: "configured",
+      fallbackReason: "Using template fallback models; availability is not account-verified.",
+      contextWindowTokens: 128000,
+      contextLimitSource: "provider_config",
+    });
+
+    const allOptions = buildUniversalModelPickerOptions({
+      providers: optionsFixtureProviders(),
+      activeProviderId: "openai",
+      activeModel: "gpt-live",
+    });
+    expect(allOptions.find((item) => item.providerId === "local")).toMatchObject({
+      availability: "unknown",
+      credentialStatus: "local_endpoint",
+      availabilityReason: "Local endpoint model; verify the runtime is reachable before send.",
+    });
+    expect(allOptions.find((item) => item.providerId === "remote")).toMatchObject({
+      availability: "blocked",
+      credentialStatus: "missing",
+      policyReason: "Provider credential is missing.",
     });
   });
 
@@ -302,3 +380,45 @@ describe("useProviderModelCatalog", () => {
     hook.renderer.unmount();
   });
 });
+
+function optionsFixtureProviders() {
+  return [
+    {
+      providerId: "openai",
+      label: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-live",
+      apiStyle: "openai-responses",
+      hasApiKey: true,
+      models: ["gpt-live"],
+      sanitizedEndpointIdentity: "https://api.openai.com",
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+    },
+    {
+      providerId: "local",
+      label: "Local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultModel: "local-model",
+      apiStyle: "openai-chat-completions",
+      hasApiKey: false,
+      models: ["local-model"],
+      sanitizedEndpointIdentity: "http://127.0.0.1:11434",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    },
+    {
+      providerId: "remote",
+      label: "Remote missing key",
+      baseUrl: "https://remote.example/v1",
+      defaultModel: "remote-model",
+      apiStyle: "openai-responses",
+      hasApiKey: false,
+      models: ["remote-model"],
+      sanitizedEndpointIdentity: "https://remote.example",
+      modelProbeState: "error",
+      modelProbeSource: "error_fallback",
+      modelProbeWarning: "401",
+    },
+  ] as never;
+}

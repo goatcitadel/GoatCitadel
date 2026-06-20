@@ -412,6 +412,11 @@ export interface AgenticPluginProviderRuntimeStatus {
   integrityStatus: "verified" | "unverified" | "corrupt" | "quarantined";
   permissions: string[];
   secretsRequired: string[];
+  secretReadiness?: {
+    required: string[];
+    configured: string[];
+    missing: string[];
+  };
   rollbackRef?: string;
   callableExposure: AgenticCapabilityAvailabilityStatus;
   healthCheckedAt?: string;

@@ -12,10 +12,13 @@ const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
 const RELEASE_PROOF_COVERED_LANES = [
   "verify:runtime:truth",
   "verify:auth:matrix",
+  "verify:desktop",
   "verify:code-mode:sandbox",
   "verify:code-mode:hostile-sandbox",
   "verify:agentic:governance",
   "verify:agentic:proof",
+  "verify:channels:runtime",
+  "verify:extensions:package",
   "verify:a2a:full",
   "verify:ui:parity",
   "verify:memory:truth",
@@ -34,10 +37,13 @@ const REQUIRED_LANE_SPECS = [
   { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
   { name: "verify:runtime:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:auth:matrix", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:desktop", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:code-mode:sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:code-mode:hostile-sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:agentic:governance", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:agentic:proof", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:channels:runtime", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:extensions:package", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:ui:parity", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:memory:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:realtime:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
@@ -56,6 +62,64 @@ const REQUIRED_LANE_SPECS = [
   ...spec,
   releaseProofCovered: RELEASE_PROOF_COVERED_LANE_NAMES.has(spec.name),
 }));
+
+const PARITY_CLOSURE_CHECKS = [
+  {
+    key: "operatorProof",
+    label: "Operator proof",
+    lane: "verify:operator:proof",
+    required: true,
+  },
+  {
+    key: "durableRecovery",
+    label: "Durable recovery",
+    lane: "verify:durable:recovery",
+    required: true,
+  },
+  {
+    key: "runtimeTruth",
+    label: "Runtime truth",
+    lane: "verify:runtime:truth",
+    required: true,
+  },
+  {
+    key: "memoryTruth",
+    label: "Memory truth",
+    lane: "verify:memory:truth",
+    required: true,
+  },
+  {
+    key: "surfaceRegression",
+    label: "Surface regression",
+    lane: "verify:surface:regression",
+    required: true,
+  },
+  {
+    key: "desktopRuntime",
+    label: "Desktop credential and SSE readiness",
+    lane: "verify:desktop",
+    required: true,
+  },
+  {
+    key: "installSmoke",
+    label: "Install smoke",
+    lane: "verify:operator:proof",
+    required: true,
+    coveredCommand: "verify:install",
+  },
+  {
+    key: "extensionsPackage",
+    label: "Extensions package",
+    lane: "verify:extensions:package",
+    required: true,
+  },
+  {
+    key: "channelRuntime",
+    label: "Channel runtime delivery",
+    lane: "verify:channels:runtime",
+    required: true,
+  },
+];
 
 const args = parseArgs(process.argv.slice(2));
 const version = normalizeVersion(args.version);
@@ -85,6 +149,13 @@ const requiredLanes = await resolveRequiredLanes({ commit, repository });
 const releaseAssets = await Promise.all(listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir)));
 const proofBundle = await fileRecord(proofZipPath, path.dirname(proofZipPath));
 const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSandboxProofPath) : null;
+const exactShaStatus = summarizeRequiredLaneExactSha(requiredLanes, commit);
+const hostileSandboxWindowsClaim = buildHostileSandboxWindowsClaim({
+  commit,
+  proof: hostileSandboxProof,
+  proofPath: hostileSandboxProofPath,
+  requiredLanes,
+});
 
 const certificate = {
   schemaVersion: 1,
@@ -105,17 +176,20 @@ const certificate = {
         : null,
   },
   requiredLanes,
-  exactShaStatus: summarizeRequiredLaneExactSha(requiredLanes, commit),
+  exactShaStatus,
   releaseProofCoverage: {
     workflowFile: RELEASE_PROOF_WORKFLOW_FILE,
     coveredLanes: RELEASE_PROOF_COVERED_LANES,
     directOnlyLanes: REQUIRED_LANE_SPECS.filter((lane) => !lane.releaseProofCovered).map((lane) => lane.name),
   },
-  hostileSandboxWindowsClaim: buildHostileSandboxWindowsClaim({
+  hostileSandboxWindowsClaim,
+  parityClosure: buildParityClosureVerdict({
     commit,
-    proof: hostileSandboxProof,
-    proofPath: hostileSandboxProofPath,
     requiredLanes,
+    exactShaStatus,
+    releaseAssets,
+    proofBundle,
+    hostileSandboxWindowsClaim,
   }),
   trivyStatus: requiredLanes.find((lane) => lane.name === "security:trivy")?.status ?? "missing",
   acceptedFailures: [],
@@ -363,6 +437,56 @@ function summarizeRequiredLaneExactSha(requiredLanes, commit) {
 
 function selectProofRun(lane) {
   return lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+}
+
+function buildParityClosureVerdict({
+  commit,
+  requiredLanes,
+  exactShaStatus,
+  releaseAssets,
+  proofBundle,
+  hostileSandboxWindowsClaim,
+}) {
+  const checks = PARITY_CLOSURE_CHECKS.map((check) => {
+    const lane = requiredLanes.find((item) => item.name === check.lane);
+    const proofRun = lane ? selectProofRun(lane) : null;
+    const exactShaMatched = Boolean(commit && proofRun?.headSha === commit);
+    const status = lane?.status === "success" && exactShaMatched ? "passed" : lane ? "blocked" : "missing";
+    return {
+      ...check,
+      status,
+      laneStatus: lane?.status ?? "missing",
+      workflowRunUrl: lane?.workflowRunUrl ?? null,
+      proofWorkflowFile: lane?.proofWorkflowFile ?? lane?.workflowFile ?? null,
+      proofSource: lane?.proofSource ?? null,
+      exactShaMatched,
+      proofHeadSha: proofRun?.headSha ?? null,
+    };
+  });
+  const blockers = checks
+    .filter((check) => check.required && check.status !== "passed")
+    .map((check) => `${check.label}: ${check.laneStatus}`);
+  if (!releaseAssets.length) {
+    blockers.push("Release assets: missing");
+  }
+  if (!proofBundle?.sha256) {
+    blockers.push("Proof bundle: missing");
+  }
+  if (exactShaStatus.status !== "matched") {
+    blockers.push(`Exact-SHA proof: ${exactShaStatus.status}`);
+  }
+  if (!hostileSandboxWindowsClaim.publicClaimAllowed) {
+    blockers.push("Windows hostile-sandbox public claim: not proved");
+  }
+  return {
+    verdict: blockers.length === 0 ? "parity-ready" : "not parity-ready",
+    targetCommit: commit,
+    generatedFrom: "release-certificate",
+    checks,
+    assetCount: releaseAssets.length,
+    proofBundleSha256: proofBundle?.sha256 ?? null,
+    blockers,
+  };
 }
 
 function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLanes }) {

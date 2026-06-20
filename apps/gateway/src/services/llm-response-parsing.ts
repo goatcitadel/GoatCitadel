@@ -1,3 +1,8 @@
+import { readBoundedResponseText } from "./bounded-response-reader.js";
+
+const PROVIDER_JSON_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+const PROVIDER_JSON_RESPONSE_READ_TIMEOUT_MS = 30_000;
+
 /**
  * Safe JSON parsing for provider HTTP responses.
  *
@@ -14,7 +19,11 @@ export async function parseProviderJsonResponse<T = Record<string, unknown>>(
   action: string,
   response: Response,
 ): Promise<T> {
-  const text = await response.text();
+  const text = await readBoundedResponseText(response, {
+    maxBytes: PROVIDER_JSON_RESPONSE_MAX_BYTES,
+    timeoutMs: PROVIDER_JSON_RESPONSE_READ_TIMEOUT_MS,
+    label: action,
+  });
   try {
     return JSON.parse(text) as T;
   } catch (error) {

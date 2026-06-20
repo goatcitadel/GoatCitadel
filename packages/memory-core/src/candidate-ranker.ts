@@ -19,10 +19,10 @@ export function rankMemoryCandidates(
   const scored = candidates.map((candidate, index) => {
     const lexical = bm25[index] ?? 0;
     const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
-    const embedding = embeddingScore(options.queryEmbedding, candidate.embedding);
+    const embedding = embeddingSignal(options.queryEmbedding, candidate.embedding);
     const recency = recencyScore(now, candidate.timestamp);
     const diversity = sourceDiversityScore(candidate, sourceCounts);
-    const rankScore = lexical + semanticHint + embedding + recency + diversity;
+    const rankScore = lexical + semanticHint + embedding.score + recency + diversity;
     return {
       ...candidate,
       rankScore,
@@ -30,7 +30,11 @@ export function rankMemoryCandidates(
         lexicalScore: roundScore(lexical),
         lexicalBm25Score: roundScore(lexical),
         semanticHintScore: roundScore(semanticHint),
-        ...(embedding > 0 ? { semanticVectorScore: roundScore(embedding), embeddingScore: roundScore(embedding) } : {}),
+        embeddingStatus: embedding.status,
+        ...(embedding.dimensions ? { embeddingDimensions: embedding.dimensions } : {}),
+        ...(embedding.score > 0
+          ? { semanticVectorScore: roundScore(embedding.score), embeddingScore: roundScore(embedding.score) }
+          : {}),
         recencyScore: roundScore(recency),
         diversityScore: roundScore(diversity),
         totalScore: roundScore(rankScore),
@@ -121,15 +125,65 @@ function calculateBm25Scores(queryTerms: string[], candidates: MemoryCandidate[]
   });
 }
 
-function embeddingScore(queryEmbedding?: number[], candidateEmbedding?: number[]): number {
-  if (!isUsableEmbedding(queryEmbedding) || !isUsableEmbedding(candidateEmbedding)) {
-    return 0;
+function embeddingSignal(
+  queryEmbedding?: number[],
+  candidateEmbedding?: number[],
+): {
+  score: number;
+  status: "used" | "missing" | "invalid" | "dimension_mismatch";
+  dimensions?: { query?: number; candidate?: number };
+} {
+  const queryPresent = Array.isArray(queryEmbedding) && queryEmbedding.length > 0;
+  const candidatePresent = Array.isArray(candidateEmbedding) && candidateEmbedding.length > 0;
+  if (!queryPresent || !candidatePresent) {
+    return {
+      score: 0,
+      status: "missing",
+      dimensions: {
+        ...(queryPresent ? { query: queryEmbedding.length } : {}),
+        ...(candidatePresent ? { candidate: candidateEmbedding.length } : {}),
+      },
+    };
+  }
+  if (!isFiniteEmbedding(queryEmbedding) || !isFiniteEmbedding(candidateEmbedding)) {
+    return {
+      score: 0,
+      status: "invalid",
+      dimensions: {
+        query: queryEmbedding.length,
+        candidate: candidateEmbedding.length,
+      },
+    };
+  }
+  if (queryEmbedding.length !== candidateEmbedding.length) {
+    return {
+      score: 0,
+      status: "dimension_mismatch",
+      dimensions: {
+        query: queryEmbedding.length,
+        candidate: candidateEmbedding.length,
+      },
+    };
   }
   const similarity = cosine(queryEmbedding, candidateEmbedding);
   if (similarity < 0.65) {
-    return 0;
+    return {
+      score: 0,
+      status: "used",
+      dimensions: {
+        query: queryEmbedding.length,
+        candidate: candidateEmbedding.length,
+      },
+    };
   }
-  return Math.min(0.35, ((similarity - 0.65) / 0.35) * 0.35);
+  return {
+    score: Math.min(0.35, ((similarity - 0.65) / 0.35) * 0.35),
+    status: "used",
+    dimensions: {
+      query: queryEmbedding.length,
+      candidate: candidateEmbedding.length,
+    },
+  };
 }
 
 function recencyScore(nowMs: number, timestamp?: string): number {
@@ -172,7 +226,7 @@ function countSourceRefs(candidates: MemoryCandidate[]): Map<string, number> {
   return counts;
 }
 
-function isUsableEmbedding(value: number[] | undefined): value is number[] {
+function isFiniteEmbedding(value: number[] | undefined): value is number[] {
   return Array.isArray(value) && value.length > 0 && value.every((item) => Number.isFinite(item));
 }
 

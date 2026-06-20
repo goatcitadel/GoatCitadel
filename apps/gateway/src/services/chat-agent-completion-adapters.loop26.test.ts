@@ -8,6 +8,7 @@ import {
   parseSerializedToolCalls,
   readToolCalls,
   resolveAllowedModelToolCallName,
+  sanitizeProviderNativeReplayContent,
   toProviderToolFunctionName,
 } from "./chat-agent-completion-adapters.js";
 
@@ -244,5 +245,90 @@ describe("chat-agent-completion-adapters edge cases", () => {
       ],
       usage: { prompt_tokens: 1 },
     });
+  });
+
+  it("keeps replay matrix edge cases explicit for raw strings, thinking-only turns, and empty post-tool finals", () => {
+    expect(extractStructuredTextContent("raw assistant replay")).toBe("raw assistant replay");
+
+    const thinkingOnly = createCompletionStreamAggregate();
+    expect(
+      absorbCompletionStreamChunk(thinkingOnly, {
+        choices: [
+          {
+            delta: {
+              provider_native_content: [{ type: "thinking", thinking: "private scratch", signature: "sig-thinking" }],
+            },
+          },
+        ],
+      }),
+    ).toEqual({ delta: undefined, sawToolCall: false });
+    expect(buildCompletionFromAggregate(thinkingOnly).choices?.[0]?.message).toEqual({
+      role: "assistant",
+      content: "",
+      provider_native_content: [{ type: "thinking", thinking: "private scratch", signature: "sig-thinking" }],
+    });
+
+    const emptyPostToolFinal = createCompletionStreamAggregate();
+    absorbCompletionStreamChunk(emptyPostToolFinal, {
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-empty-final",
+                type: "function",
+                function: { name: "browser_search", arguments: '{"query":"status"}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(
+      absorbCompletionStreamChunk(emptyPostToolFinal, { choices: [{ finish_reason: "stop", delta: {} }] }),
+    ).toEqual({ delta: undefined, sawToolCall: false });
+    expect(buildCompletionFromAggregate(emptyPostToolFinal).choices?.[0]?.message).toMatchObject({
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "call-empty-final",
+          type: "function",
+          function: { name: "browser_search", arguments: '{"query":"status"}' },
+        },
+      ],
+    });
+  });
+
+  it("quarantines malformed native reasoning signatures without dropping valid replay content", () => {
+    expect(sanitizeProviderNativeReplayContent({ type: "thinking", thinking: "private", signature: 42 })).toEqual({
+      type: "provider_native_content_quarantine",
+      sourceType: "thinking",
+      reason: "malformed_reasoning_signature",
+    });
+
+    const aggregate = createCompletionStreamAggregate();
+    absorbCompletionStreamChunk(aggregate, {
+      choices: [
+        {
+          delta: {
+            provider_native_content: [
+              { type: "thinking", thinking: "private", signature: "" },
+              { type: "thinking", thinking: "private", signature: "sig-ok" },
+            ],
+          },
+        },
+      ],
+    });
+    expect(buildCompletionFromAggregate(aggregate).choices?.[0]?.message?.provider_native_content).toEqual([
+      {
+        type: "provider_native_content_quarantine",
+        sourceType: "thinking",
+        reason: "malformed_reasoning_signature",
+      },
+      { type: "thinking", thinking: "private", signature: "sig-ok" },
+    ]);
   });
 });

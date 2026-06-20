@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getOnboardingState, type OnboardingStateHost } from "./onboarding-state-service.js";
+import { getOnboardingStartupState, getOnboardingState, type OnboardingStateHost } from "./onboarding-state-service.js";
 
 describe("onboarding-state-service", () => {
   it("adds Gateway-owned first-run checklist proof anchors to onboarding state", () => {
@@ -27,24 +27,97 @@ describe("onboarding-state-service", () => {
         detail: expect.stringContaining("trusted-code execution"),
       }),
     );
+    expect(state.setupReadiness).toEqual(
+      expect.objectContaining({
+        profile: expect.objectContaining({
+          gatewayUrl: "http://127.0.0.1:8787",
+          authMode: "token",
+          deploymentPosture: "local_trusted",
+        }),
+        summary: expect.objectContaining({ unknown: 2 }),
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "desktop_credentials",
+            status: "unknown",
+            detail: expect.stringContaining("does not expose bearer tokens"),
+          }),
+          expect.objectContaining({
+            id: "release_proof",
+            status: "unknown",
+            value: "exact-SHA certificate required",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("projects remote profile setup blockers without probing heavyweight provider state", () => {
+    const oldGatewayUrl = process.env.GOATCITADEL_GATEWAY_URL;
+    const oldOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
+    process.env.GOATCITADEL_GATEWAY_URL = "https://citadel.example.test";
+    delete process.env.GOATCITADEL_ALLOWED_ORIGINS;
+
+    try {
+      const state = getOnboardingStartupState(
+        createHost({
+          deploymentProfile: "remote_hardened",
+          authMode: "token",
+          tokenConfigured: false,
+          networkAllowlist: ["*"],
+          meshMode: "tailnet",
+          tailnetEnabled: false,
+        }),
+      );
+
+      expect(state.setupReadiness).toEqual(
+        expect.objectContaining({
+          profile: expect.objectContaining({
+            gatewayUrl: "https://citadel.example.test",
+            authMode: "token",
+            deploymentPosture: "remote_hardened",
+            tailnetMode: "disabled",
+          }),
+          summary: expect.objectContaining({
+            blocked: 2,
+            needsInput: 1,
+          }),
+        }),
+      );
+    } finally {
+      restoreEnv("GOATCITADEL_GATEWAY_URL", oldGatewayUrl);
+      restoreEnv("GOATCITADEL_ALLOWED_ORIGINS", oldOrigins);
+    }
   });
 });
 
-function createHost(): OnboardingStateHost {
+function createHost(
+  options: {
+    deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
+    authMode?: "none" | "token" | "basic";
+    tokenConfigured?: boolean;
+    basicConfigured?: boolean;
+    networkAllowlist?: string[];
+    meshMode?: "lan" | "wan" | "tailnet";
+    tailnetEnabled?: boolean;
+  } = {},
+): OnboardingStateHost {
   return {
     config: {
+      rootDir: "C:\\goatcitadel",
       assistant: {
+        deploymentProfile: options.deploymentProfile ?? "local_dev",
+        dataDir: "data",
         mesh: {
           enabled: false,
-          mode: "lan",
+          mode: options.meshMode ?? "lan",
           nodeId: "node-1",
           discovery: { mdns: true, staticPeers: [] },
-          security: { requireMtls: false, tailnet: { enabled: false } },
+          security: { requireMtls: false, tailnet: { enabled: options.tailnetEnabled ?? false } },
         },
       },
       toolPolicy: {
         tools: { approvalMode: "approve_risky", profile: "standard" },
-        sandbox: { networkAllowlist: [] },
+        sandbox: { networkAllowlist: options.networkAllowlist ?? [] },
       },
       budgets: { mode: "balanced" },
     } as never,
@@ -70,12 +143,20 @@ function createHost(): OnboardingStateHost {
     onboardingMarkerPath: "onboarding.json",
     onboardingMarker: {},
     getAuthRuntimeSettings: vi.fn(() => ({
-      mode: "token",
+      mode: options.authMode ?? "token",
       allowLoopbackBypass: false,
-      tokenConfigured: true,
-      basicConfigured: false,
+      tokenConfigured: options.tokenConfigured ?? true,
+      basicConfigured: options.basicConfigured ?? false,
     })),
     publishRealtime: vi.fn(),
     updateSettings: vi.fn(),
   };
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
 }

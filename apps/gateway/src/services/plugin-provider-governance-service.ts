@@ -12,6 +12,7 @@ export interface PluginProviderRuntimeInput {
   integrityStatus?: AgenticPluginProviderRuntimeStatus["integrityStatus"];
   permissions?: string[];
   secretsRequired?: string[];
+  secretsConfigured?: string[];
   rollbackRef?: string;
   healthOk?: boolean;
   healthMessage?: string;
@@ -26,7 +27,11 @@ export function normalizePluginProviderRuntimeStatus(
   const integrityStatus = input.integrityStatus ?? "unverified";
   const runtimeAvailable = input.runtimeAvailable ?? false;
   const approved = input.approvedForCallableUse ?? false;
-  const healthOk = input.healthOk ?? false;
+  const secretsRequired = dedupeStrings(input.secretsRequired ?? []);
+  const secretsConfigured = dedupeStrings(input.secretsConfigured ?? []);
+  const missingSecrets = secretsRequired.filter((secret) => !secretsConfigured.includes(secret));
+  const secretReady = missingSecrets.length === 0;
+  const healthOk = (input.healthOk ?? false) && secretReady;
   const status = resolveRuntimeStatus({ integrityStatus, runtimeAvailable, approved, healthOk });
   const callableExposure = resolveCallableExposure({ integrityStatus, runtimeAvailable, approved, healthOk });
 
@@ -38,12 +43,18 @@ export function normalizePluginProviderRuntimeStatus(
     manifestSource: input.manifestSource?.trim() || undefined,
     integrityStatus,
     permissions: dedupeStrings(input.permissions ?? []),
-    secretsRequired: dedupeStrings(input.secretsRequired ?? []),
+    secretsRequired,
+    secretReadiness: {
+      required: secretsRequired,
+      configured: secretsConfigured,
+      missing: missingSecrets,
+    },
     rollbackRef: input.rollbackRef?.trim() || undefined,
     callableExposure,
     healthCheckedAt: input.checkedAt ?? new Date().toISOString(),
     healthMessage:
-      input.healthMessage?.trim() || defaultHealthMessage({ integrityStatus, runtimeAvailable, approved, healthOk }),
+      input.healthMessage?.trim() ||
+      defaultHealthMessage({ integrityStatus, runtimeAvailable, approved, healthOk, missingSecrets }),
   };
 }
 
@@ -127,6 +138,7 @@ function defaultHealthMessage(input: {
   runtimeAvailable: boolean;
   approved: boolean;
   healthOk: boolean;
+  missingSecrets?: string[];
 }): string | undefined {
   if (input.integrityStatus === "corrupt") {
     return "Manifest is corrupt and has been excluded from callable runtime.";
@@ -140,6 +152,9 @@ function defaultHealthMessage(input: {
   if (!input.approved) {
     return "Runtime is inspectable but not approved for callable use.";
   }
+  if (input.missingSecrets?.length) {
+    return `Missing required SecretRef values: ${input.missingSecrets.join(", ")}.`;
+  }
   if (!input.healthOk) {
     return "Runtime health probe has not passed.";
   }
@@ -151,7 +166,9 @@ function buildCapabilityReasons(input: AgenticPluginProviderRuntimeStatus): stri
     input.integrityStatus === "verified" ? undefined : `Integrity: ${input.integrityStatus}`,
     input.status === "callable" ? undefined : `Runtime status: ${input.status}`,
     input.healthMessage,
-    input.secretsRequired.length > 0 ? `Secrets required: ${input.secretsRequired.join(", ")}` : undefined,
+    input.secretReadiness?.missing.length
+      ? `Missing SecretRefs: ${input.secretReadiness.missing.join(", ")}`
+      : undefined,
   ]);
 }
 

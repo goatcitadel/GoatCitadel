@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeChannelCapabilities } from "./channel-core.js";
+import { describeChannelCapabilities, planChannelTextDelivery } from "./channel-core.js";
 
 describe("describeChannelCapabilities", () => {
   it("advertises gateway-only Discord runtime semantics when gateway mode is configured", () => {
@@ -327,4 +327,35 @@ describe("describeChannelCapabilities", () => {
     expect(capabilities.setupReady).toBe(false);
     expect(capabilities.setupDiagnostics).toEqual(["Missing one of: config.baseUrl, config.bridgeUrl."]);
   });
+
+  it("plans channel text chunks without splitting surrogate pairs or overclaiming rich formatting", () => {
+    const text = `${"a".repeat(4095)}😀${"b".repeat(4)}`;
+    const telegram = planChannelTextDelivery("telegram", text, { richFormat: "html" });
+
+    expect(telegram.chunkingMode).toBe("fallback");
+    expect(telegram.chunks).toHaveLength(2);
+    expect(telegram.chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
+    expect(endsWithDanglingHighSurrogate(telegram.chunks[0] ?? "")).toBe(false);
+    expect(startsWithDanglingLowSurrogate(telegram.chunks[1] ?? "")).toBe(false);
+    expect(telegram.richFormatPosture).toBe("plain_text_fallback");
+    expect(telegram.notes).toEqual(
+      expect.arrayContaining([
+        "Rich formatting must be flattened before chunking unless the channel adapter proves native rich chunk support.",
+      ]),
+    );
+
+    const discord = planChannelTextDelivery("discord", "x".repeat(2001));
+    expect(discord.chunks.map((chunk) => chunk.length)).toEqual([2000, 1]);
+    expect(discord.richFormatPosture).toBe("preserved");
+  });
 });
+
+function endsWithDanglingHighSurrogate(value: string): boolean {
+  const code = value.charCodeAt(value.length - 1);
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function startsWithDanglingLowSurrogate(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return code >= 0xdc00 && code <= 0xdfff;
+}

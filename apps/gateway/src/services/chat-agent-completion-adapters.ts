@@ -344,9 +344,12 @@ export function absorbCompletionStreamChunk(
     }
     if (Array.isArray(delta.provider_native_content)) {
       aggregate.providerNativeContent.push(
-        ...delta.provider_native_content.filter(
-          (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
-        ),
+        ...delta.provider_native_content
+          .filter(
+            (item): item is Record<string, unknown> =>
+              Boolean(item) && typeof item === "object" && !Array.isArray(item),
+          )
+          .map(sanitizeProviderNativeReplayContent),
       );
     }
     const deltaText = extractContentTextFromDelta(delta.content);
@@ -389,6 +392,20 @@ export function absorbCompletionStreamChunk(
 
 export function extractContentTextFromDelta(content: unknown): string {
   return extractStructuredTextContent(content);
+}
+
+export function sanitizeProviderNativeReplayContent(content: Record<string, unknown>): Record<string, unknown> {
+  const type = typeof content.type === "string" ? content.type : undefined;
+  const reasoningLike = type === "thinking" || type === "redacted_thinking" || type === "reasoning";
+  const hasSignature = Object.prototype.hasOwnProperty.call(content, "signature");
+  if (reasoningLike && hasSignature && (typeof content.signature !== "string" || !content.signature.trim())) {
+    return {
+      type: "provider_native_content_quarantine",
+      sourceType: type,
+      reason: "malformed_reasoning_signature",
+    };
+  }
+  return content;
 }
 
 export function buildCompletionFromAggregate(aggregate: CompletionStreamAggregate): ChatCompletionResponse {

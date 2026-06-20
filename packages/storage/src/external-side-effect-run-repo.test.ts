@@ -52,6 +52,8 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(created.status, "claimed_not_sent");
     assert.equal(created.resumeState, "not_resumable");
     assert.equal(created.replayAttempt, "new");
+    assert.equal(created.reversibility?.status, "replay_audit_only");
+    assert.equal(created.reversibility?.label, "Replay audit only");
     assert.deepEqual(created.requestPayload, {
       provider: "activepieces",
       payloadKeys: ["message"],
@@ -105,6 +107,7 @@ describe("ExternalSideEffectRunRepository", () => {
     );
     assert.equal(failed.status, "unknown_external_outcome");
     assert.equal(failed.resumeState, "not_resumable");
+    assert.equal(failed.reversibility?.status, "manual_reconciliation");
     assert.equal(failed.errorText, "connection reset after request started");
     assert.deepEqual(failed.responsePayload, { provider: "trello" });
 
@@ -120,6 +123,7 @@ describe("ExternalSideEffectRunRepository", () => {
     );
     assert.equal(completed.status, "completed");
     assert.equal(completed.resumeState, "completed");
+    assert.equal(completed.reversibility?.status, "irreversible");
     assert.equal(completed.envelopeId, "env-1");
     assert.equal(completed.externalReferenceId, "id:card-1");
 

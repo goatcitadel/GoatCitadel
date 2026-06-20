@@ -482,6 +482,42 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
   });
 
+  it("adds Unicode-safe chunking and rich-format fallback diagnostics when enqueueing raw channel text", () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "telegram",
+      target: "chat-1",
+      payload: {
+        message: `${"a".repeat(4095)}😀tail`,
+        richFormat: "html",
+      },
+    });
+
+    expect(queued.deliveryDiagnostics).toMatchObject({
+      chunking: {
+        mode: "unicode_safe",
+        partCount: 2,
+        maxPartUtf16Length: 4096,
+        parts: [
+          { partIndex: 0, utf16Length: 4095 },
+          { partIndex: 1, utf16Length: 6 },
+        ],
+      },
+      richFormatting: {
+        requestedFormat: "html",
+        posture: "plain_text_fallback",
+      },
+    });
+    expect(queued.deliveryDiagnostics?.richFormatting?.notes.join(" ")).toContain("Rich formatting must be flattened");
+  });
+
   it("classifies channel delivery failures for operator-facing fallback labels", () => {
     expect(classifyChannelDeliveryFailure("HTTP 429 temporarily unavailable")).toBe("degraded");
     expect(classifyChannelDeliveryFailure("permission denied")).toBe("blocked");

@@ -96,7 +96,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           label: "Plugin OK",
           status: "callable",
           callableExposure: "callable",
-          integrityStatus: "healthy",
+          integrityStatus: "verified",
           healthMessage: "Ready",
           permissions: ["files.read"],
           secretsRequired: [],
@@ -111,6 +111,11 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           healthMessage: "Hash mismatch",
           permissions: ["files.write"],
           secretsRequired: ["TOKEN"],
+          secretReadiness: {
+            required: ["TOKEN"],
+            configured: [],
+            missing: ["TOKEN"],
+          },
         },
       ],
       providers: [
@@ -119,10 +124,15 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           label: "Provider",
           status: "not_configured",
           callableExposure: "not_configured",
-          integrityStatus: "healthy",
+          integrityStatus: "verified",
           healthMessage: "Missing key",
           permissions: [],
           secretsRequired: ["API_KEY"],
+          secretReadiness: {
+            required: ["API_KEY"],
+            configured: [],
+            missing: ["API_KEY"],
+          },
         },
       ],
       channels: [
@@ -198,6 +208,8 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("Permissions: files.write.");
     expect(rendered).toContain("Rollback v1.");
     expect(rendered).toContain("Integrity is corrupt.");
+    expect(rendered).toContain("Missing SecretRefs: TOKEN.");
+    expect(rendered).toContain("Missing SecretRefs: API_KEY.");
     expect(rendered).toContain("Secrets required: TOKEN.");
     expect(rendered).toContain("No account.");
     expect(rendered).toContain("email");

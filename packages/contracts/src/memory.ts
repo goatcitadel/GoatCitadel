@@ -24,6 +24,11 @@ export interface MemoryRetrievalMatchSignals {
   semanticHintScore: number;
   semanticVectorScore?: number;
   embeddingScore?: number;
+  embeddingStatus?: "used" | "missing" | "invalid" | "dimension_mismatch";
+  embeddingDimensions?: {
+    query?: number;
+    candidate?: number;
+  };
   recencyScore: number;
   diversityScore: number;
   totalScore: number;

@@ -722,32 +722,34 @@ function recordExternalWritebackEnvelope(
   if (action.capability !== "write") {
     return result;
   }
+  const durableWriteback = recordAuditOnlyExternalSideEffectIntent({
+    evidenceEnvelopeService: host.evidenceEnvelopeService,
+    boundary: "integration_operator_action",
+    connectionId: connection.connectionId,
+    catalogId: connection.catalogId,
+    integrationKey: connection.key,
+    actionId: action.actionId,
+    actionLabel: action.label,
+    actionCapability: action.capability,
+    replayPolicy:
+      readOutputString(result.output, "replayPolicy") === "idempotent_external" ? "idempotent_external" : undefined,
+    replayOutcome: readExternalReplayOutcome(result.output),
+    resumable: readOutputBoolean(result.output, "resumable"),
+    resumeState: readExternalResumeState(result.output),
+    idempotencyKey: readOutputString(result.output, "idempotencyKey") ?? request.idempotencyKey,
+    payloadHash: readOutputString(result.output, "payloadHash"),
+    status: result.status,
+    blockedReason: result.blockedReason,
+    inputKeys: Object.keys(request.input ?? {}).sort(),
+    outputKeys: isRecord(result.output) ? Object.keys(result.output).sort() : [],
+    externalReferenceId: readExternalReferenceId(result.output),
+    message: result.message,
+    checkedAt,
+  });
   return {
     ...result,
-    durableWriteback: recordAuditOnlyExternalSideEffectIntent({
-      evidenceEnvelopeService: host.evidenceEnvelopeService,
-      boundary: "integration_operator_action",
-      connectionId: connection.connectionId,
-      catalogId: connection.catalogId,
-      integrationKey: connection.key,
-      actionId: action.actionId,
-      actionLabel: action.label,
-      actionCapability: action.capability,
-      replayPolicy:
-        readOutputString(result.output, "replayPolicy") === "idempotent_external" ? "idempotent_external" : undefined,
-      replayOutcome: readExternalReplayOutcome(result.output),
-      resumable: readOutputBoolean(result.output, "resumable"),
-      resumeState: readExternalResumeState(result.output),
-      idempotencyKey: readOutputString(result.output, "idempotencyKey") ?? request.idempotencyKey,
-      payloadHash: readOutputString(result.output, "payloadHash"),
-      status: result.status,
-      blockedReason: result.blockedReason,
-      inputKeys: Object.keys(request.input ?? {}).sort(),
-      outputKeys: isRecord(result.output) ? Object.keys(result.output).sort() : [],
-      externalReferenceId: readExternalReferenceId(result.output),
-      message: result.message,
-      checkedAt,
-    }),
+    durableWriteback,
+    reversibility: durableWriteback.reversibility,
   };
 }
 

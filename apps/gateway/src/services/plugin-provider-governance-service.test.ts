@@ -78,7 +78,35 @@ describe("plugin/provider governance", () => {
     expect(status.status).toBe("blocked");
     expect(capability.status).toBe("blocked");
     expect(capability.reasons).toContain("Runtime status: blocked");
-    expect(capability.reasons).toContain("Secrets required: API_KEY");
+    expect(capability.reasons).toContain("Missing SecretRefs: API_KEY");
+  });
+
+  it("blocks otherwise healthy runtimes when required SecretRefs are missing", () => {
+    const status = normalizePluginProviderRuntimeStatus({
+      runtimeId: "plugin-missing-secret",
+      kind: "plugin",
+      label: "Plugin Missing Secret",
+      integrityStatus: "verified",
+      runtimeAvailable: true,
+      approvedForCallableUse: true,
+      healthOk: true,
+      secretsRequired: ["OPENCLAW_TOKEN", "OPENCLAW_TOKEN"],
+      secretsConfigured: [],
+      checkedAt: "2026-05-05T00:00:00.000Z",
+    });
+
+    expect(status.status).toBe("blocked");
+    expect(status.callableExposure).toBe("blocked");
+    expect(status.secretReadiness).toEqual({
+      required: ["OPENCLAW_TOKEN"],
+      configured: [],
+      missing: ["OPENCLAW_TOKEN"],
+    });
+    expect(status.healthMessage).toContain("Missing required SecretRef");
+    expect(runtimeStatusToCapabilityAvailability(status)).toMatchObject({
+      callable: false,
+      reasons: expect.arrayContaining(["Missing SecretRefs: OPENCLAW_TOKEN"]),
+    });
   });
 
   it("allows callable exposure only after integrity, approval, availability, and health pass", () => {
@@ -90,10 +118,17 @@ describe("plugin/provider governance", () => {
       runtimeAvailable: true,
       approvedForCallableUse: true,
       healthOk: true,
+      secretsRequired: ["READY_SECRET"],
+      secretsConfigured: ["READY_SECRET"],
       checkedAt: "2026-05-05T00:00:00.000Z",
     });
 
     expect(status.status).toBe("callable");
+    expect(status.secretReadiness).toEqual({
+      required: ["READY_SECRET"],
+      configured: ["READY_SECRET"],
+      missing: [],
+    });
     expect(runtimeStatusToCapabilityAvailability(status)).toMatchObject({
       capabilityId: "provider:provider-ready",
       family: "provider",

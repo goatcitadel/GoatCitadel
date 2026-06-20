@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChannelDeliveryDiagnostics, ChannelDeliveryStatus, CommsSendResult } from "@goatcitadel/contracts";
+import { planChannelTextDelivery, type ChannelDeliveryRichFormat } from "@goatcitadel/gateway-core";
 
 export type ChannelDeliveryRuntimeStatus = "queued" | "running" | "retrying" | "sent" | "failed" | "stale";
 
@@ -153,7 +154,8 @@ export class ChannelDeliveryRuntimeService {
 
   public enqueue(input: ChannelDeliveryRuntimeEnqueueInput): ChannelDeliveryRuntimeRecord {
     const now = this.now();
-    const payloadFingerprint = fingerprintPayload(input.payload);
+    const plannedPayload = applyChannelDeliveryPlan(input.channelKey, input.payload);
+    const payloadFingerprint = fingerprintPayload(plannedPayload);
     const idempotencyKey = input.idempotencyKey?.trim() || undefined;
     if (idempotencyKey) {
       const existingId = this.idempotencyIndex.get(idempotencyKey);
@@ -169,7 +171,7 @@ export class ChannelDeliveryRuntimeService {
         if (persisted.payloadHash && persisted.payloadHash !== payloadFingerprint) {
           throw new Error(`Delivery idempotency key ${idempotencyKey} was reused with a different payload.`);
         }
-        const hydrated = this.hydratePersistedDelivery(persisted, input.payload, payloadFingerprint);
+        const hydrated = this.hydratePersistedDelivery(persisted, plannedPayload, payloadFingerprint);
         return copyRecord(hydrated.record);
       }
     }
@@ -179,7 +181,7 @@ export class ChannelDeliveryRuntimeService {
         connectionId: input.connectionId,
         channelKey: input.channelKey,
         target: input.target,
-        payload: input.payload,
+        payload: plannedPayload,
         idempotencyKey,
         maxAttempts: Math.max(1, input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
         staleAfterMs: Math.max(1, input.staleAfterMs ?? DEFAULT_STALE_AFTER_MS),
@@ -199,13 +201,13 @@ export class ChannelDeliveryRuntimeService {
       attempts: queued.attempts ?? 0,
       maxAttempts: Math.max(1, input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
       nextAttemptAt: queued.nextAttemptAt,
-      deliveryDiagnostics: queued.deliveryDiagnostics ?? readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
+      deliveryDiagnostics: queued.deliveryDiagnostics ?? readDeliveryDiagnostics(plannedPayload.deliveryDiagnostics),
       createdAt: queued.createdAt,
       updatedAt: queued.updatedAt,
     };
     this.deliveries.set(record.deliveryId, {
       record,
-      payload: input.payload,
+      payload: plannedPayload,
       payloadFingerprint,
       baseBackoffMs: Math.max(1, input.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS),
       maxBackoffMs: Math.max(1, input.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS),
@@ -449,6 +451,55 @@ function mapPersistedStatus(
     return "failed";
   }
   return deliveryStatus === "retrying" ? "retrying" : "queued";
+}
+
+function applyChannelDeliveryPlan(channelKey: string, payload: Record<string, unknown>): Record<string, unknown> {
+  const textField = readTextPayloadField(payload);
+  if (!textField) {
+    return payload;
+  }
+  const richFormat = readRichFormat(payload);
+  const plan = planChannelTextDelivery(channelKey, textField.text, { richFormat });
+  const existingDiagnostics = readDeliveryDiagnostics(payload.deliveryDiagnostics);
+  const diagnostics: ChannelDeliveryDiagnostics = {
+    ...existingDiagnostics,
+    chunking: existingDiagnostics?.chunking ?? {
+      mode: plan.chunks.length > 1 ? "unicode_safe" : "none",
+      originalCodePointLength: Array.from(textField.text).length,
+      partCount: plan.chunks.length,
+      maxPartUtf16Length: plan.maxChunkCodeUnits,
+      parts: plan.chunks.map((chunk, index) => ({
+        partIndex: index,
+        codePointLength: Array.from(chunk).length,
+        utf16Length: chunk.length,
+      })),
+    },
+    richFormatting: existingDiagnostics?.richFormatting ?? {
+      ...(richFormat ? { requestedFormat: richFormat } : {}),
+      posture: plan.richFormatPosture,
+      notes: plan.notes,
+    },
+  };
+  return {
+    ...payload,
+    deliveryChunks: plan.chunks,
+    deliveryDiagnostics: diagnostics,
+  };
+}
+
+function readTextPayloadField(payload: Record<string, unknown>): { key: string; text: string } | undefined {
+  for (const key of ["message", "text", "content", "body"] as const) {
+    const value = payload[key];
+    if (typeof value === "string") {
+      return { key, text: value };
+    }
+  }
+  return undefined;
+}
+
+function readRichFormat(payload: Record<string, unknown>): ChannelDeliveryRichFormat | undefined {
+  const raw = payload.richFormat ?? payload.format ?? payload.contentFormat;
+  return raw === "plain_text" || raw === "html" || raw === "markdown" || raw === "provider_native" ? raw : undefined;
 }
 
 function fingerprintPayload(payload: Record<string, unknown>): string {

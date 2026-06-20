@@ -24,6 +24,9 @@ jobs:
           - laneScript: verify:auth:matrix
             artifactSlug: auth-matrix
             runner: ubuntu-latest
+          - laneScript: verify:desktop
+            artifactSlug: desktop
+            runner: windows-latest
           - laneScript: verify:code-mode:sandbox
             artifactSlug: code-mode-sandbox
             runner: ubuntu-latest
@@ -41,6 +44,12 @@ jobs:
             runner: ubuntu-latest
           - laneScript: verify:agentic:proof
             artifactSlug: agentic-proof
+            runner: ubuntu-latest
+          - laneScript: verify:channels:runtime
+            artifactSlug: channels-runtime
+            runner: ubuntu-latest
+          - laneScript: verify:extensions:package
+            artifactSlug: extensions-package
             runner: ubuntu-latest
           - laneScript: verify:ui:parity
             artifactSlug: ui-parity

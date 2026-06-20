@@ -30,6 +30,17 @@ type ChannelRule = {
   requiredAnyOf: string[][];
 };
 
+export type ChannelDeliveryRichFormat = "plain_text" | "html" | "markdown" | "provider_native";
+
+export interface ChannelTextDeliveryPlan {
+  channelKey: string;
+  chunkingMode: ChannelChunkingMode;
+  maxChunkCodeUnits: number;
+  chunks: string[];
+  richFormatPosture: "preserved" | "plain_text_fallback";
+  notes: string[];
+}
+
 const DEFAULT_THREAD_CAPABILITIES: ChannelThreadCapabilities = {
   rooms: false,
   threads: false,
@@ -63,6 +74,13 @@ const CHANNEL_ACTIVITY_PHASES: ChannelActivityPhase[] = [
   "failed",
   "clear",
 ];
+
+const CHANNEL_TEXT_LIMITS: Record<string, number> = {
+  discord: 2000,
+  telegram: 4096,
+  whatsapp: 4096,
+  slack: 40000,
+};
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
   slack: {
@@ -585,6 +603,56 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     setupDiagnostics,
     setupReady: setupDiagnostics.length === 0,
   };
+}
+
+export function planChannelTextDelivery(
+  channelKey: string,
+  text: string,
+  options: { richFormat?: ChannelDeliveryRichFormat; maxChunkCodeUnits?: number } = {},
+): ChannelTextDeliveryPlan {
+  const capabilities = describeChannelCapabilities(channelKey, {});
+  const maxChunkCodeUnits = Math.max(
+    1,
+    Math.floor(options.maxChunkCodeUnits ?? CHANNEL_TEXT_LIMITS[channelKey] ?? 4000),
+  );
+  const chunks = splitUtf16SafeChunks(text, maxChunkCodeUnits);
+  const richFormat = options.richFormat ?? "plain_text";
+  const richFormatPosture = richFormat === "plain_text" || chunks.length <= 1 ? "preserved" : "plain_text_fallback";
+  const notes = [
+    chunks.length > 1
+      ? `Text exceeds ${maxChunkCodeUnits} UTF-16 code units and will be delivered in ${chunks.length} chunks.`
+      : "Text fits within a single channel delivery chunk.",
+    richFormatPosture === "plain_text_fallback"
+      ? "Rich formatting must be flattened before chunking unless the channel adapter proves native rich chunk support."
+      : "Formatting can be preserved for this planned delivery.",
+  ];
+  return {
+    channelKey,
+    chunkingMode: capabilities.chunkingMode,
+    maxChunkCodeUnits,
+    chunks,
+    richFormatPosture,
+    notes,
+  };
+}
+
+function splitUtf16SafeChunks(text: string, maxChunkCodeUnits: number): string[] {
+  if (!text) {
+    return [""];
+  }
+  const chunks: string[] = [];
+  let current = "";
+  for (const char of text) {
+    if (current.length > 0 && current.length + char.length > maxChunkCodeUnits) {
+      chunks.push(current);
+      current = "";
+    }
+    current += char;
+  }
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+  return chunks;
 }
 
 function buildActivityCapabilities(

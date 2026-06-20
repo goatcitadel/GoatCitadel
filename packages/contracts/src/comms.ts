@@ -133,6 +133,11 @@ export interface ChannelDeliveryChunkingDiagnostics {
 
 export interface ChannelDeliveryDiagnostics {
   chunking?: ChannelDeliveryChunkingDiagnostics;
+  richFormatting?: {
+    requestedFormat?: "plain_text" | "html" | "markdown" | "provider_native";
+    posture: "preserved" | "plain_text_fallback";
+    notes: string[];
+  };
 }
 
 export interface GmailSendInput {

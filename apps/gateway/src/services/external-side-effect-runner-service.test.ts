@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimIdempotentExternalSideEffect,
+  deriveExternalSideEffectReversibility,
   type ExternalSideEffectRunStore,
   markIdempotentExternalSideEffectCompleted,
   recordAuditOnlyExternalSideEffectIntent,
@@ -161,6 +162,10 @@ describe("external-side-effect-runner-service", () => {
       envelopeId: "envelope-1",
       intentId: expect.stringMatching(/^external-side-effect-/),
       idempotencyKey: expect.any(String),
+      reversibility: expect.objectContaining({
+        status: "irreversible",
+        label: "Cannot undo",
+      }),
     });
     expect(createEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -172,11 +177,50 @@ describe("external-side-effect-runner-service", () => {
           externalSideEffectIdempotencyKey: result.idempotencyKey,
           replayPolicy: "audit_only",
           resumable: false,
+          reversibilityStatus: "irreversible",
           catalogId: "automation.activepieces",
           actionId: "run_flow",
         }),
       }),
     );
+  });
+
+  it("separates replay-audit, manual-reconciliation, and cannot-undo external action posture", () => {
+    expect(
+      deriveExternalSideEffectReversibility({
+        replayPolicy: "idempotent_external",
+        resumable: true,
+        resumeState: "manual_retry_after_recorded_failure",
+        status: "failed_before_boundary",
+        intentId: "intent-1",
+      }),
+    ).toMatchObject({
+      status: "replay_audit_only",
+      label: "Replay audit only",
+      evidenceRef: "intent-1",
+    });
+    expect(
+      deriveExternalSideEffectReversibility({
+        replayPolicy: "idempotent_external",
+        resumable: false,
+        resumeState: "manual_review_unknown_external_outcome",
+        status: "unknown_external_outcome",
+      }),
+    ).toMatchObject({
+      status: "manual_reconciliation",
+      label: "Manual reconciliation",
+    });
+    expect(
+      deriveExternalSideEffectReversibility({
+        replayPolicy: "audit_only",
+        resumable: false,
+        resumeState: "completed",
+        status: "completed",
+      }),
+    ).toMatchObject({
+      status: "irreversible",
+      label: "Cannot undo",
+    });
   });
 
   it("keeps intent posture explicit when evidence envelopes are unavailable", () => {

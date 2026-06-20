@@ -47,6 +47,28 @@ export interface ProviderModelPreviewResult {
   warning?: string;
 }
 
+export type UniversalModelPickerAvailability = "ready" | "suggested" | "blocked" | "unknown";
+
+export interface UniversalModelPickerOption {
+  id: string;
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  label: string;
+  searchText: string;
+  availability: UniversalModelPickerAvailability;
+  availabilityReason: string;
+  endpointIdentity: string;
+  credentialStatus: "configured" | "local_endpoint" | "missing" | "unknown";
+  contextWindowTokens?: number;
+  contextLimitSource?: ProviderModelCatalogOption["contextLimitSource"];
+  fallbackReason?: string;
+  policyReason?: string;
+  probeState: ProviderModelProbeState;
+  probeSource?: ProviderModelProbeSource;
+  probeCheckedAt?: string;
+}
+
 export interface ProviderModelCacheEntry {
   items: string[];
   expiresAt: number;
@@ -75,6 +97,19 @@ export function dedupeProviderModels(values: Array<string | undefined | null>): 
   return out;
 }
 
+export function buildUniversalModelPickerOptions(input: {
+  providers: ProviderModelCatalogOption[];
+  query?: string;
+  activeProviderId?: string;
+  activeModel?: string;
+}): UniversalModelPickerOption[] {
+  const query = normalizeSearchText(input.query ?? "");
+  return input.providers
+    .flatMap((provider) => buildUniversalModelPickerOptionsForProvider(provider, input))
+    .filter((option) => !query || option.searchText.includes(query))
+    .sort((left, right) => scoreUniversalModelOption(right, input) - scoreUniversalModelOption(left, input));
+}
+
 function getValidProviderModelCacheEntry(
   cache: Map<string, ProviderModelCacheEntry>,
   providerId: string,
@@ -93,6 +128,148 @@ function getValidProviderModelCacheEntry(
     return undefined;
   }
   return cached;
+}
+
+function buildUniversalModelPickerOptionsForProvider(
+  provider: ProviderModelCatalogOption,
+  input: { activeProviderId?: string; activeModel?: string },
+): UniversalModelPickerOption[] {
+  const models = provider.models.length ? provider.models : dedupeProviderModels([provider.defaultModel]);
+  return models.map((model) => {
+    const credentialStatus = resolveCredentialStatus(provider);
+    const availability = resolveModelAvailability(provider, credentialStatus);
+    const fallbackReason = resolveModelFallbackReason(provider);
+    const policyReason = credentialStatus === "missing" ? "Provider credential is missing." : undefined;
+    const availabilityReason = resolveModelAvailabilityReason({
+      provider,
+      credentialStatus,
+      availability,
+      fallbackReason,
+      policyReason,
+    });
+    const active = provider.providerId === input.activeProviderId && model === input.activeModel;
+    const label = active ? `${provider.label} / ${model} (active)` : `${provider.label} / ${model}`;
+    return {
+      id: `${provider.providerId}:${model}`,
+      providerId: provider.providerId,
+      providerLabel: provider.label,
+      model,
+      label,
+      searchText: normalizeSearchText(
+        [
+          provider.providerId,
+          provider.label,
+          model,
+          provider.apiStyle,
+          provider.resolvedApiStyle,
+          provider.sanitizedEndpointIdentity,
+          provider.contextLimitSource,
+          availability,
+          fallbackReason,
+          policyReason,
+        ].join(" "),
+      ),
+      availability,
+      availabilityReason,
+      endpointIdentity: provider.sanitizedEndpointIdentity,
+      credentialStatus,
+      contextWindowTokens: provider.contextWindowTokens,
+      contextLimitSource: provider.contextLimitSource,
+      fallbackReason,
+      policyReason,
+      probeState: provider.modelProbeState ?? "not_checked",
+      probeSource: provider.modelProbeSource,
+      probeCheckedAt: provider.modelProbeCheckedAt,
+    } satisfies UniversalModelPickerOption;
+  });
+}
+
+function resolveCredentialStatus(provider: ProviderModelCatalogOption): UniversalModelPickerOption["credentialStatus"] {
+  if (provider.hasApiKey) {
+    return "configured";
+  }
+  if (provider.localCostPosture === "zero_cost_local_runtime") {
+    return "local_endpoint";
+  }
+  return provider.hasApiKey === false ? "missing" : "unknown";
+}
+
+function resolveModelAvailability(
+  provider: ProviderModelCatalogOption,
+  credentialStatus: UniversalModelPickerOption["credentialStatus"],
+): UniversalModelPickerAvailability {
+  if (credentialStatus === "missing" || provider.modelProbeState === "error") {
+    return "blocked";
+  }
+  if (provider.modelProbeState === "fallback" || provider.modelProbeSource === "template_fallback") {
+    return "suggested";
+  }
+  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
+    return "ready";
+  }
+  return "unknown";
+}
+
+function resolveModelFallbackReason(provider: ProviderModelCatalogOption): string | undefined {
+  if (provider.modelProbeSource === "error_fallback") {
+    return provider.modelProbeWarning
+      ? `Live discovery failed: ${provider.modelProbeWarning}`
+      : "Live discovery failed.";
+  }
+  if (provider.modelProbeState === "fallback" || provider.modelProbeSource === "template_fallback") {
+    return "Using template fallback models; availability is not account-verified.";
+  }
+  if (provider.modelProbeState === "empty") {
+    return "Live discovery returned no models.";
+  }
+  return undefined;
+}
+
+function resolveModelAvailabilityReason(input: {
+  provider: ProviderModelCatalogOption;
+  credentialStatus: UniversalModelPickerOption["credentialStatus"];
+  availability: UniversalModelPickerAvailability;
+  fallbackReason?: string;
+  policyReason?: string;
+}): string {
+  if (input.policyReason) {
+    return input.policyReason;
+  }
+  if (input.fallbackReason) {
+    return input.fallbackReason;
+  }
+  if (input.credentialStatus === "local_endpoint") {
+    return "Local endpoint model; verify the runtime is reachable before send.";
+  }
+  if (input.availability === "ready") {
+    return "Live model discovery verified this model for the configured provider.";
+  }
+  return "Model has not been live-checked yet.";
+}
+
+function scoreUniversalModelOption(
+  option: UniversalModelPickerOption,
+  input: { activeProviderId?: string; activeModel?: string },
+): number {
+  let score = 0;
+  if (option.providerId === input.activeProviderId && option.model === input.activeModel) {
+    score += 100;
+  }
+  if (option.availability === "ready") {
+    score += 20;
+  } else if (option.availability === "suggested") {
+    score += 10;
+  } else if (option.availability === "blocked") {
+    score -= 20;
+  }
+  if (option.credentialStatus === "configured" || option.credentialStatus === "local_endpoint") {
+    score += 5;
+  }
+  return score;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function buildProviderCatalog(

@@ -120,9 +120,42 @@ test("release certificate treats verify:fast as direct-only proof", () => {
 test("release certificate records additive exact-SHA summary fields", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   assert.match(writer, /targetCommit:\s*commit/);
-  assert.match(writer, /exactShaStatus:\s*summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
+  assert.match(writer, /const exactShaStatus = summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
+  assert.match(writer, /exactShaStatus,/);
   assert.match(writer, /function summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
   assert.match(writer, /status:\s*mismatched\.length === 0 && missingProof\.length === 0 \? "matched" : "incomplete"/);
+});
+
+test("release certificate records parity closure gates for top 1.0 parity gaps", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
+  assert.ok(coveredBlock, "release proof covered lane list should be present");
+  for (const lane of [
+    "verify:desktop",
+    "verify:channels:runtime",
+    "verify:extensions:package",
+    "verify:operator:proof",
+    "verify:durable:recovery",
+    "verify:runtime:truth",
+    "verify:memory:truth",
+    "verify:surface:regression",
+  ]) {
+    assert.match(writer, new RegExp(`lane: "${lane}"`));
+  }
+  assert.match(coveredBlock[1], /"verify:desktop"/);
+  assert.match(coveredBlock[1], /"verify:channels:runtime"/);
+  assert.match(coveredBlock[1], /"verify:extensions:package"/);
+  assert.match(writer, /parityClosure:\s*buildParityClosureVerdict/);
+  assert.match(writer, /coveredCommand:\s*"verify:install"/);
+  assert.match(writer, /verdict:\s*blockers\.length === 0 \? "parity-ready" : "not parity-ready"/);
+
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /laneScript:\s*verify:desktop/);
+  assert.match(workflow, /laneScript:\s*verify:channels:runtime/);
+  assert.match(workflow, /laneScript:\s*verify:extensions:package/);
 });
 
 test("release certificate requires hostile sandbox proof from the exact-SHA release lane", () => {

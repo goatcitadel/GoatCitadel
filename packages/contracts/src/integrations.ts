@@ -124,6 +124,20 @@ export interface IntegrationActionInvokeInput {
 }
 
 export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed";
+export type OperatorActionReversibilityStatus =
+  | "reversible"
+  | "replay_audit_only"
+  | "manual_reconciliation"
+  | "irreversible";
+
+export interface OperatorActionReversibility {
+  status: OperatorActionReversibilityStatus;
+  label: string;
+  detail: string;
+  inverseOperation?: string;
+  evidenceRef?: string;
+}
+
 export type IntegrationExternalWritebackEnvelopeStatus = "recorded" | "unavailable" | "failed";
 export type IntegrationExternalWritebackReplayPolicy = "audit_only" | "idempotent_external";
 export type IntegrationExternalWritebackReplayOutcome =
@@ -171,6 +185,7 @@ export interface ExternalSideEffectRunRecord {
   externalReferenceId?: string;
   envelopeId?: string;
   errorText?: string;
+  reversibility?: OperatorActionReversibility;
   attemptCount: number;
   externalCallStartedAt?: string;
   completedAt?: string;
@@ -223,6 +238,7 @@ export interface IntegrationExternalWritebackEnvelope {
   signatureStatus?: EvidenceEnvelopeSignatureStatus;
   recordedAt?: string;
   reason?: string;
+  reversibility?: OperatorActionReversibility;
 }
 
 export interface IntegrationActionInvokeResult {
@@ -234,6 +250,7 @@ export interface IntegrationActionInvokeResult {
   blockedReason?: string;
   output?: Record<string, unknown>;
   durableWriteback?: IntegrationExternalWritebackEnvelope;
+  reversibility?: OperatorActionReversibility;
   checkedAt: string;
 }
 
