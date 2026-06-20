@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
 
@@ -84,6 +84,32 @@ function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+interface ResolvedAgentPreset {
+  providerId?: string;
+  model?: string;
+  promptFraming?: string;
+}
+
+// resolveAgentPreset maps agent_ref onto the GoatCitadel agent's preset so the
+// turn runs AS that agent — its preferred provider/model and persona framing.
+// Returns null when agent_ref does not resolve: an advisory turn must not fail
+// just because the agent isn't registered, so it falls back to the gateway default.
+function resolveAgentPreset(fastify: FastifyInstance, agentRef: string): ResolvedAgentPreset | null {
+  try {
+    const preset = fastify.services.agents.getAgent(agentRef).presetDefaults;
+    if (!preset) {
+      return null;
+    }
+    return {
+      providerId: preset.preferredProviderId,
+      model: preset.preferredModel,
+      promptFraming: preset.promptFraming,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const turnsRoutes: FastifyPluginAsync = async (fastify) => {
   // POST /api/v1/turns:complete — run one MatterGoat agent turn.
   //
@@ -99,15 +125,28 @@ export const turnsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const body = parsed.data;
 
+    // Run the turn AS the referenced agent: its preferred provider/model and its
+    // persona framing. An unknown agent_ref falls back to the gateway default.
+    const preset = resolveAgentPreset(fastify, body.agent_ref);
+
     // Map the turn messages to a provider completion. author_ref is accepted for
     // attribution but not forwarded to the model (speaker context already rides
     // in the message text); it is available for future provenance/audit use.
-    const messages: ChatCompletionMessage[] = body.messages.map((m) => ({
-      role: m.role,
-      content: m.message,
-    }));
+    const messages: ChatCompletionMessage[] = [];
+    if (preset?.promptFraming) {
+      messages.push({ role: "system", content: preset.promptFraming });
+    }
+    for (const m of body.messages) {
+      messages.push({ role: m.role, content: m.message });
+    }
 
     const completionRequest: ChatCompletionRequest = { messages };
+    if (preset?.providerId) {
+      completionRequest.providerId = preset.providerId;
+    }
+    if (preset?.model) {
+      completionRequest.model = preset.model;
+    }
 
     try {
       const result: ChatCompletionResponse = await fastify.services.llm.createChatCompletion(completionRequest);
