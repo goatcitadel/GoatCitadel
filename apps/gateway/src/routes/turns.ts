@@ -111,13 +111,13 @@ function resolveAgentPreset(fastify: FastifyInstance, agentRef: string): Resolve
 }
 
 export const turnsRoutes: FastifyPluginAsync = async (fastify) => {
-  // POST /api/v1/turns:complete — run one MatterGoat agent turn.
+  // POST /api/v1/turns/complete — run one MatterGoat agent turn.
   //
   // Phase 1 is a STATELESS, advisory completion: the provided messages are the
   // full allowed context (GoatCitadel fetches nothing extra), no tools run, and
   // no side effects occur. Operator bearer auth and automatic Idempotency-Key
   // dedup are applied by the gateway to all /api/v1 routes.
-  fastify.post("/api/v1/turns:complete", async (request, reply) => {
+  fastify.post("/api/v1/turns/complete", async (request, reply) => {
     const parsed = turnCompleteSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

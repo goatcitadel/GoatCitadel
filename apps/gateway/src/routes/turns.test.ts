@@ -63,7 +63,7 @@ describe("turns routes", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/turns:complete",
+      url: "/api/v1/turns/complete",
       payload: validBody,
     });
 
@@ -106,7 +106,7 @@ describe("turns routes", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/turns:complete",
+      url: "/api/v1/turns/complete",
       payload: validBody,
     });
 
@@ -139,7 +139,7 @@ describe("turns routes", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/turns:complete",
+      url: "/api/v1/turns/complete",
       payload: validBody,
     });
 
@@ -165,7 +165,7 @@ describe("turns routes", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/turns:complete",
+      url: "/api/v1/turns/complete",
       payload: validBody,
     });
 
@@ -179,7 +179,7 @@ describe("turns routes", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/turns:complete",
+      url: "/api/v1/turns/complete",
       payload: { session_id: "x" },
     });
 
