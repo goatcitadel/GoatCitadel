@@ -364,10 +364,10 @@ describe("shared loop 24 component tails", () => {
       inputs[1]!.props.onChange({ target: { value: "42" } });
       inputs[2]!.props.onChange({ target: { checked: true } });
     });
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ payload: "plain" }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ count: undefined }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ count: 42 }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenNthCalledWith(1, { payload: "plain", count: 2, enabled: false });
+    expect(onChange).toHaveBeenNthCalledWith(2, { payload: circular, count: 42, enabled: false });
+    expect(onChange).toHaveBeenNthCalledWith(3, { payload: circular, count: 2, enabled: true });
   });
 
   it("renders compact execution plan delegation notes without raw lineage ids", () => {

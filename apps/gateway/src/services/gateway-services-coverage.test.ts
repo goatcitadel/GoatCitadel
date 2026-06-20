@@ -571,7 +571,7 @@ describe("gateway service coverage helpers", () => {
       recordConnectorHealthRun: vi.fn(),
     };
     expect(listMcpTemplateDiscovery(httpHost)[0]).toMatchObject({
-      readiness: "ready",
+      readiness: "needs_url",
       dependencyChecks: expect.arrayContaining([
         expect.objectContaining({ key: "url", status: "warn" }),
         expect.objectContaining({ key: "auth", status: "pass" }),

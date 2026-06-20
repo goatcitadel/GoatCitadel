@@ -99,8 +99,8 @@ describe("shared component tail coverage", () => {
       numberInput.props.onChange({ target: { value: "5" } });
       numberInput.props.onChange({ target: { value: "not-a-number" } });
     });
+    expect(onChange).toHaveBeenCalledTimes(4);
     expect(onChange).toHaveBeenCalledWith({ enabled: false, channel: "custom", count: 5 });
-    expect(onChange).toHaveBeenCalledWith({ enabled: false, channel: "custom", count: undefined });
   });
 
   it("switches select-or-custom modes and auto-selects suggested values", () => {

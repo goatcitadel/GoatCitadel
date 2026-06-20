@@ -60,38 +60,42 @@ async function flushAsync() {
   });
 }
 
+function defaultDiagnosticsState(items: DevDiagnosticsEvent[] = []) {
+  return {
+    enabled: true,
+    verbose: true,
+    items,
+    currentRoute: "/chat",
+    activeChatSessionId: "session-1",
+    activeCorrelationId: "corr-1",
+    currentEffectsMode: "auto",
+    gatewayReachable: true,
+    sseState: "open",
+    startupSummary: {
+      startedAt: "2026-01-01T12:00:00.000Z",
+      finishedAt: "2026-01-01T12:00:01.000Z",
+      durationMs: 1000,
+      outcome: "ready",
+      phases: [
+        {
+          key: "auth",
+          label: "Access check",
+          status: "success",
+          startedAt: "2026-01-01T12:00:00.000Z",
+          finishedAt: "2026-01-01T12:00:01.000Z",
+          durationMs: 1000,
+          detail: "Authenticated",
+        },
+      ],
+    },
+  };
+}
+
 describe("DevDiagnosticsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeMocks.isDevDiagnosticsEnabled.mockReturnValue(true);
-    storeMocks.useDevDiagnosticsState.mockReturnValue({
-      enabled: true,
-      verbose: true,
-      items: [],
-      currentRoute: "/chat",
-      activeChatSessionId: "session-1",
-      activeCorrelationId: "corr-1",
-      currentEffectsMode: "auto",
-      gatewayReachable: true,
-      sseState: "open",
-      startupSummary: {
-        startedAt: "2026-01-01T12:00:00.000Z",
-        finishedAt: "2026-01-01T12:00:01.000Z",
-        durationMs: 1000,
-        outcome: "ready",
-        phases: [
-          {
-            key: "auth",
-            label: "Access check",
-            status: "success",
-            startedAt: "2026-01-01T12:00:00.000Z",
-            finishedAt: "2026-01-01T12:00:01.000Z",
-            durationMs: 1000,
-            detail: "Authenticated",
-          },
-        ],
-      },
-    });
+    storeMocks.useDevDiagnosticsState.mockReturnValue(defaultDiagnosticsState());
     storeMocks.listClientDiagnostics.mockReturnValue([
       diagnostic({
         id: "client-1",
@@ -144,6 +148,20 @@ describe("DevDiagnosticsPanel", () => {
   });
 
   it("loads gateway diagnostics, merges local items, filters, selects, copies, clears, and closes", async () => {
+    storeMocks.useDevDiagnosticsState.mockReturnValue(
+      defaultDiagnosticsState([
+        diagnostic({
+          id: "client-1",
+          timestamp: "2026-01-01T12:02:00.000Z",
+          source: "client",
+          category: "refresh",
+          level: "debug",
+          event: "refresh.completed",
+          message: "Refresh completed",
+          correlationId: "corr-2",
+        }),
+      ]),
+    );
     let streamCallback!: (event: DevDiagnosticsEvent) => void;
     const closeStream = vi.fn();
     apiMocks.connectDevDiagnosticsStream.mockImplementation((callback) => {
