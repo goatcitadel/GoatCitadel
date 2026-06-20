@@ -3,9 +3,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { turnsRoutes } from "./turns.js";
 
-function buildApp(createChatCompletion: ReturnType<typeof vi.fn>): FastifyInstance {
+function buildApp(
+  createChatCompletion: ReturnType<typeof vi.fn>,
+  getAgent?: ReturnType<typeof vi.fn>,
+): FastifyInstance {
   const app = Fastify();
-  app.decorate("services", { llm: { createChatCompletion } } as never);
+  app.decorate("services", {
+    llm: { createChatCompletion },
+    agents: {
+      getAgent:
+        getAgent ??
+        (() => {
+          throw new Error("agent not found");
+        }),
+    },
+  } as never);
   return app;
 }
 
@@ -73,6 +85,73 @@ describe("turns routes", () => {
       { role: "system", content: "system prompt" },
       { role: "user", content: "alice: why is this failing?" },
     ]);
+  });
+
+  it("runs as the referenced agent's provider/model and prepends its framing", async () => {
+    const createChatCompletion = vi.fn(async () => ({
+      choices: [{ index: 0, message: { content: "ok" } }],
+      usage: {},
+      routing: { effectiveProviderId: "anthropic", effectiveModel: "claude-x" },
+    }));
+    const getAgent = vi.fn(() => ({
+      agentId: "agent_1",
+      presetDefaults: {
+        preferredProviderId: "anthropic",
+        preferredModel: "claude-x",
+        promptFraming: "You are the Researcher.",
+      },
+    }));
+    app = buildApp(createChatCompletion, getAgent);
+    await app.register(turnsRoutes);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/turns:complete",
+      payload: validBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(getAgent).toHaveBeenCalledWith("agent_1");
+
+    const arg = createChatCompletion.mock.calls[0][0] as {
+      providerId?: string;
+      model?: string;
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(arg.providerId).toBe("anthropic");
+    expect(arg.model).toBe("claude-x");
+    // The agent's framing is prepended as a leading system message.
+    expect(arg.messages[0]).toEqual({ role: "system", content: "You are the Researcher." });
+    expect(arg.messages[1]).toEqual({ role: "system", content: "system prompt" });
+  });
+
+  it("falls back to the default when agent_ref does not resolve", async () => {
+    const createChatCompletion = vi.fn(async () => ({
+      choices: [{ index: 0, message: { content: "ok" } }],
+      usage: {},
+      routing: {},
+    }));
+    const getAgent = vi.fn(() => {
+      throw new Error("agent not found");
+    });
+    app = buildApp(createChatCompletion, getAgent);
+    await app.register(turnsRoutes);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/turns:complete",
+      payload: validBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const arg = createChatCompletion.mock.calls[0][0] as {
+      providerId?: string;
+      model?: string;
+      messages: unknown[];
+    };
+    expect(arg.providerId).toBeUndefined();
+    expect(arg.model).toBeUndefined();
+    expect(arg.messages).toHaveLength(2); // no framing prepended
   });
 
   it("detects an approval gate from the model output", async () => {
