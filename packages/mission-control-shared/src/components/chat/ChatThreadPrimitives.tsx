@@ -417,10 +417,12 @@ function buildDelegationRunChips(delegationRun: ChatDelegationRunView): string[]
 function ChatDelegationSubagentRows({
   steps,
   formatStepLabel,
+  onOpenStepDetails,
   maxVisible = 4,
 }: {
   steps: ChatDelegationStepView[];
   formatStepLabel: (step: ChatDelegationStepView) => string;
+  onOpenStepDetails?: (turnId: string) => void;
   maxVisible?: number;
 }) {
   if (steps.length === 0) {
@@ -447,6 +449,19 @@ function ChatDelegationSubagentRows({
               <span className="mc-next-thread-subagent-chip">Durable {formatCompactEvidenceId(step.durableRunId)}</span>
             ) : null}
             {duration ? <span className="mc-next-thread-subagent-time">{duration}</span> : null}
+            {step.childTurnId && onOpenStepDetails ? (
+              <button
+                type="button"
+                className="mc-next-thread-inline-button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenStepDetails(step.childTurnId!);
+                }}
+              >
+                Open messages
+              </button>
+            ) : null}
           </div>
         );
       })}
@@ -458,9 +473,11 @@ function ChatDelegationSubagentRows({
 function ChatDelegationStepEvidence({
   step,
   formatStepLabel,
+  onOpenStepDetails,
 }: {
   step: ChatDelegationStepView;
   formatStepLabel: (step: ChatDelegationStepView) => string;
+  onOpenStepDetails?: (turnId: string) => void;
 }) {
   const duration = formatStepDuration(step);
   const evidenceItems = [
@@ -493,6 +510,19 @@ function ChatDelegationStepEvidence({
       {step.summary ? <p>{step.summary}</p> : null}
       {step.failureGuidance ? <p>{step.failureGuidance}</p> : null}
       {step.error ? <p>{step.error}</p> : null}
+      {step.childTurnId && onOpenStepDetails ? (
+        <button
+          type="button"
+          className="mc-next-thread-inline-button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenStepDetails(step.childTurnId!);
+          }}
+        >
+          Open child messages
+        </button>
+      ) : null}
       {step.output ? (
         <details className="mc-next-thread-step-output-details">
           <summary>Show subagent output</summary>
@@ -555,7 +585,11 @@ export function ChatThreadDelegationSummary({
                 </button>
               ) : null}
             </div>
-            <ChatDelegationSubagentRows steps={delegationRun.steps} formatStepLabel={formatStepLabel} />
+            <ChatDelegationSubagentRows
+              steps={delegationRun.steps}
+              formatStepLabel={formatStepLabel}
+              onOpenStepDetails={onOpenRunDetails}
+            />
           </summary>
           <div className="mc-next-thread-bubble assistant">
             <p className="mc-next-thread-meta">
@@ -564,7 +598,12 @@ export function ChatThreadDelegationSummary({
             <p>{delegationRun.objective}</p>
             <ol className="mc-next-thread-step-list">
               {delegationRun.steps.map((step) => (
-                <ChatDelegationStepEvidence key={step.stepId} step={step} formatStepLabel={formatStepLabel} />
+                <ChatDelegationStepEvidence
+                  key={step.stepId}
+                  step={step}
+                  formatStepLabel={formatStepLabel}
+                  onOpenStepDetails={onOpenRunDetails}
+                />
               ))}
             </ol>
             {delegationRun.stitchedOutput ? <p>{describeDelegationStitchedOutput(delegationRun.status)}</p> : null}
@@ -595,7 +634,12 @@ export function ChatThreadDelegationSummary({
         </p>
         <ol className="mc-next-thread-step-list">
           {delegationRun.steps.map((step) => (
-            <ChatDelegationStepEvidence key={step.stepId} step={step} formatStepLabel={formatStepLabel} />
+            <ChatDelegationStepEvidence
+              key={step.stepId}
+              step={step}
+              formatStepLabel={formatStepLabel}
+              onOpenStepDetails={onOpenRunDetails}
+            />
           ))}
         </ol>
         {delegationRun.stitchedOutput ? (

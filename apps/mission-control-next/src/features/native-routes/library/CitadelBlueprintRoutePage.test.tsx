@@ -2,7 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CitadelBlueprintRoutePage } from "./CitadelBlueprintRoutePage";
+import { buildBlueprintProofItems, CitadelBlueprintRoutePage } from "./CitadelBlueprintRoutePage";
 import type { NativeRoutePagesProps } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
@@ -73,6 +73,8 @@ describe("CitadelBlueprintRoutePage", () => {
     });
     expect(apiMocks.exportCitadelBlueprint).toHaveBeenCalledWith("default");
     expect(treeString(renderer!)).toContain("goatcitadel.blueprint.v1");
+    expect(treeString(renderer!)).toContain("Secret posture");
+    expect(treeString(renderer!)).toContain("secret-free contract");
   });
 
   it("validates then imports a pasted Blueprint", async () => {
@@ -106,5 +108,15 @@ describe("CitadelBlueprintRoutePage", () => {
       renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
     });
     expect(treeString(renderer!)).toContain("nothing to export");
+  });
+
+  it("builds export proof rows from the staged blueprint artifact", () => {
+    expect(buildBlueprintProofItems('{"schemaVersion":"goatcitadel.blueprint.v1"}', "default")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "Workspace", meta: "default" }),
+        expect.objectContaining({ title: "Schema", meta: "goatcitadel.blueprint.v1" }),
+        expect.objectContaining({ title: "Secret posture", meta: "secret-free contract" }),
+      ]),
+    );
   });
 });

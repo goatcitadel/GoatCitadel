@@ -46,6 +46,8 @@ import type {
   IntegrationPluginRecord,
   IntegrationFormSchema,
   IntegrationOperatorAction,
+  McpElicitationRequest,
+  McpElicitationResponseAction,
   McpRemotePreviewResponse,
   McpServerModeManifestResponse,
   McpServerRecord,
@@ -110,6 +112,7 @@ import {
   fetchLlmProviderAdvice,
   fetchSlackOAuthStatus,
   fetchLlamaCppModels,
+  fetchMcpElicitations,
   fetchMcpRemotePreview,
   fetchMcpServerModeManifest,
   fetchMcpServers,
@@ -147,6 +150,7 @@ import {
   refreshNpuRuntime,
   restartDaemon,
   resolveGatewayInstallToken,
+  respondMcpElicitation,
   restoreWorkspace,
   revokeDeviceAccessGrant,
   revokeAutonomousActivationGrant,
@@ -6238,23 +6242,26 @@ function ChannelsSection(_props: SettingsSectionProps) {
 
 function McpSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [servers, templates, remotePreview, serverMode] = await Promise.all([
+    const [servers, templates, remotePreview, serverMode, pendingElicitations] = await Promise.all([
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("MCP templates", fetchMcpTemplates(), { items: [] }),
       nativeLoad("MCP remote preview", fetchMcpRemotePreview(), createEmptyMcpRemotePreview()),
       nativeLoad("MCP server mode", fetchMcpServerModeManifest(), createEmptyMcpServerModeManifest()),
+      nativeLoad("MCP elicitations", fetchMcpElicitations({ status: "pending" }), { items: [] }),
     ]);
     return {
-      issues: nativeLoadIssues([servers, templates, remotePreview, serverMode]),
+      issues: nativeLoadIssues([servers, templates, remotePreview, serverMode, pendingElicitations]),
       servers: servers.data.items,
       templates: templates.data.items,
       remotePreview: remotePreview.data,
       serverMode: serverMode.data,
+      pendingElicitations: pendingElicitations.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedServerId, setSelectedServerId] = useState("");
+  const [elicitationDrafts, setElicitationDrafts] = useState<Record<string, string>>({});
   const [createForm, setCreateForm] = useState({
     label: "",
     transport: "stdio",
@@ -6292,6 +6299,20 @@ function McpSection(_props: SettingsSectionProps) {
       current && data.servers.some((item) => item.serverId === current) ? current : data.servers[0]?.serverId || "",
     );
   }, [data?.servers]);
+
+  useEffect(() => {
+    if (!data?.pendingElicitations.length) {
+      setElicitationDrafts({});
+      return;
+    }
+    setElicitationDrafts((current) => {
+      const next: Record<string, string> = {};
+      for (const item of data.pendingElicitations) {
+        next[item.elicitationId] = current[item.elicitationId] ?? "{}";
+      }
+      return next;
+    });
+  }, [data?.pendingElicitations]);
 
   useEffect(() => {
     if (!selectedServer) {
@@ -6374,6 +6395,32 @@ function McpSection(_props: SettingsSectionProps) {
     }
   };
 
+  const handleElicitationResponse = async (
+    request: McpElicitationRequest,
+    action: McpElicitationResponseAction,
+  ) => {
+    try {
+      let content: Record<string, unknown> | undefined;
+      if (action === "accept") {
+        content = parseMcpElicitationDraft(elicitationDrafts[request.elicitationId] ?? "{}");
+      }
+      const updated = await respondMcpElicitation(request.elicitationId, {
+        action,
+        content,
+        owner: { surface: "mcp" },
+      });
+      setNotice({
+        tone: "success",
+        message: `MCP elicitation ${updated.status}. Evidence ${
+          updated.response?.evidence.auditEventId ?? updated.evidence.statusHistory.at(-1)?.auditEventId ?? "recorded"
+        }.`,
+      });
+      await reload();
+    } catch (responseError) {
+      setNotice({ tone: "error", message: getErrorMessage(responseError) });
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
@@ -6391,6 +6438,7 @@ function McpSection(_props: SettingsSectionProps) {
               stats={[
                 { label: "Servers", value: String(data.servers.length) },
                 { label: "Templates", value: String(data.templates.length) },
+                { label: "Pending prompts", value: String(data.pendingElicitations.length) },
               ]}
             >
               <NativeSelectableList
@@ -6496,6 +6544,103 @@ function McpSection(_props: SettingsSectionProps) {
                   }))}
                 />
               ) : null}
+            </NativeCard>
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="MCP elicitation inbox"
+              subtitle="Pending operator prompts requested through the Gateway-owned MCP elicitation route."
+              scrollBody
+              bodyMaxHeight="min(44vh, 26rem)"
+            >
+              <NativeMetricGrid
+                items={[
+                  {
+                    label: "Pending",
+                    value: String(data.pendingElicitations.length),
+                    meta: "operator responses",
+                  },
+                  {
+                    label: "Boundary",
+                    value: "Gateway",
+                    meta: "policy and audit enforced",
+                  },
+                ]}
+              />
+              {data.pendingElicitations.length ? (
+                <div className="mc-next-settings-stack">
+                  {data.pendingElicitations.map((item) => (
+                    <div className="mc-next-settings-panel-body" key={item.elicitationId}>
+                      <NativeMetricGrid
+                        items={[
+                          { label: "Status", value: item.status, meta: item.elicitationId },
+                          { label: "Source", value: item.source.sourceType, meta: item.source.serverId ?? "gateway" },
+                          {
+                            label: "Prompt",
+                            value: `${item.prompt.charLength}/${item.prompt.maxChars}`,
+                            meta: item.prompt.truncated ? "truncated" : "bounded",
+                          },
+                          {
+                            label: "Schema",
+                            value: `${item.requestedSchema.byteLength}/${item.requestedSchema.maxBytes}`,
+                            meta:
+                              item.requestedSchema.redactedSecretCount > 0
+                                ? `${item.requestedSchema.redactedSecretCount} redacted`
+                                : "bounded",
+                          },
+                        ]}
+                      />
+                      <SettingsActionList
+                        items={[
+                          {
+                            label: item.prompt.text,
+                            description: formatMcpElicitationMeta(item),
+                            meta: item.audit.auditEventIds.at(-1) ?? item.createdAt,
+                          },
+                        ]}
+                      />
+                      <SettingsCodeBlock label="Requested response schema">
+                        {formatJson(item.requestedSchema.value)}
+                      </SettingsCodeBlock>
+                      <SettingsField label="Accept response JSON">
+                        <textarea
+                          className="mc-next-settings-textarea"
+                          rows={4}
+                          value={elicitationDrafts[item.elicitationId] ?? "{}"}
+                          onChange={(event) =>
+                            setElicitationDrafts((current) => ({
+                              ...current,
+                              [item.elicitationId]: event.target.value,
+                            }))
+                          }
+                        />
+                      </SettingsField>
+                      <SettingsButtonRow>
+                        <NativeButton variant="default" onClick={() => void handleElicitationResponse(item, "accept")}>
+                          <CheckCircle2 size={16} />
+                          Accept
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void handleElicitationResponse(item, "decline")}
+                        >
+                          <Square size={16} />
+                          Decline
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void handleElicitationResponse(item, "cancel")}
+                        >
+                          <RotateCcw size={16} />
+                          Cancel
+                        </NativeButton>
+                      </SettingsButtonRow>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <SettingsEmptyState label="No pending MCP elicitations." />
+              )}
             </NativeCard>
             <NativeCard
               density="compact"
@@ -9807,6 +9952,36 @@ export function formatMcpRemotePreviewItem(item: McpRemotePreviewResponse["items
   const governance = item.governance[0] ?? "No governance note recorded.";
   const authReadiness = item.authReadiness?.replaceAll("_", " ") ?? "unknown";
   return `${item.posture.replaceAll("_", " ")} · auth ${authReadiness} · ${item.operatorNextAction} · ${blocker} · ${governance}`;
+}
+
+export function formatMcpElicitationMeta(item: McpElicitationRequest): string {
+  const source = [
+    item.source.serverId ? `server ${item.source.serverId}` : item.source.sourceType.replaceAll("_", " "),
+    item.source.toolName ? `tool ${item.source.toolName}` : undefined,
+    item.source.transport ? `transport ${item.source.transport}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const owner = [
+    item.owner.workspaceId ? `workspace ${item.owner.workspaceId}` : undefined,
+    item.owner.sessionId ? `session ${item.owner.sessionId}` : undefined,
+    item.owner.runId ? `run ${item.owner.runId}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const redaction =
+    item.prompt.redactedSecretCount + item.requestedSchema.redactedSecretCount > 0
+      ? ` · ${item.prompt.redactedSecretCount + item.requestedSchema.redactedSecretCount} redacted`
+      : "";
+  return `${source || "gateway"} · ${owner || "operator"} · updated ${formatDateTime(item.updatedAt)}${redaction}`;
+}
+
+export function parseMcpElicitationDraft(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value || "{}") as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("MCP elicitation accept response must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export function readDraftString(record: Record<string, unknown>, key: string): string | undefined {

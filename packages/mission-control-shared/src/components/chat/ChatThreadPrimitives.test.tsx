@@ -367,6 +367,8 @@ describe("ChatThreadPrimitives", () => {
     expect(renderedText(renderer)).toContain("child-session-2");
     expect(renderedText(renderer)).toContain("Child turn");
     expect(renderedText(renderer)).toContain("child-turn-2");
+    expect(renderedText(renderer)).toContain("Open messages");
+    expect(renderedText(renderer)).toContain("Open child messages");
     expect(renderedText(renderer)).toContain("Duration");
     expect(renderedText(renderer)).toContain("1.5 s");
     expect(renderedText(renderer)).toContain("Partial stitched output is available");
@@ -377,6 +379,13 @@ describe("ChatThreadPrimitives", () => {
         .props.onClick({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
     });
     expect(onOpenRunDetails).toHaveBeenCalledWith("turn-1");
+
+    TestRenderer.act(() => {
+      renderer.root
+        .find((node) => node.type === "button" && node.children.join("") === "Open messages")
+        .props.onClick({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    });
+    expect(onOpenRunDetails).toHaveBeenCalledWith("child-turn-2");
   });
 
   it("keeps selected, context, streaming, and latest-window turns visible while emitting gaps", () => {

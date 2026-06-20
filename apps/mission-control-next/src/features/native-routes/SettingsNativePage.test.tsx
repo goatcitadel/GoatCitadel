@@ -747,6 +747,159 @@ const mocks = vi.hoisted(() => ({
       catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
     },
   })),
+  fetchMcpElicitations: vi.fn(async () => ({
+    items: [
+      {
+        elicitationId: "mcp-elicit-1",
+        method: "elicitation/create",
+        status: "pending",
+        prompt: {
+          text: "Choose the repository to inspect.",
+          charLength: 33,
+          maxChars: 4000,
+          truncated: false,
+          redactedSecretCount: 0,
+        },
+        requestedSchema: {
+          value: {
+            type: "object",
+            properties: { repository: { type: "string" } },
+            required: ["repository"],
+          },
+          byteLength: 92,
+          maxBytes: 8192,
+          truncated: false,
+          redactedSecretCount: 0,
+        },
+        protocol: {
+          method: "elicitation/create",
+          message: "Choose the repository to inspect.",
+          requestedSchema: { type: "object" },
+        },
+        owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+        source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
+        policy: {
+          redactionMode: "basic",
+          sensitiveInformationAllowed: false,
+          requiresOperatorResponse: true,
+          transportBoundary: "gateway_local_mcp",
+          remoteTransportSupport: "unchanged",
+          limits: {
+            promptMaxChars: 4000,
+            schemaMaxBytes: 8192,
+            responseContentMaxBytes: 16384,
+            listMaxItems: 200,
+          },
+          governance: ["MCP elicitation is recorded at the Gateway route boundary before operator response."],
+        },
+        audit: {
+          auditEventIds: ["gateway:mcp:elicitation:mcp-elicit-1:created"],
+          createdBy: "operator",
+          createdAt: "2026-05-30T00:00:00.000Z",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+          reasonCodes: ["mcp_elicitation_created"],
+        },
+        evidence: {
+          owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+          source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
+          status: "pending",
+          createdAt: "2026-05-30T00:00:00.000Z",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+          statusHistory: [
+            {
+              status: "pending",
+              reason: "MCP elicitation request recorded by the Gateway route before operator response.",
+              recordedAt: "2026-05-30T00:00:00.000Z",
+              auditEventId: "gateway:mcp:elicitation:mcp-elicit-1:created",
+            },
+          ],
+          prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
+          requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
+        },
+        createdAt: "2026-05-30T00:00:00.000Z",
+        updatedAt: "2026-05-30T00:00:00.000Z",
+      },
+    ],
+  })),
+  respondMcpElicitation: vi.fn(async (elicitationId: string, input: any) => ({
+    elicitationId,
+    method: "elicitation/create",
+    status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
+    prompt: {
+      text: "Choose the repository to inspect.",
+      charLength: 33,
+      maxChars: 4000,
+      truncated: false,
+      redactedSecretCount: 0,
+    },
+    requestedSchema: {
+      value: { type: "object" },
+      byteLength: 92,
+      maxBytes: 8192,
+      truncated: false,
+      redactedSecretCount: 0,
+    },
+    protocol: {
+      method: "elicitation/create",
+      message: "Choose the repository to inspect.",
+      requestedSchema: { type: "object" },
+    },
+    owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+    source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
+    policy: {
+      redactionMode: "basic",
+      sensitiveInformationAllowed: false,
+      requiresOperatorResponse: true,
+      transportBoundary: "gateway_local_mcp",
+      remoteTransportSupport: "unchanged",
+      limits: {
+        promptMaxChars: 4000,
+        schemaMaxBytes: 8192,
+        responseContentMaxBytes: 16384,
+        listMaxItems: 200,
+      },
+      governance: [],
+    },
+    audit: {
+      auditEventIds: [`gateway:mcp:elicitation:${elicitationId}:${input.action}`],
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:01:00.000Z",
+      reasonCodes: ["mcp_elicitation_responded"],
+    },
+    evidence: {
+      owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+      source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
+      status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:01:00.000Z",
+      statusHistory: [],
+      prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
+      requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
+    },
+    response: {
+      action: input.action,
+      content: input.content
+        ? { value: input.content, byteLength: 30, maxBytes: 16384, truncated: false, redactedSecretCount: 0 }
+        : undefined,
+      owner: input.owner,
+      respondedAt: "2026-05-30T00:01:00.000Z",
+      audit: {
+        auditEventIds: [`gateway:mcp:elicitation:${elicitationId}:${input.action}`],
+        createdAt: "2026-05-30T00:00:00.000Z",
+        updatedAt: "2026-05-30T00:01:00.000Z",
+        reasonCodes: ["mcp_elicitation_responded"],
+      },
+      evidence: {
+        status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
+        previousStatus: "pending",
+        reason: `MCP elicitation ${input.action} response recorded by Gateway route storage.`,
+        recordedAt: "2026-05-30T00:01:00.000Z",
+        auditEventId: `gateway:mcp:elicitation:${elicitationId}:${input.action}`,
+      },
+    },
+    createdAt: "2026-05-30T00:00:00.000Z",
+    updatedAt: "2026-05-30T00:01:00.000Z",
+  })),
   fetchMcpTools: vi.fn(async () => ({ items: [] })),
   createMcpServer: vi.fn(async () => ({
     serverId: "srv-stdio",
@@ -880,6 +1033,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchMcpServers: mocks.fetchMcpServers,
     fetchMcpRemotePreview: mocks.fetchMcpRemotePreview,
     fetchMcpServerModeManifest: mocks.fetchMcpServerModeManifest,
+    fetchMcpElicitations: mocks.fetchMcpElicitations,
     fetchMcpTemplates: mocks.fetchMcpTemplates,
     fetchMcpTools: mocks.fetchMcpTools,
     createMcpServer: mocks.createMcpServer,
@@ -889,6 +1043,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     runMcpServerHealthCheck: mocks.runMcpServerHealthCheck,
     deleteMcpServer: mocks.deleteMcpServer,
     startMcpOAuth: mocks.startMcpOAuth,
+    respondMcpElicitation: mocks.respondMcpElicitation,
     startOpenAICodexOAuthDeviceFlow: mocks.startOpenAICodexOAuthDeviceFlow,
     pollOpenAICodexOAuthDeviceFlow: mocks.pollOpenAICodexOAuthDeviceFlow,
     deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
@@ -4368,7 +4523,28 @@ describe("SettingsNativePage MCP", () => {
     expect(text).toContain("Server mode preview");
     expect(text).toContain("Read-only, closed-world descriptors can re-enter Gateway policy");
     expect(text).toContain("goatcitadel.fs.read");
+    expect(text).toContain("MCP elicitation inbox");
+    expect(text).toContain("Choose the repository to inspect.");
+    expect(text).toContain("repo.inspect");
+    expect(text).toContain("Pending prompts");
+    expect(findButton(renderer!.root, "Accept")).toBeDefined();
+    expect(findButton(renderer!.root, "Decline")).toBeDefined();
+    expect(findButton(renderer!.root, "Cancel")).toBeDefined();
     expect(findButton(renderer!.root, "Connect").props.disabled).toBe(false);
     expect(findButton(renderer!.root, "Health check").props.disabled).toBe(false);
+
+    const responseInput = renderer!.root.findByType("textarea");
+    await act(async () => {
+      responseInput.props.onChange({ target: { value: '{ "repository": "GoatCitadel" }' } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Accept").props.onClick();
+    });
+
+    expect(mocks.respondMcpElicitation).toHaveBeenCalledWith("mcp-elicit-1", {
+      action: "accept",
+      content: { repository: "GoatCitadel" },
+      owner: { surface: "mcp" },
+    });
   });
 });

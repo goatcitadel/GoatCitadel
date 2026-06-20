@@ -48,6 +48,7 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
   const [exportState, setExportState] = useState<ExportState>({ loading: true, error: null, staged: false, json: null });
   const [importText, setImportText] = useState("");
   const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
+  const exportProofItems = buildBlueprintProofItems(exportState.json, activeWorkspaceId);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,16 +112,20 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
       title="Blueprint"
       description={`Export ${activeWorkspaceName} as a portable, secret-free Blueprint, or import one. Imports are validated and secret-scanned before they apply.`}
       loading={exportState.loading}
-      error={exportState.error}    >
+      error={exportState.error}
+    >
       <NativeGrid>
         <NativeCard
           title="Export"
           subtitle="The current Citadel as a Blueprint. Secrets are never included."
         >
           {exportState.staged && exportState.json ? (
-            <pre className="mc-next-blueprint-json" aria-label="Exported Blueprint">
-              {exportState.json}
-            </pre>
+            <>
+              <NativeList items={exportProofItems} emptyLabel="No export proof available." density="compact" />
+              <pre className="mc-next-blueprint-json" aria-label="Exported Blueprint">
+                {exportState.json}
+              </pre>
+            </>
           ) : (
             <EmptyState size="compact" title={`${activeWorkspaceName} isn't a Citadel yet — nothing to export.`} />
           )}
@@ -189,4 +194,40 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
       </NativeGrid>
     </NativePageFrame>
   );
+}
+
+export function buildBlueprintProofItems(
+  exportedJson: string | null,
+  workspaceId: string,
+): Array<{ title: string; meta?: string; body?: string }> {
+  if (!exportedJson) {
+    return [];
+  }
+  const parsed = parseBlueprint(exportedJson);
+  const blueprint =
+    "blueprint" in parsed && parsed.blueprint && typeof parsed.blueprint === "object"
+      ? (parsed.blueprint as Record<string, unknown>)
+      : {};
+  return [
+    {
+      title: "Workspace",
+      meta: workspaceId,
+      body: "Export is generated through the Gateway-backed Citadel blueprint API.",
+    },
+    {
+      title: "Schema",
+      meta: typeof blueprint.schemaVersion === "string" ? blueprint.schemaVersion : "unknown",
+      body: "Portable Blueprint schema used for validation before import.",
+    },
+    {
+      title: "Content",
+      meta: `${exportedJson.length} chars`,
+      body: "Read-only artifact preview; importing requires explicit validation and operator action.",
+    },
+    {
+      title: "Secret posture",
+      meta: "secret-free contract",
+      body: "Blueprint export omits credentials and import validation runs a secret scan.",
+    },
+  ];
 }

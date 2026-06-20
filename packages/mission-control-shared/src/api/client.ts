@@ -846,11 +846,13 @@ export {
 export type { BulkTaskActionInput, EmitTaskDistressBody } from "./tasks.js";
 export {
   callMcpServerModePreview,
+  createMcpElicitation,
   createMcpServer,
   completeMcpOAuth,
   connectMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  fetchMcpElicitations,
   fetchMcpRemotePreview,
   fetchMcpServerModeManifest,
   fetchMcpServers,
@@ -858,6 +860,7 @@ export {
   fetchMcpTemplates,
   fetchMcpTools,
   invokeMcpTool,
+  respondMcpElicitation,
   runMcpServerHealthCheck,
   startMcpOAuth,
   updateMcpServer,

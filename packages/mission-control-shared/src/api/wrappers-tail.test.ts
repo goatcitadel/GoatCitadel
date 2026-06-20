@@ -187,6 +187,20 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(mcp.fetchMcpRemotePreview(), "/api/v1/mcp/remote-preview");
     await expectCall(mcp.fetchMcpServerModeManifest(), "/api/v1/mcp/server-mode/manifest");
     await expectCall(
+      mcp.fetchMcpElicitations({ status: "pending", serverId: "server/1" }),
+      "/api/v1/mcp/elicitations?status=pending&serverId=server%2F1",
+    );
+    await expectCall(
+      mcp.createMcpElicitation({ prompt: "Pick a repo", requestedSchema: { type: "object" } }),
+      "/api/v1/mcp/elicitations",
+      { method: "POST" },
+    );
+    await expectCall(
+      mcp.respondMcpElicitation("elicit/1", { action: "accept", content: { repo: "GoatCitadel" } }),
+      "/api/v1/mcp/elicitations/elicit%2F1/respond",
+      { method: "POST" },
+    );
+    await expectCall(
       mcp.callMcpServerModePreview({
         descriptorName: "goatcitadel.fs.read",
         args: {},

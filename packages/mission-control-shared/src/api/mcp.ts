@@ -1,6 +1,9 @@
 import type {
   ConnectorDiagnosticReport,
   McpInvokeResponse,
+  McpElicitationRequest,
+  McpElicitationResponseAction,
+  McpElicitationStatus,
   McpOAuthStartResponse,
   McpRemotePreviewResponse,
   McpServerModeCallRequest,
@@ -31,6 +34,49 @@ export async function fetchMcpRemotePreview(): Promise<McpRemotePreviewResponse>
 
 export async function fetchMcpServerModeManifest(): Promise<McpServerModeManifestResponse> {
   return request<McpServerModeManifestResponse>("/api/v1/mcp/server-mode/manifest");
+}
+
+export async function fetchMcpElicitations(input: {
+  status?: McpElicitationStatus;
+  serverId?: string;
+  sessionId?: string;
+} = {}): Promise<{ items: McpElicitationRequest[] }> {
+  const params = new URLSearchParams();
+  if (input.status) params.set("status", input.status);
+  if (input.serverId) params.set("serverId", input.serverId);
+  if (input.sessionId) params.set("sessionId", input.sessionId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{ items: McpElicitationRequest[] }>(`/api/v1/mcp/elicitations${suffix}`);
+}
+
+export async function createMcpElicitation(input: {
+  prompt: string;
+  requestedSchema: Record<string, unknown>;
+  owner?: McpElicitationRequest["owner"];
+  source?: Partial<McpElicitationRequest["source"]>;
+  serverId?: string;
+  toolName?: string;
+  jsonRpcRequestId?: string | number;
+  transport?: McpElicitationRequest["source"]["transport"];
+}): Promise<McpElicitationRequest> {
+  return request<McpElicitationRequest>("/api/v1/mcp/elicitations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function respondMcpElicitation(
+  elicitationId: string,
+  input: {
+    action: McpElicitationResponseAction;
+    content?: Record<string, unknown>;
+    owner?: McpElicitationRequest["owner"];
+  },
+): Promise<McpElicitationRequest> {
+  return request<McpElicitationRequest>(`/api/v1/mcp/elicitations/${encodeURIComponent(elicitationId)}/respond`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function callMcpServerModePreview(input: McpServerModeCallRequest): Promise<McpServerModeCallResponse> {

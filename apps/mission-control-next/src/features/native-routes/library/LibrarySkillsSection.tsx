@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, Plus, RefreshCw, Save, Sparkles, Workflow } from "lucide-react";
 import type { CapabilityProposalDetailRecord, SkillEvaluationRunRecord, SkillListItem } from "@goatcitadel/contracts";
 import {
@@ -62,6 +62,8 @@ import {
 
 export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [skillQuery, setSkillQuery] = useState("");
+  const [skillPostureFilter, setSkillPostureFilter] = useState<SkillPostureFilter>("all");
   const [notice, setNotice] = useState<Notice | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [skills, sources, history, policy] = await Promise.all([
@@ -83,15 +85,22 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
     };
   }, []);
 
+  const filteredSkills = useMemo(
+    () => filterSkillList(data?.skills ?? [], { query: skillQuery, posture: skillPostureFilter }),
+    [data?.skills, skillPostureFilter, skillQuery],
+  );
+  const reviewNeededCount = data?.skills.filter((item) => item.reviewWarning || !item.callable).length ?? 0;
+  const lifecycleManagedCount = data?.skills.filter((item) => item.lifecycleState).length ?? 0;
+
   useEffect(() => {
-    if (!data?.skills.length) {
+    if (!filteredSkills.length) {
       setSelectedSkillId("");
       return;
     }
     setSelectedSkillId((current) =>
-      data.skills.some((item) => item.skillId === current) ? current : (data.skills[0]?.skillId ?? ""),
+      filteredSkills.some((item) => item.skillId === current) ? current : (filteredSkills[0]?.skillId ?? ""),
     );
-  }, [data]);
+  }, [filteredSkills]);
 
   const selectedSkill = data?.skills.find((item) => item.skillId === selectedSkillId) ?? null;
 
@@ -129,10 +138,35 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
           stats={[
             { label: "Installed", value: String(data?.skills.length ?? 0) },
             { label: "Callable", value: String(data?.skills.filter((item) => item.callable).length ?? 0) },
+            { label: "Filtered", value: String(filteredSkills.length) },
           ]}
         >
+          <LibraryFieldGrid>
+            <LibraryField label="Search skills">
+              <input
+                className="mc-next-settings-input"
+                value={skillQuery}
+                onChange={(event) => setSkillQuery(event.target.value)}
+                placeholder="Name, tool, tag, or source"
+              />
+            </LibraryField>
+            <LibraryField label="Posture">
+              <select
+                className="mc-next-settings-input"
+                value={skillPostureFilter}
+                onChange={(event) => setSkillPostureFilter(event.target.value as SkillPostureFilter)}
+              >
+                <option value="all">All</option>
+                <option value="callable">Callable</option>
+                <option value="review">Needs review</option>
+                <option value="enabled">Enabled</option>
+                <option value="sleep">Sleep</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </LibraryField>
+          </LibraryFieldGrid>
           <LibrarySelectableList
-            items={(data?.skills ?? []).map((item) => ({
+            items={filteredSkills.map((item) => ({
               id: item.skillId,
               title: item.name,
               meta: item.state,
@@ -264,6 +298,16 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
                 },
                 { label: "Import history", value: String(data?.history.length ?? 0), meta: "Recent install attempts" },
                 {
+                  label: "Needs review",
+                  value: String(reviewNeededCount),
+                  meta: "Not callable or warning attached",
+                },
+                {
+                  label: "Lifecycle",
+                  value: String(lifecycleManagedCount),
+                  meta: "Governed lifecycle records",
+                },
+                {
                   label: "Auto threshold",
                   value: String(data?.policy?.guardedAutoThreshold ?? "n/a"),
                   meta: data?.policy?.requireFirstUseConfirmation
@@ -306,6 +350,48 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
       </div>
     </LibrarySectionShell>
   );
+}
+
+export type SkillPostureFilter = "all" | "callable" | "review" | SkillListItem["state"];
+
+export function filterSkillList(
+  skills: SkillListItem[],
+  input: { query?: string; posture?: SkillPostureFilter },
+): SkillListItem[] {
+  const query = input.query?.trim().toLowerCase() ?? "";
+  const posture = input.posture ?? "all";
+  return skills.filter((skill) => {
+    if (posture === "callable" && !skill.callable) {
+      return false;
+    }
+    if (posture === "review" && skill.callable && !skill.reviewWarning) {
+      return false;
+    }
+    if ((posture === "enabled" || posture === "sleep" || posture === "disabled") && skill.state !== posture) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      skill.name,
+      skill.source,
+      skill.dir,
+      skill.state,
+      skill.lifecycleState,
+      skill.trustLabel,
+      skill.reviewWarning,
+      skill.capabilityCategory,
+      ...(skill.tags ?? []),
+      ...skill.declaredTools,
+      ...skill.requires,
+      ...skill.keywords,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
 }
 
 function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; onNotice: (notice: Notice) => void }) {

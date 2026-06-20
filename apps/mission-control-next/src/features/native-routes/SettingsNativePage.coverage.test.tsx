@@ -50,6 +50,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationFormSchema: fn(),
     fetchIntegrationPlugins: fn(),
     fetchLlamaCppModels: fn(),
+    fetchMcpElicitations: fn({ items: [] }),
     fetchMcpRemotePreview: fn(),
     fetchMcpServerModeManifest: fn(),
     fetchMcpServers: fn(),
@@ -88,6 +89,7 @@ const settingsMocks = vi.hoisted(() => {
     revokeDeviceAccessGrant: fn(),
     revokeToolGrant: fn(),
     runMcpServerHealthCheck: fn(),
+    respondMcpElicitation: fn(),
     saveProviderSecret: fn(),
     selectVoiceRuntimeModel: fn(),
     setDefaultPersonality: fn(),
@@ -178,6 +180,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationFormSchema: settingsMocks.fetchIntegrationFormSchema,
   fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
   fetchLlamaCppModels: settingsMocks.fetchLlamaCppModels,
+  fetchMcpElicitations: settingsMocks.fetchMcpElicitations,
   fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
   fetchMcpServerModeManifest: settingsMocks.fetchMcpServerModeManifest,
   fetchMcpServers: settingsMocks.fetchMcpServers,
@@ -213,6 +216,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   revokeDeviceAccessGrant: settingsMocks.revokeDeviceAccessGrant,
   revokeToolGrant: settingsMocks.revokeToolGrant,
   runMcpServerHealthCheck: settingsMocks.runMcpServerHealthCheck,
+  respondMcpElicitation: settingsMocks.respondMcpElicitation,
   saveProviderSecret: settingsMocks.saveProviderSecret,
   selectVoiceRuntimeModel: settingsMocks.selectVoiceRuntimeModel,
   setDefaultPersonality: settingsMocks.setDefaultPersonality,
@@ -550,6 +554,7 @@ function setupResponses() {
     ],
   });
   settingsMocks.fetchMcpTemplates.mockResolvedValue({ items: [] });
+  settingsMocks.fetchMcpElicitations.mockResolvedValue({ items: [] });
   settingsMocks.fetchMcpRemotePreview.mockResolvedValue({
     generatedAt: "2026-05-30T00:00:00.000Z",
     readOnly: true,
