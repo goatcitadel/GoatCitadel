@@ -29,6 +29,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { capabilitiesRoutes } from "./routes/capabilities.js";
 import { filesRoutes } from "./routes/files.js";
 import { llmRoutes } from "./routes/llm.js";
+import { turnsRoutes } from "./routes/turns.js";
 import { localAiRoutes } from "./routes/local-ai.js";
 import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
@@ -342,6 +343,7 @@ export async function buildApp() {
   await app.register(capabilitiesRoutes);
   await app.register(filesRoutes);
   await app.register(llmRoutes);
+  await app.register(turnsRoutes);
   await app.register(localAiRoutes);
   await app.register(llamaCppRoutes);
   await app.register(integrationsRoutes);
