@@ -1072,6 +1072,51 @@ describe("ThreadedTimeline", () => {
     expect(container?.textContent).not.toContain("Jump to latest");
   });
 
+  it("labels the jump affordance with pending blockers", async () => {
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline
+          props={
+            buildProps({
+              followOutput: false,
+              pendingApproval: {
+                approvalId: "approval-1",
+                sessionId: "session-1",
+                turnId: "turn-1",
+                toolName: "fs.write",
+                kind: "tool",
+                reason: "Needs approval",
+                riskLevel: "medium",
+              },
+            }) as any
+          }
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(container?.textContent).toContain("Jump to approval");
+
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline
+          props={
+            buildProps({
+              followOutput: false,
+              pendingUserInput: {
+                promptId: "prompt-1",
+                sessionId: "session-1",
+                turnId: "turn-1",
+                message: "Pick a target.",
+              },
+            }) as any
+          }
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(container?.textContent).toContain("Jump to answer prompt");
+  });
+
   it("covers repaired output, requested routing, fallback reasons, and empty delegation summaries", () => {
     const props = buildProps();
     props.thread.turns[0].trace.completion = { repaired: true };

@@ -9,11 +9,11 @@
     "test": "echo 'no tests configured'"
   },
   "dependencies": {
-    "express": "^4.21.0"
+    "express": "4.21.0"
   },
   "devDependencies": {
-    "typescript": "^6.0.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "6.0.0",
+    "@types/express": "5.0.0",
+    "@types/node": "22.0.0"
   }
 }

@@ -28,6 +28,40 @@ describe("capabilities routes", () => {
         snapshotId,
         items: [],
       })),
+      getCompactToolDirectorySnapshot: vi.fn((ttlMs?: number) => ({
+        snapshotId: "compact-tools-abc123",
+        version: "compact-tool-directory.v1",
+        source: "callable_catalog",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        expiresAt: "2026-04-10T00:05:00.000Z",
+        ttlMs: ttlMs ?? 300_000,
+        hash: "abc123",
+        toolCount: 1,
+        tools: [
+          {
+            capabilityId: "tool:tool.safe_read",
+            toolName: "tool.safe_read",
+            title: "tool.safe_read",
+            summary: "Read files safely.",
+            riskLabel: "safe",
+            schemaRef: {
+              refId: "tool-schema:schema123",
+              toolName: "tool.safe_read",
+              schemaHash: "schema123",
+              schemaUri: "/api/v1/capabilities/tool-directory/schemas/tool.safe_read",
+            },
+            readOnly: true,
+            deterministic: true,
+            codeModeAllowed: true,
+          },
+        ],
+        omitted: { inspectableOnlyCount: 2, reason: "callable_only" },
+      })),
+      getToolSchema: vi.fn((toolName: string) => ({
+        toolName,
+        schemaHash: "schema123",
+        schema: { type: "object", properties: { path: { type: "string" } } },
+      })),
       getCapabilityCandidateDetail: vi.fn((candidateId: string) => ({
         candidateId,
         versions: [],
@@ -227,6 +261,44 @@ describe("capabilities routes", () => {
     expect(response.json()).toMatchObject({
       scope: "callable",
       items: [{ capabilityId: "cap-callable" }],
+    });
+  });
+
+  it("returns compact tool-directory snapshots and fetches full schemas by ref", async () => {
+    const service = await registerCapabilitiesService();
+
+    const compact = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/tool-directory/compact?ttlMs=120000",
+    });
+    const schema = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/tool-directory/schemas/tool.safe_read",
+    });
+
+    expect(compact.statusCode).toBe(200);
+    expect(service.getCompactToolDirectorySnapshot).toHaveBeenCalledWith(120_000);
+    expect(compact.json()).toMatchObject({
+      version: "compact-tool-directory.v1",
+      source: "callable_catalog",
+      tools: [
+        {
+          toolName: "tool.safe_read",
+          schemaRef: {
+            schemaUri: "/api/v1/capabilities/tool-directory/schemas/tool.safe_read",
+          },
+        },
+      ],
+      omitted: {
+        reason: "callable_only",
+      },
+    });
+    expect(JSON.stringify(compact.json())).not.toContain("properties");
+    expect(schema.statusCode).toBe(200);
+    expect(service.getToolSchema).toHaveBeenCalledWith("tool.safe_read");
+    expect(schema.json()).toMatchObject({
+      toolName: "tool.safe_read",
+      schema: { properties: { path: { type: "string" } } },
     });
   });
 

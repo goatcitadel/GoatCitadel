@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
-import type { ChannelDeliveryDiagnostics, ChannelDeliveryStatus, CommsSendResult } from "@goatcitadel/contracts";
-import { planChannelTextDelivery, type ChannelDeliveryRichFormat } from "@goatcitadel/gateway-core";
+import type {
+  ChannelAttachmentInput,
+  ChannelDeliveryDiagnostics,
+  ChannelDeliveryStatus,
+  CommsSendResult,
+} from "@goatcitadel/contracts";
+import {
+  planChannelRichMessageDelivery,
+  planChannelTextDelivery,
+  type ChannelDeliveryRichFormat,
+  type ChannelRichMessageDeliveryPlan,
+} from "@goatcitadel/gateway-core";
 
 export type ChannelDeliveryRuntimeStatus = "queued" | "running" | "retrying" | "sent" | "failed" | "stale";
 
@@ -455,34 +465,54 @@ function mapPersistedStatus(
 
 function applyChannelDeliveryPlan(channelKey: string, payload: Record<string, unknown>): Record<string, unknown> {
   const textField = readTextPayloadField(payload);
-  if (!textField) {
+  const attachments = readPayloadAttachments(payload.attachments);
+  const attachmentIds = readPayloadAttachmentIds(payload.attachmentIds);
+  const richFormat = readRichFormat(payload);
+  const richPlan = planChannelRichMessageDelivery(channelKey, {
+    text: textField?.text,
+    richFormat,
+    attachments,
+    attachmentIds,
+  });
+  if (richPlan) {
+    assertRichMessagePlanSendable(richPlan);
+  }
+  if (!textField && !richPlan) {
     return payload;
   }
-  const richFormat = readRichFormat(payload);
-  const plan = planChannelTextDelivery(channelKey, textField.text, { richFormat });
+  const text = textField?.text ?? "";
+  const plan = textField ? planChannelTextDelivery(channelKey, text, { richFormat }) : undefined;
+  const plannedText = plan && textField ? textField.text : "";
   const existingDiagnostics = readDeliveryDiagnostics(payload.deliveryDiagnostics);
   const diagnostics: ChannelDeliveryDiagnostics = {
     ...existingDiagnostics,
-    chunking: existingDiagnostics?.chunking ?? {
-      mode: plan.chunks.length > 1 ? "unicode_safe" : "none",
-      originalCodePointLength: Array.from(textField.text).length,
-      partCount: plan.chunks.length,
-      maxPartUtf16Length: plan.maxChunkCodeUnits,
-      parts: plan.chunks.map((chunk, index) => ({
-        partIndex: index,
-        codePointLength: Array.from(chunk).length,
-        utf16Length: chunk.length,
-      })),
-    },
-    richFormatting: existingDiagnostics?.richFormatting ?? {
-      ...(richFormat ? { requestedFormat: richFormat } : {}),
-      posture: plan.richFormatPosture,
-      notes: plan.notes,
-    },
+    ...(plan
+      ? {
+          chunking: existingDiagnostics?.chunking ?? {
+            mode: plan.chunks.length > 1 ? "unicode_safe" : "none",
+            originalCodePointLength: Array.from(plannedText).length,
+            partCount: plan.chunks.length,
+            maxPartUtf16Length: plan.maxChunkCodeUnits,
+            parts: plan.chunks.map((chunk: string, index: number) => ({
+              partIndex: index,
+              codePointLength: Array.from(chunk).length,
+              utf16Length: chunk.length,
+            })),
+          },
+          richFormatting: existingDiagnostics?.richFormatting ?? {
+            ...(richFormat ? { requestedFormat: richFormat } : {}),
+            posture: plan.richFormatPosture,
+            notes: plan.notes,
+          },
+        }
+      : {}),
+    ...(richPlan && shouldAttachRichMessageDiagnostics(richPlan, richFormat)
+      ? { richMessage: existingDiagnostics?.richMessage ?? richPlan }
+      : {}),
   };
   return {
     ...payload,
-    deliveryChunks: plan.chunks,
+    ...(plan ? { deliveryChunks: plan.chunks } : {}),
     deliveryDiagnostics: diagnostics,
   };
 }
@@ -500,6 +530,57 @@ function readTextPayloadField(payload: Record<string, unknown>): { key: string; 
 function readRichFormat(payload: Record<string, unknown>): ChannelDeliveryRichFormat | undefined {
   const raw = payload.richFormat ?? payload.format ?? payload.contentFormat;
   return raw === "plain_text" || raw === "html" || raw === "markdown" || raw === "provider_native" ? raw : undefined;
+}
+
+function readPayloadAttachments(value: unknown): ChannelAttachmentInput[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const attachments = value
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const attachment = item as Record<string, unknown>;
+      return {
+        url: readOptionalPayloadString(attachment.url),
+        title: readOptionalPayloadString(attachment.title),
+        mimeType: readOptionalPayloadString(attachment.mimeType),
+        dataBase64: readOptionalPayloadString(attachment.dataBase64),
+        attachmentId: readOptionalPayloadString(attachment.attachmentId),
+      };
+    })
+    .filter((item) => item.url || item.title || item.mimeType || item.dataBase64 || item.attachmentId);
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function readPayloadAttachmentIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const ids = value.map((item) => readOptionalPayloadString(item)).filter((item): item is string => Boolean(item));
+  return ids.length > 0 ? ids : undefined;
+}
+
+function readOptionalPayloadString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function shouldAttachRichMessageDiagnostics(
+  plan: ChannelRichMessageDeliveryPlan,
+  richFormat: ChannelDeliveryRichFormat | undefined,
+): boolean {
+  return plan.attachmentCount > 0 || plan.pendingAttachmentIdCount > 0 || Boolean(richFormat && richFormat !== "plain_text");
+}
+
+function assertRichMessagePlanSendable(plan: ChannelRichMessageDeliveryPlan): void {
+  const blocked = plan.attachments.find((attachment) => attachment.disposition === "blocked");
+  if (!blocked) {
+    return;
+  }
+  throw new Error(
+    `${plan.capabilityLabel} blocked attachment ${blocked.index + 1}: ${
+      blocked.reason ?? "attachment cannot be delivered safely"
+    }`,
+  );
 }
 
 function fingerprintPayload(payload: Record<string, unknown>): string {

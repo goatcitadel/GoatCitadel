@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CapabilityCatalogEntry,
   McpRemotePreviewItem,
@@ -29,6 +29,7 @@ import {
   findServersExposingTool,
   parseNamespacedMcpToolName,
 } from "../services/mcp-tool-namespace.js";
+import { McpElicitationService, McpElicitationServiceError } from "../services/mcp-elicitation-service.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -128,6 +129,55 @@ const serverModeCallSchema = z.object({
   localOperatorOverrideId: z.string().optional(),
 });
 
+const elicitationStatusSchema = z.enum(["pending", "accepted", "declined", "cancelled", "expired"]);
+const elicitationActionSchema = z.enum(["accept", "decline", "cancel"]);
+const elicitationOwnerSchema = z.object({
+  operatorId: z.string().trim().min(1).optional(),
+  agentId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
+  sessionId: z.string().trim().min(1).optional(),
+  taskId: z.string().trim().min(1).optional(),
+  runId: z.string().trim().min(1).optional(),
+  surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),
+});
+const elicitationSourceSchema = z.object({
+  sourceType: z.enum(["mcp_server", "gateway", "agent", "ui"]).optional(),
+  serverId: z.string().trim().min(1).optional(),
+  toolName: z.string().trim().min(1).optional(),
+  jsonRpcRequestId: z.union([z.string().trim().min(1), z.number()]).optional(),
+  transport: z.enum(["stdio", "http", "sse"]).optional(),
+  sourceRef: z.string().trim().min(1).optional(),
+});
+const elicitationCreateSchema = z
+  .object({
+    prompt: z.string().optional(),
+    message: z.string().optional(),
+    requestedSchema: z.record(z.unknown()),
+    owner: elicitationOwnerSchema.optional(),
+    source: elicitationSourceSchema.optional(),
+    serverId: z.string().trim().min(1).optional(),
+    toolName: z.string().trim().min(1).optional(),
+    jsonRpcRequestId: z.union([z.string().trim().min(1), z.number()]).optional(),
+    transport: z.enum(["stdio", "http", "sse"]).optional(),
+  })
+  .refine((input) => Boolean((input.prompt ?? input.message)?.trim()), {
+    message: "MCP elicitation prompt/message is required.",
+    path: ["prompt"],
+  });
+const elicitationParamsSchema = z.object({
+  elicitationId: z.string().min(1),
+});
+const elicitationResponseSchema = z.object({
+  action: elicitationActionSchema,
+  content: z.record(z.unknown()).optional(),
+  owner: elicitationOwnerSchema.optional(),
+});
+const elicitationListQuerySchema = z.object({
+  status: elicitationStatusSchema.optional(),
+  serverId: z.string().trim().min(1).optional(),
+  sessionId: z.string().trim().min(1).optional(),
+});
+
 const READ_ROUTE_OPTIONS = {
   config: {
     rateLimit: {
@@ -145,6 +195,8 @@ const MUTATION_ROUTE_OPTIONS = {
 };
 
 export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
+  const mcpElicitations = new McpElicitationService();
+
   fastify.get("/api/v1/mcp/servers", READ_ROUTE_OPTIONS, async (_request, reply) => {
     return reply.send({ items: fastify.services.mcp.listMcpServers() });
   });
@@ -168,6 +220,49 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
         templates: fastify.services.mcp.listMcpTemplates(),
       }),
     );
+  });
+
+  fastify.get("/api/v1/mcp/elicitations", READ_ROUTE_OPTIONS, async (request, reply) => {
+    const query = elicitationListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    return reply.send({ items: mcpElicitations.listRequests(query.data) });
+  });
+
+  fastify.post("/api/v1/mcp/elicitations", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+    const parsed = elicitationCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(
+        mcpElicitations.createRequest({
+          ...parsed.data,
+          prompt: parsed.data.prompt ?? parsed.data.message ?? "",
+        }),
+      );
+    } catch (error) {
+      return sendMcpElicitationError(reply, error);
+    }
+  });
+
+  fastify.post("/api/v1/mcp/elicitations/:elicitationId/respond", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+    const params = elicitationParamsSchema.safeParse(request.params);
+    const body = elicitationResponseSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(mcpElicitations.respondToRequest(params.data.elicitationId, body.data));
+    } catch (error) {
+      return sendMcpElicitationError(reply, error);
+    }
   });
 
   fastify.get("/api/v1/mcp/server-mode/manifest", READ_ROUTE_OPTIONS, async (_request, reply) => {
@@ -468,6 +563,13 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function sendMcpElicitationError(reply: FastifyReply, error: unknown) {
+  if (error instanceof McpElicitationServiceError) {
+    return reply.code(error.statusCode).send({ error: error.message });
+  }
+  return reply.code(400).send({ error: (error as Error).message });
+}
 
 /** Minimal read surface of the MCP service used by the invoke-time gates. */
 interface McpInvokeGatePort {

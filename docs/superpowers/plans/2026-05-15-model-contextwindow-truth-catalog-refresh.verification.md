@@ -2,6 +2,8 @@
 
 > Verification-note artifact only. This document records the checks from that workstream and must not be cited as current release proof unless rerun on the target commit or backed by current CI evidence.
 
+> Historical unsupported-provider note: any xAI, Grok, X, or Elon Musk related provider material below is retained only as historical verification context. It is not supported product direction and must not be copied into active provider templates, configs, tests, UI, or release claims. SpaceX references are not covered by this exclusion.
+
 ## Branch
 
 `goatrocity/jolly-allen-0fad0f` — open as PR with title `feat: model contextWindow truth + provider catalog refresh`.

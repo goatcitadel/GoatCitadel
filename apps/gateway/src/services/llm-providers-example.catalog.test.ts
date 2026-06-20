@@ -11,13 +11,9 @@ describe("config/llm-providers.example.json catalog", () => {
   ) as LlmConfigFile;
   const ids = config.providers.map((p) => p.providerId);
 
-  it("includes the xAI Grok provider with grok-4.3 default", () => {
-    expect(ids).toContain("xai");
-    const xai = config.providers.find((p) => p.providerId === "xai");
-    expect(xai?.defaultModel).toBe("grok-4.3");
-    expect(xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(xai?.apiStyle).toBe("openai-chat-completions");
-    expect(xai?.apiKeyEnv).toBe("XAI_API_KEY");
+  it("does not ship active xAI/Grok provider support", () => {
+    expect(ids).not.toContain("xai");
+    expect(config.providers.some((provider) => /xai|grok/i.test(`${provider.providerId} ${provider.label}`))).toBe(false);
   });
 
   it("DeepSeek default model is deepseek-v4-pro", () => {

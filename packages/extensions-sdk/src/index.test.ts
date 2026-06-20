@@ -7,5 +7,7 @@ describe("extensions sdk barrel", () => {
     expect(sdk.INTEGRATION_PLUGIN_MANIFEST_FILENAME).toBe("goatcitadel.integration-plugin.json");
     expect(typeof sdk.validateAddonAuthorManifest).toBe("function");
     expect(typeof sdk.validateIntegrationPluginAuthorManifest).toBe("function");
+    expect(typeof sdk.validateCompactToolDirectorySnapshot).toBe("function");
+    expect(typeof sdk.dereferenceEffectiveToolSchema).toBe("function");
   });
 });

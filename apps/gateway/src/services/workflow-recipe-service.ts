@@ -142,6 +142,8 @@ export class WorkflowRecipeService {
       activepiecesTemplate,
       validation,
     };
+    const content = JSON.stringify(payload, null, 2);
+    const contentSha256 = hashText(content);
     return {
       ...preview,
       warnings: payload.warnings,
@@ -149,10 +151,18 @@ export class WorkflowRecipeService {
       generatedAt,
       filename,
       contentType: payload.contentType,
+      contentSha256,
       activepiecesTemplate,
       validation,
       posture,
-      content: JSON.stringify(payload, null, 2),
+      content,
+      evidence: buildWorkflowRecipeTemplateExportEvidence({
+        target: "activepieces",
+        generatedAt,
+        planId: preview.plan.planId,
+        filename,
+        contentSha256,
+      }),
     };
   }
 
@@ -190,6 +200,8 @@ export class WorkflowRecipeService {
       n8nWorkflow,
       validation,
     };
+    const content = JSON.stringify(payload, null, 2);
+    const contentSha256 = hashText(content);
     return {
       ...preview,
       warnings: payload.warnings,
@@ -197,13 +209,43 @@ export class WorkflowRecipeService {
       generatedAt,
       filename,
       contentType: payload.contentType,
+      contentSha256,
       target: payload.target,
       n8nWorkflow,
       validation,
       posture,
-      content: JSON.stringify(payload, null, 2),
+      content,
+      evidence: buildWorkflowRecipeTemplateExportEvidence({
+        target: "n8n",
+        generatedAt,
+        planId: preview.plan.planId,
+        filename,
+        contentSha256,
+      }),
     };
   }
+}
+
+function buildWorkflowRecipeTemplateExportEvidence(input: {
+  target: "activepieces" | "n8n";
+  generatedAt: string;
+  planId: string;
+  filename: string;
+  contentSha256: string;
+}): WorkflowRecipeActivepiecesTemplateExportResponse["evidence"] {
+  return {
+    evidenceId: `workflow-template:${input.target}:${input.contentSha256.slice(0, 24)}`,
+    owner: "gateway",
+    source: "workflow_recipe_export",
+    timestamp: input.generatedAt,
+    target: input.target,
+    planId: input.planId,
+    filename: input.filename,
+    contentType: "application/json",
+    contentSha256: input.contentSha256,
+    status: "read_only_planning_artifact",
+    actionNeeded: "Review and import manually in the external automation tool before enabling any workflow.",
+  };
 }
 
 function validateActivepiecesTemplateExport(
@@ -849,6 +891,10 @@ function slugify(value: string): string {
 
 function hashRecipe(recipe: WorkflowRecipeRecord): string {
   return createHash("sha256").update(JSON.stringify(recipe)).digest("hex");
+}
+
+function hashText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 const STARTER_TEMPLATES: WorkflowRecipeTemplateRecord[] = [

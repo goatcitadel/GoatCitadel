@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MCP_APPROVAL_INBOX_URL } from "../services/mcp-approval-inbox.js";
+import { MCP_ROUTE_ELICITATION_LIMITS } from "../services/mcp-elicitation-service.js";
 import { mcpRoutes } from "./mcp.js";
 
 describe("mcp routes", () => {
@@ -58,6 +59,328 @@ describe("mcp routes", () => {
     await app.register(mcpRoutes);
     return service;
   }
+
+  it("creates and lists MCP elicitation requests with bounded audit and evidence metadata", async () => {
+    await registerMcpService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Choose the deployment environment.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            environment: { type: "string", enum: ["staging", "production"] },
+          },
+          required: ["environment"],
+        },
+        owner: {
+          operatorId: "operator-1",
+          agentId: "agent-1",
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          surface: "mcp",
+        },
+        source: {
+          sourceType: "mcp_server",
+          serverId: "srv-1",
+          toolName: "deploy.plan",
+          jsonRpcRequestId: 7,
+          transport: "stdio",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const created = response.json();
+    expect(created).toMatchObject({
+      method: "elicitation/create",
+      status: "pending",
+      prompt: {
+        text: "Choose the deployment environment.",
+        maxChars: MCP_ROUTE_ELICITATION_LIMITS.promptMaxChars,
+        truncated: false,
+      },
+      requestedSchema: {
+        maxBytes: MCP_ROUTE_ELICITATION_LIMITS.requestedSchemaMaxBytes,
+        truncated: false,
+      },
+      protocol: {
+        method: "elicitation/create",
+        message: "Choose the deployment environment.",
+      },
+      owner: {
+        operatorId: "operator-1",
+        sessionId: "session-1",
+        surface: "mcp",
+      },
+      source: {
+        sourceType: "mcp_server",
+        serverId: "srv-1",
+        toolName: "deploy.plan",
+        jsonRpcRequestId: 7,
+        transport: "stdio",
+      },
+      policy: {
+        sensitiveInformationAllowed: false,
+        transportBoundary: "gateway_local_mcp",
+        remoteTransportSupport: "unchanged",
+      },
+      audit: {
+        reasonCodes: ["mcp_elicitation_created", "gateway_route_local_evidence"],
+      },
+      evidence: {
+        status: "pending",
+        owner: { operatorId: "operator-1" },
+        source: { serverId: "srv-1" },
+        statusHistory: [
+          expect.objectContaining({
+            status: "pending",
+            auditEventId: expect.stringContaining("gateway:mcp:elicitation:"),
+          }),
+        ],
+      },
+    });
+    expect(created.elicitationId).toEqual(expect.stringMatching(/^mcp-elicit-/));
+    expect(created.audit.auditEventIds[0]).toContain(`${created.elicitationId}:created`);
+
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/mcp/elicitations?status=pending&serverId=srv-1&sessionId=session-1",
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toMatchObject({
+      items: [expect.objectContaining({ elicitationId: created.elicitationId, status: "pending" })],
+    });
+  });
+
+  it("truncates oversized MCP elicitation prompts and redacts secrets before storage", async () => {
+    await registerMcpService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        message: `token=secret-token-value-1234567890 ${"x".repeat(MCP_ROUTE_ELICITATION_LIMITS.promptMaxChars + 128)}`,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            answer: { type: "string" },
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.prompt.truncated).toBe(true);
+    expect(body.prompt.text).toContain("[REDACTED]");
+    expect(body.prompt.text).toContain("[prompt truncated]");
+    expect(body.prompt.text).not.toContain("secret-token-value");
+    expect(body.prompt.charLength).toBeLessThanOrEqual(MCP_ROUTE_ELICITATION_LIMITS.promptMaxChars);
+    expect(body.evidence.prompt).toMatchObject({
+      truncated: true,
+      redactedSecretCount: 1,
+    });
+  });
+
+  it("rejects oversized MCP elicitation schemas without echoing secret-bearing bodies", async () => {
+    await registerMcpService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Collect non-sensitive deployment metadata.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            notes: {
+              type: "string",
+              description: `token=secret-token-value-1234567890 ${"x".repeat(
+                MCP_ROUTE_ELICITATION_LIMITS.requestedSchemaMaxBytes,
+              )}`,
+            },
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toEqual({
+      error: `MCP elicitation requestedSchema exceeded ${MCP_ROUTE_ELICITATION_LIMITS.requestedSchemaMaxBytes} bytes.`,
+    });
+    expect(response.body).not.toContain("secret-token-value");
+  });
+
+  it("records MCP elicitation response transitions and prevents duplicate resolution", async () => {
+    await registerMcpService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Pick a safe rollout track.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            track: { type: "string", enum: ["canary", "hold"] },
+          },
+        },
+        owner: { sessionId: "session-response" },
+      },
+    });
+    const created = createResponse.json();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
+      payload: {
+        action: "accept",
+        content: {
+          track: "canary",
+          note: "token=secret-token-value-1234567890",
+        },
+        owner: {
+          operatorId: "operator-2",
+          sessionId: "session-response",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const resolved = response.json();
+    expect(resolved).toMatchObject({
+      elicitationId: created.elicitationId,
+      status: "accepted",
+      response: {
+        action: "accept",
+        owner: {
+          operatorId: "operator-2",
+          sessionId: "session-response",
+        },
+        content: {
+          value: {
+            track: "canary",
+            note: "[REDACTED]",
+          },
+          maxBytes: MCP_ROUTE_ELICITATION_LIMITS.responseContentMaxBytes,
+          redactedSecretCount: 1,
+        },
+      },
+      evidence: {
+        status: "accepted",
+        responseContent: {
+          maxBytes: MCP_ROUTE_ELICITATION_LIMITS.responseContentMaxBytes,
+          redactedSecretCount: 1,
+        },
+        statusHistory: [
+          expect.objectContaining({ status: "pending" }),
+          expect.objectContaining({ status: "accepted", previousStatus: "pending" }),
+        ],
+      },
+      audit: {
+        reasonCodes: expect.arrayContaining(["mcp_elicitation_responded", "mcp_elicitation_accept"]),
+      },
+    });
+    expect(response.body).not.toContain("secret-token-value");
+
+    const duplicate = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
+      payload: {
+        action: "decline",
+        owner: { operatorId: "operator-2" },
+      },
+    });
+
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toEqual({ error: "MCP elicitation request has already been resolved." });
+  });
+
+  it("maps MCP elicitation decline and cancel actions to terminal statuses without response content", async () => {
+    await registerMcpService();
+
+    const declineCreate = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Can the server use this non-sensitive label?",
+        requestedSchema: { type: "object", properties: { label: { type: "string" } } },
+      },
+    });
+    const cancelCreate = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Continue this optional MCP workflow?",
+        requestedSchema: { type: "object", properties: { continue: { type: "boolean" } } },
+      },
+    });
+
+    const declined = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${declineCreate.json().elicitationId}/respond`,
+      payload: { action: "decline", owner: { operatorId: "operator-3" } },
+    });
+    const cancelled = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${cancelCreate.json().elicitationId}/respond`,
+      payload: { action: "cancel", owner: { operatorId: "operator-3" } },
+    });
+
+    expect(declined.statusCode).toBe(200);
+    expect(cancelled.statusCode).toBe(200);
+    expect(declined.json()).toMatchObject({
+      status: "declined",
+      response: {
+        action: "decline",
+      },
+    });
+    expect(cancelled.json()).toMatchObject({
+      status: "cancelled",
+      response: {
+        action: "cancel",
+      },
+    });
+    expect(declined.json().response).not.toHaveProperty("content");
+    expect(cancelled.json().response).not.toHaveProperty("content");
+  });
+
+  it("rejects oversized accepted MCP elicitation responses without echoing secret-bearing content", async () => {
+    await registerMcpService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Provide a short non-sensitive value.",
+        requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+      },
+    });
+    const created = createResponse.json();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
+      payload: {
+        action: "accept",
+        content: {
+          value: `token=secret-token-value-1234567890 ${"y".repeat(
+            MCP_ROUTE_ELICITATION_LIMITS.responseContentMaxBytes,
+          )}`,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toEqual({
+      error: `MCP elicitation responseContent exceeded ${MCP_ROUTE_ELICITATION_LIMITS.responseContentMaxBytes} bytes.`,
+    });
+    expect(response.body).not.toContain("secret-token-value");
+  });
 
   it("passes agentId and approval metadata through /mcp/invoke", async () => {
     const invokeMcpTool = vi.fn(async () => ({

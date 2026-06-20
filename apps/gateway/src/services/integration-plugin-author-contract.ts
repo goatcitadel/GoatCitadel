@@ -6,11 +6,13 @@ import type {
   IntegrationPluginRecord,
   IntegrationPluginSourceMetadata,
   IntegrationPluginTrustWarning,
+  PluginDescriptorHealth,
 } from "@goatcitadel/contracts";
 import { resolveIntegrationPluginAuthorManifestSource } from "@goatcitadel/extensions-sdk";
 export {
   INTEGRATION_PLUGIN_MANIFEST_FILENAME,
   validateIntegrationPluginAuthorManifest,
+  validateIntegrationPluginAuthorManifestDetailed,
 } from "@goatcitadel/extensions-sdk";
 
 export interface ResolvedIntegrationPluginInstallMetadata {
@@ -19,6 +21,7 @@ export interface ResolvedIntegrationPluginInstallMetadata {
   manifestPath?: string;
   sourceMetadata: IntegrationPluginSourceMetadata;
   trustWarnings: IntegrationPluginTrustWarning[];
+  descriptorHealth: PluginDescriptorHealth;
 }
 
 export interface BuildInstalledIntegrationPluginRecordInput {
@@ -36,9 +39,17 @@ export function resolveIntegrationPluginInstallMetadata(
 ): ResolvedIntegrationPluginInstallMetadata {
   const resolved = resolveIntegrationPluginAuthorManifestSource(source);
   const sourceType = options.sourceType ?? inferInstallSourceType(resolved.source);
+  const descriptorHealth = buildPluginDescriptorHealth(resolved, source);
   const expectedIntegrity = options.expectedIntegrity ?? resolved.manifest?.integrity?.expected;
   const integrityStatus = expectedIntegrity ? "missing" : sourceType === "local" ? "not_applicable" : "unknown";
-  const trustWarnings = buildTrustWarnings(sourceType, integrityStatus, expectedIntegrity);
+  const trustWarnings = [
+    ...buildTrustWarnings(sourceType, integrityStatus, expectedIntegrity),
+    ...descriptorHealth.issues.map((issue) => ({
+      code: issue.code,
+      severity: issue.severity,
+      message: issue.message,
+    })),
+  ];
   return {
     source: resolved.source,
     manifest: resolved.manifest,
@@ -52,6 +63,7 @@ export function resolveIntegrationPluginInstallMetadata(
       expectedIntegrity,
     },
     trustWarnings,
+    descriptorHealth,
   };
 }
 
@@ -71,13 +83,17 @@ export function buildInstalledIntegrationPluginRecord(
       input.existing?.description ??
       `Installed from ${installMetadata.source}`,
     source: installMetadata.source,
-    enabled: input.existing?.enabled ?? true,
+    enabled: installMetadata.descriptorHealth.status === "quarantined" ? false : (input.existing?.enabled ?? true),
     installedAt: input.existing?.installedAt ?? input.now,
     updatedAt: input.now,
     capabilities: installMetadata.manifest?.capabilities ?? input.existing?.capabilities ?? ["channel.adapter"],
     sourceMetadata: installMetadata.sourceMetadata,
-    integrityStatus: installMetadata.sourceMetadata.integrityStatus,
+    integrityStatus:
+      installMetadata.descriptorHealth.status === "quarantined"
+        ? "quarantined"
+        : installMetadata.sourceMetadata.integrityStatus,
     trustWarnings: installMetadata.trustWarnings,
+    descriptorHealth: installMetadata.descriptorHealth,
     theme: installMetadata.manifest?.theme ?? input.existing?.theme,
     toolOverrides: installMetadata.manifest?.toolOverrides
       ? installMetadata.manifest.toolOverrides.map((entry) => ({
@@ -86,6 +102,107 @@ export function buildInstalledIntegrationPluginRecord(
           status: "pending_owner_approval" as const,
         }))
       : input.existing?.toolOverrides,
+  };
+}
+
+function buildPluginDescriptorHealth(
+  resolved: ReturnType<typeof resolveIntegrationPluginAuthorManifestSource>,
+  requestedSource: string,
+): PluginDescriptorHealth {
+  const checkedAt = new Date().toISOString();
+  const baseEvidence = {
+    owner: "gateway" as const,
+    source: "integration_plugin_descriptor" as const,
+    timestamp: checkedAt,
+  };
+  if (!resolved.manifestPath) {
+    return {
+      status: "warning",
+      checkedAt,
+      source: resolved.source || requestedSource,
+      summary: "No GoatCitadel integration-plugin descriptor was found; install remains inspectable only.",
+      issues: [
+        {
+          code: "descriptor.missing",
+          severity: "warning",
+          message: "goatcitadel.integration-plugin.json was not found for this plugin source.",
+          action: "Add a descriptor manifest to make capabilities, version, and provenance reviewable.",
+        },
+      ],
+      evidence: {
+        ...baseEvidence,
+        status: "warning",
+      },
+    };
+  }
+  if (resolved.manifestIssues?.length) {
+    return {
+      status: "quarantined",
+      checkedAt,
+      source: resolved.source || requestedSource,
+      manifestPath: resolved.manifestPath,
+      summary: "Plugin descriptor is malformed and has been quarantined from callable runtime.",
+      issues: resolved.manifestIssues,
+      evidence: {
+        ...baseEvidence,
+        status: "quarantined",
+      },
+    };
+  }
+  if (resolved.manifestError) {
+    return {
+      status: "quarantined",
+      checkedAt,
+      source: resolved.source || requestedSource,
+      manifestPath: resolved.manifestPath,
+      summary: "Plugin descriptor could not be parsed and has been quarantined from callable runtime.",
+      issues: [
+        {
+          code: "descriptor.parse_failed",
+          severity: "critical",
+          message: resolved.manifestError,
+          action: "Fix descriptor JSON and reinstall or repair the plugin.",
+        },
+      ],
+      evidence: {
+        ...baseEvidence,
+        status: "quarantined",
+      },
+    };
+  }
+  if (resolved.manifest && resolved.descriptorHash) {
+    return {
+      status: "healthy",
+      checkedAt,
+      source: resolved.source || requestedSource,
+      manifestPath: resolved.manifestPath,
+      summary: "Plugin descriptor validated successfully.",
+      issues: [],
+      evidence: {
+        ...baseEvidence,
+        status: "healthy",
+        descriptorHash: resolved.descriptorHash,
+      },
+    };
+  }
+  return {
+    status: "quarantined",
+    checkedAt,
+    source: resolved.source || requestedSource,
+    manifestPath: resolved.manifestPath,
+    summary: "Plugin descriptor could not be validated and has been quarantined from callable runtime.",
+    issues: [
+      {
+        code: "descriptor.validation_unavailable",
+        severity: "critical",
+        message: "Descriptor validation did not return a manifest or validation issues.",
+        action: "Repair the plugin descriptor and reinstall.",
+      },
+    ],
+    evidence: {
+      ...baseEvidence,
+      status: "quarantined",
+    },
   };
 }
 

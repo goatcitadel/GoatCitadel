@@ -108,15 +108,6 @@
       "apiKeyEnv": "PERPLEXITY_API_KEY"
     },
     {
-      "providerId": "xai",
-      "label": "xAI Grok (SuperGrok OAuth)",
-      "baseUrl": "https://api.x.ai/v1",
-      "apiStyle": "openai-chat-completions",
-      "defaultModel": "grok-4.3",
-      "authMode": "api-key",
-      "apiKeyEnv": "XAI_API_KEY"
-    },
-    {
       "providerId": "huggingface",
       "label": "HuggingFace Inference",
       "baseUrl": "https://router.huggingface.co/v1",

@@ -312,6 +312,10 @@ describe("additional shared API wrappers", () => {
       }),
       "/api/v1/runtime/lifecycle/export?sessionId=s&includeTranscript=false&includeTimeline=true&timelineLimit=1000&format=trust_report",
     );
+    await expectCall(
+      sessions.fetchRuntimeLifecycleExport({ runId: "run/1", includeTimeline: true, format: "siem_ndjson" }),
+      "/api/v1/runtime/lifecycle/export?runId=run%2F1&includeTimeline=true&format=siem_ndjson",
+    );
 
     await expectCall(agentic.fetchAgenticRuntimeAvailability(), "/api/v1/agentic/availability");
     await expectCall(

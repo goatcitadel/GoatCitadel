@@ -53,7 +53,8 @@
     "coverage:gate:line100": "node scripts/coverage-gate.mjs --profile=line100",
     "coverage:gate:strict100": "node scripts/coverage-gate.mjs --profile=strict100",
     "docs:check": "node scripts/validate-governance-docs.mjs && node scripts/check-button-types.mjs && node scripts/check-no-inline-sql.mjs && node scripts/check-memory-ownership.mjs && node scripts/check-no-empty-catch.mjs && node scripts/check-launcher-ui-target.mjs && node scripts/check-docker-secret-docs.mjs && pnpm check:docker-secrets",
-    "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/check-button-types.test.mjs scripts/packaging/macos-packaging.test.mjs scripts/packaging/safe-cleanup.test.mjs scripts/release/release-certificate-proof.test.mjs scripts/verification/lib/scenarios.test.mjs && node scripts/verify-repo-hygiene.mjs",
+    "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/verify-supply-chain-posture.test.mjs scripts/check-button-types.test.mjs scripts/packaging/macos-packaging.test.mjs scripts/packaging/safe-cleanup.test.mjs scripts/release/release-certificate-proof.test.mjs scripts/verification/lib/scenarios.test.mjs && node scripts/verify-repo-hygiene.mjs && node scripts/verify-supply-chain-posture.mjs",
+    "verify:supply-chain": "node --test scripts/verify-supply-chain-posture.test.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:design:quality": "pnpm tsx scripts/verify-design-quality.ts",
     "verify:skills:catalog": "node scripts/check-skill-catalog.mjs",
     "verify:workflows": "node scripts/verify-workflows.mjs",
@@ -124,14 +125,14 @@
       "brace-expansion@^2.0.2": "2.0.3",
       "brace-expansion@^5.0.0": "5.0.6",
       "dompurify": "3.4.11",
-      "esbuild": "^0.28.1",
+      "esbuild": "0.28.1",
       "express-rate-limit@8.3.2>ip-address": "10.1.1",
       "fast-uri": "3.1.2",
       "hono": "4.12.25",
-      "lodash": "^4.18.0",
+      "lodash": "4.18.1",
       "postcss": "8.5.10",
       "qs": "6.15.2",
-      "undici": "^6.24.1",
+      "undici": "6.27.0",
       "uuid": "14.0.0",
       "ws@^8.0.0": "8.21.0",
       "@babel/core@^7.0.0": "7.29.6",
@@ -141,24 +142,24 @@
     }
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^22.15.0",
-    "@typescript/native-preview": "beta",
-    "@vitest/coverage-v8": "^4.1.8",
-    "c8": "^10.1.3",
-    "eslint": "^10.2.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
-    "playwright": "^1.56.1",
-    "prettier": "^3.8.3",
-    "sharp": "^0.34.4",
-    "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.58.0",
-    "vitest": "^4.1.8",
-    "zod": "^3.24.1"
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.19.19",
+    "@typescript/native-preview": "7.0.0-dev.20260421.2",
+    "@vitest/coverage-v8": "4.1.8",
+    "c8": "10.1.3",
+    "eslint": "10.2.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "husky": "9.1.7",
+    "lint-staged": "16.4.0",
+    "playwright": "1.58.2",
+    "prettier": "3.8.3",
+    "sharp": "0.34.5",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.58.0",
+    "vitest": "4.1.8",
+    "zod": "3.25.76"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -170,6 +171,6 @@
     ]
   },
   "dependencies": {
-    "shell-quote": "^1.8.4"
+    "shell-quote": "1.8.4"
   }
 }

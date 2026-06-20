@@ -1,7 +1,13 @@
 import type { ChannelActivityEffectResult, ChannelActivityPhase } from "./comms.js";
 
 export type IntegrationPluginInstallSourceType = "local" | "npm" | "git" | "url" | "manual" | "unknown";
-export type IntegrationPluginIntegrityStatus = "verified" | "missing" | "mismatch" | "unknown" | "not_applicable";
+export type IntegrationPluginIntegrityStatus =
+  | "verified"
+  | "missing"
+  | "mismatch"
+  | "unknown"
+  | "not_applicable"
+  | "quarantined";
 export type IntegrationPluginTrustWarningSeverity = "info" | "warning" | "critical";
 
 export interface IntegrationPluginSourceMetadata {
@@ -25,6 +31,31 @@ export interface IntegrationPluginThemeMetadata {
   dashboardVariant?: "default" | "compact" | "high_contrast";
 }
 
+export type PluginDescriptorHealthStatus = "healthy" | "warning" | "quarantined";
+
+export interface PluginDescriptorHealthIssue {
+  code: string;
+  severity: IntegrationPluginTrustWarningSeverity;
+  message: string;
+  action?: string;
+}
+
+export interface PluginDescriptorHealth {
+  status: PluginDescriptorHealthStatus;
+  checkedAt: string;
+  source: string;
+  manifestPath?: string;
+  summary: string;
+  issues: PluginDescriptorHealthIssue[];
+  evidence: {
+    owner: "gateway";
+    source: "integration_plugin_descriptor";
+    timestamp: string;
+    status: PluginDescriptorHealthStatus;
+    descriptorHash?: string;
+  };
+}
+
 export interface IntegrationPluginRecord {
   pluginId: string;
   label: string;
@@ -34,6 +65,7 @@ export interface IntegrationPluginRecord {
   sourceMetadata?: IntegrationPluginSourceMetadata;
   integrityStatus?: IntegrationPluginIntegrityStatus;
   trustWarnings?: IntegrationPluginTrustWarning[];
+  descriptorHealth?: PluginDescriptorHealth;
   theme?: IntegrationPluginThemeMetadata;
   enabled: boolean;
   installedAt: string;

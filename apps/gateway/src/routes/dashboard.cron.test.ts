@@ -158,4 +158,24 @@ describe("dashboard cron routes", () => {
       error: "Cron job has no runnable handler: test-job",
     });
   });
+
+  it("passes force metadata through manual cron runs when requested", async () => {
+    const runCronJobNow = vi.fn(async () => ({ jobId: "test-job", runId: "run-1", status: "ok" as const }));
+
+    app = Fastify();
+    app.decorate("services", { cron: { runCronJobNow } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/cron/jobs/test-job/run",
+      payload: { force: true, reason: "operator retry" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runCronJobNow).toHaveBeenCalledWith("test-job", {
+      force: true,
+      reason: "operator retry",
+    });
+  });
 });

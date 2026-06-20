@@ -46,6 +46,9 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Telegram v1 also supports channel-native commands such as /status, /sethome, /personality, /skills, and /tools. Terminal-capable work can be requested remotely, but it still runs through GoatCitadel approvals and policy.",
             ),
+            paragraph(
+              "Rich sends are preflighted before delivery: photo/document attachment posture, caption fallback, provider evidence, and attachment-count limits are recorded before the Bot API send.",
+            ),
           ],
         },
         {
@@ -222,6 +225,9 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           body: [
             paragraph(
               "GoatCitadel verifies the token with Telegram and sends a sandbox message plus cleanup probe before you finalize.",
+            ),
+            paragraph(
+              "Runtime rich-message evidence records whether media is native, document fallback, pending hydration, or blocked before provider delivery.",
             ),
             paragraph(
               "The strongest setup proof is: token validates, the intended chat appears in target discovery, a sandbox message can be sent, and /sethome confirms the delivery target.",

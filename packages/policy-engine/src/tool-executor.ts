@@ -10,6 +10,7 @@ import type {
   ChannelDeliveryStatus,
   ContextSourceAttribution,
   IngestionBackend,
+  MemoryEmbeddingProfileRequest,
   ToolExecutionTrustLevel,
   ToolGrantRecord,
   ToolInvokeRequest,
@@ -45,7 +46,12 @@ import {
   type DocumentArtifactFormat,
   type DocumentArtifactSection,
 } from "./document-artifacts.js";
-import { generateEmbedding, isEmbeddingCompatible, isEmbeddingCurrent } from "./local-embeddings.js";
+import {
+  currentEmbeddingProfile,
+  generateEmbedding,
+  isEmbeddingCompatible,
+  isEmbeddingCurrent,
+} from "./local-embeddings.js";
 import { terminateProcessTree, type ProcessTreeKillLogger } from "./process-tree-killer.js";
 import { mapWithConcurrency } from "./async-utils.js";
 const execFileAsync = promisify(execFile);
@@ -1241,47 +1247,83 @@ async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) 
   const namespace = asString(args.namespace);
   const documentId = asString(args.documentId);
   const force = asBoolean(args.force, false);
+  const embeddingProfileRequest = normalizeEmbeddingProfileRequest(args.embeddingProfile);
+  const embeddingProfile = currentEmbeddingProfile(embeddingProfileRequest);
   const chunks = documentId
     ? storage.knowledge.listChunksByDocument(documentId, 2000)
     : storage.knowledge.listChunksByNamespace(namespace, 2000);
   let indexed = 0;
   let skipped = 0;
+  let stale = 0;
   const methods = new Set<string>();
   for (const chunk of chunks) {
-    if (!force && isEmbeddingCurrent(chunk.embedding, chunk.embeddingMetadata)) {
+    const current = isEmbeddingCurrent(chunk.embedding, chunk.embeddingMetadata, embeddingProfileRequest);
+    if (!force && current) {
       skipped += 1;
       continue;
     }
-    const generated = await generateEmbedding(chunk.content);
+    if (!current && chunk.embedding) {
+      stale += 1;
+    }
+    const generated = await generateEmbedding(chunk.content, undefined, embeddingProfileRequest);
     storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, generated.metadata);
     methods.add(generated.method);
     indexed += 1;
   }
-  return { namespace: namespace ?? "all", documentId, indexed, skipped, methods: [...methods] };
+  return {
+    namespace: namespace ?? "all",
+    documentId,
+    indexed,
+    skipped,
+    stale,
+    methods: [...methods],
+    embeddingProfile,
+  };
 }
 
 async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) {
   const namespace = asString(args.namespace);
   const query = required(args.query, "query");
   const limit = clampInt(args.limit, 10, 1, 100);
-  const generatedQuery = await generateEmbedding(query);
+  const embeddingProfileRequest = normalizeEmbeddingProfileRequest(args.embeddingProfile);
+  const generatedQuery = await generateEmbedding(query, undefined, embeddingProfileRequest);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
   const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
+  let repairedEmbeddings = 0;
+  let missingEmbeddings = 0;
+  let staleEmbeddings = 0;
   const scoredItems = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
     const doc = docById.get(chunk.docId);
     if (!doc) {
       return undefined;
     }
-    const compatibleEmbedding = isEmbeddingCompatible(chunk.embedding, chunk.embeddingMetadata, generatedQuery.metadata)
-      ? chunk.embedding
-      : (await generateEmbedding(chunk.content)).embedding;
+    let compatibleEmbedding: number[];
+    let embeddingMetadata = chunk.embeddingMetadata;
+    let embeddingStatus: "used" | "generated" | "reindexed" = "used";
+    if (isEmbeddingCompatible(chunk.embedding, chunk.embeddingMetadata, generatedQuery.metadata)) {
+      compatibleEmbedding = chunk.embedding;
+    } else {
+      if (chunk.embedding) {
+        staleEmbeddings += 1;
+        embeddingStatus = "reindexed";
+      } else {
+        missingEmbeddings += 1;
+        embeddingStatus = "generated";
+      }
+      const repaired = await generateEmbedding(chunk.content, undefined, embeddingProfileRequest);
+      compatibleEmbedding = repaired.embedding;
+      embeddingMetadata = repaired.metadata;
+      storage.knowledge.updateChunkEmbedding(chunk.chunkId, repaired.embedding, repaired.metadata);
+      repairedEmbeddings += 1;
+    }
     return {
       chunkId: chunk.chunkId,
       docId: chunk.docId,
       score: cosine(generatedQuery.embedding, compatibleEmbedding),
       snippet: chunk.content.slice(0, 320),
       attribution: knowledgeDocumentAttribution(doc),
-      embeddingMetadata: chunk.embeddingMetadata,
+      embeddingMetadata,
+      embeddingStatus,
     };
   });
   const items = scoredItems
@@ -1300,6 +1342,28 @@ async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) 
       version: generatedQuery.metadata.version,
       ...(generatedQuery.metadata.fallbackReason ? { fallbackReason: generatedQuery.metadata.fallbackReason } : {}),
     },
+    embeddingProfile: generatedQuery.profile,
+    repairedEmbeddings,
+    missingEmbeddings,
+    staleEmbeddings,
+  };
+}
+
+function normalizeEmbeddingProfileRequest(value: unknown): MemoryEmbeddingProfileRequest | undefined {
+  const input = record(value);
+  const provider = asString(input.provider);
+  const modelId = asString(input.modelId);
+  const profileId = asString(input.profileId);
+  const dimensions =
+    typeof input.dimensions === "number" && Number.isFinite(input.dimensions) ? Math.floor(input.dimensions) : undefined;
+  if (!provider && !modelId && !profileId && dimensions === undefined) {
+    return undefined;
+  }
+  return {
+    provider,
+    modelId,
+    profileId,
+    dimensions,
   };
 }
 
@@ -3315,6 +3379,7 @@ async function imessageSend(
   attachments: ChannelAttachment[] = [],
   grantAllowlist?: string[],
 ): Promise<string> {
+  assertBlueBubblesIMessageProvider(config);
   const baseUrl = normalizeBlueBubblesBaseUrl(
     asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
   );
@@ -4517,6 +4582,7 @@ function resolveBlueBubblesContext(
   password: string;
   resolvedTarget: string;
 } {
+  assertBlueBubblesIMessageProvider(config);
   const baseUrl = normalizeBlueBubblesBaseUrl(
     asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
   );
@@ -4539,6 +4605,19 @@ function resolveBlueBubblesContext(
     password,
     resolvedTarget: resolvedTarget ?? "",
   };
+}
+
+function assertBlueBubblesIMessageProvider(config: Record<string, unknown>): void {
+  const provider = (asString(config.bridgeProvider) ?? asString(config.provider) ?? "bluebubbles").toLowerCase();
+  if (provider === "bluebubbles" || provider === "blue_bubbles") {
+    return;
+  }
+  if (provider === "photon") {
+    throw new Error(
+      "Photon iMessage provider is recognized but not runnable in this Gateway build; configure BlueBubbles or install a Photon adapter before sending.",
+    );
+  }
+  throw new Error(`Unsupported iMessage bridge provider: ${provider}`);
 }
 
 async function blueBubblesCreateChat(

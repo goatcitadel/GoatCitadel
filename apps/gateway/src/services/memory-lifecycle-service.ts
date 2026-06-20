@@ -10,6 +10,11 @@ import type {
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
   MemoryWriteAuthority,
+  MemoryActionLedgerEntry,
+  MemoryBatchMutationOperation,
+  MemoryBatchMutationRequest,
+  MemoryBatchMutationResponse,
+  MemoryBatchMutationResult,
   MemoryChangeEvent,
   MemoryContextComposeRequest,
   MemoryContextPack,
@@ -70,6 +75,7 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import {
+  ConflictError,
   NotFoundError,
   PolicyViolationError,
   ValidationError,
@@ -83,6 +89,7 @@ import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryIte
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { buildMemoryActionLedgerEntry, buildMemoryChangeLedgerPayload } from "./memory-action-ledger.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 
 export interface MemoryFileEntry {
@@ -92,6 +99,9 @@ export interface MemoryFileEntry {
 }
 
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
+  gatewaySql: MemoryItemHost["gatewaySql"] & {
+    runImmediateTransaction?<T>(callback: () => T): T;
+  };
   memoryQualityIssues: {
     list(input?: MemoryQualityIssueListRequest): MemoryQualityIssueRecord[];
     upsertOpenIssue(input: MemoryQualityIssueInput & { dedupKey?: string }): {
@@ -1123,6 +1133,182 @@ export class MemoryLifecycleService {
       itemIds: forgottenItems.map((item) => item.itemId),
       items: forgottenItems,
     };
+  }
+
+  public batchMutateMemoryItems(
+    input: MemoryBatchMutationRequest,
+    actorId = "operator",
+  ): MemoryBatchMutationResponse {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const operations = normalizeBatchMutationOperations(input.operations);
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const ownerId = actorId.trim() || "operator";
+
+    for (const operation of operations) {
+      requireMemoryItem(this.deps.admin, operation.itemId);
+    }
+
+    const ledgerOperations = operations.map((operation) => ({
+      kind: operation.kind,
+      itemId: operation.itemId,
+      changedFields: operation.kind === "patch_item" ? getBatchPatchChangedFields(operation.patch) : undefined,
+    }));
+    const ledger = buildMemoryActionLedgerEntry({
+      actionId: input.actionId,
+      ownerId,
+      source: input.source,
+      status: "applied",
+      operations: ledgerOperations,
+    });
+
+    const results = runTransaction(() =>
+      operations.map((operation, operationIndex) =>
+        this.applyBatchMemoryItemMutation(operation, operationIndex, ownerId, ledger),
+      ),
+    );
+
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_batch_mutation_applied",
+      actionId: ledger.actionId,
+      operationKind: ledger.operationKind,
+      itemIds: ledger.targetItemIds,
+      appliedCount: results.length,
+    });
+
+    return {
+      actionId: ledger.actionId,
+      status: "applied",
+      appliedCount: results.length,
+      targetItemIds: ledger.targetItemIds,
+      results,
+      ledger,
+    };
+  }
+
+  private applyBatchMemoryItemMutation(
+    operation: MemoryBatchMutationOperation,
+    operationIndex: number,
+    actorId: string,
+    ledger: MemoryActionLedgerEntry,
+  ): MemoryBatchMutationResult {
+    const item =
+      operation.kind === "patch_item"
+        ? this.applyBatchMemoryItemPatch(operation, actorId, ledger)
+        : this.applyBatchMemoryItemForget(operation.itemId, actorId, ledger);
+    return {
+      operationIndex,
+      kind: operation.kind,
+      itemId: item.itemId,
+      status: "applied",
+      item,
+    };
+  }
+
+  private applyBatchMemoryItemPatch(
+    operation: Extract<MemoryBatchMutationOperation, { kind: "patch_item" }>,
+    actorId: string,
+    ledger: MemoryActionLedgerEntry,
+  ): MemoryItemRecord {
+    const current = requireMemoryItem(this.deps.admin, operation.itemId);
+    const now = new Date().toISOString();
+    const patch = operation.patch;
+    const nextTtlOverrideSeconds =
+      patch.ttlOverrideSeconds === null
+        ? null
+        : patch.ttlOverrideSeconds !== undefined
+          ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
+          : (current.ttlOverrideSeconds ?? null);
+    const nextExpiresAt =
+      patch.ttlOverrideSeconds === null
+        ? null
+        : patch.ttlOverrideSeconds !== undefined
+          ? new Date(Date.parse(now) + Number(nextTtlOverrideSeconds) * 1000).toISOString()
+          : (current.expiresAt ?? null);
+    const next = {
+      title: patch.title !== undefined ? patch.title.trim() : current.title,
+      content: patch.content !== undefined ? patch.content : current.content,
+      metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
+      pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
+      ttlOverrideSeconds: nextTtlOverrideSeconds,
+      expiresAt: nextExpiresAt,
+    };
+
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_items
+      SET title = @title,
+          content = @content,
+          metadata_json = @metadataJson,
+          pinned = @pinned,
+          ttl_override_seconds = @ttlOverrideSeconds,
+          expires_at = @expiresAt,
+          updated_at = @updatedAt
+      WHERE item_id = @itemId
+    `,
+      )
+      .run({
+        itemId: operation.itemId,
+        title: next.title,
+        content: next.content,
+        metadataJson: JSON.stringify(next.metadata ?? {}),
+        pinned: next.pinned ? 1 : 0,
+        ttlOverrideSeconds: next.ttlOverrideSeconds,
+        expiresAt: next.expiresAt,
+        updatedAt: now,
+      });
+
+    const changedFields = getBatchPatchChangedFields(patch);
+    recordMemoryChange(
+      this.deps.admin,
+      operation.itemId,
+      resolveBatchPatchChangeType(changedFields),
+      actorId,
+      buildMemoryChangeLedgerPayload(ledger, {
+        kind: operation.kind,
+        itemId: operation.itemId,
+        changedFields,
+      }),
+    );
+    return requireMemoryItem(this.deps.admin, operation.itemId);
+  }
+
+  private applyBatchMemoryItemForget(
+    itemId: string,
+    actorId: string,
+    ledger: MemoryActionLedgerEntry,
+  ): MemoryItemRecord {
+    const current = requireMemoryItem(this.deps.admin, itemId);
+    if (current.status === "forgotten") {
+      return current;
+    }
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_items
+      SET status = 'forgotten',
+          forgotten_at = @forgottenAt,
+          updated_at = @updatedAt
+      WHERE item_id = @itemId
+    `,
+      )
+      .run({
+        itemId,
+        forgottenAt: now,
+        updatedAt: now,
+      });
+    recordMemoryChange(
+      this.deps.admin,
+      itemId,
+      "forgotten",
+      actorId,
+      buildMemoryChangeLedgerPayload(ledger, {
+        kind: "forget_item",
+        itemId,
+      }),
+    );
+    return requireMemoryItem(this.deps.admin, itemId);
   }
 
   public listMemoryItemHistory(itemId: string, limit = 200): MemoryChangeEvent[] {
@@ -2647,6 +2833,62 @@ function mapMemoryDecisionRow(host: MemoryLifecycleAdminDependencies, row: Memor
 
 function parseMemoryJson<T>(host: MemoryLifecycleAdminDependencies, value: string | null | undefined, fallback: T): T {
   return host.tryParseJson<T>(value, fallback);
+}
+
+function normalizeBatchMutationOperations(
+  operations: MemoryBatchMutationRequest["operations"] | undefined,
+): MemoryBatchMutationOperation[] {
+  if (!operations || operations.length === 0) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "operations" });
+  }
+  if (operations.length > 100) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "operations" });
+  }
+  return operations.map((operation, index) => {
+    const itemId = operation.itemId.trim();
+    if (!itemId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: `operations.${index}.itemId` });
+    }
+    if (operation.kind === "patch_item") {
+      return {
+        kind: operation.kind,
+        itemId,
+        patch: operation.patch ?? {},
+      };
+    }
+    return {
+      kind: operation.kind,
+      itemId,
+    };
+  });
+}
+
+function requireMemoryBatchTransaction(
+  gatewaySql: MemoryLifecycleAdminDependencies["gatewaySql"],
+): <T>(callback: () => T) => T {
+  const runImmediateTransaction = gatewaySql.runImmediateTransaction;
+  if (typeof runImmediateTransaction !== "function") {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Atomic memory batch mutations require transactional gateway storage.",
+    });
+  }
+  return runImmediateTransaction.bind(gatewaySql) as <T>(callback: () => T) => T;
+}
+
+function getBatchPatchChangedFields(patch: MemoryLifecyclePatch): string[] {
+  const fields: Array<keyof MemoryLifecyclePatch> = ["title", "content", "metadata", "pinned", "ttlOverrideSeconds"];
+  return fields.filter((field) => patch[field] !== undefined);
+}
+
+function resolveBatchPatchChangeType(changedFields: string[]): MemoryChangeEvent["changeType"] {
+  if (changedFields.length === 1 && changedFields[0] === "pinned") {
+    return "pin_changed";
+  }
+  if (changedFields.length === 1 && changedFields[0] === "ttlOverrideSeconds") {
+    return "ttl_changed";
+  }
+  return "updated";
 }
 
 function normalizeStructuredWorkspaceId(value: string | undefined): string {

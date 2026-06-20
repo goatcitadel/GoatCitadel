@@ -184,6 +184,22 @@ export interface LlmModelRecord {
 
 export type LlmModelDiscoverySource = "live" | "template_fallback" | "error_fallback";
 
+export type ProviderModelCatalogSnapshotStatus = "fresh" | "stale" | "refreshing" | "fallback";
+
+export interface ProviderModelCatalogSnapshot {
+  snapshotId: string;
+  providerId: string;
+  baseUrl: string;
+  createdAt: string;
+  cachedAt: string;
+  source: Exclude<LlmModelDiscoverySource, "error_fallback">;
+  status: ProviderModelCatalogSnapshotStatus;
+  items: LlmModelRecord[];
+  itemCount: number;
+  catalogHash: string;
+  warning?: string;
+}
+
 export interface LlmModelPreviewRequest {
   providerId: string;
   baseUrl: string;
@@ -223,12 +239,50 @@ export interface ImageGenerationResultItem {
   revisedPrompt?: string;
 }
 
+export type ImageGenerationEvidenceSource = "b64_json" | "data_url" | "url";
+
+export interface ImageGenerationResultEvidence {
+  evidenceId: string;
+  index: number;
+  source: ImageGenerationEvidenceSource;
+  status: "provider_backed" | "provider_url" | "empty_result";
+  sha256?: string;
+  sizeBytes?: number;
+  mimeType?: string;
+  urlHost?: string;
+  urlHash?: string;
+  revisedPromptHash?: string;
+  persistedArtifact?: {
+    status: "inline_result" | "external_url" | "not_persisted";
+    actionNeeded?: string;
+  };
+}
+
+export interface ImageGenerationEvidence {
+  evidenceId: string;
+  owner: "gateway";
+  source: "provider_response";
+  timestamp: string;
+  providerId?: string;
+  model?: string;
+  operation: "generate" | "edit";
+  requestHash: string;
+  promptHash: string;
+  referenceImageHashes?: string[];
+  maskImageHash?: string;
+  resultCount: number;
+  status: "provider_backed" | "no_results";
+  actionNeeded?: string;
+  results: ImageGenerationResultEvidence[];
+}
+
 export interface ImageGenerationResponse {
   providerId?: string;
   model?: string;
   created?: number;
   operation: "generate" | "edit";
   data: ImageGenerationResultItem[];
+  evidence?: ImageGenerationEvidence;
 }
 
 export interface LlmModelPreviewResponse {

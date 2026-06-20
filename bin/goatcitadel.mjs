@@ -1770,10 +1770,15 @@ function installWorkspaceDependencies(reason) {
   }
   const combinedOutput = `${frozenResult.stdout || ""}\n${frozenResult.stderr || ""}`;
   if (isOutdatedLockfileInstallFailure(combinedOutput)) {
+    if (runtimeProcessEnv.GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH !== "1") {
+      throw new Error(
+        "Frozen-lockfile install failed. Refusing to refresh pnpm-lock.yaml during launcher-managed install. Review the manifest/lockfile mismatch first, or set GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 for an intentional local recovery.",
+      );
+    }
     printManagedInstallNotice({
       title: "Refreshing workspace lock metadata...",
       what: "a reconciled pnpm lockfile install",
-      why: "The package manifests moved ahead of pnpm-lock.yaml, so GoatCitadel needs to refresh lock metadata before it can restore the local toolchain cleanly.",
+      why: "GOATCITADEL_INSTALL_ALLOW_LOCKFILE_REFRESH=1 is set and the package manifests moved ahead of pnpm-lock.yaml, so GoatCitadel is performing an explicit local recovery refresh.",
     });
     const relaxedResult = spawnPnpmCommand(["--dir", appDir, "install", "--no-frozen-lockfile"], {
       env: runtimeProcessEnv,

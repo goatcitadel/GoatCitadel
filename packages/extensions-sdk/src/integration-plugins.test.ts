@@ -7,6 +7,7 @@ import {
   loadIntegrationPluginAuthorManifest,
   resolveIntegrationPluginAuthorManifestSource,
   validateIntegrationPluginAuthorManifest,
+  validateIntegrationPluginAuthorManifestDetailed,
 } from "./integration-plugins.js";
 
 describe("extensions sdk integration-plugin manifest helpers", () => {
@@ -41,6 +42,40 @@ describe("extensions sdk integration-plugin manifest helpers", () => {
         capabilities: [],
       }),
     ).toThrow(/array/i);
+  });
+
+  it("returns readable descriptor health issues for malformed manifests", () => {
+    const result = validateIntegrationPluginAuthorManifestDetailed({
+      pluginId: "broken",
+      label: "Broken",
+      version: "1.0.0",
+      capabilities: [],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: "manifest.too_small",
+        severity: "critical",
+        message: expect.stringContaining("capabilities"),
+        action: expect.stringContaining("Fix goatcitadel.integration-plugin.json"),
+      }),
+    ]);
+  });
+
+  it("returns descriptor hashes for valid manifests without changing normalized output", () => {
+    const result = validateIntegrationPluginAuthorManifestDetailed({
+      pluginId: "reference-integration-plugin",
+      label: "Reference Integration Plugin",
+      version: "0.1.0",
+      capabilities: ["reference.install", "reference.install"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.capabilities).toEqual(["reference.install"]);
+      expect(result.descriptorHash).toMatch(/^[a-f0-9]{64}$/);
+    }
   });
 
   it("resolves the repo reference integration-plugin scaffold from a directory source", () => {

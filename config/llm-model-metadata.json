@@ -11,8 +11,6 @@
     "anthropic/claude-haiku-4-5": { "contextWindow": 400000, "outputTokenLimit": 16000 },
     "claude-code/claude-sonnet-4-6": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
     "claude-code/claude-opus-4-7": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
-    "xai/grok-4.3": { "contextWindow": 1000000, "outputTokenLimit": 32000, "thinking": "off" },
-    "xai/*": { "contextWindow": 256000, "outputTokenLimit": 16000 },
     "openrouter/deepseek/deepseek-v4-pro": { "contextWindow": 128000, "outputTokenLimit": 32000 },
     "openrouter/anthropic/claude-opus-4-7": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
     "deepseek/deepseek-v4-pro": { "contextWindow": 128000, "outputTokenLimit": 32000 },

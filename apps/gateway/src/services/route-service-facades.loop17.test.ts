@@ -142,9 +142,11 @@ describe("route service facades", () => {
       "createProposal",
       "getCandidateDetail",
       "getCatalogSnapshot",
+      "getCompactToolDirectorySnapshot",
       "getCodeModeRun",
       "getCodeModeRunInScope",
       "getProposalDetail",
+      "getToolSchema",
       "listCatalog",
       "listCodeModeExecutionBackends",
       "listCodeModeRuns",
@@ -159,6 +161,14 @@ describe("route service facades", () => {
     expect(service.getCapabilityCatalogSnapshot("snapshot-1")).toEqual({
       method: "getCatalogSnapshot",
       args: ["snapshot-1"],
+    });
+    expect(service.getCompactToolDirectorySnapshot(120_000)).toEqual({
+      method: "getCompactToolDirectorySnapshot",
+      args: [120_000],
+    });
+    expect(service.getToolSchema("tool.safe_read")).toEqual({
+      method: "getToolSchema",
+      args: ["tool.safe_read"],
     });
     expect(service.listCapabilityProposals()).toEqual({ method: "listProposals", args: [100] });
     expect(service.listCapabilityProposals(5)).toEqual({ method: "listProposals", args: [5] });

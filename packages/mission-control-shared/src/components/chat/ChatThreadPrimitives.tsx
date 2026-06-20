@@ -9,6 +9,7 @@ import type { ChatMode, ChatStreamingPreview, ChatThreadTurnRecord } from "@goat
 import { Badge } from "../ui";
 import { AssistantMessageRenderer, type AssistantStreamPresentationMode } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
+import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
 import {
   getAssistantPendingLabel,
   getRecoveryStripLabel,
@@ -34,9 +35,14 @@ export interface ChatDelegationStepView {
   label?: string;
   status: string;
   index: number;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
   summary?: string;
   output?: string;
   error?: string;
+  failureGuidance?: string;
+  degradedHandoffStepIds?: string[];
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
@@ -316,6 +322,187 @@ export function ChatThreadWindowGap({ hiddenCount, onExpand }: { hiddenCount: nu
   );
 }
 
+function formatCompactEvidenceId(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 18) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+}
+
+function formatDurationMs(durationMs?: number): string | null {
+  if (!Number.isFinite(durationMs) || durationMs === undefined || durationMs < 0) {
+    return null;
+  }
+  if (durationMs < 1000) {
+    return `${Math.max(1, Math.round(durationMs))} ms`;
+  }
+  return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+}
+
+function formatStepDuration(step: ChatDelegationStepView): string | null {
+  return formatDurationMs(step.durationMs) ?? formatToolRunElapsed(step.startedAt ?? "", step.finishedAt) ?? null;
+}
+
+function formatDelegationStepStatus(status: string): string {
+  return status.replace(/_/g, " ");
+}
+
+function getDelegationStepTone(status: string): "active" | "success" | "warning" | "danger" | "neutral" {
+  switch (status) {
+    case "running":
+      return "active";
+    case "completed":
+      return "success";
+    case "failed":
+      return "danger";
+    case "cancelled":
+    case "pending":
+    case "skipped":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+function getDelegationStepFallback(step: ChatDelegationStepView): string {
+  if (step.error) {
+    return "Needs attention; details include the status evidence.";
+  }
+  if (step.failureGuidance) {
+    return step.failureGuidance;
+  }
+  switch (step.status) {
+    case "running":
+      return "Working.";
+    case "pending":
+      return "Queued.";
+    case "completed":
+      return step.output ? "Output ready." : "Completed.";
+    case "skipped":
+      return "Skipped.";
+    case "cancelled":
+      return "Cancelled.";
+    case "failed":
+      return "Failed.";
+    default:
+      return "Status recorded.";
+  }
+}
+
+function getDelegationStepSummary(step: ChatDelegationStepView): string {
+  return step.summary?.trim() || getDelegationStepFallback(step);
+}
+
+function buildDelegationRunChips(delegationRun: ChatDelegationRunView): string[] {
+  const chips: string[] = [];
+  if (delegationRun.runId) {
+    chips.push(`Run ${formatCompactEvidenceId(delegationRun.runId)}`);
+  }
+  if (delegationRun.executionPlanId) {
+    chips.push(`Plan ${formatCompactEvidenceId(delegationRun.executionPlanId)}`);
+  }
+  if (delegationRun.taskId) {
+    chips.push(`Task ${formatCompactEvidenceId(delegationRun.taskId)}`);
+  }
+  if (delegationRun.steps.some((step) => (step.degradedHandoffStepIds?.length ?? 0) > 0)) {
+    chips.push("handoff fallback");
+  }
+  if (delegationRun.stitchedOutput) {
+    chips.push("synthesis");
+  }
+  return chips;
+}
+
+function ChatDelegationSubagentRows({
+  steps,
+  formatStepLabel,
+  maxVisible = 4,
+}: {
+  steps: ChatDelegationStepView[];
+  formatStepLabel: (step: ChatDelegationStepView) => string;
+  maxVisible?: number;
+}) {
+  if (steps.length === 0) {
+    return null;
+  }
+  const visibleSteps = steps.slice(0, maxVisible);
+  const hiddenCount = steps.length - visibleSteps.length;
+  return (
+    <div className="mc-next-thread-subagent-rows" aria-label="Subagent activity for this delegation">
+      {visibleSteps.map((step) => {
+        const duration = formatStepDuration(step);
+        return (
+          <div key={step.stepId} className={`mc-next-thread-subagent-row tone-${getDelegationStepTone(step.status)}`}>
+            <span className="mc-next-thread-subagent-status">{formatDelegationStepStatus(step.status)}</span>
+            <span className="mc-next-thread-subagent-name">{formatStepLabel(step)}</span>
+            <span className="mc-next-thread-subagent-summary">{getDelegationStepSummary(step)}</span>
+            {step.childTurnId ? (
+              <span className="mc-next-thread-subagent-chip">Turn {formatCompactEvidenceId(step.childTurnId)}</span>
+            ) : step.childSessionId ? (
+              <span className="mc-next-thread-subagent-chip">
+                Session {formatCompactEvidenceId(step.childSessionId)}
+              </span>
+            ) : step.durableRunId ? (
+              <span className="mc-next-thread-subagent-chip">Durable {formatCompactEvidenceId(step.durableRunId)}</span>
+            ) : null}
+            {duration ? <span className="mc-next-thread-subagent-time">{duration}</span> : null}
+          </div>
+        );
+      })}
+      {hiddenCount > 0 ? <span className="mc-next-thread-subagent-more">+{hiddenCount} subagents</span> : null}
+    </div>
+  );
+}
+
+function ChatDelegationStepEvidence({
+  step,
+  formatStepLabel,
+}: {
+  step: ChatDelegationStepView;
+  formatStepLabel: (step: ChatDelegationStepView) => string;
+}) {
+  const duration = formatStepDuration(step);
+  const evidenceItems = [
+    step.runId ? ["Run", step.runId] : null,
+    step.durableRunId ? ["Durable", step.durableRunId] : null,
+    step.childSessionId ? ["Child session", step.childSessionId] : null,
+    step.childTurnId ? ["Child turn", step.childTurnId] : null,
+    step.startedAt ? ["Started", formatActorTimestamp(step.startedAt)] : null,
+    step.finishedAt ? ["Finished", formatActorTimestamp(step.finishedAt)] : null,
+    duration ? ["Duration", duration] : null,
+    (step.degradedHandoffStepIds?.length ?? 0) > 0 ? ["Fallback from", step.degradedHandoffStepIds!.join(", ")] : null,
+  ].filter((item): item is [string, string] => Boolean(item));
+
+  return (
+    <li>
+      <div className="mc-next-thread-step-head">
+        <strong>{formatStepLabel(step)}</strong>
+        <span data-tone={getDelegationStepTone(step.status)}>{formatDelegationStepStatus(step.status)}</span>
+      </div>
+      {evidenceItems.length > 0 ? (
+        <dl className="mc-next-thread-subagent-evidence-grid">
+          {evidenceItems.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {step.summary ? <p>{step.summary}</p> : null}
+      {step.failureGuidance ? <p>{step.failureGuidance}</p> : null}
+      {step.error ? <p>{step.error}</p> : null}
+      {step.output ? (
+        <details className="mc-next-thread-step-output-details">
+          <summary>Show subagent output</summary>
+          <AssistantMessageRenderer role="assistant" content={step.output} className="mc-next-thread-step-output" />
+        </details>
+      ) : null}
+    </li>
+  );
+}
+
 export function ChatThreadDelegationSummary({
   delegationRun,
   mode,
@@ -335,6 +522,7 @@ export function ChatThreadDelegationSummary({
   const isCowork = mode === "cowork";
   const formatStepLabel = (step: ChatDelegationStepView) => step.label?.trim() || toTitleCase(step.role);
   const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
+  const runChips = buildDelegationRunChips(delegationRun);
 
   if (isCowork) {
     return (
@@ -348,6 +536,11 @@ export function ChatThreadDelegationSummary({
               <span>Cowork activity</span>
               <span>{countsLine}</span>
               {currentStep ? <span>Now: {formatStepLabel(currentStep)}</span> : null}
+              {runChips.map((chip) => (
+                <span key={chip} className="mc-next-thread-activity-chip">
+                  {chip}
+                </span>
+              ))}
               {delegationRun.attachedTurnId ? (
                 <button
                   type="button"
@@ -362,6 +555,7 @@ export function ChatThreadDelegationSummary({
                 </button>
               ) : null}
             </div>
+            <ChatDelegationSubagentRows steps={delegationRun.steps} formatStepLabel={formatStepLabel} />
           </summary>
           <div className="mc-next-thread-bubble assistant">
             <p className="mc-next-thread-meta">
@@ -370,24 +564,7 @@ export function ChatThreadDelegationSummary({
             <p>{delegationRun.objective}</p>
             <ol className="mc-next-thread-step-list">
               {delegationRun.steps.map((step) => (
-                <li key={step.stepId}>
-                  <div className="mc-next-thread-step-head">
-                    <strong>{formatStepLabel(step)}</strong>
-                    <span>{step.status}</span>
-                  </div>
-                  {step.summary ? <p>{step.summary}</p> : null}
-                  {step.error ? <p>{step.error}</p> : null}
-                  {step.output ? (
-                    <details className="mc-next-thread-step-output-details">
-                      <summary>Show subagent output</summary>
-                      <AssistantMessageRenderer
-                        role="assistant"
-                        content={step.output}
-                        className="mc-next-thread-step-output"
-                      />
-                    </details>
-                  ) : null}
-                </li>
+                <ChatDelegationStepEvidence key={step.stepId} step={step} formatStepLabel={formatStepLabel} />
               ))}
             </ol>
             {delegationRun.stitchedOutput ? <p>{describeDelegationStitchedOutput(delegationRun.status)}</p> : null}
@@ -418,23 +595,7 @@ export function ChatThreadDelegationSummary({
         </p>
         <ol className="mc-next-thread-step-list">
           {delegationRun.steps.map((step) => (
-            <li key={step.stepId}>
-              <div className="mc-next-thread-step-head">
-                <strong>{formatStepLabel(step)}</strong>
-                <span>{step.status}</span>
-              </div>
-              {step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
-              {step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
-              {step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
-              {step.output ? (
-                <AssistantMessageRenderer
-                  role="assistant"
-                  content={step.output}
-                  className="mc-next-thread-step-output"
-                />
-              ) : null}
-              {step.error ? <p>{step.error}</p> : null}
-            </li>
+            <ChatDelegationStepEvidence key={step.stepId} step={step} formatStepLabel={formatStepLabel} />
           ))}
         </ol>
         {delegationRun.stitchedOutput ? (
@@ -545,6 +706,8 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     Boolean(turn.trace.orchestration) ||
     turn.toolRuns.length > 0 ||
     turn.citations.length > 0 ||
+    Boolean(durableRunId) ||
+    Boolean(turn.trace.guidance?.truncated) ||
     hasGeneratedArtifact;
   const isRoutineChatTurn = isPlainChat && !showOperationalDetails;
   const turnClassName = [
@@ -623,6 +786,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             <p>{assistantPendingLabel}</p>
           )}
           {renderCitationList?.(turn)}
+          <ChatTurnActivityRows
+            mode={mode}
+            toolRuns={turn.toolRuns}
+            onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
+          />
         </div>
       </div>
       <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
@@ -651,6 +819,12 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             {routingSummary.map((item, index) => (
               <span key={index}>{item}</span>
             ))}
+            {durableRunId ? (
+              <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
+            ) : null}
+            {turn.trace.guidance?.truncated ? (
+              <span className="mc-next-thread-activity-chip">context trimmed</span>
+            ) : null}
             {turn.toolRuns.length > 0 ? (
               <span>
                 {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
@@ -757,3 +931,124 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     </article>
   );
 });
+
+function ChatTurnActivityRows({
+  mode,
+  toolRuns,
+  onOpenRunDetails,
+}: {
+  mode: ChatMode;
+  toolRuns: ChatThreadTurnRecord["toolRuns"];
+  onOpenRunDetails: () => void;
+}) {
+  if (toolRuns.length === 0) {
+    return null;
+  }
+
+  const visibleRuns = mode === "chat" ? toolRuns.slice(0, 3) : toolRuns.slice(0, 6);
+  const hiddenCount = toolRuns.length - visibleRuns.length;
+
+  return (
+    <div className="mc-next-thread-tool-activity" aria-label="Tool activity for this turn">
+      {visibleRuns.map((run) => {
+        const diagnostics = getChatToolRunDiagnostics(run);
+        const tone = getToolRunActivityTone(run.status, diagnostics.hasFailureSignal);
+        const summary =
+          diagnostics.summary ??
+          diagnostics.artifactSummary ??
+          diagnostics.engineLabel ??
+          run.failureGuidance ??
+          getToolRunActivityFallback(run.status);
+        const elapsed = formatToolRunElapsed(run.startedAt, run.finishedAt);
+
+        return (
+          <button
+            key={run.toolRunId}
+            type="button"
+            className={`mc-next-thread-tool-activity-row tone-${tone}`}
+            onClick={onOpenRunDetails}
+            aria-label={`Open execution detail for ${run.toolName}`}
+          >
+            <span className="mc-next-thread-tool-activity-status">{formatToolRunStatus(run.status)}</span>
+            <span className="mc-next-thread-tool-activity-name">{run.toolName}</span>
+            <span className="mc-next-thread-tool-activity-summary">{summary}</span>
+            {diagnostics.storedAsArtifact ? (
+              <span className="mc-next-thread-tool-activity-badge">artifact</span>
+            ) : null}
+            {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
+            {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
+          </button>
+        );
+      })}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="mc-next-thread-tool-activity-more"
+          onClick={onOpenRunDetails}
+          aria-label={`Open execution detail for ${hiddenCount} more tool runs`}
+        >
+          +{hiddenCount} more
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function getToolRunActivityTone(
+  status: ChatThreadTurnRecord["toolRuns"][number]["status"],
+  hasFailureSignal: boolean,
+): "active" | "success" | "warning" | "danger" | "neutral" {
+  if (hasFailureSignal || status === "failed") {
+    return "danger";
+  }
+  if (status === "blocked" || status === "approval_required") {
+    return "warning";
+  }
+  if (status === "started") {
+    return "active";
+  }
+  if (status === "executed") {
+    return "success";
+  }
+  return "neutral";
+}
+
+function formatToolRunStatus(status: ChatThreadTurnRecord["toolRuns"][number]["status"]): string {
+  switch (status) {
+    case "approval_required":
+      return "approval";
+    case "executed":
+      return "done";
+    default:
+      return status.replace(/_/g, " ");
+  }
+}
+
+function getToolRunActivityFallback(status: ChatThreadTurnRecord["toolRuns"][number]["status"]): string {
+  switch (status) {
+    case "approval_required":
+      return "Waiting for operator approval.";
+    case "blocked":
+      return "Blocked by policy or runtime guard.";
+    case "failed":
+      return "Tool failed; open details for evidence.";
+    case "started":
+      return "Tool is running.";
+    case "executed":
+    default:
+      return "Tool completed.";
+  }
+}
+
+function formatToolRunElapsed(startedAt: string, finishedAt?: string): string | undefined {
+  const started = parseTimestamp(startedAt);
+  const finished = finishedAt ? parseTimestamp(finishedAt) : null;
+  if (started === null || finished === null || finished < started) {
+    return undefined;
+  }
+  const elapsedMs = finished - started;
+  if (elapsedMs < 1000) {
+    return `${Math.max(1, Math.round(elapsedMs))} ms`;
+  }
+  return `${(elapsedMs / 1000).toFixed(elapsedMs < 10_000 ? 1 : 0)} s`;
+}

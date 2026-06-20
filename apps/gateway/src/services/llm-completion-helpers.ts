@@ -128,7 +128,8 @@ export function classifyProviderFailure(error: Error): ProviderFailureClass {
 }
 
 export function shouldAttemptCrossProviderFallback(error: Error): boolean {
-  return classifyProviderFailure(error) !== "context_overflow" && classifyProviderFailure(error) !== "cancelled";
+  const failureClass = classifyProviderFailure(error);
+  return failureClass === "rate_limited" || failureClass === "transient" || failureClass === "unknown";
 }
 
 export function shouldReportProviderRetryCooldownExhausted(error: Error): boolean {

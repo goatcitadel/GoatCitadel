@@ -205,6 +205,101 @@ describe("ChatThreadPrimitives", () => {
     expect(text).not.toContain("Start new thread");
   });
 
+  it("renders safe transcript tool activity rows without raw args", () => {
+    const onOpenRunDetails = vi.fn();
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "executed",
+        startedAt: "2026-05-15T00:00:01.000Z",
+        finishedAt: "2026-05-15T00:00:02.250Z",
+        args: { query: "secret raw operator query" },
+        result: { results: [{ id: "memory-1" }, { id: "memory-2" }] },
+      },
+      {
+        toolRunId: "tool-2",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "artifact.write",
+        status: "approval_required",
+        approvalId: "approval-1",
+        startedAt: "2026-05-15T00:00:03.000Z",
+        result: { storedAsArtifact: true, artifactSummary: "Draft saved as artifact." },
+      },
+      {
+        toolRunId: "tool-3",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "browser.search",
+        status: "failed",
+        startedAt: "2026-05-15T00:00:04.000Z",
+        finishedAt: "2026-05-15T00:00:04.100Z",
+        error: "network failed",
+      },
+      {
+        toolRunId: "tool-4",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "fs.read",
+        status: "executed",
+        startedAt: "2026-05-15T00:00:05.000Z",
+        finishedAt: "2026-05-15T00:00:05.020Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const renderer = renderTurn({
+      onOpenRunDetails,
+      turn: createTurn({
+        toolRuns,
+        trace: {
+          ...createTurn().trace,
+          toolRuns,
+        },
+      }),
+    });
+
+    const text = renderedText(renderer);
+    expect(text).toContain("memory.search");
+    expect(text).toContain("2 results returned.");
+    expect(text).toContain("artifact.write");
+    expect(text).toContain("approval");
+    expect(text).toContain("artifact");
+    expect(text).toContain("+1 more");
+    expect(text).not.toContain("secret raw operator query");
+    expect(text).not.toContain("network failed");
+
+    TestRenderer.act(() => {
+      renderer.root.findByProps({ "aria-label": "Open execution detail for memory.search" }).props.onClick();
+    });
+    expect(onOpenRunDetails).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("renders compact run and context chips from trace owner data", () => {
+    const renderer = renderTurn({
+      turn: createTurn({
+        trace: {
+          ...createTurn().trace,
+          durable: {
+            runId: "durable-run-1234567890abcdef",
+            status: "running",
+          },
+          guidance: {
+            workspaceId: "workspace-1",
+            globalFilesUsed: [],
+            workspaceFilesUsed: [],
+            truncated: true,
+          },
+        },
+      }),
+    });
+
+    const text = renderedText(renderer);
+    expect(text).toContain("Run durable-...abcdef");
+    expect(text).toContain("context trimmed");
+  });
+
   it("does not render an empty action menu when no turn actions are available", () => {
     const renderer = renderTurn({
       turn: createTurn({
@@ -237,7 +332,21 @@ describe("ChatThreadPrimitives", () => {
           status: "partial",
           steps: [
             { stepId: "step-1", role: "architect_lead", status: "completed", index: 0, output: "Design locked." },
-            { stepId: "step-2", role: "qa", label: "QA", status: "running", index: 1, summary: "Checking." },
+            {
+              stepId: "step-2",
+              runId: "run-step-2",
+              role: "qa",
+              label: "QA",
+              status: "running",
+              index: 1,
+              startedAt: "2026-05-15T00:00:01.000Z",
+              durationMs: 1500,
+              summary: "Checking.",
+              durableRunId: "durable-step-2",
+              childSessionId: "child-session-2",
+              childTurnId: "child-turn-2",
+              degradedHandoffStepIds: ["step-1"],
+            },
           ],
           stitchedOutput: "Partial answer",
         }}
@@ -246,6 +355,20 @@ describe("ChatThreadPrimitives", () => {
 
     expect(renderedText(renderer)).toContain("Cowork activity");
     expect(renderedText(renderer)).toContain("Now: QA");
+    expect(renderedText(renderer)).toContain("Run run-1");
+    expect(renderedText(renderer)).toContain("Plan plan-1");
+    expect(renderedText(renderer)).toContain("Task task-1");
+    expect(renderedText(renderer)).toContain("handoff fallback");
+    expect(renderedText(renderer)).toContain("synthesis");
+    expect(renderer.root.findByProps({ "aria-label": "Subagent activity for this delegation" })).toBeTruthy();
+    expect(renderedText(renderer)).toContain("Durable");
+    expect(renderedText(renderer)).toContain("durable-step-2");
+    expect(renderedText(renderer)).toContain("Child session");
+    expect(renderedText(renderer)).toContain("child-session-2");
+    expect(renderedText(renderer)).toContain("Child turn");
+    expect(renderedText(renderer)).toContain("child-turn-2");
+    expect(renderedText(renderer)).toContain("Duration");
+    expect(renderedText(renderer)).toContain("1.5 s");
     expect(renderedText(renderer)).toContain("Partial stitched output is available");
 
     TestRenderer.act(() => {

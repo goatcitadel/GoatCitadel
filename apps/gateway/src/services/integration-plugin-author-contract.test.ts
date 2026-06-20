@@ -73,6 +73,13 @@ describe("integration plugin author contract", () => {
         }),
         integrityStatus: "not_applicable",
         trustWarnings: [],
+        descriptorHealth: expect.objectContaining({
+          status: "healthy",
+          evidence: expect.objectContaining({
+            owner: "gateway",
+            descriptorHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          }),
+        }),
         enabled: true,
         installedAt: "2026-03-30T10:00:00.000Z",
         updatedAt: "2026-03-30T10:00:00.000Z",
@@ -150,7 +157,56 @@ describe("integration plugin author contract", () => {
     expect(created.trustWarnings?.map((warning) => warning.code)).toEqual([
       "integrity_not_verified",
       "unverified_source",
+      "descriptor.missing",
     ]);
+    expect(created.descriptorHealth).toMatchObject({
+      status: "warning",
+      issues: [expect.objectContaining({ code: "descriptor.missing" })],
+    });
+  });
+
+  it("quarantines malformed local plugin descriptors with readable evidence", () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-broken-manifest-"));
+    try {
+      fs.writeFileSync(
+        path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME),
+        JSON.stringify({
+          pluginId: "broken-plugin",
+          label: "Broken Plugin",
+          version: "1.0.0",
+          capabilities: [],
+        }),
+        "utf8",
+      );
+
+      const created = buildInstalledIntegrationPluginRecord({
+        now: "2026-03-30T10:00:00.000Z",
+        pluginId: "broken-plugin",
+        source,
+      });
+
+      expect(created.enabled).toBe(false);
+      expect(created.integrityStatus).toBe("quarantined");
+      expect(created.descriptorHealth).toMatchObject({
+        status: "quarantined",
+        summary: expect.stringContaining("malformed"),
+        issues: [
+          expect.objectContaining({
+            code: "manifest.too_small",
+            severity: "critical",
+            message: expect.stringContaining("capabilities"),
+          }),
+        ],
+        evidence: expect.objectContaining({
+          owner: "gateway",
+          source: "integration_plugin_descriptor",
+          status: "quarantined",
+        }),
+      });
+      expect(created.trustWarnings?.map((warning) => warning.code)).toContain("manifest.too_small");
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
   });
 
   it("classifies GitHub URL sources by hostname instead of substring", () => {
@@ -166,48 +222,60 @@ describe("integration plugin author contract", () => {
   });
 
   it("normalizes install source displays for empty, git, npm, manual, and invalid-url overrides", () => {
-    expect(resolveIntegrationPluginInstallMetadata("   ")).toMatchObject({
+    const empty = resolveIntegrationPluginInstallMetadata("   ");
+    expect(empty).toMatchObject({
       sourceMetadata: {
         type: "unknown",
         display: "Unknown source",
         integrityStatus: "unknown",
       },
-      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
     });
-    expect(resolveIntegrationPluginInstallMetadata("git@github.com:goat/plugin.git")).toMatchObject({
+    expect(empty.trustWarnings.map((warning) => warning.code)).toEqual(["unverified_source", "descriptor.missing"]);
+
+    const git = resolveIntegrationPluginInstallMetadata("git@github.com:goat/plugin.git");
+    expect(git).toMatchObject({
       sourceMetadata: {
         type: "git",
         display: "Git source",
       },
-      trustWarnings: [],
     });
-    expect(resolveIntegrationPluginInstallMetadata("goat-plugin")).toMatchObject({
+    expect(git.trustWarnings.map((warning) => warning.code)).toEqual(["descriptor.missing"]);
+
+    const npm = resolveIntegrationPluginInstallMetadata("goat-plugin");
+    expect(npm).toMatchObject({
       sourceMetadata: {
         type: "npm",
         display: "goat-plugin",
       },
-      trustWarnings: [],
     });
+    expect(npm.trustWarnings.map((warning) => warning.code)).toEqual(["descriptor.missing"]);
+
     expect(resolveIntegrationPluginInstallMetadata("npm:@goat/plugin", { sourceType: "npm" })).toMatchObject({
       sourceMetadata: {
         type: "npm",
         display: "@goat/plugin",
       },
     });
-    expect(resolveIntegrationPluginInstallMetadata("plugin bundle", { sourceType: "manual" })).toMatchObject({
+    const manual = resolveIntegrationPluginInstallMetadata("plugin bundle", { sourceType: "manual" });
+    expect(manual).toMatchObject({
       sourceMetadata: {
         type: "manual",
         display: "Manual source",
       },
-      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
     });
-    expect(resolveIntegrationPluginInstallMetadata("not a url", { sourceType: "url" })).toMatchObject({
+    expect(manual.trustWarnings.map((warning) => warning.code)).toEqual(["unverified_source", "descriptor.missing"]);
+
+    const invalidUrl = resolveIntegrationPluginInstallMetadata("not a url", { sourceType: "url" });
+    expect(invalidUrl).toMatchObject({
       sourceMetadata: {
         type: "url",
         display: "URL source",
       },
-      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
     });
+    expect(invalidUrl.trustWarnings.map((warning) => warning.code)).toEqual([
+      "unverified_source",
+      "descriptor.missing",
+    ]);
   });
 });
 

@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
-    "pg": "^8.20.0"
+    "pg": "8.20.0"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
@@ -24,6 +24,6 @@
     "lint": "tsc -b tsconfig.json"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.0"
+    "@types/pg": "8.20.0"
   }
 }

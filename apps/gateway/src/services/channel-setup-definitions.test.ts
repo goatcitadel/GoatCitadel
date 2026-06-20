@@ -552,6 +552,7 @@ describe("channel setup definitions", () => {
         key: "imessage",
         label: "iMessage Primary",
         config: {
+          bridgeProvider: "bluebubbles",
           bridgeUrl: "http://127.0.0.1:3001",
           passwordEnv: "IMESSAGE_PASSWORD",
           defaultHandle: "imessage:+15551234567",
@@ -566,9 +567,50 @@ describe("channel setup definitions", () => {
     expect(definition.validate(draft)).toEqual([]);
     expect(definition.normalize(draft)).toEqual(
       expect.objectContaining({
+        bridgeProvider: "bluebubbles",
         bridgeUrl: "http://127.0.0.1:3001",
         passwordEnv: "IMESSAGE_PASSWORD",
         defaultHandle: "imessage:+15551234567",
+      }),
+    );
+  });
+
+  it("preserves Photon iMessage provider metadata while warning that runtime sends are adapter-gated", () => {
+    const definition = requireChannelSetupDefinition("channel.imessage");
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.imessage",
+        key: "imessage",
+        label: "Photon iMessage",
+        config: {
+          bridgeProvider: "photon",
+          bridgeUrl: "http://127.0.0.1:4317",
+          passwordEnv: "PHOTON_AUTH_TOKEN",
+          photonSidecarUrl: "http://127.0.0.1:4317",
+          photonAuthEnv: "PHOTON_AUTH_TOKEN",
+          defaultHandle: "imessage:+15551234567",
+        },
+      }),
+    );
+    const draft = {
+      ...createDraft("channel.imessage", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "imessage_photon_preview",
+          level: "warn",
+          fieldKey: "bridgeProvider",
+        }),
+      ]),
+    );
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        bridgeProvider: "photon",
+        photonSidecarUrl: "http://127.0.0.1:4317",
+        photonAuthEnv: "PHOTON_AUTH_TOKEN",
       }),
     );
   });

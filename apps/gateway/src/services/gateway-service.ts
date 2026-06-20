@@ -966,6 +966,7 @@ export class GatewayService {
         readOnlyRoots: config.toolPolicy.sandbox.readOnlyRoots,
       },
       modelMetadataPath: path.join(config.rootDir, "config", "llm-model-metadata.json"),
+      modelCatalogCachePath: path.resolve(config.rootDir, config.assistant.dataDir, "cache", "llm-model-catalog.json"),
       secretStore,
     });
     this.assemblyService = new AssemblyService({
@@ -6794,7 +6795,7 @@ export class GatewayService {
       if (!providerId || !model) {
         return;
       }
-      if (providerId === primaryProviderId && model === primaryModel) {
+      if (providerId === primaryProviderId) {
         return;
       }
       if (candidates.some((item) => item.providerId === providerId && item.model === model)) {

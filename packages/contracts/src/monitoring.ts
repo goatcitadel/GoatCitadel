@@ -140,6 +140,14 @@ export interface CronJobRecord {
   contextFrom?: string;
   lastRunOutput?: string;
   lastRunId?: string;
+  lastRunStatus?: "ok" | "failed";
+  lastFailureAt?: string;
+  lastFailure?: {
+    message: string;
+    code?: string;
+  };
+  failureCount?: number;
+  backoffUntil?: string;
 }
 
 export interface OperatorSummary {

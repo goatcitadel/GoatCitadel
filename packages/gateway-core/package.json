@@ -14,7 +14,7 @@
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
     "@goatcitadel/storage": "workspace:*",
-    "nanoid": "^5.1.5"
+    "nanoid": "5.1.6"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

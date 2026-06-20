@@ -40,6 +40,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair.",
             ),
+            paragraph(
+              "Rich sends are preflighted before delivery: native media labels, text fallbacks, pending attachment hydration, provider evidence, and attachment-count limits are recorded before the Cloud API send.",
+            ),
             note(
               "warning",
               "WhatsApp Cloud API is a guided beta lane. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient before finalize.",
@@ -174,6 +177,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           body: [
             paragraph(
               "Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize.",
+            ),
+            paragraph(
+              "Runtime rich-message evidence records whether media is native, text fallback, pending hydration, or blocked before provider delivery.",
             ),
           ],
         },

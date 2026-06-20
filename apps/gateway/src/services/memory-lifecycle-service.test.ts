@@ -459,6 +459,161 @@ describe("MemoryLifecycleService", () => {
     );
   });
 
+  it("applies batch memory item mutations with sanitized reversible ledger evidence", () => {
+    const harness = createMemoryItemBatchHarness();
+
+    const response = harness.service.batchMutateMemoryItems(
+      {
+        actionId: "batch-1",
+        source: "operator-ui",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "item-1",
+            patch: {
+              title: "Updated batch title",
+              metadata: { token: "sk-should-not-enter-ledger" },
+              pinned: true,
+            },
+          },
+          {
+            kind: "forget_item",
+            itemId: "item-2",
+          },
+        ],
+      },
+      "operator-1",
+    );
+
+    expect(response).toMatchObject({
+      actionId: "batch-1",
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["item-1", "item-2"],
+      ledger: {
+        actionId: "batch-1",
+        ownerId: "operator-1",
+        source: "operator-ui",
+        status: "applied",
+        operationKind: "mixed",
+        operationCount: 2,
+        evidence: {
+          storesRawContent: false,
+          changedFields: {
+            "item-1": ["metadata", "pinned", "title"],
+          },
+        },
+      },
+    });
+    expect(harness.rows.get("item-1")).toMatchObject({
+      title: "Updated batch title",
+      pinned: 1,
+    });
+    expect(harness.rows.get("item-2")).toMatchObject({
+      status: "forgotten",
+    });
+    expect(JSON.stringify(response.ledger)).not.toContain("Updated batch title");
+    expect(JSON.stringify(response.ledger)).not.toContain("sk-should-not-enter-ledger");
+
+    const itemHistory = harness.service.listMemoryItemHistory("item-1");
+    expect(itemHistory[0]).toMatchObject({
+      itemId: "item-1",
+      changeType: "updated",
+      actorId: "operator-1",
+      payload: {
+        actionId: "batch-1",
+        ownerId: "operator-1",
+        source: "operator-ui",
+        status: "applied",
+        operationKind: "patch_item",
+        changedFields: ["metadata", "pinned", "title"],
+        storesRawContent: false,
+      },
+    });
+    expect(JSON.stringify(itemHistory[0]?.payload)).not.toContain("Updated batch title");
+    expect(JSON.stringify(itemHistory[0]?.payload)).not.toContain("sk-should-not-enter-ledger");
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "memory",
+      expect.objectContaining({
+        type: "memory_batch_mutation_applied",
+        actionId: "batch-1",
+        appliedCount: 2,
+      }),
+    );
+  });
+
+  it("rolls back every batch memory mutation when a transactional write fails", () => {
+    const harness = createMemoryItemBatchHarness({ throwOnUpdateNumber: 2 });
+
+    expect(() =>
+      harness.service.batchMutateMemoryItems(
+        {
+          actionId: "batch-rollback",
+          operations: [
+            { kind: "patch_item", itemId: "item-1", patch: { title: "Should roll back" } },
+            { kind: "patch_item", itemId: "item-2", patch: { title: "Throws on second update" } },
+          ],
+        },
+        "operator-1",
+      ),
+    ).toThrow("Simulated transactional update failure");
+
+    expect(harness.rows.get("item-1")).toMatchObject({
+      title: "Original item 1",
+      pinned: 0,
+    });
+    expect(harness.rows.get("item-2")).toMatchObject({
+      title: "Original item 2",
+      pinned: 0,
+      status: "active",
+    });
+    expect(harness.historyRows).toHaveLength(0);
+    expect(harness.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of applying a batch when transactional storage is unavailable", () => {
+    const harness = createMemoryItemBatchHarness({ includeTransaction: false });
+
+    expect(() =>
+      harness.service.batchMutateMemoryItems(
+        {
+          actionId: "batch-no-transaction",
+          operations: [{ kind: "patch_item", itemId: "item-1", patch: { title: "Should not apply" } }],
+        },
+        "operator-1",
+      ),
+    ).toThrow("Atomic memory batch mutations require transactional gateway storage.");
+
+    expect(harness.rows.get("item-1")).toMatchObject({
+      title: "Original item 1",
+      pinned: 0,
+    });
+    expect(harness.historyRows).toHaveLength(0);
+    expect(harness.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("enforces the memory batch operation limit at the service boundary", () => {
+    const harness = createMemoryItemBatchHarness();
+
+    expect(() =>
+      harness.service.batchMutateMemoryItems(
+        {
+          operations: Array.from({ length: 101 }, () => ({
+            kind: "forget_item" as const,
+            itemId: "item-1",
+          })),
+        },
+        "operator-1",
+      ),
+    ).toThrow(/operations/i);
+
+    expect(harness.rows.get("item-1")).toMatchObject({
+      status: "active",
+    });
+    expect(harness.historyRows).toHaveLength(0);
+  });
+
   it("owns operator-facing memory file listing", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gc-memory-lifecycle-"));
     const workspaceDir = path.join(tempRoot, "workspace");
@@ -1363,6 +1518,189 @@ function createStructuredMemorySqlHarness() {
         },
       };
     },
+  };
+}
+
+type MemoryItemBatchTestRow = {
+  item_id: string;
+  namespace: string;
+  title: string;
+  content: string;
+  metadata_json: string;
+  pinned: number;
+  ttl_override_seconds: number | null;
+  expires_at: string | null;
+  status: "active" | "forgotten";
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+};
+
+type MemoryItemBatchHistoryRow = {
+  change_id: string;
+  item_id: string;
+  change_type: string;
+  actor_id: string | null;
+  payload_json: string;
+  created_at: string;
+};
+
+function createMemoryItemBatchHarness(
+  options: { throwOnUpdateNumber?: number; includeTransaction?: boolean } = {},
+) {
+  const rows = new Map<string, MemoryItemBatchTestRow>(
+    [
+      {
+        item_id: "item-1",
+        namespace: "workspace.default",
+        title: "Original item 1",
+        content: "Original content 1",
+        metadata_json: JSON.stringify({ source: "test-1" }),
+        pinned: 0,
+        ttl_override_seconds: null,
+        expires_at: null,
+        status: "active",
+        created_at: "2026-04-10T00:00:00.000Z",
+        updated_at: "2026-04-10T00:00:00.000Z",
+        forgotten_at: null,
+      },
+      {
+        item_id: "item-2",
+        namespace: "workspace.default",
+        title: "Original item 2",
+        content: "Original content 2",
+        metadata_json: JSON.stringify({ source: "test-2" }),
+        pinned: 0,
+        ttl_override_seconds: null,
+        expires_at: null,
+        status: "active",
+        created_at: "2026-04-10T00:00:00.000Z",
+        updated_at: "2026-04-10T00:00:00.000Z",
+        forgotten_at: null,
+      },
+    ].map((row) => [row.item_id, row]),
+  );
+  const historyRows: MemoryItemBatchHistoryRow[] = [];
+  const publishRealtime = vi.fn();
+  const requireFeatureEnabled = vi.fn();
+  let updateRunCount = 0;
+
+  const gatewaySql: {
+    prepare: ReturnType<typeof vi.fn>;
+    runImmediateTransaction?: <T>(callback: () => T) => T;
+  } = {
+    prepare: vi.fn((sql: string) => {
+      if (sql.includes("FROM memory_items") && sql.includes("WHERE item_id = ?")) {
+        return {
+          get: vi.fn((itemId: string) => {
+            const row = rows.get(itemId);
+            return row ? { ...row } : undefined;
+          }),
+          all: vi.fn(() => []),
+          run: vi.fn(),
+        };
+      }
+      if (sql.includes("UPDATE memory_items")) {
+        return {
+          get: vi.fn(),
+          all: vi.fn(() => []),
+          run: vi.fn((params: Record<string, unknown>) => {
+            updateRunCount += 1;
+            if (options.throwOnUpdateNumber === updateRunCount) {
+              throw new Error("Simulated transactional update failure");
+            }
+            const row = rows.get(String(params.itemId));
+            if (!row) {
+              return;
+            }
+            if (params.title !== undefined) {
+              row.title = String(params.title);
+              row.content = String(params.content);
+              row.metadata_json = String(params.metadataJson);
+              row.pinned = Number(params.pinned ?? 0);
+              row.ttl_override_seconds = (params.ttlOverrideSeconds as number | null | undefined) ?? null;
+              row.expires_at = (params.expiresAt as string | null | undefined) ?? null;
+            }
+            if (params.forgottenAt !== undefined) {
+              row.status = "forgotten";
+              row.forgotten_at = String(params.forgottenAt);
+            }
+            row.updated_at = String(params.updatedAt ?? row.updated_at);
+          }),
+        };
+      }
+      if (sql.includes("INSERT INTO memory_change_history")) {
+        return {
+          get: vi.fn(),
+          all: vi.fn(() => []),
+          run: vi.fn((params: Record<string, unknown>) => {
+            historyRows.unshift({
+              change_id: String(params.changeId),
+              item_id: String(params.itemId),
+              change_type: String(params.changeType),
+              actor_id: params.actorId ? String(params.actorId) : null,
+              payload_json: String(params.payloadJson ?? "{}"),
+              created_at: String(params.createdAt),
+            });
+          }),
+        };
+      }
+      if (sql.includes("FROM memory_change_history")) {
+        return {
+          get: vi.fn(),
+          all: vi.fn((itemId: string, limit: number) =>
+            historyRows.filter((row) => row.item_id === itemId).slice(0, limit),
+          ),
+          run: vi.fn(),
+        };
+      }
+      throw new Error(`Unexpected SQL in batch test harness: ${sql}`);
+    }),
+  };
+
+  if (options.includeTransaction !== false) {
+    gatewaySql.runImmediateTransaction = vi.fn(<T>(callback: () => T): T => {
+      const rowSnapshot = new Map(Array.from(rows.entries()).map(([key, row]) => [key, { ...row }]));
+      const historySnapshot = historyRows.map((row) => ({ ...row }));
+      try {
+        return callback();
+      } catch (error) {
+        rows.clear();
+        for (const [key, row] of rowSnapshot.entries()) {
+          rows.set(key, row);
+        }
+        historyRows.splice(0, historyRows.length, ...historySnapshot);
+        throw error;
+      }
+    });
+  }
+
+  const service = new MemoryLifecycleService({
+    context: {} as never,
+    learned: {} as never,
+    maintenance: {} as never,
+    admin: {
+      gatewaySql: gatewaySql as never,
+      tryParseJson: (raw, fallback) => {
+        try {
+          return raw ? JSON.parse(raw) : fallback;
+        } catch {
+          return fallback;
+        }
+      },
+      requireFeatureEnabled,
+      publishRealtime,
+    },
+    resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+    readTranscriptOrEmpty: vi.fn(async () => []),
+  });
+
+  return {
+    service,
+    rows,
+    historyRows,
+    publishRealtime,
+    requireFeatureEnabled,
   };
 }
 

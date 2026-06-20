@@ -760,6 +760,23 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Generate/update embeddings for knowledge chunks.",
     pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        namespace: { type: "string" },
+        documentId: { type: "string" },
+        force: { type: "boolean" },
+        embeddingProfile: {
+          type: "object",
+          properties: {
+            provider: { type: "string" },
+            modelId: { type: "string" },
+            dimensions: { type: "integer", minimum: 1 },
+            profileId: { type: "string" },
+          },
+        },
+      },
+    },
   },
   {
     name: "embeddings.query",
@@ -768,6 +785,24 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Search chunks by vector similarity with lexical fallback.",
     pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        namespace: { type: "string" },
+        query: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        embeddingProfile: {
+          type: "object",
+          properties: {
+            provider: { type: "string" },
+            modelId: { type: "string" },
+            dimensions: { type: "integer", minimum: 1 },
+            profileId: { type: "string" },
+          },
+        },
+      },
+      required: ["query"],
+    },
   },
   {
     name: "artifacts.create",

@@ -37,3 +37,46 @@ test("artifact redaction scan catches JSON provider secrets", async () => {
     },
   ]);
 });
+
+test("artifact redaction scan catches env and query-string provider secrets", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-redaction-env-url-"));
+  await fs.writeFile(
+    path.join(root, "run.env"),
+    [
+      "OPENAI_API_KEY=sk-test-secret-value-that-must-not-print",
+      "CALLBACK_URL=https://example.com/hook?access_token=query-secret-value-1234567890",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const findings = await findArtifactRedactionFindings(root);
+
+  assert.deepEqual(
+    findings.map((item) => item.ruleId).sort(),
+    ["openai-style-key", "provider-secret-env", "provider-secret-url-query"].sort(),
+  );
+  assert.ok(findings.every((item) => item.file === "run.env"));
+  assert.ok(findings.every((item) => !JSON.stringify(item).includes("secret-value")));
+  assert.ok(findings.every((item) => !JSON.stringify(item).includes("query-secret")));
+});
+
+test("artifact redaction scan catches common provider token shapes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-redaction-provider-shapes-"));
+  await fs.writeFile(
+    path.join(root, "tokens.txt"),
+    [
+      "anthropic=sk-ant-test-token-that-is-long-enough-for-proof",
+      "github=ghp_abcdefghijklmnopqrstuvwxyz123456",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const findings = await findArtifactRedactionFindings(root);
+
+  assert.deepEqual(
+    findings.map((item) => item.ruleId).sort(),
+    ["anthropic-style-key", "github-style-token"].sort(),
+  );
+  assert.ok(findings.every((item) => item.file === "tokens.txt"));
+  assert.ok(findings.every((item) => !JSON.stringify(item).includes("abcdefghijklmnopqrstuvwxyz")));
+});

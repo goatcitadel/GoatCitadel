@@ -1,3 +1,5 @@
+import type { MemoryEmbeddingProfileRequest } from "./memory.js";
+
 export interface MemoryWriteInput {
   namespace: string;
   title: string;
@@ -52,6 +54,7 @@ export interface EmbeddingIndexInput {
   namespace?: string;
   documentId?: string;
   force?: boolean;
+  embeddingProfile?: MemoryEmbeddingProfileRequest;
   sessionId?: string;
   agentId?: string;
   taskId?: string;
@@ -61,6 +64,7 @@ export interface EmbeddingQueryInput {
   namespace?: string;
   query: string;
   limit?: number;
+  embeddingProfile?: MemoryEmbeddingProfileRequest;
   sessionId?: string;
   agentId?: string;
   taskId?: string;

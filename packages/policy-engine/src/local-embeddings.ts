@@ -1,3 +1,5 @@
+import type { MemoryEmbeddingProfile, MemoryEmbeddingProfileRequest } from "@goatcitadel/contracts";
+
 export type EmbeddingProviderId = "pseudo";
 
 export interface EmbeddingMetadata extends Record<string, unknown> {
@@ -12,36 +14,37 @@ export interface EmbeddingMetadata extends Record<string, unknown> {
 export interface GeneratedEmbedding {
   embedding: number[];
   metadata: EmbeddingMetadata;
+  profile: MemoryEmbeddingProfile;
   method: "pseudo-embedding";
-}
-
-interface EmbeddingProfile {
-  provider: EmbeddingProviderId;
-  modelId: string;
-  dimensions: number;
-  version: string;
 }
 
 const PSEUDO_MODEL_ID = "pseudo-hash-v1";
 const PSEUDO_DIMENSIONS = 64;
+const MIN_PSEUDO_DIMENSIONS = 8;
+const MAX_PSEUDO_DIMENSIONS = 512;
 const EMBEDDING_VERSION = "goatcitadel-embedding-v1";
 
-export async function generateEmbedding(text: string, now = new Date()): Promise<GeneratedEmbedding> {
-  return createPseudoEmbedding(text, now, embeddingFallbackReason());
+export async function generateEmbedding(
+  text: string,
+  now = new Date(),
+  request?: MemoryEmbeddingProfileRequest,
+): Promise<GeneratedEmbedding> {
+  return createPseudoEmbedding(text, now, resolveEmbeddingProfile(request));
 }
 
-export function currentEmbeddingProfile(): EmbeddingProfile {
-  return resolveEmbeddingProfile();
+export function currentEmbeddingProfile(request?: MemoryEmbeddingProfileRequest): MemoryEmbeddingProfile {
+  return resolveEmbeddingProfile(request);
 }
 
 export function isEmbeddingCurrent(
   embedding: number[] | undefined,
   metadata: Record<string, unknown> | undefined,
+  request?: MemoryEmbeddingProfileRequest,
 ): boolean {
   if (!embedding || embedding.length === 0) {
     return false;
   }
-  const profile = resolveEmbeddingProfile();
+  const profile = resolveEmbeddingProfile(request);
   if (!metadata) {
     return false;
   }
@@ -54,6 +57,7 @@ export function isEmbeddingCurrent(
     modelId === profile.modelId &&
     version === profile.version &&
     dimensions === embedding.length &&
+    dimensions === profile.dimensions &&
     profile.dimensions === embedding.length
   );
 }
@@ -86,29 +90,79 @@ export function pseudoEmbedding(text: string, dimensions = PSEUDO_DIMENSIONS): n
   return normalizeVector(buckets.map((value) => Number(value.toFixed(6))));
 }
 
-function createPseudoEmbedding(text: string, now: Date, fallbackReason?: string): GeneratedEmbedding {
-  const embedding = pseudoEmbedding(text);
+function createPseudoEmbedding(text: string, now: Date, profile: MemoryEmbeddingProfile): GeneratedEmbedding {
+  const embedding = pseudoEmbedding(text, profile.dimensions);
+  const fallbackReason = embeddingFallbackReason(profile);
   return {
     embedding,
+    profile,
     method: "pseudo-embedding",
     metadata: {
       provider: "pseudo",
-      modelId: PSEUDO_MODEL_ID,
+      modelId: profile.modelId,
       dimensions: embedding.length,
       generatedAt: now.toISOString(),
-      version: EMBEDDING_VERSION,
+      version: profile.version,
+      profileId: profile.profileId,
+      profileStatus: profile.status,
       ...(fallbackReason ? { fallbackReason } : {}),
     },
   };
 }
 
-function resolveEmbeddingProfile(): EmbeddingProfile {
+function resolveEmbeddingProfile(request?: MemoryEmbeddingProfileRequest): MemoryEmbeddingProfile {
+  const requestedProvider =
+    optionalString(request?.provider) ?? optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER) ?? "pseudo";
+  const source = resolveEmbeddingProfileSource(request);
+  if (requestedProvider !== "pseudo") {
+    return {
+      profileId: "pseudo:pseudo-hash-v1:64:goatcitadel-embedding-v1",
+      provider: "pseudo",
+      modelId: PSEUDO_MODEL_ID,
+      dimensions: PSEUDO_DIMENSIONS,
+      version: EMBEDDING_VERSION,
+      status: "fallback",
+      source,
+      requestedProvider,
+      fallbackReason: `embedding-provider-unavailable: ${requestedProvider}`,
+    };
+  }
+  const modelId = optionalString(request?.modelId) ?? optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ?? PSEUDO_MODEL_ID;
+  const dimensions = normalizePseudoDimensions(
+    request?.dimensions ?? optionalNumberFromEnv(process.env.GOATCITADEL_EMBEDDINGS_DIMENSIONS),
+  );
+  const profileId =
+    optionalString(request?.profileId) ?? `pseudo:${modelId}:${dimensions}:${EMBEDDING_VERSION}`;
   return {
     provider: "pseudo",
-    modelId: PSEUDO_MODEL_ID,
-    dimensions: PSEUDO_DIMENSIONS,
+    modelId,
+    dimensions,
     version: EMBEDDING_VERSION,
+    profileId,
+    status: "active",
+    source,
   };
+}
+
+function resolveEmbeddingProfileSource(
+  request: MemoryEmbeddingProfileRequest | undefined,
+): MemoryEmbeddingProfile["source"] {
+  if (
+    optionalString(request?.provider) ||
+    optionalString(request?.modelId) ||
+    optionalString(request?.profileId) ||
+    typeof request?.dimensions === "number"
+  ) {
+    return "request";
+  }
+  if (
+    optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER) ||
+    optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ||
+    optionalString(process.env.GOATCITADEL_EMBEDDINGS_DIMENSIONS)
+  ) {
+    return "environment";
+  }
+  return "default";
 }
 
 function normalizeVector(values: number[]): number[] {
@@ -119,10 +173,24 @@ function normalizeVector(values: number[]): number[] {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
-function embeddingFallbackReason(): string | undefined {
-  const requested = optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER);
-  if (requested && requested !== "pseudo") {
-    return `embedding-provider-retired: ${requested}`;
+function normalizePseudoDimensions(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return PSEUDO_DIMENSIONS;
+  }
+  return Math.max(MIN_PSEUDO_DIMENSIONS, Math.min(MAX_PSEUDO_DIMENSIONS, Math.floor(value)));
+}
+
+function optionalNumberFromEnv(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function embeddingFallbackReason(profile: MemoryEmbeddingProfile): string | undefined {
+  if (profile.fallbackReason) {
+    return profile.fallbackReason;
   }
   return process.env.NODE_ENV === "test" ? "test-environment-default" : undefined;
 }

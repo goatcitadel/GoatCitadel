@@ -629,9 +629,16 @@ describe("RuntimeRoutePage", () => {
       recipe: {
         name: "Provider spend review automation",
         goal: "Review provider spend and prepare an operator note.",
+        process: "sequential",
+        agents: [],
         steps: [],
-        scheduleIntent: { trigger: "manual review", frequency: "weekdays at 9" },
+        scheduleIntent: "manual review · weekdays at 9",
       },
+      plan: { planId: "recipe-provider-spend-review" },
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1 },
       warnings: ["Operator approval is required before activation."],
       roiEstimate: { confidence: 0.6, rationale: "Small recurring review task." },
       proofChecklist: ["Review generated recipe", "Validate schedule intent", "Confirm no cron job was created"],
@@ -642,6 +649,7 @@ describe("RuntimeRoutePage", () => {
       generatedAt: "2026-05-31T12:00:00.000Z",
       filename: "provider-spend-review-activepieces-template.json",
       contentType: "application/json",
+      contentSha256: "a".repeat(64),
       content: '{"version":"workflow_recipe.activepieces_template_export.v1"}',
       recipe: {
         name: "Provider spend review automation",
@@ -692,12 +700,26 @@ describe("RuntimeRoutePage", () => {
         importRequired: true,
         execution: "operator_import_required",
       },
+      evidence: {
+        evidenceId: "workflow-template:activepieces:a",
+        owner: "gateway",
+        source: "workflow_recipe_export",
+        timestamp: "2026-05-31T12:00:00.000Z",
+        target: "activepieces",
+        planId: "recipe-provider-spend-review",
+        filename: "provider-spend-review-activepieces-template.json",
+        contentType: "application/json",
+        contentSha256: "a".repeat(64),
+        status: "read_only_planning_artifact",
+        actionNeeded: "Review and import manually in the external automation tool before enabling any workflow.",
+      },
     });
     runtimeApiMocks.exportN8nWorkflowTemplate.mockResolvedValue({
       version: "workflow_recipe.n8n_template_export.v1",
       generatedAt: "2026-05-31T12:00:00.000Z",
       filename: "provider-spend-review-n8n-template.json",
       contentType: "application/json",
+      contentSha256: "b".repeat(64),
       target: "n8n",
       content: '{"version":"workflow_recipe.n8n_template_export.v1"}',
       recipe: {
@@ -749,6 +771,19 @@ describe("RuntimeRoutePage", () => {
         sideEffectPosture: "not_executed",
         importRequired: true,
         execution: "operator_import_required",
+      },
+      evidence: {
+        evidenceId: "workflow-template:n8n:b",
+        owner: "gateway",
+        source: "workflow_recipe_export",
+        timestamp: "2026-05-31T12:00:00.000Z",
+        target: "n8n",
+        planId: "recipe-provider-spend-review",
+        filename: "provider-spend-review-n8n-template.json",
+        contentType: "application/json",
+        contentSha256: "b".repeat(64),
+        status: "read_only_planning_artifact",
+        actionNeeded: "Review and import manually in the external automation tool before enabling any workflow.",
       },
     });
     Object.defineProperty(globalThis.navigator, "clipboard", {
@@ -806,6 +841,8 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Automation recipe drafted. No cron job was created.");
     expect(collectText(renderer!.root)).toContain("Provider spend review automation");
     expect(collectText(renderer!.root)).toContain("Confirm no cron job was created");
+    expect(collectText(renderer!.root)).toContain("recipe-p...");
+    expect(collectText(renderer!.root)).toContain("weekdays at 9");
     expect(collectText(renderer!.root)).toContain("Copy n8n template");
 
     await act(async () => {
@@ -823,6 +860,8 @@ describe("RuntimeRoutePage", () => {
     );
     expect(collectText(renderer!.root)).toContain("Activepieces");
     expect(collectText(renderer!.root)).toContain("ready_for_operator_import_review");
+    expect(collectText(renderer!.root)).toContain("aaaaaaaa...");
+    expect(collectText(renderer!.root)).toContain("read_only_planning_artifact");
 
     await act(async () => {
       findButton(renderer!.root, "Copy n8n template").props.onClick();
@@ -840,6 +879,10 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("native import");
     expect(collectText(renderer!.root)).toContain("not verified");
     expect(collectText(renderer!.root)).toContain("No webhook trigger");
+    expect(collectText(renderer!.root)).toContain("bbbbbbbb...");
+    expect(collectText(renderer!.root)).toContain(
+      "Review and import manually in the external automation tool before enabling any workflow.",
+    );
   });
 
   it("surfaces schedule creation failures without clearing the draft", async () => {

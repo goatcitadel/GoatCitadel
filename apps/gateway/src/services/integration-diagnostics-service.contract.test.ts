@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
+const runIMessageBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 const runZaloUserBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-bot-live-probes.js", () => ({
   runDiscordBotLiveChecks: runDiscordBotLiveChecksMock,
-  runIMessageBridgeLiveChecks: vi.fn(),
+  runIMessageBridgeLiveChecks: runIMessageBridgeLiveChecksMock,
   runLineBotLiveChecks: vi.fn(),
   runMattermostBotLiveChecks: vi.fn(),
   runSignalBridgeLiveChecks: vi.fn(),
@@ -95,6 +96,7 @@ function createPort(): IntegrationDiagnosticsPort {
 describe("integration-diagnostics-service contract behavior", () => {
   beforeEach(() => {
     runDiscordBotLiveChecksMock.mockReset();
+    runIMessageBridgeLiveChecksMock.mockReset();
     runZaloUserBridgeLiveChecksMock.mockReset();
   });
 
@@ -153,6 +155,37 @@ describe("integration-diagnostics-service contract behavior", () => {
         fetcher: expect.any(Function),
       }),
     );
+  });
+
+  it("blocks Photon iMessage live checks before BlueBubbles probes", async () => {
+    const host = createPort();
+    const connection = createIntegrationConnection("imessage", "channel", {
+      bridgeProvider: "photon",
+      bridgeUrl: "http://127.0.0.1:4317",
+      password: "photon-token",
+      defaultHandle: "imessage:+15551234567",
+    });
+
+    const staticChecks = buildIntegrationConnectionChecks(host, connection);
+    const result = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
+
+    expect(staticChecks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "provider",
+          status: "warn",
+          message: expect.stringContaining("Photon/Spectrum"),
+        }),
+      ]),
+    );
+    expect(result.checks).toEqual([
+      expect.objectContaining({
+        key: "imessage_photon_runtime",
+        status: "fail",
+        message: expect.stringContaining("blocked until a Photon adapter is installed"),
+      }),
+    ]);
+    expect(runIMessageBridgeLiveChecksMock).not.toHaveBeenCalled();
   });
 
   it("requires local bridge posture for local-app productivity entries", () => {

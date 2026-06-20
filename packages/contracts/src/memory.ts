@@ -17,6 +17,27 @@ export type MemoryFallbackModeStatus =
   | "short_prompt_or_disabled"
   | "no_candidates"
   | "distiller_fallback";
+export type MemoryEmbeddingProfileStatus = "active" | "fallback" | "unavailable";
+export type MemoryEmbeddingProfileSource = "default" | "environment" | "request";
+
+export interface MemoryEmbeddingProfile {
+  profileId: string;
+  provider: string;
+  modelId: string;
+  dimensions: number;
+  version: string;
+  status: MemoryEmbeddingProfileStatus;
+  source: MemoryEmbeddingProfileSource;
+  requestedProvider?: string;
+  fallbackReason?: string;
+}
+
+export interface MemoryEmbeddingProfileRequest {
+  provider?: string;
+  modelId?: string;
+  dimensions?: number;
+  profileId?: string;
+}
 
 export interface MemoryRetrievalMatchSignals {
   lexicalScore: number;
@@ -588,6 +609,72 @@ export interface MemoryLifecyclePatch {
   metadata?: Record<string, unknown>;
   pinned?: boolean;
   ttlOverrideSeconds?: number | null;
+}
+
+export type MemoryBatchMutationOperationKind = "patch_item" | "forget_item";
+export type MemoryActionLedgerOperationKind = MemoryBatchMutationOperationKind | "mixed";
+export type MemoryActionLedgerStatus = "applied" | "failed" | "rejected";
+
+export interface MemoryBatchPatchItemMutation {
+  kind: "patch_item";
+  itemId: string;
+  patch: MemoryLifecyclePatch;
+}
+
+export interface MemoryBatchForgetItemMutation {
+  kind: "forget_item";
+  itemId: string;
+}
+
+export type MemoryBatchMutationOperation = MemoryBatchPatchItemMutation | MemoryBatchForgetItemMutation;
+
+export interface MemoryBatchMutationRequest {
+  actionId?: string;
+  source?: string;
+  operations: MemoryBatchMutationOperation[];
+}
+
+export interface MemoryActionLedgerNote {
+  feasible: boolean;
+  note: string;
+}
+
+export interface MemoryActionLedgerEvidence {
+  storesRawContent: boolean;
+  redactionNote: string;
+  changedFields?: Record<string, string[]>;
+  failureReason?: string;
+}
+
+export interface MemoryActionLedgerEntry {
+  actionId: string;
+  ownerId: string;
+  source: string;
+  timestamp: string;
+  status: MemoryActionLedgerStatus;
+  targetItemIds: string[];
+  operationKind: MemoryActionLedgerOperationKind;
+  operationCount: number;
+  reversal: MemoryActionLedgerNote;
+  reapply: MemoryActionLedgerNote;
+  evidence: MemoryActionLedgerEvidence;
+}
+
+export interface MemoryBatchMutationResult {
+  operationIndex: number;
+  kind: MemoryBatchMutationOperationKind;
+  itemId: string;
+  status: "applied";
+  item: MemoryItemRecord;
+}
+
+export interface MemoryBatchMutationResponse {
+  actionId: string;
+  status: Extract<MemoryActionLedgerStatus, "applied">;
+  appliedCount: number;
+  targetItemIds: string[];
+  results: MemoryBatchMutationResult[];
+  ledger: MemoryActionLedgerEntry;
 }
 
 export interface MemoryChangeEvent {

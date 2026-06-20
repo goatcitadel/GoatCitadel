@@ -98,6 +98,87 @@ describe("memory routes", () => {
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 
+  it("routes atomic memory item batch mutations through the memory service", async () => {
+    const batchMutateItems = vi.fn(() => ({
+      actionId: "batch-1",
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["mem-1", "mem-2"],
+      results: [],
+      ledger: {
+        actionId: "batch-1",
+        ownerId: "operator",
+        source: "route-test",
+        timestamp: "2026-06-20T00:00:00.000Z",
+        status: "applied",
+        targetItemIds: ["mem-1", "mem-2"],
+        operationKind: "mixed",
+        operationCount: 2,
+        reversal: { feasible: true, note: "reverse" },
+        reapply: { feasible: false, note: "reapply" },
+        evidence: { storesRawContent: false, redactionNote: "raw content excluded" },
+      },
+    }));
+    const built = buildApp({
+      batchMutateItems,
+    });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/items/batch-mutate",
+      payload: {
+        actionId: "batch-1",
+        source: "route-test",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "mem-1",
+            patch: {
+              title: "Updated title",
+              pinned: true,
+            },
+          },
+          {
+            kind: "forget_item",
+            itemId: "mem-2",
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actionId: "batch-1",
+      ledger: {
+        evidence: { storesRawContent: false },
+      },
+    });
+    expect(batchMutateItems).toHaveBeenCalledWith(
+      {
+        actionId: "batch-1",
+        source: "route-test",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "mem-1",
+            patch: {
+              title: "Updated title",
+              pinned: true,
+            },
+          },
+          {
+            kind: "forget_item",
+            itemId: "mem-2",
+          },
+        ],
+      },
+      expect.stringMatching(/^ip:/),
+    );
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
   it("validates memory context route params", async () => {
     const getMemoryContext = vi.fn(() => ({ contextId: "ctx-1", scope: "chat" }));
     app = Fastify();

@@ -185,6 +185,121 @@ export interface McpInvokeResponse {
   reasonCodes?: string[];
 }
 
+export const MCP_ELICITATION_LIMITS = {
+  promptMaxChars: 4096,
+  requestedSchemaMaxBytes: 16 * 1024,
+  responseContentMaxBytes: 16 * 1024,
+  listMaxItems: 200,
+} as const;
+
+export type McpElicitationStatus = "pending" | "accepted" | "declined" | "cancelled" | "expired";
+export type McpElicitationResponseAction = "accept" | "decline" | "cancel";
+export type McpElicitationSourceType = "mcp_server" | "gateway" | "agent" | "ui";
+
+export interface McpElicitationBoundedTextBody {
+  text: string;
+  charLength: number;
+  maxChars: number;
+  truncated: boolean;
+  redactedSecretCount: number;
+}
+
+export interface McpElicitationBoundedJsonBody<TValue = Record<string, unknown>> {
+  value: TValue;
+  byteLength: number;
+  maxBytes: number;
+  truncated: boolean;
+  redactedSecretCount: number;
+}
+
+export interface McpElicitationOwnerMetadata {
+  operatorId?: string;
+  agentId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  surface?: PermissionSurface;
+}
+
+export interface McpElicitationSourceMetadata {
+  sourceType: McpElicitationSourceType;
+  serverId?: string;
+  toolName?: string;
+  jsonRpcRequestId?: string | number;
+  transport?: McpTransport;
+  sourceRef?: string;
+}
+
+export interface McpElicitationPolicyMetadata {
+  redactionMode: "basic" | "strict";
+  sensitiveInformationAllowed: false;
+  requiresOperatorResponse: boolean;
+  transportBoundary: "gateway_local_mcp";
+  remoteTransportSupport: "unchanged";
+  limits: typeof MCP_ELICITATION_LIMITS;
+  governance: string[];
+}
+
+export interface McpElicitationAuditMetadata {
+  auditEventIds: string[];
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  reasonCodes: string[];
+}
+
+export interface McpElicitationStatusEvidence {
+  status: McpElicitationStatus;
+  previousStatus?: McpElicitationStatus;
+  reason: string;
+  recordedAt: string;
+  auditEventId: string;
+}
+
+export interface McpElicitationEvidence {
+  owner: McpElicitationOwnerMetadata;
+  source: McpElicitationSourceMetadata;
+  status: McpElicitationStatus;
+  createdAt: string;
+  updatedAt: string;
+  statusHistory: McpElicitationStatusEvidence[];
+  prompt: Pick<McpElicitationBoundedTextBody, "charLength" | "maxChars" | "truncated" | "redactedSecretCount">;
+  requestedSchema: Pick<McpElicitationBoundedJsonBody, "byteLength" | "maxBytes" | "truncated" | "redactedSecretCount">;
+  responseContent?: Pick<McpElicitationBoundedJsonBody, "byteLength" | "maxBytes" | "truncated" | "redactedSecretCount">;
+}
+
+export interface McpElicitationResponse {
+  action: McpElicitationResponseAction;
+  content?: McpElicitationBoundedJsonBody;
+  owner: McpElicitationOwnerMetadata;
+  respondedAt: string;
+  audit: McpElicitationAuditMetadata;
+  evidence: McpElicitationStatusEvidence;
+}
+
+export interface McpElicitationRequest {
+  elicitationId: string;
+  method: "elicitation/create";
+  status: McpElicitationStatus;
+  prompt: McpElicitationBoundedTextBody;
+  requestedSchema: McpElicitationBoundedJsonBody;
+  protocol: {
+    method: "elicitation/create";
+    message: string;
+    requestedSchema: Record<string, unknown>;
+  };
+  owner: McpElicitationOwnerMetadata;
+  source: McpElicitationSourceMetadata;
+  policy: McpElicitationPolicyMetadata;
+  audit: McpElicitationAuditMetadata;
+  evidence: McpElicitationEvidence;
+  response?: McpElicitationResponse;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AutonomousActivationRuntimeEvidence {
   requested: boolean;
   allowed: boolean;

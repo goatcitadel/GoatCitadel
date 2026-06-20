@@ -25,7 +25,7 @@
   ],
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
-    "zod": "^3.24.1"
+    "zod": "3.25.76"
   },
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",

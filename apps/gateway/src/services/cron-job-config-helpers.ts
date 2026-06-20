@@ -133,6 +133,11 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
         contextFrom: sanitized.contextFrom ?? existing?.contextFrom,
         lastRunOutput: sanitized.lastRunOutput ?? existing?.lastRunOutput,
         lastRunId: sanitized.lastRunId ?? existing?.lastRunId,
+        lastRunStatus: sanitized.lastRunStatus ?? existing?.lastRunStatus,
+        lastFailureAt: sanitized.lastFailureAt ?? existing?.lastFailureAt,
+        lastFailure: sanitized.lastFailure ?? existing?.lastFailure,
+        failureCount: sanitized.failureCount ?? existing?.failureCount,
+        backoffUntil: sanitized.backoffUntil ?? existing?.backoffUntil,
       });
     }
   });
@@ -153,6 +158,11 @@ interface SanitizedCronJobRow {
   contextFrom?: string;
   lastRunOutput?: string;
   lastRunId?: string;
+  lastRunStatus?: CronJobRecord["lastRunStatus"];
+  lastFailureAt?: string;
+  lastFailure?: CronJobRecord["lastFailure"];
+  failureCount?: number;
+  backoffUntil?: string;
 }
 
 function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
@@ -177,6 +187,24 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
     contextFrom: typeof record.contextFrom === "string" ? record.contextFrom : undefined,
     lastRunOutput: typeof record.lastRunOutput === "string" ? record.lastRunOutput : undefined,
     lastRunId: typeof record.lastRunId === "string" ? record.lastRunId : undefined,
+    lastRunStatus: record.lastRunStatus === "ok" || record.lastRunStatus === "failed" ? record.lastRunStatus : undefined,
+    lastFailureAt: typeof record.lastFailureAt === "string" ? record.lastFailureAt : undefined,
+    lastFailure: sanitizeCronLastFailure(record.lastFailure),
+    failureCount:
+      typeof record.failureCount === "number" && Number.isFinite(record.failureCount) && record.failureCount >= 0
+        ? Math.floor(record.failureCount)
+        : undefined,
+    backoffUntil: typeof record.backoffUntil === "string" ? record.backoffUntil : undefined,
+  };
+}
+
+function sanitizeCronLastFailure(value: unknown): CronJobRecord["lastFailure"] | undefined {
+  if (!isPlainRecord(value) || typeof value.message !== "string") {
+    return undefined;
+  }
+  return {
+    message: value.message,
+    code: typeof value.code === "string" ? value.code : undefined,
   };
 }
 
@@ -220,6 +248,11 @@ export function persistCronJobsConfig(host: CronJobConfigHost): void {
     contextFrom: job.contextFrom,
     lastRunOutput: job.lastRunOutput,
     lastRunId: job.lastRunId,
+    lastRunStatus: job.lastRunStatus,
+    lastFailureAt: job.lastFailureAt,
+    lastFailure: job.lastFailure,
+    failureCount: job.failureCount,
+    backoffUntil: job.backoffUntil,
   }));
   fsSync.writeFileSync(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
   host.persistUnifiedConfig();
@@ -243,6 +276,11 @@ export function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): void {
       contextFrom: existing?.contextFrom,
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
+      lastRunStatus: existing?.lastRunStatus,
+      lastFailureAt: existing?.lastFailureAt,
+      lastFailure: existing?.lastFailure,
+      failureCount: existing?.failureCount,
+      backoffUntil: existing?.backoffUntil,
     },
     now,
   );
@@ -266,6 +304,11 @@ export function ensureMemoryFlushCronJob(host: CronJobConfigHost): void {
       contextFrom: existing?.contextFrom,
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
+      lastRunStatus: existing?.lastRunStatus,
+      lastFailureAt: existing?.lastFailureAt,
+      lastFailure: existing?.lastFailure,
+      failureCount: existing?.failureCount,
+      backoffUntil: existing?.backoffUntil,
     },
     now,
   );
@@ -289,6 +332,11 @@ export function ensureCostReportCronJob(host: CronJobConfigHost): void {
       contextFrom: existing?.contextFrom,
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
+      lastRunStatus: existing?.lastRunStatus,
+      lastFailureAt: existing?.lastFailureAt,
+      lastFailure: existing?.lastFailure,
+      failureCount: existing?.failureCount,
+      backoffUntil: existing?.backoffUntil,
     },
     now,
   );
@@ -312,6 +360,11 @@ export function ensureUpdateReviewCronJob(host: CronJobConfigHost): void {
       contextFrom: existing?.contextFrom,
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
+      lastRunStatus: existing?.lastRunStatus,
+      lastFailureAt: existing?.lastFailureAt,
+      lastFailure: existing?.lastFailure,
+      failureCount: existing?.failureCount,
+      backoffUntil: existing?.backoffUntil,
     },
     now,
   );

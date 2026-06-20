@@ -165,6 +165,89 @@ describe("RuntimeLifecycleExportService", () => {
     expect(calls.indexOf("timeline:start")).toBeLessThan(calls.indexOf("transcript:end"));
   });
 
+  it("exports SIEM-ready NDJSON with redacted secret-like fields", async () => {
+    const service = new RuntimeLifecycleExportService({
+      getRuntimeLifecycle: vi.fn(async () => ({
+        query: {
+          sessionId: "session-1",
+        },
+        canonical: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+        },
+        linked: {
+          sessionIds: ["session-1"],
+          turnIds: ["turn-1"],
+          runIds: [],
+          proactiveRunIds: [],
+          approvalIds: [],
+          taskIds: [],
+          workspaceIds: [],
+        },
+        turns: [
+          {
+            turnId: "turn-1",
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: "completed",
+            mode: "chat",
+            startedAt: "2026-04-22T00:00:00.000Z",
+          },
+        ],
+        toolRuns: [
+          {
+            toolRunId: "tool-1",
+            turnId: "turn-1",
+            sessionId: "session-1",
+            toolName: "connector.send",
+            status: "executed",
+            startedAt: "2026-04-22T00:00:01.000Z",
+          },
+        ],
+        executionPlans: [],
+        delegationRuns: [],
+        delegationSteps: [],
+        proactiveRuns: [],
+        approvalEffects: [],
+        decisionTrace: [],
+      })),
+      getTranscript: vi.fn(async () => [
+        {
+          eventId: "evt-secret",
+          actionId: "action-secret",
+          idempotencyKey: "idem-secret",
+          sessionId: "session-1",
+          sessionKey: "key-1",
+          timestamp: "2026-04-22T00:00:02.000Z",
+          type: "message.user",
+          actorType: "user",
+          actorId: "operator",
+          payload: {
+            accessToken: "should-not-escape",
+            nested: { password: "also-secret", visible: "ok" },
+          },
+        },
+      ]),
+      listSessionTimeline: vi.fn(async () => []),
+    });
+
+    const ndjson = await service.exportSiemNdjson({ sessionId: "session-1" });
+    const lines = ndjson.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(lines[0]).toMatchObject({
+      schemaVersion: "goatcitadel.siem.runtime.v1",
+      eventType: "runtime.export",
+      source: { sessionId: "session-1", turnId: "turn-1" },
+    });
+    expect(lines.map((line) => line.eventType)).toEqual(
+      expect.arrayContaining(["runtime.turn", "runtime.tool_run", "runtime.transcript"]),
+    );
+    expect(ndjson).not.toContain("should-not-escape");
+    expect(ndjson).not.toContain("also-secret");
+    expect(ndjson).toContain("\"accessToken\":\"[redacted]\"");
+    expect(ndjson).toContain("\"visible\":\"ok\"");
+  });
+
   it("attaches a shareable trust report when requested", async () => {
     const service = new RuntimeLifecycleExportService({
       getRuntimeLifecycle: vi.fn(async () => ({

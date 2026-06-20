@@ -173,14 +173,6 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     knownModels: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
   },
   {
-    providerId: "xai",
-    label: "xAI Grok (SuperGrok OAuth)",
-    baseUrl: "https://api.x.ai/v1",
-    defaultModel: "grok-4.3",
-    apiStyle: "openai-chat-completions",
-    knownModels: ["grok-4.3", "grok-4.2", "grok-4-mini"],
-  },
-  {
     providerId: "huggingface",
     label: "HuggingFace Inference",
     baseUrl: "https://router.huggingface.co/v1",

@@ -14,6 +14,7 @@ import {
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
+import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 
 describe("llm-completion-helpers", () => {
   afterEach(() => {
@@ -79,12 +80,16 @@ describe("llm-completion-helpers", () => {
     ).toBe(true);
   });
 
-  it("classifies provider denials and blocks cross-provider fallback for context overflow", () => {
+  it("classifies provider denials and blocks unsafe cross-provider fallback classes", () => {
     expect(classifyProviderFailure(new Error("request failed (401 Unauthorized)"))).toBe("auth_denial");
     expect(classifyProviderFailure(new Error("request failed (402): insufficient credits"))).toBe("business_denial");
     expect(classifyProviderFailure(new Error("request failed (429 Too Many Requests)"))).toBe("rate_limited");
     expect(classifyProviderFailure(new Error("maximum context length exceeded"))).toBe("context_overflow");
+    expect(shouldAttemptCrossProviderFallback(new Error("request failed (401 Unauthorized)"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new Error("request failed (402): insufficient credits"))).toBe(false);
     expect(shouldAttemptCrossProviderFallback(new Error("maximum context length exceeded"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new ChatTurnCancelledError("turn-1"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new Error("request failed (429 Too Many Requests)"))).toBe(true);
     expect(shouldAttemptCrossProviderFallback(new Error("request failed (503 Service Unavailable)"))).toBe(true);
   });
 

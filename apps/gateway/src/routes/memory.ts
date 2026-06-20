@@ -337,6 +337,27 @@ const patchItemSchema = z.object({
   ttlOverrideSeconds: z.number().int().positive().max(31_536_000).nullable().optional(),
 });
 
+const batchMutationSchema = z.object({
+  actionId: z.string().trim().min(1).max(120).optional(),
+  source: z.string().trim().min(1).max(160).optional(),
+  operations: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("patch_item"),
+          itemId: z.string().trim().min(1),
+          patch: patchItemSchema,
+        }),
+        z.object({
+          kind: z.literal("forget_item"),
+          itemId: z.string().trim().min(1),
+        }),
+      ]),
+    )
+    .min(1)
+    .max(100),
+});
+
 const forgetItemSchema = z.object({});
 
 const forgetManySchema = z
@@ -689,6 +710,27 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         items: memory.listItems(parsed.data),
       });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/items/batch-mutate", operatorOnly, async (request, reply) => {
+    const body = batchMutationSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      return reply.send(
+        memory.batchMutateItems(
+          {
+            actionId: body.data.actionId,
+            source: body.data.source,
+            operations: body.data.operations,
+          },
+          resolveActorId(request),
+        ),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

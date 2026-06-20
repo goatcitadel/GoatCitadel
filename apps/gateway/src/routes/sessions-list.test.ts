@@ -122,6 +122,7 @@ describe("sessions routes", () => {
       runtimeLifecycle: {
         getLifecycle: getRuntimeLifecycle,
         exportLifecycle: vi.fn(),
+        exportLifecycleSiemNdjson: vi.fn(),
       },
     } as never);
     await app.register(sessionsListRoute);
@@ -189,6 +190,7 @@ describe("sessions routes", () => {
       runtimeLifecycle: {
         getLifecycle: vi.fn(),
         exportLifecycle: vi.fn(),
+        exportLifecycleSiemNdjson: vi.fn(),
       },
     } as never);
     await app.register(sessionsListRoute);
@@ -284,6 +286,7 @@ describe("sessions routes", () => {
       runtimeLifecycle: {
         getLifecycle: vi.fn(),
         exportLifecycle,
+        exportLifecycleSiemNdjson: vi.fn(),
       },
     } as never);
     await app.register(sessionsListRoute);
@@ -313,5 +316,50 @@ describe("sessions routes", () => {
         timelineEventCount: 1,
       },
     });
+  });
+
+  it("exports SIEM-ready runtime lifecycle NDJSON", async () => {
+    const exportLifecycleSiemNdjson = vi.fn(
+      async () =>
+        [
+          JSON.stringify({
+            schemaVersion: "goatcitadel.siem.runtime.v1",
+            eventType: "runtime.export",
+            timestamp: "2026-04-22T00:00:00.000Z",
+            payload: { ok: true },
+          }),
+          "",
+        ].join("\n"),
+    );
+
+    app = Fastify();
+    app.decorate("services", {
+      sessionsList: {
+        listSessions: vi.fn(() => []),
+        getSession: vi.fn(),
+        getTranscript: vi.fn(),
+        getSessionSummary: vi.fn(),
+        listSessionTimeline: vi.fn(),
+      },
+      runtimeLifecycle: {
+        getLifecycle: vi.fn(),
+        exportLifecycle: vi.fn(),
+        exportLifecycleSiemNdjson,
+      },
+    } as never);
+    await app.register(sessionsListRoute);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/runtime/lifecycle/export?sessionId=session-1&format=siem_ndjson",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-ndjson");
+    expect(exportLifecycleSiemNdjson).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      format: "siem_ndjson",
+    });
+    expect(response.body).toContain("\"eventType\":\"runtime.export\"");
   });
 });

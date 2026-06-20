@@ -317,7 +317,10 @@ export async function createChatCompletion(
   }
 
   if (!response && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
-    const fallbacks = host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
+    const fallbacks = filterCrossProviderFallbackTargets(
+      host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      primaryProviderId,
+    );
     for (const fallback of fallbacks) {
       for (
         let transientRetryIndex = 0;
@@ -764,7 +767,10 @@ export async function* createChatCompletionStream(
   }
 
   if (!streamed && allowCrossProviderFallback) {
-    const fallbacks = host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
+    const fallbacks = filterCrossProviderFallbackTargets(
+      host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      primaryProviderId,
+    );
     for (const fallback of fallbacks) {
       for (
         let transientRetryIndex = 0;
@@ -1043,4 +1049,11 @@ function appendTelemetryChunk(target: Array<Record<string, unknown>>, chunk: Rec
   if (target.length > 20) {
     target.shift();
   }
+}
+
+function filterCrossProviderFallbackTargets(
+  fallbacks: Array<{ providerId: string; model: string }>,
+  primaryProviderId: string,
+): Array<{ providerId: string; model: string }> {
+  return fallbacks.filter((fallback) => fallback.providerId !== primaryProviderId);
 }

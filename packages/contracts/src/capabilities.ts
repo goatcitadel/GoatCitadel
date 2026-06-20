@@ -80,6 +80,41 @@ export interface CapabilityCatalogSnapshotRecord {
   createdAt: string;
 }
 
+export interface ToolSchemaRef {
+  refId: string;
+  toolName: string;
+  schemaHash: string;
+  schemaUri: string;
+}
+
+export interface EffectiveToolGrantSummary {
+  capabilityId: string;
+  toolName: string;
+  title: string;
+  summary: string;
+  riskLabel: string;
+  schemaRef: ToolSchemaRef;
+  readOnly: boolean;
+  deterministic: boolean;
+  codeModeAllowed: boolean;
+}
+
+export interface CompactToolDirectorySnapshot {
+  snapshotId: string;
+  version: "compact-tool-directory.v1";
+  source: "callable_catalog";
+  createdAt: string;
+  expiresAt: string;
+  ttlMs: number;
+  hash: string;
+  toolCount: number;
+  tools: EffectiveToolGrantSummary[];
+  omitted: {
+    inspectableOnlyCount: number;
+    reason: "callable_only";
+  };
+}
+
 export interface SkillLifecycleRecord {
   skillId: string;
   category: CapabilityCategory;

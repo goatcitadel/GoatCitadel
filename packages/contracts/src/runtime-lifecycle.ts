@@ -25,7 +25,7 @@ export interface RuntimeLifecycleExportQuery extends RuntimeLifecycleQuery {
   includeTranscript?: boolean;
   includeTimeline?: boolean;
   timelineLimit?: number;
-  format?: "bundle" | "trust_report";
+  format?: "bundle" | "trust_report" | "siem_ndjson";
 }
 
 export interface RuntimeLifecycleTurnSummary extends Pick<
@@ -157,9 +157,25 @@ export interface RuntimeLifecycleCanonicalIds {
   taskId?: string;
 }
 
+export type RuntimeLifecycleLinkRel =
+  | "self"
+  | "export_bundle"
+  | "export_trust_report"
+  | "export_siem_ndjson";
+
+export interface RuntimeLifecycleLink {
+  rel: RuntimeLifecycleLinkRel;
+  label: string;
+  href: string;
+  method: "GET";
+  contentType: "application/json" | "application/x-ndjson";
+  format?: RuntimeLifecycleExportQuery["format"];
+}
+
 export interface RuntimeLifecycleResponse {
   query: RuntimeLifecycleQuery;
   canonical: RuntimeLifecycleCanonicalIds;
+  links?: RuntimeLifecycleLink[];
   linked: RuntimeLifecycleLinkedIds;
   resolution?: RuntimeLifecycleResolution;
   session?: SessionMeta;
@@ -245,7 +261,7 @@ export interface RuntimeLifecycleExportBundle extends RuntimeLifecycleResponse {
     includeTranscript: boolean;
     includeTimeline: boolean;
     timelineLimit: number;
-    format: "bundle" | "trust_report";
+    format: "bundle" | "trust_report" | "siem_ndjson";
   };
   transcript?: TranscriptEvent[];
   timeline?: SessionTimelineItem[];

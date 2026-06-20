@@ -26,13 +26,13 @@
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
     "@goatcitadel/mission-control-shared": "workspace:*",
-    "react": "^19.1.1"
+    "react": "19.2.5"
   },
   "devDependencies": {
-    "@types/react": "^19.1.10",
-    "@types/react-dom": "^19.1.7",
-    "@types/react-test-renderer": "^19.1.0",
-    "react-test-renderer": "^19.1.1"
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@types/react-test-renderer": "19.1.0",
+    "react-test-renderer": "19.2.5"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

@@ -38,6 +38,7 @@ interface RunDetailModel {
   sideEffects: NativeListItem[];
   errors: NativeListItem[];
   evidenceStates: NativeListItem[];
+  exportLinks: NativeListItem[];
   orchestrationDecisions: NativeListItem[];
   orchestrationPrompts: NativeListItem[];
   orchestrationModels: NativeListItem[];
@@ -290,6 +291,18 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
           />
         </NativeCard>
 
+        <NativeCard
+          title="Trace and SIEM exports"
+          subtitle="Stable Gateway routes for raw trace, export bundle, trust report, and SIEM NDJSON handoff."
+        >
+          <NativeList
+            density="compact"
+            items={detail.exportLinks}
+            emptyLabel="No export links can be derived without a run id."
+            maxHeight="min(34vh, 20rem)"
+          />
+        </NativeCard>
+
         <NativeCard title="Side effects" subtitle="External effects stay explicit, including audit-only effects.">
           <NativeList
             density="compact"
@@ -488,6 +501,7 @@ function buildRunDetailModel(raw: unknown, fallbackRunId: string, orchestrationR
     sideEffects: getSideEffectItems(record),
     errors: getErrorItems(record, trace, firstTurn, run),
     evidenceStates: getEvidenceStateItems(record),
+    exportLinks: getExportLinkItems(runId),
     orchestrationDecisions: getOrchestrationDecisionItems(orchestrationTrace),
     orchestrationPrompts: getOrchestrationPromptItems(orchestrationTrace),
     orchestrationModels: getOrchestrationModelItems(orchestrationTrace),
@@ -882,6 +896,36 @@ function getSideEffectItems(record: RunTracePayload): NativeListItem[] {
         .join(" · "),
     };
   });
+}
+
+function getExportLinkItems(runId: string): NativeListItem[] {
+  const normalizedRunId = runId.trim();
+  if (!normalizedRunId || normalizedRunId === "unknown") {
+    return [];
+  }
+  const encodedRunId = encodeURIComponent(normalizedRunId);
+  return [
+    {
+      title: "Observe trace",
+      meta: "GET · read-only",
+      body: `/api/v1/observe/runs/${encodedRunId}/trace`,
+    },
+    {
+      title: "Observe trace export",
+      meta: "GET · evidence bundle",
+      body: `/api/v1/observe/runs/${encodedRunId}/trace/export`,
+    },
+    {
+      title: "Runtime lifecycle bundle",
+      meta: "GET · transcript and timeline optional",
+      body: `/api/v1/runtime/lifecycle/export?runId=${encodedRunId}&includeTranscript=true&includeTimeline=true&format=bundle`,
+    },
+    {
+      title: "Runtime SIEM stream",
+      meta: "GET · application/x-ndjson",
+      body: `/api/v1/runtime/lifecycle/export?runId=${encodedRunId}&includeTimeline=true&format=siem_ndjson`,
+    },
+  ];
 }
 
 function getEvidenceStateItems(record: RunTracePayload): NativeListItem[] {

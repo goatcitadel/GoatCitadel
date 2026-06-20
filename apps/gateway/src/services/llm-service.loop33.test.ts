@@ -152,7 +152,33 @@ describe("LlmService loop33 runtime branch coverage", () => {
       model: "gpt-image-1",
       operation: "edit",
       data: [{ url: "https://cdn.example.test/edit.png", revisedPrompt: "Sharper console" }],
+      evidence: {
+        owner: "gateway",
+        source: "provider_response",
+        providerId: "openai",
+        model: "gpt-image-1",
+        operation: "edit",
+        resultCount: 1,
+        status: "provider_backed",
+        results: [
+          {
+            index: 0,
+            source: "url",
+            status: "provider_url",
+            urlHost: "cdn.example.test",
+            persistedArtifact: {
+              status: "external_url",
+            },
+          },
+        ],
+      },
     });
+    expect(response.evidence?.referenceImageHashes).toHaveLength(2);
+    expect(response.evidence?.maskImageHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(response.evidence?.requestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(response.evidence?.results[0]?.urlHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(response.evidence)).not.toContain("Edit these references");
+    expect(JSON.stringify(response.evidence)).not.toContain("cmVmMQ==");
     expect(bodyEntries).toEqual(
       expect.arrayContaining([
         ["model", "gpt-image-1"],

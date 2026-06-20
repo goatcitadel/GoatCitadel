@@ -1600,6 +1600,56 @@ describe("CapabilitySystemService", () => {
     ]);
   });
 
+  it("builds compact prompt-facing tool directories from callable tools only", async () => {
+    const harness = await createHarness({
+      toolCatalog: [
+        createTool("tool.safe_read", {
+          argSchema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+        }),
+      ],
+    });
+    harness.service.createProposal({
+      proposalKind: "tool",
+      title: "Unactivated tool",
+      summary: "Inspectable proposal only",
+      payload: {},
+    });
+
+    const compact = harness.service.getCompactToolDirectorySnapshot(60_000);
+    const schema = harness.service.getToolSchema("tool.safe_read");
+
+    expect(compact).toMatchObject({
+      version: "compact-tool-directory.v1",
+      source: "callable_catalog",
+      ttlMs: 60_000,
+      toolCount: 1,
+      omitted: {
+        inspectableOnlyCount: 1,
+        reason: "callable_only",
+      },
+    });
+    expect(compact.tools).toEqual([
+      expect.objectContaining({
+        capabilityId: "tool:tool.safe_read",
+        toolName: "tool.safe_read",
+        summary: "tool.safe_read description",
+        schemaRef: expect.objectContaining({
+          toolName: "tool.safe_read",
+          schemaHash: schema.schemaHash,
+          schemaUri: "/api/v1/capabilities/tool-directory/schemas/tool.safe_read",
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(compact)).not.toContain("properties");
+    expect(schema.schema).toMatchObject({
+      properties: { path: { type: "string" } },
+    });
+  });
+
   it("includes active delegated child approvals when the parent Cowork turn is waiting", async () => {
     const harness = await createHarness();
     const childApproval: ApprovalRequest = {
@@ -3997,17 +4047,17 @@ function createPermissionProfileRecord(profileId: string): PermissionProfileReco
 
 function createTool(
   toolName: string,
-  overrides?: Partial<Pick<ToolCatalogEntry, "readOnly" | "deterministic" | "codeModeAllowed">>,
+  overrides?: Partial<ToolCatalogEntry>,
 ): ToolCatalogEntry {
   return {
     toolName,
-    category: "fs",
-    riskLevel: "safe",
-    requiresApproval: false,
-    description: `${toolName} description`,
-    argSchema: { type: "object" },
-    examples: [],
-    pack: "core",
+    category: overrides?.category ?? "fs",
+    riskLevel: overrides?.riskLevel ?? "safe",
+    requiresApproval: overrides?.requiresApproval ?? false,
+    description: overrides?.description ?? `${toolName} description`,
+    argSchema: overrides?.argSchema ?? { type: "object" },
+    examples: overrides?.examples ?? [],
+    pack: overrides?.pack ?? "core",
     readOnly: overrides?.readOnly ?? true,
     deterministic: overrides?.deterministic ?? true,
     codeModeAllowed: overrides?.codeModeAllowed ?? true,

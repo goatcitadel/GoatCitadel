@@ -43,10 +43,12 @@ interface TrustPolicyMatrixRow {
   source?: string;
   status: TrustPolicyDashboardStatus;
   trustState?: string;
+  owner?: string;
   callableState?: TrustPolicyCallableState;
   callable?: boolean;
   grants?: string[];
   blockers?: string[];
+  actionNeeded?: string;
   lastUse?: {
     at?: string;
     label?: string;
@@ -293,6 +295,7 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
             <th scope="col">Callable state</th>
             <th scope="col">Grants</th>
             <th scope="col">Blockers</th>
+            <th scope="col">Owner action</th>
             <th scope="col">Last-use evidence</th>
           </tr>
         </thead>
@@ -313,6 +316,10 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
               <td>{labelForCallableState(row)}</td>
               <td>{formatList(row.grants, "No grants attached")}</td>
               <td>{formatList(row.blockers, "No blockers reported")}</td>
+              <td>
+                <strong>{row.owner ?? "Unknown owner"}</strong>
+                <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
+              </td>
               <td>{formatLastUse(row)}</td>
             </tr>
           ))}
@@ -542,7 +549,53 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
       lastUse: null,
     });
   }
-  return rows;
+  return rows.map(withTrustPolicyOwnerAction);
+}
+
+function withTrustPolicyOwnerAction(row: TrustPolicyMatrixRow): TrustPolicyMatrixRow {
+  const status = normalizeTrustPolicyStatus(row.status);
+  const owner = ownerForTrustPolicyRow(row);
+  const blockers = row.blockers?.map((item) => item.trim()).filter(Boolean) ?? [];
+  const actionNeeded =
+    status === "ready"
+      ? "No action needed; monitor last-use evidence and grants."
+      : status === "approval_required"
+        ? "Review the approval or grant before allowing runtime use."
+        : status === "blocked" || status === "quarantined"
+          ? blockers[0] ?? "Resolve the blocker in the owner surface before runtime use."
+          : status === "not_callable"
+            ? "Use as inspectable context only until an owner promotes it."
+            : status === "experimental"
+              ? "Evaluate and approve through the owner lifecycle before promotion."
+              : "Refresh the snapshot or inspect the owner source for missing evidence.";
+  return {
+    ...row,
+    owner,
+    actionNeeded,
+  };
+}
+
+function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
+  switch (row.source) {
+    case "tools.permissionProfiles":
+      return "Settings / Permissions";
+    case "tools.grants":
+      return "Settings / Tools";
+    case "tools.localOperatorOverrides":
+      return "Ops / Approvals";
+    case "capabilities.catalog":
+      return "Library / Capabilities";
+    case "mcp.servers":
+    case "mcp.tools":
+      return "Settings / MCP";
+    case "skills.lifecycle":
+      return "Library / Skills";
+    case "addons.catalog":
+    case "addons.installed":
+      return "Settings / Add-ons";
+    default:
+      return row.kind === "tool" ? "Settings / Tools" : row.kind === "capability" ? "Library / Capabilities" : "Settings";
+  }
 }
 
 function statusForPosture(posture: TrustPolicyPosture | string): TrustPolicyDashboardStatus {
@@ -629,9 +682,11 @@ function trustPolicyRowSearchText(row: TrustPolicyMatrixRow): string {
     row.source,
     row.status,
     row.trustState,
+    row.owner,
     row.callableState,
     row.grants?.join(" "),
     row.blockers?.join(" "),
+    row.actionNeeded,
     row.lastUse?.label,
     row.lastUse?.runId,
     row.lastUse?.approvalId,

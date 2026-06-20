@@ -79,6 +79,7 @@ describe("memory-facade-service", () => {
       namespace: "docs",
       documentId: "doc-1",
       force: true,
+      embeddingProfile: { provider: "pseudo", dimensions: 16 },
       sessionId: "session-3",
       agentId: "agent-3",
       taskId: "task-3",
@@ -143,7 +144,12 @@ describe("memory-facade-service", () => {
       4,
       {
         toolName: "embeddings.index",
-        args: { namespace: "docs", documentId: "doc-1", force: true },
+        args: {
+          namespace: "docs",
+          documentId: "doc-1",
+          force: true,
+          embeddingProfile: { provider: "pseudo", dimensions: 16 },
+        },
         sessionId: "session-3",
         agentId: "agent-3",
         taskId: "task-3",
@@ -154,7 +160,7 @@ describe("memory-facade-service", () => {
       5,
       {
         toolName: "embeddings.query",
-        args: { namespace: "docs", query: "decision", limit: 5 },
+        args: { namespace: "docs", query: "decision", limit: 5, embeddingProfile: undefined },
         sessionId: "session-4",
         agentId: "agent-4",
         taskId: "task-4",

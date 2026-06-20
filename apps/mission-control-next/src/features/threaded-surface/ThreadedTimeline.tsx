@@ -352,6 +352,11 @@ export function ThreadedTimeline({
       streamError: props.streamError,
     },
   });
+  const jumpToLatestLabel = props.pendingApproval
+    ? "Jump to approval"
+    : props.pendingUserInput
+      ? "Jump to answer prompt"
+      : "Jump to latest";
 
   const showHiddenTurns = useCallback(() => {
     setManualWindowStart(0);
@@ -451,7 +456,7 @@ export function ThreadedTimeline({
       </div>
       {!props.followOutput && props.thread && props.thread.turns.length > 0 ? (
         <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToLatest}>
-          Jump to latest
+          {jumpToLatestLabel}
         </button>
       ) : null}
     </div>

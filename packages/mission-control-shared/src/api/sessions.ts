@@ -50,7 +50,7 @@ export async function fetchRuntimeLifecycleExport(input: {
   includeTranscript?: boolean;
   includeTimeline?: boolean;
   timelineLimit?: number;
-  format?: "bundle" | "trust_report";
+  format?: "bundle" | "trust_report" | "siem_ndjson";
 }): Promise<RuntimeLifecycleExportBundle> {
   const query = new URLSearchParams();
   if (input.sessionId) query.set("sessionId", input.sessionId);

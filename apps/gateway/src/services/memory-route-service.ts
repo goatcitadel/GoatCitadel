@@ -4,6 +4,7 @@ type MemoryRoutePort = Pick<
   MemoryLifecycleService,
   | "acceptMaintenanceRecommendation"
   | "composeContext"
+  | "batchMutateMemoryItems"
   | "forgetMemory"
   | "forgetMemoryItem"
   | "forgetMemoryDecision"
@@ -157,6 +158,10 @@ export class MemoryRouteService {
 
   public listItems(input: Parameters<MemoryRoutePort["listMemoryItems"]>[0]) {
     return this.memory.listMemoryItems(input);
+  }
+
+  public batchMutateItems(input: Parameters<MemoryRoutePort["batchMutateMemoryItems"]>[0], actorId: string) {
+    return this.memory.batchMutateMemoryItems(input, actorId);
   }
 
   public patchItem(itemId: string, patch: Parameters<MemoryRoutePort["patchMemoryItem"]>[1], actorId: string) {

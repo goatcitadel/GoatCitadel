@@ -63,6 +63,40 @@ const SYSTEM_CRON_JOB_IDS = new Set([
   UPDATE_REVIEW_DAILY_JOB_ID,
 ]);
 
+const CRON_FAILURE_MESSAGE_MAX_LENGTH = 500;
+const CRON_BACKOFF_BASE_MS = 60_000;
+const CRON_BACKOFF_MAX_MS = 60 * 60_000;
+
+export interface CronRunOptions {
+  force?: boolean;
+  reason?: string;
+}
+
+export interface CronRunResult {
+  jobId: string;
+  runId: string;
+  status: "ok";
+  force?: boolean;
+}
+
+export interface CronDueRunItem {
+  jobId: string;
+  status: "ran" | "failed" | "backoff";
+  runId?: string;
+  error?: string;
+  failureCount?: number;
+  backoffUntil?: string;
+}
+
+export interface CronDueRunSummary {
+  checkedAt: string;
+  dueCount: number;
+  ranCount: number;
+  failedCount: number;
+  backoffCount: number;
+  items: CronDueRunItem[];
+}
+
 export interface CronAutomationServiceDeps {
   storage: Storage;
   persistCronJobsConfig: () => void;
@@ -237,166 +271,185 @@ export class CronAutomationService {
     };
   }
 
-  public async runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }> {
+  public async runCronJobNow(jobId: string, options: CronRunOptions = {}): Promise<CronRunResult> {
     const normalizedJobId = normalizeCronJobId(jobId);
     const job = this.getCronJob(normalizedJobId);
-    if (!job.enabled) {
+    const force = options.force === true;
+    if (!force && !job.enabled) {
       throw new Error(`Cron job is paused: ${normalizedJobId}`);
     }
-    if (job.endAt && Date.parse(job.endAt) < Date.now()) {
+    if (!force && job.endAt && Date.parse(job.endAt) < Date.now()) {
       throw new Error(`Cron job has ended: ${normalizedJobId}`);
+    }
+    if (!force && isCronJobBackedOff(job, new Date())) {
+      throw new Error(`Cron job is in backoff until ${job.backoffUntil}: ${normalizedJobId}`);
     }
     const runId = randomUUID();
     let runSummary: Record<string, unknown> = { result: "ok" };
     let watchdogReviewRecorded = false;
-    if (job.action === "task") {
-      const context = this.resolveCronJobContext(job);
-      const taskResult = await this.deps.runHandlers.task(job, context);
-      const finishedAt = new Date().toISOString();
-      const saved = this.deps.storage.cronJobs.upsert(
-        {
-          ...job,
-          lastRunAt: finishedAt,
-          lastRunId: runId,
-          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
-        },
-        finishedAt,
-      );
-      this.deps.persistCronJobsConfig();
-      runSummary = {
-        ...runSummary,
-        action: job.action,
-        taskId: taskResult?.taskId,
-        nextRunAt: saved.nextRunAt,
-        contextFrom: context?.contextFrom,
-      };
-      this.deps.publishRealtime("cron_job_run", "cron", {
-        type: "scheduled_task_created",
-        jobId: saved.jobId,
-        taskId: taskResult?.taskId,
-        name: saved.name,
-        contextFrom: context?.contextFrom,
-      });
-    } else if (job.action === "watchdog") {
-      const watchdogResult = await this.deps.runHandlers.watchdog(job);
-      const finishedAt = new Date().toISOString();
-      const saved = this.deps.storage.cronJobs.upsert(
-        {
-          ...job,
-          lastRunAt: finishedAt,
-          lastRunId: runId,
-          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
-        },
-        finishedAt,
-      );
-      this.deps.persistCronJobsConfig();
-      runSummary = {
-        ...runSummary,
-        action: job.action,
-        watchdogStatus: watchdogResult.status,
-        checkId: watchdogResult.checkId,
-        summary: watchdogResult.summary,
-        nextRunAt: saved.nextRunAt,
-      };
-      if (watchdogResult.status !== "ok") {
-        this.deps.publishRealtime("cron_job_run", "cron", {
-          type: "watchdog_check_attention_required",
-          jobId: saved.jobId,
-          name: saved.name,
-          checkId: watchdogResult.checkId,
-          status: watchdogResult.status,
-          summary: watchdogResult.summary,
-        });
-        if (this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") && shouldRecordWatchdogReview(job, watchdogResult)) {
-          this.recordCronReviewItem({
-            jobId: normalizedJobId,
-            runId: randomUUID(),
-            severity: watchdogResult.status === "error" ? "high" : "medium",
-            status: "open",
-            summary: {
-              trigger: "watchdog",
-              checkId: watchdogResult.checkId,
-              status: watchdogResult.status,
-              summary: watchdogResult.summary,
-              notifyHomeChannel: watchdogResult.notifyHomeChannel,
-              ...(watchdogResult.details ? { details: watchdogResult.details } : {}),
-            },
-            diff: {
-              type: "watchdog",
-              changed: false,
-            },
-          });
-          watchdogReviewRecorded = true;
-        }
-      }
-    } else if (job.action === "improvement") {
-      await this.deps.runHandlers.improvement();
-    } else if (job.action === "backup") {
-      await this.deps.runHandlers.backup();
-    } else if (job.action === "memory_flush") {
-      await this.deps.runHandlers.memoryFlush();
-    } else if (job.action === "cost_report") {
-      await this.deps.runHandlers.costReport();
-    } else if (job.action === "update_review") {
-      await this.deps.runHandlers.updateReview();
-    } else if (job.action === "curator") {
-      await this.deps.runHandlers.curator();
-      const finishedAt = new Date().toISOString();
-      const saved = this.deps.storage.cronJobs.upsert(
-        {
-          ...job,
-          lastRunAt: finishedAt,
-          lastRunId: runId,
-          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
-        },
-        finishedAt,
-      );
-      this.deps.persistCronJobsConfig();
-      runSummary = {
-        ...runSummary,
-        action: job.action,
-        nextRunAt: saved.nextRunAt,
-      };
-    } else if (job.action === "no_agent") {
-      runSummary = await runNoAgentCronJob({
-        job,
-        normalizedJobId,
-        runId,
-        runHandler: this.deps.runHandlers.noAgent,
-        upsertCronJob: (updatedJob: CronJobRecord, updatedAt: string) =>
-          this.deps.storage.cronJobs.upsert(updatedJob, updatedAt),
-        persistCronJobsConfig: this.deps.persistCronJobsConfig,
-        publishRealtime: this.deps.publishRealtime,
-        computeNextCronRunAt,
-      });
-    } else {
-      throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
-    }
-    if (
-      this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
-      job.action !== "watchdog" &&
-      !watchdogReviewRecorded
-    ) {
-      this.recordCronReviewItem({
-        jobId: normalizedJobId,
-        runId: randomUUID(),
-        severity: "low",
-        status: "resolved",
-        summary: {
-          trigger: "manual_run",
+    try {
+      if (job.action === "task") {
+        const context = this.resolveCronJobContext(job);
+        const taskResult = await this.deps.runHandlers.task(job, context);
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = {
           ...runSummary,
-        },
-        diff: { type: "manual_run", changed: false },
-      });
+          action: job.action,
+          taskId: taskResult?.taskId,
+          nextRunAt: saved.nextRunAt,
+          contextFrom: context?.contextFrom,
+          force,
+          reason: options.reason,
+        };
+        this.deps.publishRealtime("cron_job_run", "cron", {
+          type: "scheduled_task_created",
+          jobId: saved.jobId,
+          taskId: taskResult?.taskId,
+          name: saved.name,
+          contextFrom: context?.contextFrom,
+          force,
+        });
+      } else if (job.action === "watchdog") {
+        const watchdogResult = await this.deps.runHandlers.watchdog(job);
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = {
+          ...runSummary,
+          action: job.action,
+          watchdogStatus: watchdogResult.status,
+          checkId: watchdogResult.checkId,
+          summary: watchdogResult.summary,
+          nextRunAt: saved.nextRunAt,
+          force,
+          reason: options.reason,
+        };
+        if (watchdogResult.status !== "ok") {
+          this.deps.publishRealtime("cron_job_run", "cron", {
+            type: "watchdog_check_attention_required",
+            jobId: saved.jobId,
+            name: saved.name,
+            checkId: watchdogResult.checkId,
+            status: watchdogResult.status,
+            summary: watchdogResult.summary,
+            force,
+          });
+          if (
+            this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+            shouldRecordWatchdogReview(job, watchdogResult)
+          ) {
+            this.recordCronReviewItem({
+              jobId: normalizedJobId,
+              runId: randomUUID(),
+              severity: watchdogResult.status === "error" ? "high" : "medium",
+              status: "open",
+              summary: {
+                trigger: "watchdog",
+                checkId: watchdogResult.checkId,
+                status: watchdogResult.status,
+                summary: watchdogResult.summary,
+                notifyHomeChannel: watchdogResult.notifyHomeChannel,
+                ...(watchdogResult.details ? { details: watchdogResult.details } : {}),
+              },
+              diff: {
+                type: "watchdog",
+                changed: false,
+              },
+            });
+            watchdogReviewRecorded = true;
+          }
+        }
+      } else if (job.action === "improvement") {
+        await this.deps.runHandlers.improvement();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "backup") {
+        await this.deps.runHandlers.backup();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "memory_flush") {
+        await this.deps.runHandlers.memoryFlush();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "cost_report") {
+        await this.deps.runHandlers.costReport();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "update_review") {
+        await this.deps.runHandlers.updateReview();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "curator") {
+        await this.deps.runHandlers.curator();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = {
+          ...runSummary,
+          action: job.action,
+          nextRunAt: saved.nextRunAt,
+          force,
+          reason: options.reason,
+        };
+      } else if (job.action === "no_agent") {
+        runSummary = await runNoAgentCronJob({
+          job,
+          normalizedJobId,
+          runId,
+          runHandler: this.deps.runHandlers.noAgent,
+          upsertCronJob: (updatedJob: CronJobRecord, updatedAt: string) =>
+            this.deps.storage.cronJobs.upsert(updatedJob, updatedAt),
+          persistCronJobsConfig: this.deps.persistCronJobsConfig,
+          publishRealtime: this.deps.publishRealtime,
+          computeNextCronRunAt,
+        });
+        runSummary = { ...runSummary, force, reason: options.reason };
+      } else {
+        throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
+      }
+      if (
+        this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+        job.action !== "watchdog" &&
+        !watchdogReviewRecorded
+      ) {
+        this.recordCronReviewItem({
+          jobId: normalizedJobId,
+          runId: randomUUID(),
+          severity: "low",
+          status: "resolved",
+          summary: {
+            trigger: force ? "force_run" : "manual_run",
+            ...runSummary,
+          },
+          diff: { type: "manual_run", changed: false },
+        });
+      }
+      return {
+        jobId: normalizedJobId,
+        runId,
+        status: "ok",
+        ...(force ? { force: true } : {}),
+      };
+    } catch (error) {
+      const latest = this.deps.storage.cronJobs.get(normalizedJobId) ?? job;
+      this.recordCronRunFailure(latest, runId, error, new Date(), options);
+      throw error;
     }
-    return {
-      jobId: normalizedJobId,
-      runId,
-      status: "ok",
-    };
   }
 
-  public async runDueTaskCronJobs(now = new Date()): Promise<void> {
+  public async runDueTaskCronJobs(now = new Date()): Promise<CronDueRunSummary> {
+    const summary: CronDueRunSummary = {
+      checkedAt: now.toISOString(),
+      dueCount: 0,
+      ranCount: 0,
+      failedCount: 0,
+      backoffCount: 0,
+      items: [],
+    };
     const jobs = this.deps.storage.cronJobs
       .list()
       .filter(
@@ -416,8 +469,35 @@ export class CronAutomationService {
       if (didCronJobRunInCurrentWindow(job, now)) {
         continue;
       }
-      await this.runCronJobNow(job.jobId);
+      summary.dueCount += 1;
+      if (isCronJobBackedOff(job, now)) {
+        summary.backoffCount += 1;
+        summary.items.push({
+          jobId: job.jobId,
+          status: "backoff",
+          failureCount: job.failureCount,
+          backoffUntil: job.backoffUntil,
+        });
+        continue;
+      }
+      try {
+        const result = await this.runCronJobNow(job.jobId, { reason: "scheduled_due" });
+        summary.ranCount += 1;
+        summary.items.push({ jobId: job.jobId, status: "ran", runId: result.runId });
+      } catch (error) {
+        const latest = this.deps.storage.cronJobs.get(job.jobId) ?? job;
+        summary.failedCount += 1;
+        summary.items.push({
+          jobId: job.jobId,
+          status: "failed",
+          error: normalizeCronFailureMessage(error),
+          failureCount: latest.failureCount,
+          backoffUntil: latest.backoffUntil,
+          runId: latest.lastRunId,
+        });
+      }
     }
+    return summary;
   }
 
   public findCronRunById(runId: string): CronRunSnapshot | undefined {
@@ -554,6 +634,69 @@ export class CronAutomationService {
       diff: parseJsonRecord(row.diff_json),
       createdAt: row.created_at,
     };
+  }
+
+  private recordCronRunSuccess(job: CronJobRecord, runId: string, finishedAt: string): CronJobRecord {
+    const saved = this.deps.storage.cronJobs.upsert(
+      {
+        ...job,
+        lastRunAt: finishedAt,
+        lastRunId: runId,
+        lastRunStatus: "ok",
+        lastFailureAt: undefined,
+        lastFailure: undefined,
+        failureCount: 0,
+        backoffUntil: undefined,
+        nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
+      },
+      finishedAt,
+    );
+    this.deps.persistCronJobsConfig();
+    return saved;
+  }
+
+  private recordCronRunFailure(
+    job: CronJobRecord,
+    runId: string,
+    error: unknown,
+    failedAt: Date,
+    options: CronRunOptions,
+  ): CronJobRecord {
+    const failedAtIso = failedAt.toISOString();
+    const message = normalizeCronFailureMessage(error);
+    const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
+    const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
+    const saved = this.deps.storage.cronJobs.upsert(
+      {
+        ...job,
+        lastRunAt: failedAtIso,
+        lastRunId: runId,
+        lastRunStatus: "failed",
+        lastFailureAt: failedAtIso,
+        lastFailure: {
+          message,
+          ...(error instanceof Error && error.name ? { code: error.name } : {}),
+        },
+        failureCount,
+        backoffUntil,
+        nextRunAt: computeNextCronRunAt(job.schedule, failedAt, job.endAt),
+      },
+      failedAtIso,
+    );
+    this.deps.persistCronJobsConfig();
+    this.deps.publishRealtime("cron_job_run", "cron", {
+      type: "cron_job_run_failed",
+      jobId: saved.jobId,
+      name: saved.name,
+      runId,
+      action: saved.action,
+      message,
+      failureCount,
+      backoffUntil,
+      force: options.force === true,
+      reason: options.reason,
+    });
+    return saved;
   }
 
   private resolveCronJobContext(job: CronJobRecord): { contextFrom?: string; contextOutput?: string } | undefined {
@@ -873,6 +1016,28 @@ export function didCronJobRunInCurrentWindow(job: CronJobRecord, now: Date): boo
     return false;
   }
   return cronRunWindowKey(parsed, now) === cronRunWindowKey(parsed, lastRun);
+}
+
+export function isCronJobBackedOff(job: CronJobRecord, now: Date): boolean {
+  if (!job.backoffUntil) {
+    return false;
+  }
+  const parsed = Date.parse(job.backoffUntil);
+  return Number.isFinite(parsed) && parsed > now.getTime();
+}
+
+function computeCronBackoffUntil(failedAt: Date, failureCount: number): string {
+  const exponent = Math.max(0, Math.min(10, failureCount - 1));
+  const delayMs = Math.min(CRON_BACKOFF_MAX_MS, CRON_BACKOFF_BASE_MS * 2 ** exponent);
+  return new Date(failedAt.getTime() + delayMs).toISOString();
+}
+
+function normalizeCronFailureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const normalized = raw.replace(/\s+/g, " ").trim() || "Cron job failed.";
+  return normalized.length > CRON_FAILURE_MESSAGE_MAX_LENGTH
+    ? `${normalized.slice(0, CRON_FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
+    : normalized;
 }
 
 export function computeNextCronRunAt(schedule: string, from: Date, endAt?: string): string | undefined {

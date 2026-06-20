@@ -154,11 +154,26 @@ export interface WorkflowRecipeActivepiecesTemplateValidation {
   notes: string[];
 }
 
+export interface WorkflowRecipeTemplateExportEvidence {
+  evidenceId: string;
+  owner: "gateway";
+  source: "workflow_recipe_export";
+  timestamp: string;
+  target: WorkflowRecipeTemplateExportTarget;
+  planId: string;
+  filename: string;
+  contentType: "application/json";
+  contentSha256: string;
+  status: "read_only_planning_artifact";
+  actionNeeded: string;
+}
+
 export interface WorkflowRecipeActivepiecesTemplateExportResponse extends WorkflowRecipePreviewResponse {
   version: "workflow_recipe.activepieces_template_export.v1";
   generatedAt: string;
   filename: string;
   contentType: "application/json";
+  contentSha256: string;
   activepiecesTemplate: WorkflowRecipeActivepiecesTemplate;
   validation: WorkflowRecipeActivepiecesTemplateValidation;
   posture: {
@@ -168,6 +183,7 @@ export interface WorkflowRecipeActivepiecesTemplateExportResponse extends Workfl
     execution: "operator_import_required";
   };
   content: string;
+  evidence: WorkflowRecipeTemplateExportEvidence;
 }
 
 export interface WorkflowRecipeN8nTemplateExportRequest extends WorkflowRecipePreviewRequest {
@@ -212,6 +228,7 @@ export interface WorkflowRecipeN8nTemplateExportResponse extends WorkflowRecipeP
   generatedAt: string;
   filename: string;
   contentType: "application/json";
+  contentSha256: string;
   target: "n8n";
   n8nWorkflow: WorkflowRecipeN8nWorkflowTemplate;
   validation: WorkflowRecipeN8nTemplateValidation;
@@ -222,4 +239,5 @@ export interface WorkflowRecipeN8nTemplateExportResponse extends WorkflowRecipeP
     execution: "operator_import_required";
   };
   content: string;
+  evidence: WorkflowRecipeTemplateExportEvidence;
 }

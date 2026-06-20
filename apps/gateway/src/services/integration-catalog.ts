@@ -138,7 +138,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.telegram": {
     catalogId: "channel.telegram",
     title: "Telegram Connection",
-    description: "Connect a Telegram bot token and default chat target.",
+    description:
+      "Connect a Telegram bot token and default chat target with preflighted rich media evidence for photo/document sends.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Telegram" }),
@@ -306,7 +307,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.whatsapp": {
     catalogId: "channel.whatsapp",
     title: "WhatsApp Connection",
-    description: "Connect a WhatsApp Cloud API sender identity and default direct recipient target.",
+    description:
+      "Connect a WhatsApp Cloud API sender identity and default direct recipient target with preflighted rich media evidence.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "WhatsApp" }),
@@ -388,10 +390,26 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.imessage": {
     catalogId: "channel.imessage",
     title: "iMessage Connection",
-    description: "Configure a BlueBubbles-compatible iMessage bridge, password, and default target.",
+    description:
+      "Configure an iMessage bridge provider. BlueBubbles is the callable local-first path; Photon/Spectrum is tracked as third-party sidecar metadata until an adapter is installed.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "iMessage" }),
+      {
+        key: "bridgeProvider",
+        label: "Bridge Provider",
+        type: "select",
+        defaultValue: "bluebubbles",
+        options: [
+          { value: "bluebubbles", label: "BlueBubbles", hint: "Default local-first callable bridge." },
+          {
+            value: "photon",
+            label: "Photon/Spectrum",
+            hint: "Third-party sidecar posture. Runtime sends require a future adapter.",
+          },
+        ],
+        description: "Select the provider posture for diagnostics and runtime routing.",
+      },
       url("bridgeUrl", "Bridge URL", {
         placeholder: "http://127.0.0.1:3001",
         required: true,
@@ -404,6 +422,16 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("defaultHandle", "Default Handle", {
         placeholder: "imessage:+15551234567 or chat_guid:iMessage;-;+15551234567",
         required: true,
+      }),
+      url("photonSidecarUrl", "Photon Sidecar URL", {
+        placeholder: "http://127.0.0.1:4317",
+        advanced: true,
+        description: "Optional Photon/Spectrum sidecar origin for adapter-backed builds.",
+      }),
+      text("photonAuthEnv", "Photon Auth ENV Var", {
+        placeholder: "PHOTON_AUTH_TOKEN",
+        advanced: true,
+        secretRef: true,
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -901,10 +929,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "imessage",
     "iMessage",
-    "iMessage bridge (platform dependent).",
+    "iMessage bridge. BlueBubbles is the default callable local path; Photon/Spectrum is explicit third-party sidecar metadata.",
     "beta",
     ["local-agent"],
-    ["chat", "attachments", "reactions", "unsend", "replies"],
+    ["chat", "attachments", "reactions", "unsend", "replies", "bluebubbles", "photon-diagnostics"],
   ),
   entry(
     "channel",

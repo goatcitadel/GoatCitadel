@@ -717,6 +717,16 @@ export const CronJobSchema = z
     contextFrom: z.string().optional(),
     lastRunOutput: z.string().optional(),
     lastRunId: z.string().optional(),
+    lastRunStatus: z.enum(["ok", "failed"]).optional(),
+    lastFailureAt: z.string().optional(),
+    lastFailure: z
+      .object({
+        message: z.string(),
+        code: z.string().optional(),
+      })
+      .optional(),
+    failureCount: z.number().int().nonnegative().optional(),
+    backoffUntil: z.string().optional(),
   })
   .passthrough();
 

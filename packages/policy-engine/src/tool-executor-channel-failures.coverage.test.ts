@@ -1506,6 +1506,25 @@ describe("tool executor channel failure coverage", () => {
       /Missing iMessage target/i,
     );
 
+    await expectFailed(
+      executeTool(
+        request("imessage.send", { connectionId: "imessage-photon", message: "photon should not misroute" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "imessage-photon",
+          key: "imessage",
+          config: {
+            bridgeProvider: "photon",
+            bridgeUrl: "127.0.0.1:4317",
+            password: "photon-token",
+            defaultHandle: "+15551234567",
+          },
+        }),
+      ),
+      /Photon iMessage provider is recognized but not runnable/i,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+
     const created = await executeTool(
       request("imessage.send", {
         connectionId: "imessage-create-chat",

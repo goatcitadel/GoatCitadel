@@ -285,6 +285,42 @@ describe("createChatCompletionStream", () => {
     );
   });
 
+  it("skips same-provider stream fallback candidates", async () => {
+    const calls: string[] = [];
+    const host = createHost(
+      async function* (request) {
+        const providerId = request.providerId ?? "primary";
+        const model = request.model ?? (providerId === "primary" ? "primary-model" : "backup-model");
+        calls.push(`${providerId}:${model}`);
+        if (providerId !== "backup") {
+          throw new Error("primary unavailable");
+        }
+        yield {
+          choices: [{ delta: { content: "backup stream" } }],
+        };
+      },
+      [
+        { providerId: "primary", model: "alternate-primary-model" },
+        { providerId: "backup", model: "backup-model" },
+      ],
+    );
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    expect(calls).toContain("primary:primary-model");
+    expect(calls.at(-1)).toBe("backup:backup-model");
+    expect(calls).not.toContain("primary:alternate-primary-model");
+    expect(result.chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        routing: expect.objectContaining({
+          fallbackUsed: true,
+          fallbackProviderId: "backup",
+        }),
+      }),
+    );
+  });
+
   it("reports final stream failure when every provider fails before output", async () => {
     const host = createHost(async function* () {
       yield* [] as Iterable<never>;
@@ -677,6 +713,41 @@ describe("createChatCompletion", () => {
         fallbackUsed: true,
         fallbackProviderId: "backup",
         fallbackModel: "backup-model",
+      }),
+    );
+  });
+
+  it("skips same-provider completion fallback candidates", async () => {
+    const calls: string[] = [];
+    const host = createCompletionHost({
+      fallbacks: [
+        { providerId: "primary", model: "alternate-primary-model" },
+        { providerId: "backup", model: "backup-model" },
+      ],
+      completion: async (request) => {
+        const providerId = request.providerId ?? "primary";
+        const model = request.model ?? (providerId === "primary" ? "primary-model" : "backup-model");
+        calls.push(`${providerId}:${model}`);
+        if (providerId === "primary") {
+          throw new Error("primary offline");
+        }
+        return {
+          model,
+          choices: [{ index: 0, message: { role: "assistant", content: "fallback" }, finish_reason: "stop" }],
+        };
+      },
+    });
+
+    const response = await createChatCompletion(host, createRequest());
+
+    expect(calls).toContain("primary:primary-model");
+    expect(calls.at(-1)).toBe("backup:backup-model");
+    expect(calls).not.toContain("primary:alternate-primary-model");
+    expect(response.routing).toEqual(
+      expect.objectContaining({
+        fallbackUsed: true,
+        fallbackProviderId: "backup",
+        effectiveProviderId: "backup",
       }),
     );
   });

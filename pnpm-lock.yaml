@@ -9,14 +9,14 @@ overrides:
   brace-expansion@^2.0.2: 2.0.3
   brace-expansion@^5.0.0: 5.0.6
   dompurify: 3.4.11
-  esbuild: ^0.28.1
+  esbuild: 0.28.1
   express-rate-limit@8.3.2>ip-address: 10.1.1
   fast-uri: 3.1.2
   hono: 4.12.25
-  lodash: ^4.18.0
+  lodash: 4.18.1
   postcss: 8.5.10
   qs: 6.15.2
-  undici: ^6.27.0
+  undici: 6.27.0
   uuid: 14.0.0
   ws@^8.0.0: 8.21.0
   '@babel/core@^7.0.0': 7.29.6
@@ -29,71 +29,71 @@ importers:
   .:
     dependencies:
       shell-quote:
-        specifier: ^1.8.4
+        specifier: 1.8.4
         version: 1.8.4
     devDependencies:
       '@eslint/js':
-        specifier: ^10.0.1
+        specifier: 10.0.1
         version: 10.0.1(eslint@10.2.0(jiti@2.6.1))
       '@types/node':
-        specifier: ^22.15.0
+        specifier: 22.19.19
         version: 22.19.19
       '@typescript/native-preview':
-        specifier: beta
+        specifier: 7.0.0-dev.20260421.2
         version: 7.0.0-dev.20260421.2
       '@vitest/coverage-v8':
-        specifier: ^4.1.8
+        specifier: 4.1.8
         version: 4.1.8(vitest@4.1.8)
       c8:
-        specifier: ^10.1.3
+        specifier: 10.1.3
         version: 10.1.3
       eslint:
-        specifier: ^10.2.0
+        specifier: 10.2.0
         version: 10.2.0(jiti@2.6.1)
       eslint-config-prettier:
-        specifier: ^10.1.8
+        specifier: 10.1.8
         version: 10.1.8(eslint@10.2.0(jiti@2.6.1))
       eslint-plugin-react-hooks:
-        specifier: ^7.1.1
+        specifier: 7.1.1
         version: 7.1.1(eslint@10.2.0(jiti@2.6.1))
       husky:
-        specifier: ^9.1.7
+        specifier: 9.1.7
         version: 9.1.7
       lint-staged:
-        specifier: ^16.4.0
+        specifier: 16.4.0
         version: 16.4.0
       playwright:
-        specifier: ^1.56.1
+        specifier: 1.58.2
         version: 1.58.2
       prettier:
-        specifier: ^3.8.3
+        specifier: 3.8.3
         version: 3.8.3
       sharp:
-        specifier: ^0.34.4
+        specifier: 0.34.5
         version: 0.34.5
       tsx:
-        specifier: ^4.22.4
+        specifier: 4.22.4
         version: 4.22.4
       typescript:
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       typescript-eslint:
-        specifier: ^8.58.0
+        specifier: 8.58.0
         version: 8.58.0(eslint@10.2.0(jiti@2.6.1))(typescript@6.0.3)
       vitest:
-        specifier: ^4.1.8
+        specifier: 4.1.8
         version: 4.1.8(@types/node@22.19.19)(@vitest/coverage-v8@4.1.8)(happy-dom@20.9.0)(jsdom@29.0.2(@noble/hashes@1.8.0))(msw@2.13.2(@types/node@22.19.19)(typescript@6.0.3))(vite@6.4.3(@types/node@22.19.19)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.8.3))
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
 
   apps/gateway:
     dependencies:
       '@fastify/cors':
-        specifier: ^10.0.1
+        specifier: 10.1.0
         version: 10.1.0
       '@fastify/rate-limit':
-        specifier: ^10.1.0
+        specifier: 10.3.0
         version: 10.3.0
       '@goatcitadel/contracts':
         specifier: workspace:*
@@ -123,53 +123,53 @@ importers:
         specifier: workspace:*
         version: link:../../packages/storage
       '@grpc/grpc-js':
-        specifier: ^1.14.4
+        specifier: 1.14.4
         version: 1.14.4
       '@grpc/proto-loader':
-        specifier: ^0.8.1
+        specifier: 0.8.1
         version: 0.8.1
       '@inquirer/prompts':
-        specifier: ^7.8.4
+        specifier: 7.10.1
         version: 7.10.1(@types/node@25.9.1)
       adm-zip:
         specifier: 0.5.16
         version: 0.5.16
       chalk:
-        specifier: ^5.6.2
+        specifier: 5.6.2
         version: 5.6.2
       discord.js:
-        specifier: ^14.22.1
+        specifier: 14.25.1
         version: 14.25.1
       fastify:
-        specifier: ^5.8.5
+        specifier: 5.8.5
         version: 5.8.5
       fastify-plugin:
-        specifier: ^5.0.1
+        specifier: 5.1.0
         version: 5.1.0
       ora:
-        specifier: ^9.0.0
+        specifier: 9.3.0
         version: 9.3.0
       pg:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       shell-quote:
         specifier: 1.8.4
         version: 1.8.4
       typescript:
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       undici:
-        specifier: ^6.27.0
+        specifier: 6.27.0
         version: 6.27.0
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
     devDependencies:
       '@types/adm-zip':
         specifier: 0.5.7
         version: 0.5.7
       '@types/shell-quote':
-        specifier: ^1.7.5
+        specifier: 1.7.5
         version: 1.7.5
 
   apps/mission-control-desktop:
@@ -185,31 +185,31 @@ importers:
         specifier: 2.11.0
         version: 2.11.0
       happy-dom:
-        specifier: ^20.9.0
+        specifier: 20.9.0
         version: 20.9.0
       typescript:
-        specifier: ^6.0.0
+        specifier: 6.0.2
         version: 6.0.2
       vite:
         specifier: 6.4.3
         version: 6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.8.3)
       vitest:
-        specifier: ^4.1.8
+        specifier: 4.1.8
         version: 4.1.8(@types/node@25.9.1)(@vitest/coverage-v8@4.1.8)(happy-dom@20.9.0)(jsdom@29.0.2(@noble/hashes@1.8.0))(msw@2.13.2(@types/node@25.9.1)(typescript@6.0.2))(vite@6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.8.3))
 
   apps/mission-control-next:
     dependencies:
       '@assistant-ui/react':
-        specifier: ^0.12.25
+        specifier: 0.12.25
         version: 0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
       '@assistant-ui/react-markdown':
-        specifier: ^0.12.9
+        specifier: 0.12.9
         version: 0.12.9(@assistant-ui/react@0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5)))(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@awesome.me/webawesome':
-        specifier: ^3.0.0
+        specifier: 3.5.0
         version: 3.5.0(@floating-ui/utils@0.2.11)(@types/react@19.2.14)
       '@fontsource-variable/geist':
-        specifier: ^5.2.8
+        specifier: 5.2.8
         version: 5.2.8
       '@goatcitadel/contracts':
         specifier: workspace:*
@@ -221,122 +221,122 @@ importers:
         specifier: workspace:*
         version: link:../../packages/threaded-surface-core
       '@monaco-editor/loader':
-        specifier: ^1.7.0
+        specifier: 1.7.0
         version: 1.7.0
       '@radix-ui/react-dialog':
-        specifier: ^1.1.2
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-popover':
-        specifier: ^1.1.2
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-select':
-        specifier: ^2.1.2
+        specifier: 2.2.6
         version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-separator':
-        specifier: ^1.1.7
+        specifier: 1.1.8
         version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-slot':
-        specifier: ^1.2.4
+        specifier: 1.2.4
         version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
       '@radix-ui/react-switch':
-        specifier: ^1.1.1
+        specifier: 1.2.6
         version: 1.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-tabs':
-        specifier: ^1.1.13
+        specifier: 1.1.13
         version: 1.1.13(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-tooltip':
-        specifier: ^1.1.4
+        specifier: 1.2.8
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tailwindcss/vite':
-        specifier: ^4.1.11
+        specifier: 4.2.2
         version: 4.2.2(vite@6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.8.3))
       '@tanstack/react-table':
-        specifier: ^8.21.3
+        specifier: 8.21.3
         version: 8.21.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@uiw/react-monacoeditor':
-        specifier: ^3.6.1
+        specifier: 3.6.1
         version: 3.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       class-variance-authority:
-        specifier: ^0.7.1
+        specifier: 0.7.1
         version: 0.7.1
       clsx:
-        specifier: ^2.1.1
+        specifier: 2.1.1
         version: 2.1.1
       cmdk:
-        specifier: ^1.0.0
+        specifier: 1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       lucide-react:
-        specifier: ^0.542.0
+        specifier: 0.542.0
         version: 0.542.0(react@19.2.5)
       mermaid:
-        specifier: ^11.15.0
+        specifier: 11.15.0
         version: 11.15.0
       monaco-editor:
-        specifier: ^0.55.1
+        specifier: 0.55.1
         version: 0.55.1
       next-themes:
-        specifier: ^0.4.6
+        specifier: 0.4.6
         version: 0.4.6(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       radix-ui:
-        specifier: ^1.4.3
+        specifier: 1.4.3
         version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5
       react-arborist:
-        specifier: ^3.5.0
+        specifier: 3.5.0
         version: 3.5.0(@types/node@25.9.1)(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react-dom:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
       react-markdown:
-        specifier: ^10.1.0
+        specifier: 10.1.0
         version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
       react-reflex:
-        specifier: ^5.0.5
+        specifier: 5.0.5
         version: 5.0.5
       react-virtuoso:
-        specifier: ^4.10.5
+        specifier: 4.18.3
         version: 4.18.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       remark-gfm:
-        specifier: ^4.0.1
+        specifier: 4.0.1
         version: 4.0.1
       shadcn:
-        specifier: ^4.2.0
+        specifier: 4.2.0
         version: 4.2.0(@types/node@25.9.1)(typescript@6.0.3)
       sonner:
-        specifier: ^2.0.7
+        specifier: 2.0.7
         version: 2.0.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       tailwind-merge:
-        specifier: ^3.3.1
+        specifier: 3.5.0
         version: 3.5.0
       tailwindcss:
-        specifier: ^4.1.11
+        specifier: 4.2.2
         version: 4.2.2
       tw-animate-css:
-        specifier: ^1.3.6
+        specifier: 1.4.0
         version: 1.4.0
       vaul:
-        specifier: ^1.1.2
+        specifier: 1.1.2
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
     devDependencies:
       '@types/react':
-        specifier: ^19.1.10
+        specifier: 19.2.14
         version: 19.2.14
       '@types/react-dom':
-        specifier: ^19.1.7
+        specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.14)
       '@types/react-test-renderer':
-        specifier: ^19.1.0
+        specifier: 19.1.0
         version: 19.1.0
       '@vitejs/plugin-react':
-        specifier: ^4.3.4
+        specifier: 4.7.0
         version: 4.7.0(vite@6.4.3(@types/node@25.9.1)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.8.3))
       happy-dom:
-        specifier: ^20.9.0
+        specifier: 20.9.0
         version: 20.9.0
       react-test-renderer:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
       vite:
         specifier: 6.4.3
@@ -345,7 +345,7 @@ importers:
   packages/contracts:
     dependencies:
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/extensions-sdk:
@@ -354,7 +354,7 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/gateway-core:
@@ -366,7 +366,7 @@ importers:
         specifier: workspace:*
         version: link:../storage
       nanoid:
-        specifier: ^5.1.5
+        specifier: 5.1.6
         version: 5.1.6
 
   packages/memory-core:
@@ -387,131 +387,131 @@ importers:
   packages/mission-control-shared:
     dependencies:
       '@assistant-ui/react':
-        specifier: ^0.12.25
+        specifier: 0.12.25
         version: 0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
       '@assistant-ui/react-markdown':
-        specifier: ^0.12.9
+        specifier: 0.12.9
         version: 0.12.9(@assistant-ui/react@0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5)))(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@fontsource-variable/geist':
-        specifier: ^5.2.8
+        specifier: 5.2.8
         version: 5.2.8
       '@goatcitadel/contracts':
         specifier: workspace:*
         version: link:../contracts
       '@monaco-editor/loader':
-        specifier: ^1.7.0
+        specifier: 1.7.0
         version: 1.7.0
       '@radix-ui/react-dialog':
-        specifier: ^1.1.2
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-popover':
-        specifier: ^1.1.2
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-select':
-        specifier: ^2.1.2
+        specifier: 2.2.6
         version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-separator':
-        specifier: ^1.1.7
+        specifier: 1.1.8
         version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-slot':
-        specifier: ^1.2.4
+        specifier: 1.2.4
         version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
       '@radix-ui/react-switch':
-        specifier: ^1.1.1
+        specifier: 1.2.6
         version: 1.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-tabs':
-        specifier: ^1.1.13
+        specifier: 1.1.13
         version: 1.1.13(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-tooltip':
-        specifier: ^1.1.4
+        specifier: 1.2.8
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@react-three/drei':
-        specifier: ^10.7.7
+        specifier: 10.7.7
         version: 10.7.7(@react-three/fiber@9.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1))(@types/react@19.2.14)(@types/three@0.183.1)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1)
       '@react-three/fiber':
-        specifier: ^9.6.0
+        specifier: 9.6.0
         version: 9.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1)
       '@tanstack/react-table':
-        specifier: ^8.21.3
+        specifier: 8.21.3
         version: 8.21.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@uiw/react-monacoeditor':
-        specifier: ^3.6.1
+        specifier: 3.6.1
         version: 3.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       class-variance-authority:
-        specifier: ^0.7.1
+        specifier: 0.7.1
         version: 0.7.1
       clsx:
-        specifier: ^2.1.1
+        specifier: 2.1.1
         version: 2.1.1
       cmdk:
-        specifier: ^1.0.0
+        specifier: 1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       lucide-react:
-        specifier: ^0.542.0
+        specifier: 0.542.0
         version: 0.542.0(react@19.2.5)
       mermaid:
-        specifier: ^11.15.0
+        specifier: 11.15.0
         version: 11.15.0
       monaco-editor:
-        specifier: ^0.55.1
+        specifier: 0.55.1
         version: 0.55.1
       next-themes:
-        specifier: ^0.4.6
+        specifier: 0.4.6
         version: 0.4.6(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       radix-ui:
-        specifier: ^1.4.3
+        specifier: 1.4.3
         version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5
       react-arborist:
-        specifier: ^3.5.0
+        specifier: 3.5.0
         version: 3.5.0(@types/node@25.9.1)(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react-dom:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
       react-markdown:
-        specifier: ^10.1.0
+        specifier: 10.1.0
         version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
       react-virtuoso:
-        specifier: ^4.10.5
+        specifier: 4.18.3
         version: 4.18.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       remark-gfm:
-        specifier: ^4.0.1
+        specifier: 4.0.1
         version: 4.0.1
       shell-quote:
         specifier: 1.8.4
         version: 1.8.4
       sonner:
-        specifier: ^2.0.7
+        specifier: 2.0.7
         version: 2.0.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       tailwind-merge:
-        specifier: ^3.3.1
+        specifier: 3.5.0
         version: 3.5.0
       three:
-        specifier: ^0.183.1
+        specifier: 0.183.1
         version: 0.183.1
       vaul:
-        specifier: ^1.1.2
+        specifier: 1.1.2
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
     devDependencies:
       '@types/react':
-        specifier: ^19.1.10
+        specifier: 19.2.14
         version: 19.2.14
       '@types/react-dom':
-        specifier: ^19.1.7
+        specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.14)
       '@types/react-test-renderer':
-        specifier: ^19.1.0
+        specifier: 19.1.0
         version: 19.1.0
       '@types/shell-quote':
-        specifier: ^1.7.5
+        specifier: 1.7.5
         version: 1.7.5
       '@types/three':
-        specifier: ^0.183.1
+        specifier: 0.183.1
         version: 0.183.1
       react-test-renderer:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
 
   packages/orchestration:
@@ -520,7 +520,7 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/policy-engine:
@@ -538,10 +538,10 @@ importers:
         specifier: 9.6.1
         version: 9.6.1
       mammoth:
-        specifier: ^1.12.0
+        specifier: 1.12.0
         version: 1.12.0
       playwright:
-        specifier: ^1.56.1
+        specifier: 1.58.2
         version: 1.58.2
       pptxgenjs:
         specifier: 4.0.1
@@ -550,10 +550,10 @@ importers:
         specifier: 0.34.5
         version: 0.34.5
       undici:
-        specifier: ^6.27.0
+        specifier: 6.27.0
         version: 6.27.0
       unpdf:
-        specifier: ^1.6.2
+        specifier: 1.6.2
         version: 1.6.2
 
   packages/skills:
@@ -562,10 +562,10 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       yaml:
-        specifier: ^2.8.3
+        specifier: 2.8.3
         version: 2.8.3
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/storage:
@@ -574,11 +574,11 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       pg:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@types/pg':
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
 
   packages/threaded-surface-core:
@@ -590,20 +590,20 @@ importers:
         specifier: workspace:*
         version: link:../mission-control-shared
       react:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5
     devDependencies:
       '@types/react':
-        specifier: ^19.1.10
+        specifier: 19.2.14
         version: 19.2.14
       '@types/react-dom':
-        specifier: ^19.1.7
+        specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.14)
       '@types/react-test-renderer':
-        specifier: ^19.1.0
+        specifier: 19.1.0
         version: 19.1.0
       react-test-renderer:
-        specifier: ^19.1.1
+        specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
 
 packages:

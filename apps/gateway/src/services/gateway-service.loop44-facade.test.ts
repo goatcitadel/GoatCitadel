@@ -300,6 +300,17 @@ describe("GatewayService loop44 facade behavior", () => {
         gateway,
         {
           ...runtime,
+          activeModel: "gpt-4.1-mini",
+        },
+        "openai",
+        "gpt-5",
+      ),
+    ).toEqual([{ providerId: "moonshot", model: "kimi-k2" }]);
+    expect(
+      GatewayService.prototype.resolveFallbackTargets.call(
+        gateway,
+        {
+          ...runtime,
           activeProviderId: "anthropic",
           activeModel: "claude-sonnet",
         },

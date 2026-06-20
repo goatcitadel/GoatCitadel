@@ -518,6 +518,98 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(queued.deliveryDiagnostics?.richFormatting?.notes.join(" ")).toContain("Rich formatting must be flattened");
   });
 
+  it("adds provider-backed rich-message diagnostics for WhatsApp attachments", () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "whatsapp",
+      target: "+15551234567",
+      payload: {
+        message: "review this",
+        richFormat: "markdown",
+        attachments: [
+          { url: "https://example.com/chart.png", mimeType: "image/png" },
+          { title: "context note", mimeType: "text/plain" },
+        ],
+        attachmentIds: ["11111111-1111-4111-8111-111111111111"],
+      },
+    });
+
+    expect(queued.deliveryDiagnostics?.richMessage).toMatchObject({
+      channelKey: "whatsapp",
+      provider: "whatsapp_cloud_api",
+      capabilityLabel: "WhatsApp Cloud API rich media",
+      status: "degraded",
+      textPosture: "separate_text_then_media",
+      attachmentCount: 3,
+      nativeAttachmentCount: 1,
+      fallbackAttachmentCount: 1,
+      pendingAttachmentIdCount: 1,
+      evidence: {
+        owner: "gateway",
+        source: "channel_rich_message_plan",
+        status: "degraded",
+        provider: "whatsapp_cloud_api",
+      },
+      attachments: [
+        {
+          source: "url",
+          mediaKind: "image",
+          providerKind: "image",
+          disposition: "native_media",
+        },
+        {
+          source: "metadata_only",
+          disposition: "text_fallback",
+        },
+        {
+          source: "pending_attachment_id",
+          disposition: "pending_hydration",
+        },
+      ],
+    });
+    expect(queued.deliveryDiagnostics?.richMessage?.evidence.evidenceId).toMatch(/^richmsg-[a-f0-9]{8}$/);
+    expect(repository.created[0]?.deliveryDiagnostics).toBeUndefined();
+  });
+
+  it("rejects Telegram rich payloads that cannot be delivered safely", () => {
+    const service = new ChannelDeliveryRuntimeService({
+      repository: createRepository(),
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(() =>
+      service.enqueue({
+        connectionId: "conn-1",
+        channelKey: "telegram",
+        target: "chat-1",
+        payload: {
+          message: "see attachment",
+          attachments: [{ title: "missing-url.pdf", mimeType: "application/pdf" }],
+        },
+      }),
+    ).toThrow("Telegram rich attachments require a URL, inline data, or an attachmentId to hydrate");
+
+    expect(() =>
+      service.enqueue({
+        connectionId: "conn-1",
+        channelKey: "telegram",
+        target: "chat-1",
+        payload: {
+          message: "too many",
+          attachmentIds: Array.from({ length: 11 }, (_, index) => `attachment-${index + 1}`),
+        },
+      }),
+    ).toThrow("Provider rich delivery is capped at 10 attachments per message");
+  });
+
   it("classifies channel delivery failures for operator-facing fallback labels", () => {
     expect(classifyChannelDeliveryFailure("HTTP 429 temporarily unavailable")).toBe("degraded");
     expect(classifyChannelDeliveryFailure("permission denied")).toBe("blocked");

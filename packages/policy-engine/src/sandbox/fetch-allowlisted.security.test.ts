@@ -123,6 +123,42 @@ describe("fetchAllowlisted (codex #11, #14)", () => {
     expect(stub).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds response text reads from allowlisted fetches", async () => {
+    const stub = vi.fn(async () => new Response("secret-free-but-too-large"));
+    global.fetch = stub as unknown as typeof global.fetch;
+
+    const response = await fetchAllowlisted("https://skillsmp.com/large", {
+      allowlist: ["skillsmp.com"],
+      maxResponseBytes: 8,
+    });
+
+    await expect(response.text()).rejects.toThrow(/response body exceeded 8 bytes/);
+  });
+
+  it("bounds response JSON reads from allowlisted fetches", async () => {
+    const stub = vi.fn(async () => new Response('{"message":"large-enough-to-trip-the-cap"}'));
+    global.fetch = stub as unknown as typeof global.fetch;
+
+    const response = await fetchAllowlisted("https://skillsmp.com/large-json", {
+      allowlist: ["skillsmp.com"],
+      maxResponseBytes: 16,
+    });
+
+    await expect(response.json()).rejects.toThrow(/response body exceeded 16 bytes/);
+  });
+
+  it("bounds binary response reads from allowlisted fetches", async () => {
+    const stub = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4, 5, 6])));
+    global.fetch = stub as unknown as typeof global.fetch;
+
+    const response = await fetchAllowlisted("https://skillsmp.com/blob", {
+      allowlist: ["skillsmp.com"],
+      maxResponseBytes: 4,
+    });
+
+    await expect(response.arrayBuffer()).rejects.toThrow(/response body exceeded 4 bytes/);
+  });
+
   it("aborts when redirect chain exceeds the cap", async () => {
     const stub = vi.fn(
       async () => new Response(null, { status: 302, headers: { Location: "https://skillsmp.com/loop" } }),

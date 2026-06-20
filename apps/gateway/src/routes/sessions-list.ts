@@ -31,12 +31,18 @@ const runtimeLifecycleExportQuerySchema = runtimeLifecycleIdentifierSchema
     includeTranscript: z.coerce.boolean().optional(),
     includeTimeline: z.coerce.boolean().optional(),
     timelineLimit: z.coerce.number().int().positive().max(1000).optional(),
-    format: z.enum(["bundle", "trust_report"]).optional(),
+    format: z.enum(["bundle", "trust_report", "siem_ndjson"]).optional(),
   })
   .refine((value) => Boolean(value.sessionId || value.turnId || value.runId || value.approvalId || value.taskId), {
     message: "Provide at least one lifecycle identifier.",
     path: ["sessionId"],
   });
+
+type RuntimeLifecycleExportRouteQuery = z.infer<typeof runtimeLifecycleExportQuerySchema>;
+interface RuntimeLifecycleExporterRouteShape {
+  exportLifecycle(input: RuntimeLifecycleExportRouteQuery): Promise<unknown>;
+  exportLifecycleSiemNdjson(input: RuntimeLifecycleExportRouteQuery): Promise<string>;
+}
 
 export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/runtime/lifecycle", async (request, reply) => {
@@ -52,7 +58,14 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.runtimeLifecycle.exportLifecycle(parsed.data));
+    const runtimeLifecycleExporter =
+      fastify.services.runtimeLifecycle as unknown as RuntimeLifecycleExporterRouteShape;
+    if (parsed.data.format === "siem_ndjson") {
+      return reply
+        .type("application/x-ndjson")
+        .send(await runtimeLifecycleExporter.exportLifecycleSiemNdjson(parsed.data));
+    }
+    return reply.send(await runtimeLifecycleExporter.exportLifecycle(parsed.data));
   });
 
   fastify.get("/api/v1/sessions", async (request, reply) => {

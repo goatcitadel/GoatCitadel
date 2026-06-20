@@ -2,6 +2,7 @@ import type {
   ChannelActionName,
   ChannelActivityCapabilities,
   ChannelActivityPhase,
+  ChannelAttachmentInput,
   ChannelAttachmentSource,
   ChannelCapabilities,
   ChannelChunkingMode,
@@ -39,6 +40,56 @@ export interface ChannelTextDeliveryPlan {
   chunks: string[];
   richFormatPosture: "preserved" | "plain_text_fallback";
   notes: string[];
+}
+
+export type ChannelRichMessageProvider = "telegram_bot_api" | "whatsapp_cloud_api";
+export type ChannelRichMessagePlanStatus = "preserved" | "degraded" | "blocked";
+export type ChannelRichMessageTextPosture = "text_only" | "caption" | "separate_text_then_media" | "media_only";
+export type ChannelRichAttachmentSource = "url" | "inline" | "pending_attachment_id" | "metadata_only";
+export type ChannelRichMediaKind = "image" | "video" | "audio" | "document" | "unknown";
+export type ChannelRichProviderKind = "photo" | "image" | "video" | "audio" | "document";
+export type ChannelRichAttachmentDisposition =
+  | "native_media"
+  | "document_fallback"
+  | "text_fallback"
+  | "pending_hydration"
+  | "blocked";
+
+export interface ChannelRichAttachmentPlan {
+  index: number;
+  source: ChannelRichAttachmentSource;
+  mediaKind: ChannelRichMediaKind;
+  providerKind?: ChannelRichProviderKind;
+  disposition: ChannelRichAttachmentDisposition;
+  mimeType?: string;
+  title?: string;
+  reason?: string;
+}
+
+export interface ChannelRichMessageEvidence {
+  owner: "gateway";
+  source: "channel_rich_message_plan";
+  status: ChannelRichMessagePlanStatus;
+  provider: ChannelRichMessageProvider;
+  evidenceId: string;
+}
+
+export interface ChannelRichMessageDeliveryPlan {
+  channelKey: string;
+  provider: ChannelRichMessageProvider;
+  capabilityLabel: string;
+  status: ChannelRichMessagePlanStatus;
+  textPosture: ChannelRichMessageTextPosture;
+  attachmentCount: number;
+  nativeAttachmentCount: number;
+  fallbackAttachmentCount: number;
+  blockedAttachmentCount: number;
+  pendingAttachmentIdCount: number;
+  providerAttachmentLimit: number;
+  captionMaxCodeUnits: number;
+  notes: string[];
+  evidence: ChannelRichMessageEvidence;
+  attachments: ChannelRichAttachmentPlan[];
 }
 
 const DEFAULT_THREAD_CAPABILITIES: ChannelThreadCapabilities = {
@@ -80,6 +131,29 @@ const CHANNEL_TEXT_LIMITS: Record<string, number> = {
   telegram: 4096,
   whatsapp: 4096,
   slack: 40000,
+};
+
+const CHANNEL_RICH_MESSAGE_PROFILES: Record<
+  string,
+  {
+    provider: ChannelRichMessageProvider;
+    capabilityLabel: string;
+    providerAttachmentLimit: number;
+    captionMaxCodeUnits: number;
+  }
+> = {
+  telegram: {
+    provider: "telegram_bot_api",
+    capabilityLabel: "Telegram Bot API rich media",
+    providerAttachmentLimit: 10,
+    captionMaxCodeUnits: 1024,
+  },
+  whatsapp: {
+    provider: "whatsapp_cloud_api",
+    capabilityLabel: "WhatsApp Cloud API rich media",
+    providerAttachmentLimit: 10,
+    captionMaxCodeUnits: 0,
+  },
 };
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
@@ -259,6 +333,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     resolveSupportNotes: (config) => [
       "Telegram bot connections can add reactions, delete sent messages, and emit typing indicators when the bot has access to the target chat.",
       "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
+      "Telegram rich-message preflight blocks metadata-only attachments, caps rich batches at 10 attachments, and records provider delivery evidence before send.",
       hasAnyConfigured(config, ["webhookSecret", "webhookSecretEnv", "secretToken", "secretTokenEnv"])
         ? "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path."
         : "Telegram inbound routing remains disabled until a webhook secret is configured.",
@@ -368,6 +443,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     resolveSupportNotes: (config) => [
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+      "WhatsApp rich-message preflight labels native media, text fallbacks, pending attachment hydration, and Cloud API provider evidence before send.",
       "WhatsApp reactions are sent through the Cloud API, but unsend/delete is still not wired in this bridge.",
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
       hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
@@ -433,9 +509,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       lifecycle: "stateless",
       inboundReadiness: "unsupported",
       operatorSummary:
-        "iMessage via BlueBubbles is normalized as a stateless local bridge. Outbound sends, replies, reactions, and unsend depend on bridge capabilities, but inbound normalization is not active here.",
+        "iMessage defaults to a BlueBubbles local bridge. Photon/Spectrum is tracked as a third-party sidecar provider, but it is not the default runtime path and must be explicitly configured with a runnable adapter.",
     },
     supportNotes: [
+      "BlueBubbles is the local-first callable provider for this Gateway build.",
+      "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
       "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
       "Reactions and unsend require BlueBubbles Private API support.",
     ],
@@ -636,6 +714,89 @@ export function planChannelTextDelivery(
   };
 }
 
+export function planChannelRichMessageDelivery(
+  channelKey: string,
+  input: {
+    text?: string;
+    richFormat?: ChannelDeliveryRichFormat;
+    attachments?: ChannelAttachmentInput[];
+    attachmentIds?: string[];
+  } = {},
+): ChannelRichMessageDeliveryPlan | undefined {
+  const normalizedChannelKey = channelKey.toLowerCase();
+  const profile = CHANNEL_RICH_MESSAGE_PROFILES[normalizedChannelKey];
+  if (!profile) {
+    return undefined;
+  }
+
+  const text = input.text ?? "";
+  const attachments = normalizeRichAttachments(input.attachments);
+  const attachmentIds = normalizeAttachmentIds(input.attachmentIds);
+  const plannedAttachments = attachments.map((attachment, index) =>
+    planRichAttachment(normalizedChannelKey, attachment, index, profile.providerAttachmentLimit),
+  );
+
+  for (let index = 0; index < attachmentIds.length; index += 1) {
+    plannedAttachments.push({
+      index: plannedAttachments.length,
+      source: "pending_attachment_id",
+      mediaKind: "unknown",
+      disposition:
+        plannedAttachments.length < profile.providerAttachmentLimit ? "pending_hydration" : "blocked",
+      reason:
+        plannedAttachments.length < profile.providerAttachmentLimit
+          ? "Attachment id will be hydrated before provider send."
+          : `Provider rich delivery is capped at ${profile.providerAttachmentLimit} attachments per message.`,
+    });
+  }
+
+  const nativeAttachmentCount = plannedAttachments.filter((item) => item.disposition === "native_media").length;
+  const fallbackAttachmentCount = plannedAttachments.filter(
+    (item) => item.disposition === "document_fallback" || item.disposition === "text_fallback",
+  ).length;
+  const blockedAttachmentCount = plannedAttachments.filter((item) => item.disposition === "blocked").length;
+  const pendingAttachmentIdCount = plannedAttachments.filter((item) => item.source === "pending_attachment_id").length;
+  const textPosture = resolveRichTextPosture(normalizedChannelKey, text, plannedAttachments, profile.captionMaxCodeUnits);
+  const status = blockedAttachmentCount > 0 ? "blocked" : resolveRichPlanStatus(textPosture, fallbackAttachmentCount);
+  const notes = buildRichMessageNotes({
+    channelKey: normalizedChannelKey,
+    text,
+    textPosture,
+    richFormat: input.richFormat,
+    attachmentCount: plannedAttachments.length,
+    nativeAttachmentCount,
+    fallbackAttachmentCount,
+    blockedAttachmentCount,
+    pendingAttachmentIdCount,
+    providerAttachmentLimit: profile.providerAttachmentLimit,
+    captionMaxCodeUnits: profile.captionMaxCodeUnits,
+  });
+
+  return {
+    channelKey: normalizedChannelKey,
+    provider: profile.provider,
+    capabilityLabel: profile.capabilityLabel,
+    status,
+    textPosture,
+    attachmentCount: plannedAttachments.length,
+    nativeAttachmentCount,
+    fallbackAttachmentCount,
+    blockedAttachmentCount,
+    pendingAttachmentIdCount,
+    providerAttachmentLimit: profile.providerAttachmentLimit,
+    captionMaxCodeUnits: profile.captionMaxCodeUnits,
+    notes,
+    evidence: {
+      owner: "gateway",
+      source: "channel_rich_message_plan",
+      status,
+      provider: profile.provider,
+      evidenceId: buildRichMessageEvidenceId(normalizedChannelKey, status, textPosture, plannedAttachments),
+    },
+    attachments: plannedAttachments,
+  };
+}
+
 function splitUtf16SafeChunks(text: string, maxChunkCodeUnits: number): string[] {
   if (!text) {
     return [""];
@@ -653,6 +814,238 @@ function splitUtf16SafeChunks(text: string, maxChunkCodeUnits: number): string[]
     chunks.push(current);
   }
   return chunks;
+}
+
+function normalizeRichAttachments(input: ChannelAttachmentInput[] | undefined): ChannelAttachmentInput[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      url: trimOptionalString(item.url),
+      title: trimOptionalString(item.title),
+      mimeType: trimOptionalString(item.mimeType),
+      dataBase64: trimOptionalString(item.dataBase64),
+      attachmentId: trimOptionalString(item.attachmentId),
+    }))
+    .filter((item) => item.url || item.title || item.mimeType || item.dataBase64 || item.attachmentId);
+}
+
+function normalizeAttachmentIds(input: string[] | undefined): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+}
+
+function planRichAttachment(
+  channelKey: string,
+  attachment: ChannelAttachmentInput,
+  index: number,
+  providerAttachmentLimit: number,
+): ChannelRichAttachmentPlan {
+  const source = resolveRichAttachmentSource(attachment);
+  const mediaKind = inferRichMediaKind(attachment);
+  const common = {
+    index,
+    source,
+    mediaKind,
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    ...(attachment.title ? { title: attachment.title } : {}),
+  };
+
+  if (index >= providerAttachmentLimit) {
+    return {
+      ...common,
+      disposition: "blocked",
+      reason: `Provider rich delivery is capped at ${providerAttachmentLimit} attachments per message.`,
+    };
+  }
+  if (source === "pending_attachment_id") {
+    return {
+      ...common,
+      disposition: "pending_hydration",
+      reason: "Attachment id will be hydrated before provider send.",
+    };
+  }
+  if (source === "metadata_only") {
+    return channelKey === "whatsapp"
+      ? {
+          ...common,
+          disposition: "text_fallback",
+          reason: "Metadata-only attachment will be rendered into the text body.",
+        }
+      : {
+          ...common,
+          disposition: "blocked",
+          reason: "Telegram rich attachments require a URL, inline data, or an attachmentId to hydrate.",
+        };
+  }
+  if (channelKey === "telegram") {
+    return {
+      ...common,
+      providerKind: mediaKind === "image" ? "photo" : "document",
+      disposition: mediaKind === "image" ? "native_media" : "document_fallback",
+      ...(mediaKind === "image"
+        ? {}
+        : { reason: "Telegram non-image rich attachments use document delivery in this bridge." }),
+    };
+  }
+  if (channelKey === "whatsapp") {
+    const providerKind = mediaKind === "unknown" ? "document" : mediaKind;
+    return {
+      ...common,
+      providerKind,
+      disposition: mediaKind === "unknown" ? "document_fallback" : "native_media",
+      ...(mediaKind === "unknown"
+        ? { reason: "Unknown WhatsApp media type falls back to document delivery." }
+        : {}),
+    };
+  }
+  return {
+    ...common,
+    disposition: "blocked",
+    reason: "No rich message planner is available for this channel.",
+  };
+}
+
+function resolveRichAttachmentSource(attachment: ChannelAttachmentInput): ChannelRichAttachmentSource {
+  if (attachment.dataBase64) {
+    return "inline";
+  }
+  if (attachment.url) {
+    return "url";
+  }
+  if (attachment.attachmentId) {
+    return "pending_attachment_id";
+  }
+  return "metadata_only";
+}
+
+function inferRichMediaKind(attachment: ChannelAttachmentInput): ChannelRichMediaKind {
+  const mimeType = attachment.mimeType?.toLowerCase();
+  if (mimeType?.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType?.startsWith("video/")) {
+    return "video";
+  }
+  if (mimeType?.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mimeType) {
+    return "document";
+  }
+  const path = `${attachment.title ?? ""} ${attachment.url ?? ""}`.toLowerCase();
+  if (/\.(png|jpe?g|gif|webp)(\?|#|$)/u.test(path)) {
+    return "image";
+  }
+  if (/\.(mp4|mov|webm|m4v)(\?|#|$)/u.test(path)) {
+    return "video";
+  }
+  if (/\.(mp3|wav|m4a|ogg|aac)(\?|#|$)/u.test(path)) {
+    return "audio";
+  }
+  if (path.trim()) {
+    return "document";
+  }
+  return "unknown";
+}
+
+function resolveRichTextPosture(
+  channelKey: string,
+  text: string,
+  attachments: ChannelRichAttachmentPlan[],
+  captionMaxCodeUnits: number,
+): ChannelRichMessageTextPosture {
+  const hasText = text.trim().length > 0;
+  const hasRichAttachment = attachments.some((item) => item.disposition !== "text_fallback");
+  if (!hasRichAttachment) {
+    return hasText ? "text_only" : "media_only";
+  }
+  if (!hasText) {
+    return "media_only";
+  }
+  if (channelKey === "telegram" && text.length <= captionMaxCodeUnits) {
+    return "caption";
+  }
+  return "separate_text_then_media";
+}
+
+function resolveRichPlanStatus(
+  textPosture: ChannelRichMessageTextPosture,
+  fallbackAttachmentCount: number,
+): ChannelRichMessagePlanStatus {
+  if (fallbackAttachmentCount > 0 || textPosture === "separate_text_then_media") {
+    return "degraded";
+  }
+  return "preserved";
+}
+
+function buildRichMessageNotes(input: {
+  channelKey: string;
+  text: string;
+  textPosture: ChannelRichMessageTextPosture;
+  richFormat?: ChannelDeliveryRichFormat;
+  attachmentCount: number;
+  nativeAttachmentCount: number;
+  fallbackAttachmentCount: number;
+  blockedAttachmentCount: number;
+  pendingAttachmentIdCount: number;
+  providerAttachmentLimit: number;
+  captionMaxCodeUnits: number;
+}): string[] {
+  const notes: string[] = [];
+  if (input.attachmentCount === 0) {
+    notes.push("No rich attachments are present; delivery stays text-only.");
+  } else {
+    notes.push(
+      `${input.channelKey} rich delivery planned ${input.nativeAttachmentCount} native attachment${input.nativeAttachmentCount === 1 ? "" : "s"} and ${input.fallbackAttachmentCount} fallback attachment${input.fallbackAttachmentCount === 1 ? "" : "s"}.`,
+    );
+  }
+  if (input.pendingAttachmentIdCount > 0) {
+    notes.push(`${input.pendingAttachmentIdCount} attachment id${input.pendingAttachmentIdCount === 1 ? "" : "s"} will be hydrated before provider send.`);
+  }
+  if (input.textPosture === "caption") {
+    notes.push(`Message text fits the ${input.captionMaxCodeUnits} UTF-16 code unit caption limit.`);
+  }
+  if (input.textPosture === "separate_text_then_media") {
+    notes.push(
+      input.channelKey === "telegram"
+        ? `Message text exceeds the ${input.captionMaxCodeUnits} UTF-16 code unit caption limit and will be sent before media.`
+        : "WhatsApp Cloud API sends message text separately from media attachments in this bridge.",
+    );
+  }
+  if (input.richFormat && input.richFormat !== "plain_text" && input.channelKey === "whatsapp") {
+    notes.push("WhatsApp Cloud API delivery does not preserve arbitrary HTML/Markdown rich formatting in this bridge.");
+  }
+  if (input.blockedAttachmentCount > 0) {
+    notes.push(
+      `${input.blockedAttachmentCount} attachment${input.blockedAttachmentCount === 1 ? "" : "s"} blocked before provider send; fix the attachment payload or split the delivery.`,
+    );
+  }
+  if (input.attachmentCount > input.providerAttachmentLimit) {
+    notes.push(`Provider rich delivery limit is ${input.providerAttachmentLimit} attachments per message.`);
+  }
+  return notes;
+}
+
+function buildRichMessageEvidenceId(
+  channelKey: string,
+  status: ChannelRichMessagePlanStatus,
+  textPosture: ChannelRichMessageTextPosture,
+  attachments: ChannelRichAttachmentPlan[],
+): string {
+  const stable = `${channelKey}|${status}|${textPosture}|${attachments
+    .map((item) => `${item.index}:${item.source}:${item.mediaKind}:${item.disposition}:${item.providerKind ?? ""}`)
+    .join(";")}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < stable.length; index += 1) {
+    hash ^= stable.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `richmsg-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function buildActivityCapabilities(
@@ -711,4 +1104,8 @@ function readConfigString(config: Record<string, unknown>, key: string): string 
 
 function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): boolean {
   return keys.some((key) => Boolean(readConfigString(config, key)));
+}
+
+function trimOptionalString(value: string | undefined): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

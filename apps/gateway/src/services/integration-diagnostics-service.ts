@@ -206,6 +206,12 @@ export function buildIntegrationConnectionChecks(
             ? "Telegram API host is allowlisted."
             : "Telegram API host is not allowlisted.",
         });
+        checks.push({
+          key: "rich_message_policy",
+          status: "pass",
+          message:
+            "Telegram rich-message policy: Bot API photo/document delivery is preflighted, caption limits are recorded, metadata-only attachments are blocked, and rich batches are capped at 10 attachments.",
+        });
         break;
       case "google-chat":
         checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
@@ -228,6 +234,12 @@ export function buildIntegrationConnectionChecks(
           "warn",
         );
         requireText("target", "Default WhatsApp recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+        checks.push({
+          key: "rich_message_policy",
+          status: "pass",
+          message:
+            "WhatsApp rich-message policy: Cloud API image/video/audio/document delivery is preflighted, text-only fallbacks are labeled, pending attachment hydration is visible, and rich batches are capped at 10 attachments.",
+        });
         break;
       case "signal":
         checkUrl(
@@ -244,6 +256,14 @@ export function buildIntegrationConnectionChecks(
         requireText("target", "Default Mattermost channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "imessage":
+        if (readIMessageBridgeProvider(deps, config) === "photon") {
+          checks.push({
+            key: "provider",
+            status: "warn",
+            message:
+              "Photon/Spectrum iMessage provider metadata is recognized, but this Gateway build blocks Photon sends until a runnable adapter is installed. BlueBubbles remains the callable local path.",
+          });
+        }
         checkUrl(
           "url",
           "iMessage bridge URL",
@@ -602,6 +622,18 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "imessage": {
+      if (readIMessageBridgeProvider(deps, config) === "photon") {
+        return {
+          checks: [
+            {
+              key: "imessage_photon_runtime",
+              status: "fail",
+              message:
+                "Photon/Spectrum iMessage diagnostics are explicit, but runtime sends are blocked until a Photon adapter is installed. Use BlueBubbles for callable local iMessage sends.",
+            },
+          ],
+        };
+      }
       const bridgeUrl =
         deps.readConnectionConfigValue(config, "bridgeUrl") ??
         deps.readConnectionConfigValue(config, "baseUrl") ??
@@ -710,6 +742,15 @@ function resolveZaloUserConnectionAuthorizationHeader(
     return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
   }
   return undefined;
+}
+
+function readIMessageBridgeProvider(
+  deps: IntegrationDiagnosticsPort,
+  config: Record<string, unknown>,
+): "bluebubbles" | "photon" {
+  const provider =
+    deps.readConnectionConfigValue(config, "bridgeProvider") ?? deps.readConnectionConfigValue(config, "provider");
+  return provider === "photon" ? "photon" : "bluebubbles";
 }
 
 async function runDiscordConnectionLiveChecks(

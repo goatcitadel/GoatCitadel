@@ -13,6 +13,7 @@ import {
   type CodeModeAiderArtifactBundle,
   type CodeModeAiderArtifactPersister,
 } from "./code-mode-aider-artifacts.js";
+import { terminateProcessTree } from "./process-tree-killer.js";
 
 export interface CodeModeAiderExecutionInput {
   runId: string;
@@ -27,6 +28,9 @@ export interface CodeModeAiderExecutionInput {
   persister: CodeModeAiderArtifactPersister;
   signal?: AbortSignal;
   spawnCommand?: typeof spawn;
+  terminateProcessTree?: typeof terminateProcessTree;
+  timeoutMs?: number;
+  outputCaptureLimitBytes?: number;
 }
 
 export interface CodeModeAiderExecutionResult {
@@ -38,12 +42,18 @@ export interface CodeModeAiderExecutionResult {
   errorDetails?: Record<string, unknown>;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   bundle: CodeModeAiderArtifactBundle;
 }
 
 const AIDER_RUN_ROOT_SEGMENT = "aider-live";
 const AIDER_CONTAINER_ROOT = "/goatcitadel/aider-run";
 const AIDER_PATCH_CANDIDATES = ["aider.patch", "aider.git.patch"];
+const AIDER_RUN_TIMEOUT_MS = 15_000;
+const AIDER_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
+const AIDER_TERMINATE_GRACE_MS = 3000;
+const OUTPUT_TRUNCATION_MARKER = "\n...[truncated]\n";
 
 export async function executeCodeModeAiderAdapter(
   input: CodeModeAiderExecutionInput,
@@ -88,7 +98,13 @@ export async function executeCodeModeAiderAdapter(
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const execution = await waitForAiderChild(spawned, input.signal);
+  const execution = await waitForAiderChild(spawned, {
+    runId: input.runId,
+    signal: input.signal,
+    timeoutMs: input.timeoutMs ?? AIDER_RUN_TIMEOUT_MS,
+    outputCaptureLimitBytes: input.outputCaptureLimitBytes ?? AIDER_OUTPUT_CAPTURE_LIMIT_BYTES,
+    terminate: input.terminateProcessTree ?? terminateProcessTree,
+  });
   const finishedAt = new Date().toISOString();
   const explicitPatch = await readAiderPatchIfPresent(runRoot, repositoryRoot);
   const sourcePatch =
@@ -99,7 +115,8 @@ export async function executeCodeModeAiderAdapter(
       currentSource: await fs.readFile(sourcePath, "utf8"),
     });
   const patch = explicitPatch ?? sourcePatch;
-  const failed = execution.exitCode !== 0;
+  const failure = buildAiderFailureEvidence(execution);
+  const failed = Boolean(failure);
   const outcome: CodeModeAiderAdapterOutcome = failed ? "failed" : patch ? "patch_produced" : "no_changes";
   const bundle = await persistCodeModeAiderArtifactBundle(input.persister, {
     runId: input.runId,
@@ -114,12 +131,9 @@ export async function executeCodeModeAiderAdapter(
       startedAt,
       finishedAt,
     },
-    ...(failed
+    ...(failure
       ? {
-          error: {
-            code: "AIDER_EXIT_NONZERO",
-            message: `Aider adapter exited with code ${execution.exitCode}.`,
-          },
+          error: failure,
         }
       : {}),
   });
@@ -128,11 +142,13 @@ export async function executeCodeModeAiderAdapter(
     failed,
     outcome,
     result: bundle.result,
-    error: failed ? `Aider adapter exited with code ${execution.exitCode}.` : undefined,
-    errorCode: failed ? "AIDER_EXIT_NONZERO" : undefined,
-    errorDetails: failed ? { exitCode: execution.exitCode } : undefined,
+    error: failure?.message,
+    errorCode: failure?.code,
+    errorDetails: failure?.details,
     stdout: execution.stdout,
     stderr: execution.stderr,
+    stdoutTruncated: execution.stdoutTruncated,
+    stderrTruncated: execution.stderrTruncated,
     bundle,
   };
 }
@@ -176,49 +192,205 @@ function buildAiderDockerCommand(input: {
   };
 }
 
+interface AiderChildExecution {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  failure?: {
+    code: "AIDER_TIMEOUT" | "AIDER_ABORTED" | "AIDER_PROCESS_ERROR";
+    message: string;
+    details: Record<string, unknown>;
+  };
+}
+
 function waitForAiderChild(
   child: ChildProcess,
-  signal: AbortSignal | undefined,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+  options: {
+    runId: string;
+    signal: AbortSignal | undefined;
+    timeoutMs: number;
+    outputCaptureLimitBytes: number;
+    terminate: typeof terminateProcessTree;
+  },
+): Promise<AiderChildExecution> {
+  return new Promise((resolve) => {
+    const stdout = createBoundedCapture(options.outputCaptureLimitBytes);
+    const stderr = createBoundedCapture(options.outputCaptureLimitBytes);
     let settled = false;
-    const finish = (callback: () => void) => {
+    const timeoutMs = Math.max(1, Math.round(options.timeoutMs));
+    const timer = setTimeout(() => {
+      terminate("Aider adapter timeout");
+      finish({
+        exitCode: -1,
+        failure: {
+          code: "AIDER_TIMEOUT",
+          message: `Aider adapter timed out after ${timeoutMs}ms; process tree cleanup was requested.`,
+          details: {
+            runId: options.runId,
+            timeoutMs,
+            processTreeCleanup: "requested",
+          },
+        },
+      });
+    }, timeoutMs);
+    timer.unref?.();
+    const finish = (result: { exitCode: number; failure?: AiderChildExecution["failure"] }) => {
       if (settled) {
         return;
       }
       settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      callback();
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      const stdoutResult = stdout.finish();
+      const stderrResult = stderr.finish();
+      resolve({
+        exitCode: result.exitCode,
+        stdout: stdoutResult.text,
+        stderr: stderrResult.text,
+        stdoutTruncated: stdoutResult.truncated,
+        stderrTruncated: stderrResult.truncated,
+        ...(result.failure
+          ? {
+              failure: {
+                ...result.failure,
+                details: {
+                  ...result.failure.details,
+                  stdoutTruncated: stdoutResult.truncated,
+                  stderrTruncated: stderrResult.truncated,
+                },
+              },
+            }
+          : {}),
+      });
+    };
+    const terminate = (label: string) => {
+      options.terminate({
+        child,
+        label,
+        context: {
+          runId: options.runId,
+        },
+        graceMs: AIDER_TERMINATE_GRACE_MS,
+      });
     };
     const onAbort = () => {
-      if (!child.killed) {
-        child.kill();
-      }
-      finish(() => reject(new Error("Aider adapter execution was aborted.")));
+      const reason = formatAbortReason(options.signal);
+      terminate("Aider adapter abort");
+      finish({
+        exitCode: -1,
+        failure: {
+          code: "AIDER_ABORTED",
+          message: `Aider adapter execution was aborted; process tree cleanup was requested.`,
+          details: {
+            runId: options.runId,
+            reason,
+            processTreeCleanup: "requested",
+          },
+        },
+      });
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
+    options.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
+      stdout.append(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
+      stderr.append(chunk);
     });
-    child.on("error", (error) => finish(() => reject(error)));
+    child.on("error", (error) => {
+      terminate("Aider adapter process error");
+      finish({
+        exitCode: -1,
+        failure: {
+          code: "AIDER_PROCESS_ERROR",
+          message: error.message,
+          details: {
+            runId: options.runId,
+            processTreeCleanup: "requested",
+          },
+        },
+      });
+    });
     child.on("close", (code) =>
-      finish(() =>
-        resolve({
-          exitCode: code ?? 1,
-          stdout,
-          stderr,
-        }),
-      ),
+      finish({
+        exitCode: code ?? 1,
+      }),
     );
-    if (signal?.aborted) {
+    if (options.signal?.aborted) {
       onAbort();
     }
   });
+}
+
+function buildAiderFailureEvidence(
+  execution: AiderChildExecution,
+): { code: string; message: string; details?: Record<string, unknown> } | undefined {
+  if (execution.failure) {
+    return execution.failure;
+  }
+  if (execution.exitCode === 0) {
+    return undefined;
+  }
+  return {
+    code: "AIDER_EXIT_NONZERO",
+    message: `Aider adapter exited with code ${execution.exitCode}.`,
+    details: {
+      exitCode: execution.exitCode,
+      stdoutTruncated: execution.stdoutTruncated,
+      stderrTruncated: execution.stderrTruncated,
+    },
+  };
+}
+
+function createBoundedCapture(limitBytes: number): {
+  append: (chunk: Buffer | string) => void;
+  finish: () => { text: string; truncated: boolean };
+} {
+  const maxBytes = Math.max(1, Math.floor(limitBytes));
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  let truncated = false;
+  return {
+    append(chunk) {
+      if (truncated) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+      const remaining = maxBytes - bytes;
+      if (remaining <= 0) {
+        chunks.push(Buffer.from(OUTPUT_TRUNCATION_MARKER, "utf8"));
+        truncated = true;
+        return;
+      }
+      if (buffer.length <= remaining) {
+        chunks.push(buffer);
+        bytes += buffer.length;
+        return;
+      }
+      chunks.push(buffer.subarray(0, remaining));
+      chunks.push(Buffer.from(OUTPUT_TRUNCATION_MARKER, "utf8"));
+      bytes = maxBytes;
+      truncated = true;
+    },
+    finish() {
+      return {
+        text: Buffer.concat(chunks).toString("utf8"),
+        truncated,
+      };
+    },
+  };
+}
+
+function formatAbortReason(signal: AbortSignal | undefined): string {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason.message;
+  }
+  if (typeof reason === "string" && reason.trim()) {
+    return reason;
+  }
+  return "Abort signal was raised.";
 }
 
 async function readAiderPatchIfPresent(

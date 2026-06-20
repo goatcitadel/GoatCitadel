@@ -125,15 +125,18 @@ function Preserve-ManagedConfigForUpdate {
   }
 
   $unexpected = @($dirtyTrackedPaths | Where-Object { -not $managedSet.Contains($_) })
+  if ($unexpected.Count -gt 0) {
+    throw "Update blocked because the installed checkout has non-config tracked changes: $($unexpected -join ', ')"
+  }
+
   $existingConfigPaths = @($ManagedPaths | Where-Object { Test-Path (Join-Path $RepositoryPath $_) })
-  if ($existingConfigPaths.Count -eq 0 -and $unexpected.Count -eq 0) {
+  if ($existingConfigPaths.Count -eq 0) {
     return $null
   }
 
   $backupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("goatcitadel-update-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-  $pathsToArchive = @($existingConfigPaths + $unexpected | Select-Object -Unique)
-  foreach ($relativePath in $pathsToArchive) {
+  foreach ($relativePath in $existingConfigPaths) {
     $sourcePath = Join-Path $RepositoryPath $relativePath
     if (-not (Test-Path $sourcePath)) {
       continue
@@ -152,7 +155,7 @@ function Preserve-ManagedConfigForUpdate {
   return [pscustomobject]@{
     BackupRoot = $backupRoot
     Paths = $existingConfigPaths
-    ArchivedPaths = $unexpected
+    ArchivedPaths = @()
   }
 }
 

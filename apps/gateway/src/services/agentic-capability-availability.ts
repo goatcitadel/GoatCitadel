@@ -221,6 +221,8 @@ function mapPluginIntegrityStatus(
     case "missing":
     case "mismatch":
       return "corrupt";
+    case "quarantined":
+      return "quarantined";
     case "unknown":
     default:
       return "unverified";

@@ -141,14 +141,23 @@ export function assertNotPrivateOrReservedHost(hostOrUrl: string): void {
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 5;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_FETCH_BODY_TIMEOUT_MS = 15_000;
 
 export interface FetchAllowlistedOptions {
   allowlist: string[];
   additionalAllowlists?: string[][];
   timeoutMs?: number;
+  bodyReadTimeoutMs?: number;
+  maxResponseBytes?: number;
   maxRedirects?: number;
   init?: RequestInit;
   dnsLookup?: DnsLookupFunction;
+}
+
+interface FetchBodyReadLimits {
+  timeoutMs: number;
+  maxBytes: number;
 }
 
 type DnsLookupFunction = (
@@ -199,12 +208,17 @@ export async function fetchAllowlisted(url: string, options: FetchAllowlistedOpt
     const timeout = setTimeout(() => controller.abort(new Error("fetchAllowlisted timed out")), timeoutMs);
 
     try {
-      lastResponse = await fetchGuardedOnce(currentUrl, allowlist, {
-        ...options.init,
-        redirect: "manual",
-        signal: controller.signal,
-        dnsLookup: options.dnsLookup,
-      });
+      lastResponse = await fetchGuardedOnce(
+        currentUrl,
+        allowlist,
+        {
+          ...options.init,
+          redirect: "manual",
+          signal: controller.signal,
+          dnsLookup: options.dnsLookup,
+        },
+        resolveFetchBodyReadLimits(options),
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -231,11 +245,16 @@ export async function fetchAllowlisted(url: string, options: FetchAllowlistedOpt
 
 export async function fetchAllowlistedOnce(url: string, options: FetchAllowlistedOptions): Promise<Response> {
   assertHostAllowed(url, options.allowlist);
-  return fetchGuardedOnce(url, options.allowlist, {
-    ...options.init,
-    redirect: options.init?.redirect ?? "manual",
-    dnsLookup: options.dnsLookup,
-  });
+  return fetchGuardedOnce(
+    url,
+    options.allowlist,
+    {
+      ...options.init,
+      redirect: options.init?.redirect ?? "manual",
+      dnsLookup: options.dnsLookup,
+    },
+    resolveFetchBodyReadLimits(options),
+  );
 }
 
 export function evaluateDangerousHostBypass(
@@ -438,6 +457,7 @@ async function fetchGuardedOnce(
   url: string,
   allowlist: string[],
   init: RequestInit & { dnsLookup?: DnsLookupFunction },
+  bodyLimits: FetchBodyReadLimits,
 ): Promise<Response> {
   const { dnsLookup, ...fetchInit } = init;
   // PERF (POLICY-003): The guarded dispatcher is reused across requests that
@@ -458,10 +478,11 @@ async function fetchGuardedOnce(
     ? undiciFetch
     : globalThis.fetch) as unknown as FetchWithDispatcher;
   try {
-    return await fetchImpl(url, {
+    const response = await fetchImpl(url, {
       ...fetchInit,
       dispatcher,
     });
+    return wrapBoundedFetchResponse(response, bodyLimits);
   } catch (error) {
     const cause = (error as { cause?: unknown }).cause;
     if (cause instanceof Error && cause.message.includes("resolved address is blocked")) {
@@ -469,6 +490,93 @@ async function fetchGuardedOnce(
     }
     throw error;
   }
+}
+
+function resolveFetchBodyReadLimits(options: FetchAllowlistedOptions): FetchBodyReadLimits {
+  return {
+    maxBytes: normalizePositiveInteger(options.maxResponseBytes, DEFAULT_FETCH_MAX_RESPONSE_BYTES),
+    timeoutMs: normalizePositiveInteger(options.bodyReadTimeoutMs, DEFAULT_FETCH_BODY_TIMEOUT_MS),
+  };
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function wrapBoundedFetchResponse(response: Response, limits: FetchBodyReadLimits): Response {
+  const boundedText = async () => new TextDecoder().decode(await readBoundedResponseArrayBuffer(response, limits));
+  const boundedJson = async () => JSON.parse(await boundedText()) as unknown;
+  const boundedArrayBuffer = async () => readBoundedResponseArrayBuffer(response, limits);
+
+  return new Proxy(response, {
+    get(target, property) {
+      if (property === "text") {
+        return boundedText;
+      }
+      if (property === "json") {
+        return boundedJson;
+      }
+      if (property === "arrayBuffer") {
+        return boundedArrayBuffer;
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+async function readBoundedResponseArrayBuffer(response: Response, limits: FetchBodyReadLimits): Promise<ArrayBuffer> {
+  const body = response.body;
+  if (!body) {
+    return new ArrayBuffer(0);
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let timeout: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      void reader.cancel().catch(() => undefined);
+      reject(new Error("fetchAllowlisted blocked: response body read timed out"));
+    }, limits.timeoutMs);
+  });
+
+  try {
+    while (true) {
+      const result = await Promise.race([reader.read(), timeoutPromise]);
+      if (result.done) {
+        break;
+      }
+      const chunk = result.value;
+      totalBytes += chunk.byteLength;
+      if (totalBytes > limits.maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`fetchAllowlisted blocked: response body exceeded ${limits.maxBytes} bytes`);
+      }
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (timedOut) {
+      throw error;
+    }
+    throw error;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    reader.releaseLock();
+  }
+
+  const output = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
 }
 
 // Bound on guarded Agents retained per DNS-lookup function. Distinct

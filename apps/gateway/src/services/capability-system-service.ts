@@ -19,6 +19,7 @@ import type {
   CapabilityCatalogEntry,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
+  CompactToolDirectorySnapshot,
   CapabilityProposalDetailRecord,
   CapabilityProposalKind,
   CapabilityProposalRecord,
@@ -233,6 +234,77 @@ export class CapabilitySystemService {
     this.ensureSkillLifecycleBackfill();
     const inspectable = this.buildInspectableCatalog();
     return scope === "callable" ? inspectable.filter((entry) => entry.callable) : inspectable;
+  }
+
+  public getCompactToolDirectorySnapshot(ttlMs = 300_000): CompactToolDirectorySnapshot {
+    this.ensureSkillLifecycleBackfill();
+    const now = new Date();
+    const createdAt = now.toISOString();
+    const resolvedTtlMs = Math.max(1_000, Math.min(ttlMs, 3_600_000));
+    const expiresAt = new Date(now.getTime() + resolvedTtlMs).toISOString();
+    const inspectable = this.buildInspectableCatalog();
+    const callableTools = inspectable.filter((entry) => entry.callable && entry.kind === "tool" && entry.toolName);
+    const toolCatalogByName = new Map(this.options.listToolCatalog().map((tool) => [tool.toolName, tool]));
+    const tools = callableTools.map((entry) => {
+      const toolName = entry.toolName as string;
+      const tool = toolCatalogByName.get(toolName);
+      const schemaJson = canonicalJson(tool?.argSchema ?? {});
+      const schemaHash = sha256Text(schemaJson);
+      return {
+        capabilityId: entry.capabilityId,
+        toolName,
+        title: entry.title,
+        summary: entry.summary,
+        riskLabel: tool?.riskLevel ?? "unknown",
+        schemaRef: {
+          refId: `tool-schema:${schemaHash}`,
+          toolName,
+          schemaHash,
+          schemaUri: `/api/v1/capabilities/tool-directory/schemas/${encodeURIComponent(toolName)}`,
+        },
+        readOnly: Boolean(entry.wrapperVisibility?.readOnly),
+        deterministic: Boolean(entry.wrapperVisibility?.deterministic),
+        codeModeAllowed: Boolean(entry.wrapperVisibility?.codeModeAllowed),
+      };
+    });
+    const payloadForHash = canonicalJson({
+      version: "compact-tool-directory.v1",
+      source: "callable_catalog",
+      tools,
+      omitted: {
+        inspectableOnlyCount: inspectable.filter((entry) => !entry.callable).length,
+        reason: "callable_only",
+      },
+    });
+    const hash = sha256Text(payloadForHash);
+    return {
+      snapshotId: `compact-tools-${hash.slice(0, 16)}`,
+      version: "compact-tool-directory.v1",
+      source: "callable_catalog",
+      createdAt,
+      expiresAt,
+      ttlMs: resolvedTtlMs,
+      hash,
+      toolCount: tools.length,
+      tools,
+      omitted: {
+        inspectableOnlyCount: inspectable.filter((entry) => !entry.callable).length,
+        reason: "callable_only",
+      },
+    };
+  }
+
+  public getToolSchema(toolName: string): { toolName: string; schemaHash: string; schema: Record<string, unknown> } {
+    const tool = this.options.listToolCatalog().find((entry) => entry.toolName === toolName);
+    if (!tool) {
+      throw new Error(`Unknown tool schema: ${toolName}`);
+    }
+    const schema = tool.argSchema ?? {};
+    return {
+      toolName,
+      schemaHash: sha256Text(canonicalJson(schema)),
+      schema,
+    };
   }
 
   public listCodeModeExecutionBackends() {
@@ -3101,6 +3173,24 @@ function resolveManagedRoot(rootDir: string, configuredPath: string): string {
 
 function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, sortJsonValue(child)]),
+  );
 }
 
 function buildTrustedCodeWriteVerification(input: {

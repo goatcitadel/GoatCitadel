@@ -1,10 +1,11 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
 import { assertExistingPathRealpathAllowed, assertHostAllowed } from "@goatcitadel/policy-engine";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -27,6 +28,7 @@ import type {
   LlmModelPreviewRequest,
   LlmModelPreviewResponse,
   LlmProviderConfig,
+  ProviderModelCatalogSnapshot,
   LlmProviderSummary,
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
@@ -54,6 +56,10 @@ import {
 } from "./secret-store-service.js";
 
 const log = logger.child("llm-service");
+const MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024;
+const PROVIDER_ERROR_BODY_TIMEOUT_MS = 5000;
+const MAX_PROVIDER_SSE_BYTES = 16 * 1024 * 1024;
+const MAX_PROVIDER_SSE_EVENTS = 2048;
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -86,6 +92,22 @@ interface ModelDiscoveryResult {
   warning?: string;
 }
 
+interface ModelDiscoveryCacheEntry {
+  cachedAt: number;
+  result: ModelDiscoveryResult;
+  origin: "memory" | "disk";
+}
+
+interface ModelDiscoveryCacheKeys {
+  exact: string;
+  persisted: string;
+}
+
+interface PersistedModelCatalogFile {
+  version: 1;
+  snapshots: ProviderModelCatalogSnapshot[];
+}
+
 export interface LlmServiceOptions {
   networkAllowlist?: string[];
   enforceNetworkAllowlist?: boolean;
@@ -106,6 +128,12 @@ export interface LlmServiceOptions {
    * model metadata manifest path when `modelMetadataPath` is unset.
    */
   configFilePath?: string;
+  /**
+   * Optional secret-free model catalog cache path. When present, startup can
+   * serve a stale local catalog immediately and refresh provider metadata
+   * after readiness instead of blocking on remote model discovery.
+   */
+  modelCatalogCachePath?: string;
 }
 
 export interface LlmProviderSecretStatusOptions {
@@ -156,7 +184,7 @@ export class LlmService {
   private readonly secretStore: SecretStoreService;
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
-  private readonly modelDiscoveryCache = new Map<string, { cachedAt: number; result: ModelDiscoveryResult }>();
+  private readonly modelDiscoveryCache = new Map<string, ModelDiscoveryCacheEntry>();
   // Per-process opaque tokens that key the in-memory model-discovery cache by credential WITHOUT
   // deriving anything from the API key. A fast unsalted digest of a credential is exactly what CodeQL
   // js/insufficient-password-hash flags, and a slow KDF would be wrong on this hot, in-memory path;
@@ -177,6 +205,7 @@ export class LlmService {
   private activeProviderId: string;
   private activeModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
+  private readonly modelCatalogCachePath: string | undefined;
 
   public constructor(
     config: LlmConfigFile,
@@ -190,6 +219,7 @@ export class LlmService {
     this.tlsPathPolicy = options.tlsPathPolicy;
     this.activeProviderId = "";
     this.activeModel = "";
+    this.modelCatalogCachePath = options.modelCatalogCachePath ?? this.env.GOATCITADEL_LLM_MODEL_CATALOG_CACHE_PATH;
 
     const metadataPath =
       options.modelMetadataPath ??
@@ -208,6 +238,7 @@ export class LlmService {
     if (this.providers.size === 0) {
       throw new Error("LLM configuration must include at least one provider");
     }
+    this.hydrateModelDiscoveryCacheFromDisk();
 
     const configuredActiveProviderId = normalizeConfiguredProviderId(config.activeProviderId);
     if (!configuredActiveProviderId) {
@@ -647,7 +678,13 @@ export class LlmService {
       Array.isArray(request.referenceImages) && request.referenceImages.length > 0 ? "edit" : "generate";
 
     if (isOpenAICodexProvider(resolved.provider)) {
-      return this.generateOpenAICodexImage(request, resolved, model, operation);
+      const response = await this.generateOpenAICodexImage(request, resolved, model, operation);
+      return attachImageGenerationEvidence(response, request, {
+        providerId: resolved.provider.providerId,
+        model,
+        operation,
+        prompt,
+      });
     }
 
     if (operation === "edit") {
@@ -686,10 +723,16 @@ export class LlmService {
       if (!response.ok) {
         throw new Error(await buildHttpError("image edit", response));
       }
-      return adaptImageGenerationResponse(await parseProviderJsonResponse("image edit", response), {
+      const imageResponse = adaptImageGenerationResponse(await parseProviderJsonResponse("image edit", response), {
         providerId: resolved.provider.providerId,
         model,
         operation,
+      });
+      return attachImageGenerationEvidence(imageResponse, request, {
+        providerId: resolved.provider.providerId,
+        model,
+        operation,
+        prompt,
       });
     }
 
@@ -716,10 +759,16 @@ export class LlmService {
     if (!response.ok) {
       throw new Error(await buildHttpError("image generation", response));
     }
-    return adaptImageGenerationResponse(await parseProviderJsonResponse("image generation", response), {
+    const imageResponse = adaptImageGenerationResponse(await parseProviderJsonResponse("image generation", response), {
       providerId: resolved.provider.providerId,
       model,
       operation,
+    });
+    return attachImageGenerationEvidence(imageResponse, request, {
+      providerId: resolved.provider.providerId,
+      model,
+      operation,
+      prompt,
     });
   }
 
@@ -886,7 +935,7 @@ export class LlmService {
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readProviderErrorBody("chat completion", response);
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
@@ -953,7 +1002,7 @@ export class LlmService {
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readProviderErrorBody("chat completion", response);
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
@@ -1367,12 +1416,9 @@ export class LlmService {
   }
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
-    let key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
-    if (resolved.apiKey) {
-      key += `::auth_${this.getModelDiscoveryAuthCacheToken(resolved.apiKey)}`;
-    }
+    const keys = this.buildModelDiscoveryCacheKeys(resolved);
     const now = Date.now();
-    const cached = this.modelDiscoveryCache.get(key);
+    const cached = this.modelDiscoveryCache.get(keys.exact) ?? this.modelDiscoveryCache.get(keys.persisted);
     if (cached) {
       const ageMs = now - cached.cachedAt;
       if (ageMs < LlmService.MODEL_DISCOVERY_TTL_MS) {
@@ -1385,20 +1431,23 @@ export class LlmService {
       }
 
       // Stale-while-revalidate: if younger than 1 hour, return cached immediately
-      // and trigger a background refresh.
-      if (ageMs < 3600_000) {
+      // and trigger a background refresh. Disk-hydrated bootstrap entries are
+      // also returned immediately even when older so Gateway readiness never
+      // waits on remote provider catalog hydration.
+      if (ageMs < 3600_000 || cached.origin === "disk") {
         log.debug("model catalog cache hit (stale, revalidating in background)", {
           providerId: resolved.provider.providerId,
           ageMs,
           itemCount: cached.result.items.length,
+          origin: cached.origin,
         });
 
-        const inFlight = this.modelDiscoveryInFlight.get(key);
+        const inFlight = this.modelDiscoveryInFlight.get(keys.exact);
         if (!inFlight) {
           const pending = this.fetchModelsForResolvedProviderUncached(resolved)
             .then((result) => {
               if (result.source !== "error_fallback") {
-                this.modelDiscoveryCache.set(key, { cachedAt: Date.now(), result });
+                this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
               }
               return result;
             })
@@ -1410,15 +1459,15 @@ export class LlmService {
               return cached.result;
             })
             .finally(() => {
-              this.modelDiscoveryInFlight.delete(key);
+              this.modelDiscoveryInFlight.delete(keys.exact);
             });
-          this.modelDiscoveryInFlight.set(key, pending);
+          this.modelDiscoveryInFlight.set(keys.exact, pending);
         }
-        return cached.result;
+        return markStaleModelDiscoveryResult(cached.result, cached.origin);
       }
     }
     // Stampede protection: coalesce concurrent cold-cache callers onto a single fetch.
-    const inFlight = this.modelDiscoveryInFlight.get(key);
+    const inFlight = this.modelDiscoveryInFlight.get(keys.exact);
     if (inFlight) {
       return inFlight;
     }
@@ -1427,15 +1476,115 @@ export class LlmService {
         // Cache live + template_fallback (successful fetches with known catalog), but
         // skip error_fallback so transient network errors retry on the next call.
         if (result.source !== "error_fallback") {
-          this.modelDiscoveryCache.set(key, { cachedAt: now, result });
+          this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
         }
         return result;
       })
       .finally(() => {
-        this.modelDiscoveryInFlight.delete(key);
+        this.modelDiscoveryInFlight.delete(keys.exact);
       });
-    this.modelDiscoveryInFlight.set(key, pending);
+    this.modelDiscoveryInFlight.set(keys.exact, pending);
     return pending;
+  }
+
+  private buildModelDiscoveryCacheKeys(resolved: ResolvedProvider): ModelDiscoveryCacheKeys {
+    const persisted = buildPersistedModelDiscoveryCacheKey(resolved.provider.providerId, resolved.provider.baseUrl);
+    let exact = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
+    if (resolved.apiKey) {
+      exact += `::auth_${this.getModelDiscoveryAuthCacheToken(resolved.apiKey)}`;
+    }
+    return { exact, persisted };
+  }
+
+  private setModelDiscoveryCacheEntry(
+    keys: ModelDiscoveryCacheKeys,
+    result: ModelDiscoveryResult,
+    cachedAt: number,
+    resolved: ResolvedProvider,
+    options: { persist: boolean },
+  ): void {
+    const entry: ModelDiscoveryCacheEntry = {
+      cachedAt,
+      result,
+      origin: "memory",
+    };
+    this.modelDiscoveryCache.set(keys.exact, entry);
+    this.modelDiscoveryCache.set(keys.persisted, entry);
+    if (options.persist && result.source !== "error_fallback") {
+      this.persistModelDiscoverySnapshot(resolved.provider, result, cachedAt);
+    }
+  }
+
+  private hydrateModelDiscoveryCacheFromDisk(): void {
+    const snapshots = this.readPersistedModelCatalogSnapshots();
+    if (snapshots.length === 0) {
+      return;
+    }
+    for (const snapshot of snapshots) {
+      const provider = this.providers.get(snapshot.providerId);
+      if (!provider || provider.baseUrl !== snapshot.baseUrl) {
+        continue;
+      }
+      const cachedAt = Date.parse(snapshot.cachedAt);
+      if (!Number.isFinite(cachedAt) || snapshot.items.length === 0) {
+        continue;
+      }
+      this.modelDiscoveryCache.set(buildPersistedModelDiscoveryCacheKey(snapshot.providerId, snapshot.baseUrl), {
+        cachedAt,
+        origin: "disk",
+        result: {
+          items: snapshot.items,
+          source: snapshot.source,
+          warning: snapshot.warning,
+        },
+      });
+    }
+  }
+
+  private persistModelDiscoverySnapshot(
+    provider: LlmProviderConfig,
+    result: ModelDiscoveryResult,
+    cachedAt: number,
+  ): void {
+    if (!this.modelCatalogCachePath || result.source === "error_fallback" || result.items.length === 0) {
+      return;
+    }
+    try {
+      const existing = this.readPersistedModelCatalogSnapshots().filter(
+        (snapshot) => !(snapshot.providerId === provider.providerId && snapshot.baseUrl === provider.baseUrl),
+      );
+      const snapshot = buildProviderModelCatalogSnapshot(provider, result, cachedAt);
+      const payload: PersistedModelCatalogFile = {
+        version: 1,
+        snapshots: [...existing, snapshot],
+      };
+      mkdirSync(path.dirname(this.modelCatalogCachePath), { recursive: true });
+      writeFileSync(this.modelCatalogCachePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    } catch (error) {
+      log.warn("failed to persist model catalog cache", {
+        providerId: provider.providerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private readPersistedModelCatalogSnapshots(): ProviderModelCatalogSnapshot[] {
+    if (!this.modelCatalogCachePath || !existsSync(this.modelCatalogCachePath)) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(this.modelCatalogCachePath, "utf8")) as Partial<PersistedModelCatalogFile>;
+      if (parsed.version !== 1 || !Array.isArray(parsed.snapshots)) {
+        return [];
+      }
+      return parsed.snapshots.filter(isProviderModelCatalogSnapshot);
+    } catch (error) {
+      log.warn("failed to read model catalog cache", {
+        path: this.modelCatalogCachePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   private async fetchModelsForResolvedProviderUncached(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
@@ -1493,6 +1642,68 @@ export class LlmService {
       throw error;
     }
   }
+}
+
+function buildPersistedModelDiscoveryCacheKey(providerId: string, baseUrl: string): string {
+  return `${providerId}::${baseUrl}::persisted`;
+}
+
+function markStaleModelDiscoveryResult(result: ModelDiscoveryResult, origin: "memory" | "disk"): ModelDiscoveryResult {
+  if (origin !== "disk") {
+    return result;
+  }
+  return {
+    ...result,
+    warning: result.warning ?? "Loaded from local model catalog cache; remote provider refresh is running in background.",
+  };
+}
+
+function buildProviderModelCatalogSnapshot(
+  provider: LlmProviderConfig,
+  result: ModelDiscoveryResult,
+  cachedAt: number,
+): ProviderModelCatalogSnapshot {
+  const items = result.items.map((item) => ({ ...item }));
+  return {
+    snapshotId: `model-catalog-${provider.providerId}-${createHash("sha256")
+      .update(`${provider.providerId}\0${provider.baseUrl}\0${cachedAt}`)
+      .digest("hex")
+      .slice(0, 16)}`,
+    providerId: provider.providerId,
+    baseUrl: provider.baseUrl,
+    createdAt: new Date().toISOString(),
+    cachedAt: new Date(cachedAt).toISOString(),
+    source: result.source === "live" ? "live" : "template_fallback",
+    status: result.source === "live" ? "fresh" : "fallback",
+    items,
+    itemCount: items.length,
+    catalogHash: buildModelCatalogHash(items),
+    warning: result.warning,
+  };
+}
+
+function buildModelCatalogHash(items: LlmModelRecord[]): string {
+  const normalized = [...items].sort((a, b) => a.id.localeCompare(b.id));
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+function isProviderModelCatalogSnapshot(value: unknown): value is ProviderModelCatalogSnapshot {
+  const record = value as Partial<ProviderModelCatalogSnapshot> | undefined;
+  return Boolean(
+    record &&
+      typeof record.snapshotId === "string" &&
+      typeof record.providerId === "string" &&
+      typeof record.baseUrl === "string" &&
+      typeof record.cachedAt === "string" &&
+      (record.source === "live" || record.source === "template_fallback") &&
+      Array.isArray(record.items) &&
+      record.items.every(isLlmModelRecord),
+  );
+}
+
+function isLlmModelRecord(value: unknown): value is LlmModelRecord {
+  const record = value as Partial<LlmModelRecord> | undefined;
+  return Boolean(record && typeof record.id === "string" && record.id.trim().length > 0);
 }
 
 function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
@@ -1955,9 +2166,17 @@ function shouldAppendV1(providerId: string, baseUrl: string): boolean {
 }
 
 async function buildHttpError(action: string, response: Response): Promise<string> {
-  const text = await response.text();
+  const text = await readProviderErrorBody(action, response);
   const snippet = text.slice(0, 400);
   return `${action} failed (${response.status} ${response.statusText}): ${snippet}`;
+}
+
+async function readProviderErrorBody(action: string, response: Response): Promise<string> {
+  return readBoundedResponseText(response, {
+    maxBytes: MAX_PROVIDER_ERROR_BODY_BYTES,
+    timeoutMs: PROVIDER_ERROR_BODY_TIMEOUT_MS,
+    label: action,
+  });
 }
 
 function buildHttpErrorFromText(action: string, status: number, statusText: string, text: string): string {
@@ -2350,11 +2569,18 @@ async function* streamJsonSseResponse(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedBytes = 0;
+  let eventCount = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
         break;
+      }
+      receivedBytes += value.byteLength;
+      if (receivedBytes > MAX_PROVIDER_SSE_BYTES) {
+        await reader.cancel();
+        throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_BYTES} bytes.`);
       }
       buffer += decoder.decode(value, { stream: true });
       const frames = buffer.split(/\r?\n\r?\n/g);
@@ -2369,6 +2595,11 @@ async function* streamJsonSseResponse(
           if (payload === "[DONE]") {
             return;
           }
+          eventCount += 1;
+          if (eventCount > MAX_PROVIDER_SSE_EVENTS) {
+            await reader.cancel();
+            throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_EVENTS} events.`);
+          }
           yield payload;
         }
       }
@@ -2382,6 +2613,10 @@ async function* streamJsonSseResponse(
       for (const payload of parseSseFramePayloads(dataLines)) {
         if (payload === "[DONE]") {
           return;
+        }
+        eventCount += 1;
+        if (eventCount > MAX_PROVIDER_SSE_EVENTS) {
+          throw new Error(`provider stream exceeded ${MAX_PROVIDER_SSE_EVENTS} events.`);
         }
         yield payload;
       }
@@ -2921,7 +3156,9 @@ function randomToolCallId(): string {
 }
 
 function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string }): Blob {
-  return new Blob([Buffer.from(input.bytesBase64, "base64")], {
+  const bytes = decodeStrictBase64(input.bytesBase64, "image asset");
+  const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return new Blob([payload], {
     type: input.mimeType?.trim() || "image/png",
   });
 }
@@ -2931,6 +3168,8 @@ const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant."
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
+const MAX_IMAGE_DATA_URL_BASE64_CHARS = 64 * 1024 * 1024;
+const IMAGE_DATA_URL_PATTERN = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i;
 
 function buildOpenAICodexImagePayload(
   request: ImageGenerationRequest,
@@ -2964,6 +3203,7 @@ function buildOpenAICodexImagePayload(
 
 function toImageDataUrl(image: ImageAssetInput): string {
   const mimeType = image.mimeType?.trim() || "image/png";
+  assertStrictBase64(image.bytesBase64, "image asset");
   return `data:${mimeType};base64,${image.bytesBase64}`;
 }
 
@@ -3078,6 +3318,7 @@ function toOpenAICodexImageResult(item: Record<string, unknown>): ImageGeneratio
   if (result.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
     throw new Error("OpenAI Codex image generation result exceeded size limit.");
   }
+  assertStrictBase64(result, "OpenAI Codex image generation result");
   return {
     b64Json: result,
     revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
@@ -3107,8 +3348,8 @@ function adaptImageGenerationResponse(
 ): ImageGenerationResponse {
   const items = Array.isArray(payload.data)
     ? payload.data.filter(isRecord).map((item) => ({
-        b64Json: typeof item.b64_json === "string" ? item.b64_json : undefined,
-        url: typeof item.url === "string" ? item.url : undefined,
+        b64Json: normalizeProviderImageBase64(item.b64_json, "image generation result"),
+        url: normalizeProviderImageUrl(item.url),
         revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
       }))
     : [];
@@ -3119,6 +3360,248 @@ function adaptImageGenerationResponse(
     operation: context.operation,
     data: items,
   };
+}
+
+function attachImageGenerationEvidence(
+  response: ImageGenerationResponse,
+  request: ImageGenerationRequest,
+  context: {
+    providerId: string;
+    model: string;
+    operation: "generate" | "edit";
+    prompt: string;
+  },
+): ImageGenerationResponse {
+  const referenceImageHashes = (request.referenceImages ?? []).map(hashImageAssetInput);
+  const maskImageHash = request.maskImage ? hashImageAssetInput(request.maskImage) : undefined;
+  const promptHash = hashUtf8(context.prompt);
+  const requestHash = hashStableJson({
+    providerId: context.providerId,
+    model: context.model,
+    operation: context.operation,
+    promptHash,
+    referenceImageHashes,
+    maskImageHash,
+    n: request.n,
+    size: request.size,
+    quality: request.quality,
+    background: request.background,
+    outputFormat: request.outputFormat,
+    responseFormat: request.responseFormat,
+    moderation: request.moderation,
+  });
+  const evidenceId = `image-proof:${requestHash.slice(0, 24)}`;
+  const results = response.data.map((item, index) => buildImageResultEvidence(evidenceId, item, index));
+  const providerBacked = results.some((item) => item.status === "provider_backed" || item.status === "provider_url");
+
+  return {
+    ...response,
+    evidence: {
+      evidenceId,
+      owner: "gateway",
+      source: "provider_response",
+      timestamp: new Date().toISOString(),
+      providerId: response.providerId ?? context.providerId,
+      model: response.model ?? context.model,
+      operation: response.operation,
+      requestHash,
+      promptHash,
+      referenceImageHashes: referenceImageHashes.length > 0 ? referenceImageHashes : undefined,
+      maskImageHash,
+      resultCount: response.data.length,
+      status: providerBacked ? "provider_backed" : "no_results",
+      actionNeeded: providerBacked
+        ? "Persist the selected image artifact before claiming local artifact durability."
+        : "Provider returned no usable image result; retry or choose another provider.",
+      results,
+    },
+  };
+}
+
+function buildImageResultEvidence(
+  evidenceId: string,
+  item: ImageGenerationResponse["data"][number],
+  index: number,
+): NonNullable<ImageGenerationResponse["evidence"]>["results"][number] {
+  const revisedPromptHash = item.revisedPrompt ? hashUtf8(item.revisedPrompt) : undefined;
+  if (item.b64Json) {
+    const bytes = decodeStrictBase64(item.b64Json, "image generation result");
+    return {
+      evidenceId: `${evidenceId}:result:${index}`,
+      index,
+      source: "b64_json",
+      status: "provider_backed",
+      sha256: hashBuffer(bytes),
+      sizeBytes: bytes.length,
+      revisedPromptHash,
+      persistedArtifact: {
+        status: "inline_result",
+        actionNeeded: "Persist this inline image response as an artifact before durable local claims.",
+      },
+    };
+  }
+  if (item.url?.toLowerCase().startsWith("data:")) {
+    const parsed = parseImageDataUrl(item.url);
+    return {
+      evidenceId: `${evidenceId}:result:${index}`,
+      index,
+      source: "data_url",
+      status: "provider_backed",
+      sha256: hashBuffer(parsed.bytes),
+      sizeBytes: parsed.bytes.length,
+      mimeType: parsed.mimeType,
+      revisedPromptHash,
+      persistedArtifact: {
+        status: "inline_result",
+        actionNeeded: "Persist this inline image response as an artifact before durable local claims.",
+      },
+    };
+  }
+  if (item.url) {
+    const parsed = new URL(item.url);
+    return {
+      evidenceId: `${evidenceId}:result:${index}`,
+      index,
+      source: "url",
+      status: "provider_url",
+      urlHost: parsed.host,
+      urlHash: hashUtf8(item.url),
+      revisedPromptHash,
+      persistedArtifact: {
+        status: "external_url",
+        actionNeeded: "Download and hash through the artifact pipeline before durable local claims.",
+      },
+    };
+  }
+  return {
+    evidenceId: `${evidenceId}:result:${index}`,
+    index,
+    source: "b64_json",
+    status: "empty_result",
+    revisedPromptHash,
+    persistedArtifact: {
+      status: "not_persisted",
+      actionNeeded: "Provider result did not include image bytes or an image URL.",
+    },
+  };
+}
+
+function hashImageAssetInput(input: ImageAssetInput): string {
+  return hashBuffer(decodeStrictBase64(input.bytesBase64, "image asset"));
+}
+
+function parseImageDataUrl(dataUrl: string): { mimeType: string; bytes: Buffer } {
+  const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl);
+  if (!match) {
+    throw new Error("image generation data URL must be a valid base64 data URL.");
+  }
+  return {
+    mimeType: match[1] ?? "application/octet-stream",
+    bytes: decodeStrictBase64(match[2] ?? "", "image generation data URL"),
+  };
+}
+
+function hashBuffer(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function hashUtf8(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function hashStableJson(value: unknown): string {
+  return hashUtf8(JSON.stringify(sortStableJson(value)));
+}
+
+function sortStableJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortStableJson);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortStableJson(item)]),
+  );
+}
+
+function normalizeProviderImageBase64(value: unknown, label: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
+    throw new Error(`${label} exceeded size limit.`);
+  }
+  assertStrictBase64(normalized, label);
+  return normalized;
+}
+
+function normalizeProviderImageUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.toLowerCase().startsWith("data:")) {
+    assertValidImageDataUrl(normalized, "image generation data URL");
+    return normalized;
+  }
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return normalized;
+    }
+  } catch {
+    // Report a stable validation error below.
+  }
+  throw new Error("Image generation result URL must be http(s) or a valid base64 data URL.");
+}
+
+function assertValidImageDataUrl(dataUrl: string, label: string): void {
+  if (dataUrl.length > MAX_IMAGE_DATA_URL_BASE64_CHARS + 64) {
+    throw new Error(`${label} exceeded size limit.`);
+  }
+  const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl);
+  if (!match) {
+    throw new Error(`${label} must be a valid base64 data URL.`);
+  }
+  assertStrictBase64(match[2] ?? "", label);
+}
+
+function assertStrictBase64(value: string, label: string): void {
+  void decodeStrictBase64(value, label);
+}
+
+function decodeStrictBase64(value: string, label: string): Buffer {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`${label} base64 payload is empty.`);
+  }
+  const unpadded = normalized.replace(/=+$/, "");
+  const firstPaddingIndex = normalized.indexOf("=");
+  const paddingLength = normalized.match(/=+$/)?.[0].length ?? 0;
+  if (
+    normalized.length % 4 === 1 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) ||
+    (firstPaddingIndex !== -1 && firstPaddingIndex < normalized.length - paddingLength)
+  ) {
+    throw new Error(`${label} must be valid base64.`);
+  }
+  const padded = `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.length === 0 || decoded.toString("base64").replace(/=+$/, "") !== unpadded) {
+    throw new Error(`${label} must be valid base64.`);
+  }
+  return decoded;
 }
 
 function normalizeProviderMessages(

@@ -3117,7 +3117,7 @@ describe("LlmService", () => {
       return new Response(
         JSON.stringify({
           created: 123,
-          data: [{ b64_json: "image-bytes" }],
+          data: [{ b64_json: "aW1hZ2UtYnl0ZXM=" }],
         }),
         {
           status: 200,
@@ -3175,7 +3175,7 @@ describe("LlmService", () => {
       return new Response(
         JSON.stringify({
           created: 456,
-          data: [{ b64_json: "edited-image" }],
+          data: [{ b64_json: "ZWRpdGVkLWltYWdl" }],
         }),
         {
           status: 200,
@@ -3238,7 +3238,7 @@ describe("LlmService", () => {
       return new Response(
         JSON.stringify({
           created: 789,
-          data: [{ b64_json: "google-image-bytes" }],
+          data: [{ b64_json: "Z29vZ2xlLWltYWdlLWJ5dGVz" }],
         }),
         {
           status: 200,
@@ -3349,6 +3349,56 @@ describe("LlmService", () => {
         expect.objectContaining({ type: "input_image", image_url: "data:image/png;base64,cmVmZXJlbmNl" }),
       ]),
     );
+  });
+
+  it("rejects malformed provider image base64 and data URLs", async () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "openai",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: "not-base64!" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ) as unknown as typeof fetch;
+      await expect(
+        service.generateImage({
+          providerId: "openai",
+          prompt: "bad base64",
+          responseFormat: "b64_json",
+        }),
+      ).rejects.toThrow("image generation result must be valid base64");
+
+      globalThis.fetch = vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ url: "data:image/png;base64,not-base64!" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ) as unknown as typeof fetch;
+      await expect(
+        service.generateImage({
+          providerId: "openai",
+          prompt: "bad data URL",
+        }),
+      ).rejects.toThrow("image generation data URL must be a valid base64 data URL");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("routes provider requests through a proxy dispatcher when configured", async () => {

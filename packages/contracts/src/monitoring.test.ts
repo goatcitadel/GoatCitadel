@@ -23,7 +23,7 @@ describe("CronJobActionConfig", () => {
 });
 
 describe("CronJobRecord", () => {
-  it("carries workdir, contextFrom, lastRunOutput, lastRunId", () => {
+  it("carries workdir, contextFrom, lastRunOutput, lastRunId, and backoff evidence", () => {
     const record: CronJobRecord = {
       jobId: "id",
       name: "n",
@@ -34,10 +34,18 @@ describe("CronJobRecord", () => {
       contextFrom: "other-job",
       lastRunOutput: "alert",
       lastRunId: "run-1",
+      lastRunStatus: "failed",
+      lastFailureAt: "2026-05-15T12:03:00.000Z",
+      lastFailure: { message: "downstream refused", code: "Error" },
+      failureCount: 2,
+      backoffUntil: "2026-05-15T12:05:00.000Z",
     };
     expect(record.workdir).toBe("/tmp/x");
     expect(record.contextFrom).toBe("other-job");
     expect(record.lastRunOutput).toBe("alert");
     expect(record.lastRunId).toBe("run-1");
+    expect(record.lastRunStatus).toBe("failed");
+    expect(record.failureCount).toBe(2);
+    expect(record.backoffUntil).toBe("2026-05-15T12:05:00.000Z");
   });
 });

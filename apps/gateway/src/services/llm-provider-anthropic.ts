@@ -10,9 +10,14 @@ import {
   applyEstimatedCostToChatResponseWithSource,
   applyEstimatedCostToStreamChunkWithSource,
 } from "./llm-pricing.js";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
+const MAX_ANTHROPIC_ERROR_BODY_BYTES = 64 * 1024;
+const ANTHROPIC_ERROR_BODY_TIMEOUT_MS = 5000;
+const MAX_ANTHROPIC_SSE_BYTES = 16 * 1024 * 1024;
+const MAX_ANTHROPIC_SSE_EVENTS = 2048;
 
 export const anthropicProviderAdapter: LlmProviderAdapter = {
   apiStyle: "anthropic-messages",
@@ -263,7 +268,11 @@ async function postJsonRequest(
 }
 
 async function buildHttpError(action: string, response: Response): Promise<string> {
-  const text = await response.text();
+  const text = await readBoundedResponseText(response, {
+    maxBytes: MAX_ANTHROPIC_ERROR_BODY_BYTES,
+    timeoutMs: ANTHROPIC_ERROR_BODY_TIMEOUT_MS,
+    label: action,
+  });
   const snippet = text.slice(0, 400);
   return `${action} failed (${response.status} ${response.statusText}): ${snippet}`;
 }
@@ -750,11 +759,18 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedBytes = 0;
+  let eventCount = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
         break;
+      }
+      receivedBytes += value.byteLength;
+      if (receivedBytes > MAX_ANTHROPIC_SSE_BYTES) {
+        await reader.cancel();
+        throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_BYTES} bytes.`);
       }
       buffer += decoder.decode(value, { stream: true });
       const frames = buffer.split(/\r?\n\r?\n/g);
@@ -769,6 +785,11 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
           if (payload === "[DONE]") {
             return;
           }
+          eventCount += 1;
+          if (eventCount > MAX_ANTHROPIC_SSE_EVENTS) {
+            await reader.cancel();
+            throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_EVENTS} events.`);
+          }
           yield payload;
         }
       }
@@ -782,6 +803,10 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
       for (const payload of parseSseFramePayloads(dataLines)) {
         if (payload === "[DONE]") {
           return;
+        }
+        eventCount += 1;
+        if (eventCount > MAX_ANTHROPIC_SSE_EVENTS) {
+          throw new Error(`messages stream exceeded ${MAX_ANTHROPIC_SSE_EVENTS} events.`);
         }
         yield payload;
       }

@@ -114,6 +114,193 @@ describe("code-mode-aider-execution", () => {
     });
   });
 
+  it("bounds adapter stdout and stderr before persisting log evidence", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-bounded-"));
+    tempRoots.push(runTempRoot);
+    const persisted: Array<{ filename: string; content: string }> = [];
+
+    const result = await executeCodeModeAiderAdapter({
+      runId: "code-run-aider-bounded",
+      runTempRoot,
+      language: "javascript",
+      source: "return { ok: true };",
+      requestMarkdown: "Keep logs bounded.",
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+      },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      persister: fakePersister(persisted),
+      outputCaptureLimitBytes: 32,
+      spawnCommand: vi.fn(() =>
+        fakeChild({
+          stdout: "o".repeat(96),
+          stderr: "e".repeat(96),
+          exitCode: 0,
+        }),
+      ) as never,
+    });
+
+    expect(result).toMatchObject({
+      failed: false,
+      stdoutTruncated: true,
+      stderrTruncated: true,
+    });
+    expect(result.stdout).toContain("...[truncated]");
+    expect(result.stderr).toContain("...[truncated]");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThan(96);
+    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThan(96);
+    expect(persisted.find((item) => item.filename === "stdout.log")?.content).toBe(result.stdout);
+    expect(persisted.find((item) => item.filename === "stderr.log")?.content).toBe(result.stderr);
+  });
+
+  it("uses process-tree cleanup and records timeout evidence", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-timeout-"));
+    tempRoots.push(runTempRoot);
+    const terminateProcessTree = vi.fn();
+
+    const result = await executeCodeModeAiderAdapter({
+      runId: "code-run-aider-timeout",
+      runTempRoot,
+      language: "typescript",
+      source: "return { ok: true };",
+      requestMarkdown: "This adapter hangs.",
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+      },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      persister: fakePersister([]),
+      timeoutMs: 20,
+      terminateProcessTree: terminateProcessTree as never,
+      spawnCommand: vi.fn(() => fakeChild({ stdout: "partial\n", stderr: "", close: false, pid: 4511 })) as never,
+    });
+
+    expect(terminateProcessTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Aider adapter timeout",
+        context: { runId: "code-run-aider-timeout" },
+      }),
+    );
+    expect(result).toMatchObject({
+      failed: true,
+      outcome: "failed",
+      errorCode: "AIDER_TIMEOUT",
+      errorDetails: expect.objectContaining({
+        timeoutMs: 20,
+        processTreeCleanup: "requested",
+      }),
+    });
+    expect(result.result.aiderAdapter.envelope.error).toMatchObject({
+      code: "AIDER_TIMEOUT",
+      message: expect.stringContaining("timed out after 20ms"),
+      details: expect.objectContaining({ processTreeCleanup: "requested" }),
+    });
+  });
+
+  it("uses process-tree cleanup and records abort evidence", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-abort-"));
+    tempRoots.push(runTempRoot);
+    const terminateProcessTree = vi.fn();
+    const controller = new AbortController();
+
+    const result = await executeCodeModeAiderAdapter({
+      runId: "code-run-aider-abort",
+      runTempRoot,
+      language: "javascript",
+      source: "return { ok: true };",
+      requestMarkdown: "This adapter is cancelled.",
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+      },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      persister: fakePersister([]),
+      signal: controller.signal,
+      terminateProcessTree: terminateProcessTree as never,
+      spawnCommand: vi.fn(() => {
+        setImmediate(() => controller.abort(new Error("operator cancelled")));
+        return fakeChild({ stdout: "", stderr: "waiting\n", close: false, pid: 4512 });
+      }) as never,
+    });
+
+    expect(terminateProcessTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Aider adapter abort",
+        context: { runId: "code-run-aider-abort" },
+      }),
+    );
+    expect(result).toMatchObject({
+      failed: true,
+      outcome: "failed",
+      errorCode: "AIDER_ABORTED",
+      errorDetails: expect.objectContaining({
+        reason: "operator cancelled",
+        processTreeCleanup: "requested",
+      }),
+    });
+    expect(result.result.aiderAdapter.envelope.error).toMatchObject({
+      code: "AIDER_ABORTED",
+      details: expect.objectContaining({ reason: "operator cancelled" }),
+    });
+  });
+
+  it("uses process-tree cleanup when the adapter process errors", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-process-error-"));
+    tempRoots.push(runTempRoot);
+    const terminateProcessTree = vi.fn();
+
+    const result = await executeCodeModeAiderAdapter({
+      runId: "code-run-aider-process-error",
+      runTempRoot,
+      language: "typescript",
+      source: "return { ok: true };",
+      requestMarkdown: "The process errors.",
+      aiderAdapter: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+      },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      persister: fakePersister([]),
+      terminateProcessTree: terminateProcessTree as never,
+      spawnCommand: vi.fn(() =>
+        fakeChild({
+          error: new Error("spawn failed after pid assignment"),
+          close: false,
+          pid: 4513,
+        }),
+      ) as never,
+    });
+
+    expect(terminateProcessTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Aider adapter process error",
+        context: { runId: "code-run-aider-process-error" },
+      }),
+    );
+    expect(result).toMatchObject({
+      failed: true,
+      outcome: "failed",
+      errorCode: "AIDER_PROCESS_ERROR",
+      error: "spawn failed after pid assignment",
+      errorDetails: expect.objectContaining({
+        processTreeCleanup: "requested",
+      }),
+    });
+  });
+
   it("records a generated patch artifact when Aider edits the run-temp input file", async () => {
     const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-edit-"));
     tempRoots.push(runTempRoot);
@@ -184,26 +371,50 @@ function fakePersister(persisted: Array<{ filename: string; content: string }>) 
   };
 }
 
-function fakeChild(input: { stdout: string; stderr: string; exitCode: number; beforeClose?: () => Promise<void> }) {
+function fakeChild(input: {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  beforeClose?: () => Promise<void>;
+  close?: boolean;
+  pid?: number;
+  error?: Error;
+}) {
   const child = new EventEmitter() as EventEmitter & {
     stdout: PassThrough;
     stderr: PassThrough;
     killed: boolean;
-    kill: () => void;
+    pid?: number;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: (signal?: NodeJS.Signals) => boolean;
   };
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.killed = false;
-  child.kill = () => {
+  child.pid = input.pid ?? 4510;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (signal?: NodeJS.Signals) => {
     child.killed = true;
+    child.signalCode = signal ?? "SIGTERM";
+    return true;
   };
   setImmediate(async () => {
+    if (input.error) {
+      child.emit("error", input.error);
+      return;
+    }
     await input.beforeClose?.();
-    child.stdout.write(input.stdout);
-    child.stderr.write(input.stderr);
+    child.stdout.write(input.stdout ?? "");
+    child.stderr.write(input.stderr ?? "");
+    if (input.close === false) {
+      return;
+    }
+    child.exitCode = input.exitCode ?? 0;
     child.stdout.end();
     child.stderr.end();
-    child.emit("close", input.exitCode);
+    child.emit("close", child.exitCode);
   });
   return child;
 }

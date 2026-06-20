@@ -9,7 +9,15 @@ const MAX_TEXT_SCAN_BYTES = 10 * 1024 * 1024;
 const SECRET_PATTERNS = [
   {
     id: "openai-style-key",
-    pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/,
+    pattern: /\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/i,
+  },
+  {
+    id: "anthropic-style-key",
+    pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/i,
+  },
+  {
+    id: "github-style-token",
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/,
   },
   {
     id: "bearer-token",
@@ -22,6 +30,16 @@ const SECRET_PATTERNS = [
   {
     id: "provider-secret-json",
     pattern: /"(?:apiKey|api_key|authorization|accessToken|access_token)"\s*:\s*"[^"]{16,}"/i,
+  },
+  {
+    id: "provider-secret-env",
+    pattern:
+      /\b[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*["']?[^"'\s]{16,}/i,
+  },
+  {
+    id: "provider-secret-url-query",
+    pattern:
+      /[?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|secret|client_secret)=([^&#\s]{12,})/i,
   },
 ];
 

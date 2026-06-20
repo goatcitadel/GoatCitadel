@@ -14,6 +14,13 @@ const cronRunParamsSchema = z.object({
   runId: z.string().min(1),
 });
 
+const cronManualRunBodySchema = z
+  .object({
+    force: z.boolean().optional(),
+    reason: z.string().trim().min(1).max(160).optional(),
+  })
+  .default({});
+
 const observeRunParamsSchema = z.object({
   runId: z.string().min(1),
 });
@@ -447,8 +454,20 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const parsedBody = cronManualRunBodySchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply.code(400).send({ error: parsedBody.error.flatten() });
+    }
     try {
-      return reply.send(await fastify.services.cron.runCronJobNow(parsed.data.jobId));
+      const options =
+        parsedBody.data.force === true || parsedBody.data.reason
+          ? { force: parsedBody.data.force === true, reason: parsedBody.data.reason }
+          : undefined;
+      return reply.send(
+        options
+          ? await fastify.services.cron.runCronJobNow(parsed.data.jobId, options)
+          : await fastify.services.cron.runCronJobNow(parsed.data.jobId),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");

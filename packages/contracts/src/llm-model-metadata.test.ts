@@ -21,7 +21,7 @@ describe("LlmModelMetadataManifest", () => {
       version: 1,
       entries: {
         "openai-codex/*": { contextWindow: 272_000, outputTokenLimit: 32_000 },
-        "xai/grok-4.3": { contextWindow: 1_000_000, outputTokenLimit: 32_000, thinking: "off" },
+        "openai/gpt-5.4": { contextWindow: 400_000, outputTokenLimit: 32_000, thinking: "auto" },
       },
     };
     expectTypeOf<LlmModelMetadataManifest>().toHaveProperty("version").toEqualTypeOf<number>();
@@ -41,8 +41,9 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
     expect(parsedManifest.version).toBe(1);
     expect(typeof parsedManifest.entries).toBe("object");
-    expect(Object.keys(parsedManifest.entries)).toHaveLength(25);
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(23);
     for (const [key, entry] of Object.entries(parsedManifest.entries)) {
+      expect(key.toLowerCase()).not.toMatch(/(?:^|\/)(?:xai|grok)(?:\/|$)/);
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);
       expect(entry.outputTokenLimit, `${key} outputTokenLimit`).toBeGreaterThan(0);
       if (entry.thinking !== undefined) {
@@ -53,11 +54,6 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
 
   it("includes the critical entries called out in the plan", () => {
     expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
-    expect(parsedManifest.entries["xai/grok-4.3"]).toEqual({
-      contextWindow: 1000000,
-      outputTokenLimit: 32000,
-      thinking: "off",
-    });
     expect(parsedManifest.entries["openrouter/deepseek/deepseek-v4-pro"]).toEqual({
       contextWindow: 128000,
       outputTokenLimit: 32000,
@@ -66,5 +62,9 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
       contextWindow: 1000000,
       outputTokenLimit: 32000,
     });
+  });
+
+  it("does not ship active xAI/Grok model metadata", () => {
+    expect(Object.keys(parsedManifest.entries).some((key) => /xai|grok/i.test(key))).toBe(false);
   });
 });

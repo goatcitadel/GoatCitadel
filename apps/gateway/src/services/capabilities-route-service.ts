@@ -7,10 +7,12 @@ export type CapabilitiesRoutePort = Pick<
   | "createProposal"
   | "getCandidateDetail"
   | "getCatalogSnapshot"
+  | "getCompactToolDirectorySnapshot"
   | "getCodeModeRun"
   | "getCodeModeRunArtifactPreview"
   | "getCodeModeRunInScope"
   | "getProposalDetail"
+  | "getToolSchema"
   | "listCatalog"
   | "listCodeModeExecutionBackends"
   | "listCodeModeRuns"
@@ -34,6 +36,14 @@ export class CapabilitiesRouteService {
 
   public getCapabilityCatalogSnapshot(snapshotId: string) {
     return this.capabilities.getCatalogSnapshot(snapshotId);
+  }
+
+  public getCompactToolDirectorySnapshot(ttlMs?: number) {
+    return this.capabilities.getCompactToolDirectorySnapshot(ttlMs);
+  }
+
+  public getToolSchema(toolName: string) {
+    return this.capabilities.getToolSchema(toolName);
   }
 
   public listCapabilityProposals(limit = 100) {

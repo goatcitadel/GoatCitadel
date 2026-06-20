@@ -57,6 +57,10 @@ describe("RunDetailRoutePage", () => {
     expect(runTraceHarness.fetchObserveRunTrace).toHaveBeenCalledWith("run-no-memory");
     expect(text).toContain("Memory and context");
     expect(text).toContain("No memory/context evidence is attached to this trace.");
+    expect(text).toContain("Trace and SIEM exports");
+    expect(text).toContain("/api/v1/observe/runs/run-no-memory/trace/export");
+    expect(text).toContain("/api/v1/runtime/lifecycle/export?runId=run-no-memory");
+    expect(text).toContain("format=siem_ndjson");
     expect(text).toContain("Expert raw trace");
   });
 

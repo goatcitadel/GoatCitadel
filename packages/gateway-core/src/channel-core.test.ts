@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeChannelCapabilities, planChannelTextDelivery } from "./channel-core.js";
+import {
+  describeChannelCapabilities,
+  planChannelRichMessageDelivery,
+  planChannelTextDelivery,
+} from "./channel-core.js";
 
 describe("describeChannelCapabilities", () => {
   it("advertises gateway-only Discord runtime semantics when gateway mode is configured", () => {
@@ -92,6 +96,12 @@ describe("describeChannelCapabilities", () => {
       expect.arrayContaining([
         "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
         "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+      ]),
+    );
+    expect(capabilities.supportNotes).toEqual(
+      expect.arrayContaining([
+        "BlueBubbles is the local-first callable provider for this Gateway build.",
+        "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
       ]),
     );
   });
@@ -347,6 +357,131 @@ describe("describeChannelCapabilities", () => {
     const discord = planChannelTextDelivery("discord", "x".repeat(2001));
     expect(discord.chunks.map((chunk) => chunk.length)).toEqual([2000, 1]);
     expect(discord.richFormatPosture).toBe("preserved");
+  });
+
+  it("plans Telegram rich messages with caption limits and document fallback evidence", () => {
+    const plan = planChannelRichMessageDelivery("telegram", {
+      text: `${"a".repeat(1024)} plus body`,
+      richFormat: "html",
+      attachments: [
+        { url: "https://example.com/photo.png", mimeType: "image/png", title: "photo.png" },
+        { dataBase64: Buffer.from("report").toString("base64"), mimeType: "application/pdf", title: "report.pdf" },
+      ],
+    });
+
+    expect(plan).toMatchObject({
+      channelKey: "telegram",
+      provider: "telegram_bot_api",
+      capabilityLabel: "Telegram Bot API rich media",
+      status: "degraded",
+      textPosture: "separate_text_then_media",
+      attachmentCount: 2,
+      nativeAttachmentCount: 1,
+      fallbackAttachmentCount: 1,
+      blockedAttachmentCount: 0,
+      evidence: {
+        owner: "gateway",
+        source: "channel_rich_message_plan",
+        status: "degraded",
+        provider: "telegram_bot_api",
+      },
+      attachments: [
+        {
+          index: 0,
+          source: "url",
+          mediaKind: "image",
+          providerKind: "photo",
+          disposition: "native_media",
+        },
+        {
+          index: 1,
+          source: "inline",
+          mediaKind: "document",
+          providerKind: "document",
+          disposition: "document_fallback",
+        },
+      ],
+    });
+    expect(plan?.evidence.evidenceId).toMatch(/^richmsg-[a-f0-9]{8}$/);
+    expect(plan?.notes.join(" ")).toContain("caption limit");
+  });
+
+  it("blocks unsafe Telegram rich attachment shapes before provider send", () => {
+    const metadataOnly = planChannelRichMessageDelivery("telegram", {
+      text: "see attachment",
+      attachments: [{ title: "missing-url.pdf", mimeType: "application/pdf" }],
+    });
+
+    expect(metadataOnly).toMatchObject({
+      status: "blocked",
+      blockedAttachmentCount: 1,
+      attachments: [
+        {
+          source: "metadata_only",
+          disposition: "blocked",
+          reason: "Telegram rich attachments require a URL, inline data, or an attachmentId to hydrate.",
+        },
+      ],
+    });
+
+    const tooMany = planChannelRichMessageDelivery("telegram", {
+      attachments: Array.from({ length: 11 }, (_, index) => ({
+        url: `https://example.com/${index}.png`,
+        mimeType: "image/png",
+      })),
+    });
+    expect(tooMany).toMatchObject({
+      status: "blocked",
+      attachmentCount: 11,
+      blockedAttachmentCount: 1,
+    });
+    expect(tooMany?.notes.join(" ")).toContain("Provider rich delivery limit is 10");
+  });
+
+  it("plans WhatsApp rich messages with direct Cloud API media labels and text fallback", () => {
+    const plan = planChannelRichMessageDelivery("whatsapp", {
+      text: "review these",
+      richFormat: "markdown",
+      attachments: [
+        { url: "https://example.com/screenshot.webp", mimeType: "image/webp" },
+        { title: "context note", mimeType: "text/plain" },
+        { attachmentId: "11111111-1111-4111-8111-111111111111" },
+      ],
+    });
+
+    expect(plan).toMatchObject({
+      channelKey: "whatsapp",
+      provider: "whatsapp_cloud_api",
+      capabilityLabel: "WhatsApp Cloud API rich media",
+      status: "degraded",
+      textPosture: "separate_text_then_media",
+      nativeAttachmentCount: 1,
+      fallbackAttachmentCount: 1,
+      pendingAttachmentIdCount: 1,
+      evidence: {
+        owner: "gateway",
+        source: "channel_rich_message_plan",
+        status: "degraded",
+        provider: "whatsapp_cloud_api",
+      },
+      attachments: [
+        {
+          source: "url",
+          mediaKind: "image",
+          providerKind: "image",
+          disposition: "native_media",
+        },
+        {
+          source: "metadata_only",
+          disposition: "text_fallback",
+        },
+        {
+          source: "pending_attachment_id",
+          disposition: "pending_hydration",
+        },
+      ],
+    });
+    expect(plan?.notes.join(" ")).toContain("does not preserve arbitrary HTML/Markdown");
   });
 });
 

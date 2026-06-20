@@ -114,8 +114,20 @@ describe("integration-catalog", () => {
 
   it("requires BlueBubbles bridge credentials in the iMessage guided setup form", () => {
     const imessageForm = getIntegrationFormSchema("channel.imessage");
+    const providerField = imessageForm?.fields.find((field) => field.key === "bridgeProvider");
     const bridgeUrlField = imessageForm?.fields.find((field) => field.key === "bridgeUrl");
     const passwordEnvField = imessageForm?.fields.find((field) => field.key === "passwordEnv");
+    const photonSidecarField = imessageForm?.fields.find((field) => field.key === "photonSidecarUrl");
+
+    expect(providerField).toMatchObject({
+      key: "bridgeProvider",
+      type: "select",
+      defaultValue: "bluebubbles",
+      options: expect.arrayContaining([
+        expect.objectContaining({ value: "bluebubbles" }),
+        expect.objectContaining({ value: "photon" }),
+      ]),
+    });
 
     expect(bridgeUrlField).toMatchObject({
       key: "bridgeUrl",
@@ -126,6 +138,11 @@ describe("integration-catalog", () => {
       key: "passwordEnv",
       required: true,
       secretRef: true,
+    });
+    expect(photonSidecarField).toMatchObject({
+      key: "photonSidecarUrl",
+      type: "url",
+      advanced: true,
     });
   });
 

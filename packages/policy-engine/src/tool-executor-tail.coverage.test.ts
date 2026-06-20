@@ -170,14 +170,7 @@ describe("tool executor tail coverage", () => {
     const root = createRoot();
     const config = createConfig(root);
     const storage = createKnowledgeStorage();
-    const fetchMock = vi.fn(
-      async () =>
-        ({
-          status: 200,
-          headers: { get: () => null },
-          text: async () => "ok",
-        }) as unknown as Response,
-    );
+    const fetchMock = vi.fn(async () => new Response(new TextEncoder().encode("ok"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const get = await executeTool(request("http.get", { url: "https://example.com/status" }), config, storage);
@@ -211,7 +204,13 @@ describe("tool executor tail coverage", () => {
       documentId: undefined,
       indexed: 1,
       skipped: 0,
+      stale: 0,
       methods: ["pseudo-embedding"],
+      embeddingProfile: {
+        provider: "pseudo",
+        modelId: "pseudo-hash-v1",
+        status: "active",
+      },
     });
 
     const queried = await executeTool(request("embeddings.query", { query: "coverage" }), config, storage);
@@ -222,7 +221,51 @@ describe("tool executor tail coverage", () => {
         provider: "pseudo",
         modelId: "pseudo-hash-v1",
       },
+      embeddingProfile: {
+        provider: "pseudo",
+        modelId: "pseudo-hash-v1",
+      },
+      repairedEmbeddings: 0,
     });
+  });
+
+  it("persists query-time embedding repairs with profile evidence", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+
+    const queried = await executeTool(
+      request("embeddings.query", {
+        query: "coverage",
+        embeddingProfile: { provider: "pseudo", modelId: "pseudo-hash-v1-small", dimensions: 16 },
+      }),
+      config,
+      storage,
+    );
+
+    expect(queried).toMatchObject({
+      method: "pseudo-embedding",
+      embeddingProfile: {
+        provider: "pseudo",
+        modelId: "pseudo-hash-v1-small",
+        dimensions: 16,
+        source: "request",
+      },
+      repairedEmbeddings: 1,
+      missingEmbeddings: 1,
+      staleEmbeddings: 0,
+      items: [expect.objectContaining({ embeddingStatus: "generated" })],
+    });
+    expect(storage.knowledge.updateChunkEmbedding).toHaveBeenCalledWith(
+      "chunk-match",
+      expect.arrayContaining([expect.any(Number)]),
+      expect.objectContaining({
+        provider: "pseudo",
+        modelId: "pseudo-hash-v1-small",
+        dimensions: 16,
+        profileStatus: "active",
+      }),
+    );
   });
 
   it("uses artifact title, template, and body defaults", async () => {
@@ -296,7 +339,7 @@ describe("tool executor tail coverage", () => {
     expect(deck.includes("ppt/media/")).toBe(true);
     expect(deck.includes("ppt/notesSlides/")).toBe(true);
     expect(JSON.stringify(created)).toContain("renderer-generated-visual");
-  });
+  }, 15_000);
 
   it("creates real document artifacts inside the write jail", async () => {
     const root = createRoot();

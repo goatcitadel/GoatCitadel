@@ -6,6 +6,7 @@ Local workspace SDK package for GoatCitadel add-on and integration-plugin author
 
 - add-on manifest schemas and validation helpers
 - integration-plugin manifest schemas and validation helpers
+- compact effective-tool snapshot helpers that consume Gateway-owned callable catalogs and schema refs
 - manifest filename constants
 - file-loading and source-resolution helpers for repo-native author flows
 

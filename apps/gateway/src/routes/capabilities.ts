@@ -11,6 +11,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const snapshotParamsSchema = z.object({
     snapshotId: z.string().min(1),
   });
+  const compactToolDirectoryQuerySchema = z.object({
+    ttlMs: z.coerce.number().int().min(1000).max(3_600_000).optional(),
+  });
+  const toolSchemaParamsSchema = z.object({
+    toolName: z.string().min(1),
+  });
 
   const proposalBodySchema = z.object({
     proposalKind: z.enum(["skill", "tool"]),
@@ -143,6 +149,26 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       scope,
       items: fastify.services.capabilities.listCapabilityCatalog(scope),
     });
+  });
+
+  fastify.get("/api/v1/capabilities/tool-directory/compact", async (request, reply) => {
+    const parsed = compactToolDirectoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.capabilities.getCompactToolDirectorySnapshot(parsed.data.ttlMs));
+  });
+
+  fastify.get("/api/v1/capabilities/tool-directory/schemas/:toolName", async (request, reply) => {
+    const parsed = toolSchemaParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.capabilities.getToolSchema(parsed.data.toolName));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/capabilities/snapshots/:snapshotId", async (request, reply) => {

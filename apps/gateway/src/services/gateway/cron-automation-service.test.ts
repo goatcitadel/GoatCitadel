@@ -497,6 +497,112 @@ describe("CronAutomationService job behavior", () => {
     expect(cronJobs.get("due-job")?.nextRunAt).toMatch(/^2026-05-15T12:0[0-4]:/);
   });
 
+  it("isolates due job failures, records backoff, and keeps running later due jobs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const publishRealtime = vi.fn();
+    const task = vi.fn(async (job: CronJobRecord) => {
+      if (job.jobId === "failing-due") {
+        throw new Error("downstream worker refused the run\nwith extra detail");
+      }
+      return { taskId: `task-${job.jobId}` };
+    });
+    const service = createService(db, publishRealtime, {
+      cronJobs,
+      handlers: { task },
+    });
+    cronJobs.upsert(buildTaskJob({ jobId: "failing-due", schedule: "0 12 * * * UTC" }));
+    cronJobs.upsert(buildTaskJob({ jobId: "next-due", schedule: "0 12 * * * UTC" }));
+
+    let summary;
+    try {
+      summary = await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(summary).toMatchObject({
+      dueCount: 2,
+      ranCount: 1,
+      failedCount: 1,
+      backoffCount: 0,
+    });
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(summary.items.map((item) => [item.jobId, item.status])).toEqual([
+      ["failing-due", "failed"],
+      ["next-due", "ran"],
+    ]);
+    expect(cronJobs.get("failing-due")).toMatchObject({
+      lastRunStatus: "failed",
+      failureCount: 1,
+      lastFailure: { message: "downstream worker refused the run with extra detail", code: "Error" },
+      backoffUntil: "2026-05-15T12:04:00.000Z",
+    });
+    expect(cronJobs.get("next-due")).toMatchObject({
+      lastRunStatus: "ok",
+      failureCount: 0,
+    });
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "cron_job_run",
+      "cron",
+      expect.objectContaining({
+        type: "cron_job_run_failed",
+        jobId: "failing-due",
+        failureCount: 1,
+        backoffUntil: "2026-05-15T12:04:00.000Z",
+      }),
+    );
+  });
+
+  it("skips backed-off due jobs but lets an explicit force run clear stale backoff", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const task = vi.fn(async () => ({ taskId: "forced-task" }));
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      handlers: { task },
+    });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: "backoff-due",
+        schedule: "0 12 * * * UTC",
+        backoffUntil: "2026-05-15T12:10:00.000Z",
+        failureCount: 2,
+        lastRunStatus: "failed",
+        lastFailureAt: "2026-05-15T12:02:00.000Z",
+        lastFailure: { message: "previous failure" },
+      }),
+    );
+
+    let summary;
+    let forced;
+    try {
+      summary = await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
+      forced = await service.runCronJobNow("backoff-due", { force: true, reason: "operator_retry" });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(summary).toMatchObject({
+      dueCount: 1,
+      ranCount: 0,
+      failedCount: 0,
+      backoffCount: 1,
+    });
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(forced).toMatchObject({ jobId: "backoff-due", status: "ok", force: true });
+    expect(cronJobs.get("backoff-due")).toMatchObject({
+      lastRunStatus: "ok",
+      failureCount: 0,
+      backoffUntil: undefined,
+      lastFailure: undefined,
+    });
+  });
+
   it("runs non-task handlers and records low-severity manual review entries when enabled", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();

@@ -138,6 +138,38 @@ export interface ChannelDeliveryDiagnostics {
     posture: "preserved" | "plain_text_fallback";
     notes: string[];
   };
+  richMessage?: {
+    channelKey: string;
+    provider: "telegram_bot_api" | "whatsapp_cloud_api";
+    capabilityLabel: string;
+    status: "preserved" | "degraded" | "blocked";
+    textPosture: "text_only" | "caption" | "separate_text_then_media" | "media_only";
+    attachmentCount: number;
+    nativeAttachmentCount: number;
+    fallbackAttachmentCount: number;
+    blockedAttachmentCount: number;
+    pendingAttachmentIdCount: number;
+    providerAttachmentLimit: number;
+    captionMaxCodeUnits: number;
+    notes: string[];
+    evidence: {
+      owner: "gateway";
+      source: "channel_rich_message_plan";
+      status: "preserved" | "degraded" | "blocked";
+      provider: "telegram_bot_api" | "whatsapp_cloud_api";
+      evidenceId: string;
+    };
+    attachments: Array<{
+      index: number;
+      source: "url" | "inline" | "pending_attachment_id" | "metadata_only";
+      mediaKind: "image" | "video" | "audio" | "document" | "unknown";
+      providerKind?: "photo" | "image" | "video" | "audio" | "document";
+      disposition: "native_media" | "document_fallback" | "text_fallback" | "pending_hydration" | "blocked";
+      mimeType?: string;
+      title?: string;
+      reason?: string;
+    }>;
+  };
 }
 
 export interface GmailSendInput {

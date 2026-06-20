@@ -606,6 +606,27 @@ export function RuntimeRoutePage({
                       <li key={item}>{item}</li>
                     ))}
                   </ul>
+                  <MetricGrid
+                    items={[
+                      {
+                        label: "Plan",
+                        value: formatShortRunId(automationPreview.plan.planId),
+                        meta: "Reviewable orchestration plan",
+                      },
+                      {
+                        label: "Schedule intent",
+                        value: automationPreview.recipe.scheduleIntent ?? "none",
+                        meta: "Preview only; no cron job created",
+                      },
+                      {
+                        label: "Limits",
+                        value: `${automationPreview.estimatedLimits.maxRuntimeMinutes}m`,
+                        meta: `${automationPreview.estimatedLimits.maxIterations} iterations · ${formatOptionalUsd(
+                          automationPreview.estimatedLimits.maxCostUsd,
+                        )}`,
+                      },
+                    ]}
+                  />
                   <div className="mc-next-runtime-actions">
                     <button
                       type="button"
@@ -670,6 +691,17 @@ export function RuntimeRoutePage({
                         </StatusChip>
                       ) : null}
                     </div>
+                  ) : null}
+                  {automationTemplateExport || automationN8nTemplateExport ? (
+                    <NativeList
+                      density="compact"
+                      items={[
+                        ...formatWorkflowTemplateExportProofItems("Activepieces", automationTemplateExport),
+                        ...formatWorkflowTemplateExportProofItems("n8n", automationN8nTemplateExport),
+                      ]}
+                      emptyLabel="No template export proof has been copied yet."
+                      ariaLabel="Automation template export proof"
+                    />
                   ) : null}
                 </div>
               ) : null}
@@ -1760,6 +1792,38 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string; me
       ))}
     </div>
   );
+}
+
+function formatWorkflowTemplateExportProofItems(
+  label: string,
+  exportResult: WorkflowRecipeActivepiecesTemplateExportResponse | WorkflowRecipeN8nTemplateExportResponse | null,
+): Array<{ title: string; meta?: string; body?: string }> {
+  if (!exportResult) {
+    return [];
+  }
+  const warningChecks = exportResult.validation.checks.filter((check) => check.status !== "passed");
+  return [
+    {
+      title: `${label} copied artifact`,
+      meta: `${exportResult.contentType} · ${formatShortRunId(exportResult.contentSha256)}`,
+      body: `${exportResult.filename} · plan ${exportResult.evidence.planId} · ${exportResult.evidence.status}`,
+    },
+    {
+      title: `${label} validation`,
+      meta: `${exportResult.validation.status} · native import ${exportResult.validation.nativeImportCompatibility.replace(
+        "_",
+        " ",
+      )}`,
+      body:
+        warningChecks.map((check) => `${check.label}: ${check.detail}`).join(" · ") ||
+        "All validation checks passed for operator import review.",
+    },
+    {
+      title: `${label} next action`,
+      meta: exportResult.posture.execution,
+      body: exportResult.evidence.actionNeeded,
+    },
+  ];
 }
 
 function DaemonControlHandoffPanel({ handoff }: { handoff: DaemonControlHandoff }) {

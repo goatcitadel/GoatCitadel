@@ -45,6 +45,14 @@ const embeddingIndexSchema = z.object({
   namespace: z.string().optional(),
   documentId: z.string().optional(),
   force: z.boolean().optional(),
+  embeddingProfile: z
+    .object({
+      provider: z.string().min(1).optional(),
+      modelId: z.string().min(1).optional(),
+      dimensions: z.number().int().positive().optional(),
+      profileId: z.string().min(1).optional(),
+    })
+    .optional(),
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
@@ -54,6 +62,14 @@ const embeddingQuerySchema = z.object({
   namespace: z.string().optional(),
   query: z.string().min(1),
   limit: z.number().int().positive().max(200).optional(),
+  embeddingProfile: z
+    .object({
+      provider: z.string().min(1).optional(),
+      modelId: z.string().min(1).optional(),
+      dimensions: z.number().int().positive().optional(),
+      profileId: z.string().min(1).optional(),
+    })
+    .optional(),
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
