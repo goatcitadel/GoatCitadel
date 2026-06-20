@@ -899,7 +899,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/trust", () => ({
   fetchTrustPolicySnapshot: mocks.fetchTrustPolicySnapshot,
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
+vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog")>()),
   useProviderModelCatalog: () => ({
     ...mocks.providerCatalogState,
     loadModelsForProvider: mocks.loadModelsForProvider,

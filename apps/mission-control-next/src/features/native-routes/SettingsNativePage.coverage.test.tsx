@@ -236,7 +236,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   validateChannelSetupDraft: settingsMocks.validateChannelSetupDraft,
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
+vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog")>()),
   useProviderModelCatalog: () => ({
     config: settingsMocks.providerModelCatalog.config,
     providers: settingsMocks.providerModelCatalog.providers,

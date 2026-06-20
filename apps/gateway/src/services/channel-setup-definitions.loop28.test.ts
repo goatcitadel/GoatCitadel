@@ -73,6 +73,7 @@ describe("channel setup definition loop28 tails", () => {
           defaultHandle: "+15555550123",
         },
         expected: {
+          bridgeProvider: "bluebubbles",
           bridgeUrl: "http://mac-mini.local:1234",
           passwordEnv: "BLUBBLES_PASSWORD",
           defaultHandle: "+15555550123",

@@ -282,7 +282,7 @@ describe("ChatThreadView", () => {
     ).not.toHaveLength(0);
     expect(
       renderer.root.findAll(
-        (node) => Array.isArray(node.children) && node.children.join("").includes("Durable durable-child-1"),
+        (node) => Array.isArray(node.children) && node.children.join("").includes("durable-child-1"),
       ),
     ).not.toHaveLength(0);
     expect(
