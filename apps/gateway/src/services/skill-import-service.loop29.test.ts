@@ -12,7 +12,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     vi.unstubAllGlobals();
   });
 

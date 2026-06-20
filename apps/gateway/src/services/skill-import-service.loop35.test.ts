@@ -15,7 +15,7 @@ describe("SkillImportService loop 35 import behavior", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("persists rejected validation diagnostics for malformed high-risk local sources", async () => {

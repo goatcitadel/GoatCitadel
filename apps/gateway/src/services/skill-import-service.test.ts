@@ -29,7 +29,7 @@ describe("SkillImportService lookup", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("resolves SkillsMP listing URLs into review-only lookup results", async () => {
@@ -297,7 +297,7 @@ describe("SkillImportService validation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("rejects not_installable curated sources at import time", async () => {

@@ -38,6 +38,12 @@ import type { SystemSettingsRepository } from "@goatcitadel/storage";
 
 const IMPORT_HISTORY_KEY = "skill_import_history_v1";
 const MAX_IMPORT_HISTORY = 300;
+const TEMP_CLEANUP_OPTIONS = {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 100,
+} as const;
 const execFileAsync = promisify(execFile);
 
 interface MaterializedSkillSource {
@@ -1334,7 +1340,7 @@ export class SkillImportService {
           skillRootPath: skillDir,
         },
         cleanup: async () => {
-          await fs.rm(tempRoot, { recursive: true, force: true });
+          await removeTempRoot(tempRoot);
         },
       };
     }
@@ -1346,7 +1352,7 @@ export class SkillImportService {
       try {
         await materializeHostedSkillBundle(sourceRef, bundleDir);
       } catch (error) {
-        await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+        await removeTempRoot(tempRoot).catch(() => undefined);
         throw error;
       }
       return {
@@ -1367,7 +1373,7 @@ export class SkillImportService {
           skillRootPath: bundleDir,
         },
         cleanup: async () => {
-          await fs.rm(tempRoot, { recursive: true, force: true });
+          await removeTempRoot(tempRoot);
         },
       };
     }
@@ -1400,7 +1406,7 @@ export class SkillImportService {
         skillRootPath: skillDir,
       },
       cleanup: async () => {
-        await fs.rm(tempRoot, { recursive: true, force: true });
+        await removeTempRoot(tempRoot);
       },
     };
   }
@@ -2715,6 +2721,10 @@ function buildScriptDisposition(scriptFiles: string[], suspiciousSignals: string
         : `${file} is recorded as non-callable until governed activation.`,
     ),
   };
+}
+
+async function removeTempRoot(tempRoot: string): Promise<void> {
+  await fs.rm(tempRoot, TEMP_CLEANUP_OPTIONS);
 }
 
 async function tryReadFileText(filePath: string): Promise<{ text: string; skippedLargeFile: boolean }> {

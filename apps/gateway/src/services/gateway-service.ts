@@ -6795,7 +6795,7 @@ export class GatewayService {
       if (!providerId || !model) {
         return;
       }
-      if (providerId === primaryProviderId) {
+      if (providerId === primaryProviderId && model === primaryModel) {
         return;
       }
       if (candidates.some((item) => item.providerId === providerId && item.model === model)) {

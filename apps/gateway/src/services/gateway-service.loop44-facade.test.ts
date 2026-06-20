@@ -305,7 +305,10 @@ describe("GatewayService loop44 facade behavior", () => {
         "openai",
         "gpt-5",
       ),
-    ).toEqual([{ providerId: "moonshot", model: "kimi-k2" }]);
+    ).toEqual([
+      { providerId: "openai", model: "gpt-4.1-mini" },
+      { providerId: "moonshot", model: "kimi-k2" },
+    ]);
     expect(
       GatewayService.prototype.resolveFallbackTargets.call(
         gateway,

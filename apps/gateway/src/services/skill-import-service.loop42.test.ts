@@ -29,7 +29,7 @@ describe("SkillImportService loop42 git install behavior", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("installs local git sources, records resolved HEAD metadata, and cleans cloned materialization", async () => {
