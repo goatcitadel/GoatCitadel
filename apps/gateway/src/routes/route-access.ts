@@ -83,6 +83,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/operators", accessClass: "operator" },
   { prefix: "/api/v1/assembly", accessClass: "operator" },
   { prefix: "/api/v1/tasks", accessClass: "operator" },
+  { prefix: "/api/v1/turns", accessClass: "operator" },
   { prefix: "/api/v1/files", accessClass: "operator" },
   { prefix: "/api/v1/memory", accessClass: "operator" },
   { prefix: "/api/v1/mesh", accessClass: "operator" },
