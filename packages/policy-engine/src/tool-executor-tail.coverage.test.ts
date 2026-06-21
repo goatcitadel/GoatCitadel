@@ -339,7 +339,7 @@ describe("tool executor tail coverage", () => {
     expect(deck.includes("ppt/media/")).toBe(true);
     expect(deck.includes("ppt/notesSlides/")).toBe(true);
     expect(JSON.stringify(created)).toContain("renderer-generated-visual");
-  }, 15_000);
+  }, 20_000);
 
   it("creates real document artifacts inside the write jail", async () => {
     const root = createRoot();

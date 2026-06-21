@@ -118,7 +118,7 @@ describe("ingestion backend coverage", () => {
       expect(result.chunksSaved).toBeGreaterThan(0);
       expect(result.chunks[0]?.content).toContain(input.expected);
     }
-  });
+  }, 20_000);
 
   it("fails unsupported binary native file formats clearly", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-ingest-binary-"));

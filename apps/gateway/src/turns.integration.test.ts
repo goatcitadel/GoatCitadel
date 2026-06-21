@@ -8,10 +8,9 @@ import { buildApp } from "./app.js";
 // Full-stack smoke for POST /api/v1/turns/complete (the MatterGoat turn contract).
 // Boots the REAL gateway — operator-bearer auth, the idempotency plugin, route
 // access, and the handler itself — rather than a bare route, so it verifies the
-// endpoint is genuinely wired into the app. The LLM provider is intentionally
-// absent (no API key here), so a fully-authorized, well-formed turn reaches the
-// handler and fails only at the provider call (5xx) — which is exactly the signal
-// that everything up to the model invocation works end to end.
+// endpoint is genuinely wired into the app. The isolated runtime config provides
+// the local test provider, so a fully-authorized, well-formed turn reaches the
+// handler and returns the MatterGoat completion envelope end to end.
 
 const TOKEN = "turns-smoke-token-1234567890";
 const ENV_KEYS = [
@@ -88,8 +87,7 @@ describe("turns:complete full-stack smoke", () => {
       expect(invalidBody.statusCode).toBe(400);
 
       // 4. Fully authorized, well-formed turn → passes auth + idempotency + routing
-      // and reaches the handler. With no LLM provider configured the model call
-      // fails (5xx) — proving everything up to the provider invocation is wired.
+      // and reaches the handler, returning the MatterGoat completion envelope.
       const routed = await app.inject({
         method: "POST",
         url: "/api/v1/turns/complete",
@@ -99,7 +97,19 @@ describe("turns:complete full-stack smoke", () => {
       expect(routed.statusCode).not.toBe(401); // passed auth
       expect(routed.statusCode).not.toBe(404); // route is registered
       expect(routed.statusCode).not.toBe(400); // passed validation + idempotency
-      expect(routed.statusCode).toBeGreaterThanOrEqual(500); // reached handler; provider absent
+      expect(routed.statusCode).toBe(200);
+      expect(routed.json()).toMatchObject({
+        message: expect.any(String),
+        markers: expect.any(Array),
+        needs_approval: expect.any(Boolean),
+        provider: expect.any(String),
+        model: expect.any(String),
+        run_id: expect.any(String),
+        usage: {
+          input_tokens: expect.any(Number),
+          output_tokens: expect.any(Number),
+        },
+      });
     } finally {
       await app.close();
     }
