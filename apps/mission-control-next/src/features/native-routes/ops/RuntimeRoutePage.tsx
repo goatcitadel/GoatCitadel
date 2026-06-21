@@ -18,6 +18,7 @@ import {
   EmptyState,
   ErrorState,
   NativeButton,
+  NativeTable,
   NoticeBanner,
   StatusChip,
   ThreePartChip,
@@ -804,13 +805,21 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
-              <NativeList
-                items={(data.cost?.items ?? []).slice(0, 10).map((item) => ({
-                  title: item.key,
-                  meta: formatUsd(item.costUsd),
-                  body: `${item.tokenTotal.toLocaleString()} total tokens`,
-                }))}
+              <NativeTable
+                ariaLabel="Provider spend breakdown"
+                rows={(data.cost?.items ?? []).slice(0, 10)}
+                getRowKey={(item) => item.key}
                 emptyLabel="No spend breakdown available."
+                columns={[
+                  { key: "provider", header: "Provider", cell: (item) => item.key },
+                  {
+                    key: "tokens",
+                    header: "Tokens",
+                    numeric: true,
+                    cell: (item) => item.tokenTotal.toLocaleString(),
+                  },
+                  { key: "cost", header: "Cost", numeric: true, cell: (item) => formatUsd(item.costUsd) },
+                ]}
               />
             </NativeCard>
             <NativeCard

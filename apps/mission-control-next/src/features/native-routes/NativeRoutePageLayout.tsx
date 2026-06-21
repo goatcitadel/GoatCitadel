@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { ArrowRight, FlaskConical, RefreshCw } from "lucide-react";
+import { ArrowRight, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
@@ -139,7 +139,14 @@ export function NativePageFrame({
                     <strong className="mc-next-directory-head-metric-value">{metric.value}</strong>
                     {metric.delta ? (
                       <em className="mc-next-directory-head-metric-delta" data-tone={metric.delta.tone}>
-                        {metric.delta.value}
+                        {metric.delta.tone === "up" ? (
+                          <TrendingUp aria-hidden="true" />
+                        ) : metric.delta.tone === "down" ? (
+                          <TrendingDown aria-hidden="true" />
+                        ) : (
+                          <Minus aria-hidden="true" />
+                        )}
+                        <span>{metric.delta.value}</span>
                       </em>
                     ) : null}
                   </div>

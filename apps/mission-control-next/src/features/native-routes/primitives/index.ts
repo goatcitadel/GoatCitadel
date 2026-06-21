@@ -37,5 +37,8 @@ export type { NativeSelectableListItem, NativeSelectableListProps } from "./Nati
 export { NativeMetricGrid } from "./NativeMetricGrid";
 export type { NativeMetricGridItem } from "./NativeMetricGrid";
 
+export { NativeTable } from "./NativeTable";
+export type { NativeTableColumn, NativeTableProps } from "./NativeTable";
+
 export { NativeButton } from "./NativeButton";
 export type { NativeButtonProps, NativeButtonVariant } from "./NativeButton";
