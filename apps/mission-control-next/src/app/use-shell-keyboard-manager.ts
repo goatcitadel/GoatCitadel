@@ -140,8 +140,9 @@ export function useShellKeyboardManager(options: ShellKeyboardManagerOptions): v
       }
 
       // "?" (Shift+/) — toggle the keyboard-shortcuts overlay. Reached only when
-      // focus is NOT in an editable element (handled by the check above).
-      if (event.key === "?") {
+      // focus is NOT in an editable element (handled by the check above). Ignore
+      // Ctrl/Cmd/Alt+? so we don't steal browser/OS shortcuts (Shift is expected).
+      if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (opts.onToggleShortcuts) {
           event.preventDefault();
           opts.onToggleShortcuts();

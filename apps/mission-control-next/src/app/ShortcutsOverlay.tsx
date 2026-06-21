@@ -31,7 +31,12 @@ export function ShortcutsOverlay({ open, onClose, routeShortcuts }: ShortcutsOve
     restoreFocusRef.current = (document.activeElement as HTMLElement | null) ?? null;
     cardRef.current?.focus();
     return () => {
-      restoreFocusRef.current?.focus?.();
+      const previous = restoreFocusRef.current;
+      // Only restore if the trigger is still in the document — otherwise let the
+      // browser fall back rather than focusing a detached node.
+      if (previous && document.contains(previous)) {
+        previous.focus?.();
+      }
     };
   }, [open]);
 
@@ -43,18 +48,29 @@ export function ShortcutsOverlay({ open, onClose, routeShortcuts }: ShortcutsOve
     if (event.key !== "Tab") {
       return;
     }
-    const focusables = cardRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], [tabindex]:not([tabindex="-1"])',
-    );
-    if (!focusables || focusables.length === 0) {
+    const card = cardRef.current;
+    if (!card) {
+      return;
+    }
+    const focusables = card.querySelectorAll<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])');
+    if (focusables.length === 0) {
+      event.preventDefault();
       return;
     }
     const first = focusables[0]!;
     const last = focusables[focusables.length - 1]!;
-    if (event.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    // Focus on the card wrapper (tabIndex=-1) or anywhere outside the dialog:
+    // pull it back in so Tab/Shift+Tab can never reach the page behind the modal.
+    if (active === card || !card.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && active === first) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault();
       first.focus();
     }

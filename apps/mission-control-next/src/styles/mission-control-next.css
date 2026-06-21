@@ -2403,15 +2403,16 @@
   }
 
   /* C3: also remove the hover LIFT (a position shift), not just its transition,
-     so motion-sensitive users get no movement on hover. */
-  .mc-next-button:hover,
-  .mc-next-button-secondary:hover,
-  .mc-next-button-ghost:hover,
-  .mc-next-button-danger:hover,
-  .mc-next-icon-button:hover,
-  .mc-next-shell .gc-button:hover,
-  .mc-next-shell .gc-nav-button:hover,
-  .mc-next-shell .gc-action-button:hover {
+     so motion-sensitive users get no movement on hover. :not(:disabled) lifts
+     specificity above the .gc-button:hover:not(:disabled) baseline rule. */
+  .mc-next-button:hover:not(:disabled),
+  .mc-next-button-secondary:hover:not(:disabled),
+  .mc-next-button-ghost:hover:not(:disabled),
+  .mc-next-button-danger:hover:not(:disabled),
+  .mc-next-icon-button:hover:not(:disabled),
+  .mc-next-shell .gc-button:hover:not(:disabled),
+  .mc-next-shell .gc-nav-button:hover:not(:disabled),
+  .mc-next-shell .gc-action-button:hover:not(:disabled) {
     transform: none;
   }
 }
