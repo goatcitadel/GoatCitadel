@@ -112,6 +112,8 @@
   top: 0;
   align-self: start;
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 0.34rem;
   padding: 6px 5px;
   padding-inline-end: calc(5px + var(--mc-scrollbar-safe-gutter));

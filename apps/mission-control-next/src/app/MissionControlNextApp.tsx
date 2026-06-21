@@ -656,6 +656,7 @@ export function MissionControlNextApp() {
           `ui-mode-${mode}`,
           `ui-density-${density}`,
           `ui-effects-${effectiveEffectsMode}`,
+          hasVisibleInspector ? "has-shell-inspector" : "",
           showTechnicalDetails ? "" : "ui-hide-technical",
         ]
           .filter(Boolean)

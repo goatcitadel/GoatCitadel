@@ -2017,6 +2017,20 @@
   gap: 0.75rem;
 }
 
+@media (min-width: 1181px) {
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-native-projects-grid {
+    grid-template-columns: minmax(16rem, 0.82fr) minmax(28rem, 1.18fr);
+  }
+
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-project-controls-card {
+    grid-column: 1 / -1;
+  }
+
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-project-controls {
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  }
+}
+
 .mc-next-project-lead-card {
   display: grid;
   gap: 0.55rem;

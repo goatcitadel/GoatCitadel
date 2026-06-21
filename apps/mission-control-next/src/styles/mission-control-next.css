@@ -28,6 +28,8 @@
   --gc-risk-nuclear: var(--risk-nuclear);
   --mc-area-color: var(--area-chat);
   --mc-scrollbar-safe-gutter: 0.85rem;
+  --shell-inspector-width: min(24rem, calc(100vw - 2rem));
+  --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1.75rem);
   --text-xs: calc(0.75rem * var(--density-type-scale));
   --text-sm: calc(0.8125rem * var(--density-type-scale));
   --text-md: calc(0.875rem * var(--density-type-scale));
@@ -1254,12 +1256,18 @@
   min-height: 0;
 }
 
+@media (min-width: 1181px) {
+  .mc-next-shell.has-shell-inspector .mc-next-body:not(.is-work-area) .mc-next-stage {
+    padding-right: var(--shell-inspector-gutter);
+  }
+}
+
 .mc-next-shell-inspector.side-inspector-drawer {
   position: fixed;
   top: 5.3rem;
   right: 1rem;
   z-index: var(--z-panel);
-  width: min(24rem, calc(100vw - 2rem));
+  width: var(--shell-inspector-width);
   max-height: calc(100dvh - 6.3rem);
   padding: 1rem;
   padding-inline-end: calc(1rem + var(--mc-scrollbar-safe-gutter));
@@ -1982,12 +1990,13 @@
 }
 
 @media (max-width: 1279px) {
-  .mc-next-body {
-    grid-template-columns: 13rem minmax(0, 1fr);
+  .mc-next-shell {
+    --shell-inspector-width: min(22rem, calc(100vw - 2rem));
+    --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1.5rem);
   }
 
-  .mc-next-shell-inspector.side-inspector-drawer {
-    width: min(22rem, calc(100vw - 2rem));
+  .mc-next-body {
+    grid-template-columns: 13rem minmax(0, 1fr);
   }
 
   .mc-next-status-strip {
@@ -2004,6 +2013,25 @@
      tier folds it (and command search) into the nav drawer entirely. */
   .mc-next-select-field select {
     width: 6.6rem;
+  }
+
+  .mc-next-shell-inspector.side-inspector-drawer {
+    top: auto;
+    right: 0.9rem;
+    left: 0.9rem;
+    bottom: 0.9rem;
+    width: auto;
+    max-height: min(74dvh, 42rem);
+    transform: none;
+  }
+
+  .mc-next-inspector-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-scrim);
+    border: 0;
+    background: var(--bg-scrim);
   }
 }
 
@@ -2130,25 +2158,6 @@
 
   .mc-next-stage-chips {
     justify-content: flex-start;
-  }
-
-  .mc-next-shell-inspector.side-inspector-drawer {
-    top: auto;
-    right: 0.9rem;
-    left: 0.9rem;
-    bottom: 0.9rem;
-    width: auto;
-    max-height: min(74dvh, 42rem);
-    transform: none;
-  }
-
-  .mc-next-inspector-scrim.open {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-scrim);
-    border: 0;
-    background: var(--bg-scrim);
   }
 }
 

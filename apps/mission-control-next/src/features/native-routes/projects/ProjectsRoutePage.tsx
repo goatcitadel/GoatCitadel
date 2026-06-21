@@ -751,6 +751,7 @@ export function ProjectsRoutePage({
         </NativeCard>
 
         <NativeCard
+          className="mc-next-project-controls-card"
           title="Project controls"
           subtitle={
             selectedProject
