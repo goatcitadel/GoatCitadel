@@ -161,6 +161,7 @@ export function CitadelOverviewRoutePage({
           <NativeCard
             title="Default Citadels"
             subtitle="Personal and Company are the two default starting points; both stay approval-governed until you connect Gates."
+            className="mc-next-citadel-default-card"
             stats={[
               { label: "Defaults", value: String(defaultTemplates.length || 2) },
               { label: "Posture", value: "governed" },
