@@ -76,9 +76,20 @@ export async function hardDeleteAgentProfile(
 export async function fetchFilesList(
   dir = ".",
   limit = 1000,
+  scope?: { citadelId?: string; workspaceId?: string },
 ): Promise<{ items: Array<{ relativePath: string; size: number; modifiedAt: string }> }> {
+  const query = new URLSearchParams({
+    dir,
+    limit: String(limit),
+  });
+  if (scope?.citadelId?.trim()) {
+    query.set("citadelId", scope.citadelId.trim());
+  }
+  if (scope?.workspaceId?.trim()) {
+    query.set("workspaceId", scope.workspaceId.trim());
+  }
   return request<{ items: Array<{ relativePath: string; size: number; modifiedAt: string }> }>(
-    `/api/v1/files/list?dir=${encodeURIComponent(dir)}&limit=${limit}`,
+    `/api/v1/files/list?${query.toString()}`,
   );
 }
 
@@ -95,12 +106,13 @@ export async function fetchFileTemplates(): Promise<{ items: FileTemplate[] }> {
 export async function createFileFromTemplate(
   templateId: string,
   targetPath?: string,
+  scope?: { citadelId?: string; workspaceId?: string },
 ): Promise<{ relativePath: string; fullPath: string; bytes: number }> {
   return request<{ relativePath: string; fullPath: string; bytes: number }>(
     `/api/v1/files/templates/${encodeURIComponent(templateId)}/create`,
     {
       method: "POST",
-      body: JSON.stringify({ targetPath }),
+      body: JSON.stringify({ targetPath, ...scope }),
     },
   );
 }
@@ -115,7 +127,10 @@ export async function uploadFile(
   });
 }
 
-export async function downloadFile(relativePath: string): Promise<{
+export async function downloadFile(
+  relativePath: string,
+  scope?: { citadelId?: string; workspaceId?: string },
+): Promise<{
   relativePath: string;
   fullPath: string;
   size: number;
@@ -124,5 +139,12 @@ export async function downloadFile(relativePath: string): Promise<{
   encoding: string;
   content: string;
 }> {
-  return request(`/api/v1/files/download?relativePath=${encodeURIComponent(relativePath)}`);
+  const query = new URLSearchParams({ relativePath });
+  if (scope?.citadelId?.trim()) {
+    query.set("citadelId", scope.citadelId.trim());
+  }
+  if (scope?.workspaceId?.trim()) {
+    query.set("workspaceId", scope.workspaceId.trim());
+  }
+  return request(`/api/v1/files/download?${query.toString()}`);
 }

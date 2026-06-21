@@ -63,6 +63,8 @@ export interface MemoryContextComposeRequest {
   taskId?: string;
   runId?: string;
   phaseId?: string;
+  citadelId?: string;
+  workspaceId?: string;
   workspace?: string;
   relationScope?: MemoryRelationScope;
   maxContextTokens?: number;

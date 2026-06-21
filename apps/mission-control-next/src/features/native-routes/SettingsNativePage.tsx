@@ -9,6 +9,7 @@ import {
   type CapabilityPackManifest,
   type CapabilityPackPreview,
   type CapabilityPackStagedRecord,
+  type CitadelRecord,
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
@@ -67,6 +68,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   archiveWorkspace,
+  archiveCitadel,
   activatePermissionProfile,
   archivePermissionProfile,
   bootstrapOnboarding,
@@ -81,6 +83,7 @@ import {
   createPermissionProfile,
   createToolGrant,
   createWorkspace,
+  createCitadel,
   deleteOpenAICodexOAuthCredential,
   deleteIntegrationConnection,
   deleteMcpServer,
@@ -139,6 +142,7 @@ import {
   fetchToolGrants,
   fetchVoiceRuntimeStatus,
   fetchWorkspaces,
+  listCitadels,
   finalizeChannelSetupDraft,
   installAddon,
   installCapabilityPack,
@@ -155,6 +159,7 @@ import {
   resolveGatewayInstallToken,
   respondMcpElicitation,
   restoreWorkspace,
+  restoreCitadel,
   revokeDeviceAccessGrant,
   revokeAutonomousActivationGrant,
   revokeLocalOperatorOverride,
@@ -183,6 +188,7 @@ import {
   updatePersonality,
   updatePermissionProfile,
   updateWorkspace,
+  updateCitadel,
   validateChannelSetupDraft,
   type IntegrationConnection,
   type OpenAICodexDeviceStartResponse,
@@ -4490,20 +4496,54 @@ function RuntimeSection(_props: SettingsSectionProps) {
   );
 }
 
+const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
+  "personal",
+  "company",
+  "team",
+  "client",
+  "household",
+  "creator",
+  "learning",
+  "project",
+  "custom",
+];
+
 function WorkspacesSection({
   activeCitadelId,
   activeCitadelName,
   activeWorkspaceId,
+  setActiveCitadelId,
   setActiveWorkspaceId,
 }: SettingsSectionProps) {
   const [view, setView] = useState<"active" | "archived" | "all">("all");
+  const [citadelView, setCitadelView] = useState<"active" | "archived" | "all">("all");
   const load = useCallback(
     async () => (activeCitadelId ? fetchWorkspaces("all", 500, activeCitadelId) : fetchWorkspaces("all", 500)),
     [activeCitadelId],
   );
+  const loadCitadels = useCallback(() => listCitadels("all", 500), []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const {
+    loading: citadelsLoading,
+    error: citadelsError,
+    data: citadelsData,
+    reload: reloadCitadels,
+  } = useAsyncLoad(loadCitadels, [loadCitadels]);
+  const [selectedCitadelId, setSelectedCitadelId] = useState(activeCitadelId ?? "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [citadelCreateForm, setCitadelCreateForm] = useState({
+    name: "",
+    description: "",
+    slug: "",
+    kind: "custom",
+  });
+  const [citadelEditForm, setCitadelEditForm] = useState({
+    name: "",
+    description: "",
+    slug: "",
+    kind: "custom",
+  });
   const [createForm, setCreateForm] = useState({
     name: "",
     description: "",
@@ -4522,7 +4562,44 @@ function WorkspacesSection({
     }
     return items.filter((item) => item.lifecycleStatus === view);
   }, [data?.items, view]);
+  const filteredCitadels = useMemo(() => {
+    const items = citadelsData?.items ?? [];
+    if (citadelView === "all") {
+      return items;
+    }
+    return items.filter((item) => item.lifecycleStatus === citadelView);
+  }, [citadelView, citadelsData?.items]);
+  const selectedCitadel = (citadelsData?.items ?? []).find((item) => item.citadelId === selectedCitadelId) ?? null;
   const selectedWorkspace = (data?.items ?? []).find((item) => item.workspaceId === selectedWorkspaceId) ?? null;
+
+  useEffect(() => {
+    setSelectedCitadelId((current) => activeCitadelId || current);
+  }, [activeCitadelId]);
+
+  useEffect(() => {
+    if (!filteredCitadels.length) {
+      setSelectedCitadelId("");
+      return;
+    }
+    setSelectedCitadelId((current) =>
+      current && filteredCitadels.some((item) => item.citadelId === current)
+        ? current
+        : filteredCitadels[0]?.citadelId || "",
+    );
+  }, [filteredCitadels]);
+
+  useEffect(() => {
+    if (!selectedCitadel) {
+      setCitadelEditForm({ name: "", description: "", slug: "", kind: "custom" });
+      return;
+    }
+    setCitadelEditForm({
+      name: selectedCitadel.name,
+      description: selectedCitadel.description ?? "",
+      slug: selectedCitadel.slug,
+      kind: selectedCitadel.kind,
+    });
+  }, [selectedCitadel]);
 
   useEffect(() => {
     if (!filtered.length) {
@@ -4545,6 +4622,75 @@ function WorkspacesSection({
       slug: selectedWorkspace.slug,
     });
   }, [selectedWorkspace]);
+
+  const handleCreateCitadel = async () => {
+    if (!citadelCreateForm.name.trim()) {
+      setNotice({ tone: "warning", message: "Citadel name is required." });
+      return;
+    }
+    try {
+      const created = await createCitadel({
+        name: citadelCreateForm.name.trim(),
+        description: citadelCreateForm.description.trim() || undefined,
+        slug: citadelCreateForm.slug.trim() || undefined,
+        kind: citadelCreateForm.kind as CitadelRecord["kind"],
+      });
+      setNotice({ tone: "success", message: `Citadel ${created.name} created.` });
+      setCitadelCreateForm({ name: "", description: "", slug: "", kind: "custom" });
+      await reloadCitadels();
+      setSelectedCitadelId(created.citadelId);
+      setActiveCitadelId?.(created.citadelId);
+    } catch (createError) {
+      setNotice({ tone: "error", message: getErrorMessage(createError) });
+    }
+  };
+
+  const handleSaveCitadel = async () => {
+    if (!selectedCitadel) {
+      return;
+    }
+    try {
+      const updated = await updateCitadel(selectedCitadel.citadelId, {
+        name: citadelEditForm.name.trim() || undefined,
+        description: citadelEditForm.description.trim() || undefined,
+        slug: citadelEditForm.slug.trim() || undefined,
+        kind: citadelEditForm.kind as CitadelRecord["kind"],
+      });
+      setNotice({ tone: "success", message: `Citadel ${updated.name} updated.` });
+      await reloadCitadels();
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    }
+  };
+
+  const handleArchiveCitadel = async () => {
+    if (!selectedCitadel) {
+      return;
+    }
+    if (!window.confirm(`Archive Citadel ${selectedCitadel.name}?`)) {
+      return;
+    }
+    try {
+      await archiveCitadel(selectedCitadel.citadelId);
+      setNotice({ tone: "success", message: `Citadel ${selectedCitadel.name} archived.` });
+      await reloadCitadels();
+    } catch (archiveError) {
+      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+    }
+  };
+
+  const handleRestoreCitadel = async () => {
+    if (!selectedCitadel) {
+      return;
+    }
+    try {
+      await restoreCitadel(selectedCitadel.citadelId);
+      setNotice({ tone: "success", message: `Citadel ${selectedCitadel.name} restored.` });
+      await reloadCitadels();
+    } catch (restoreError) {
+      setNotice({ tone: "error", message: getErrorMessage(restoreError) });
+    }
+  };
 
   const handleCreate = async () => {
     if (!createForm.name.trim()) {
@@ -4615,7 +4761,14 @@ function WorkspacesSection({
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell
+      loading={loading || citadelsLoading}
+      error={error || citadelsError}
+      onRetry={() => {
+        void reload();
+        void reloadCitadels();
+      }}
+    >
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsNotice
         notice={{
@@ -4626,6 +4779,145 @@ function WorkspacesSection({
       />
       <SettingsGrid variant="detail-wide">
         <SettingsStack>
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Citadel manager"
+            subtitle="Create, select, archive, and restore the top-level operating worlds that contain workspaces."
+            stats={[
+              { label: "Citadels", value: String(citadelsData?.items.length ?? 0) },
+              { label: "Active", value: activeCitadelId ?? "legacy" },
+            ]}
+          >
+            <SettingsFilterBar
+              options={[
+                { id: "all", label: "All" },
+                { id: "active", label: "Active" },
+                { id: "archived", label: "Archived" },
+              ]}
+              value={citadelView}
+              onChange={(next) => setCitadelView(next as "active" | "archived" | "all")}
+            />
+            <NativeSelectableList
+              items={filteredCitadels.map((item) => ({
+                id: item.citadelId,
+                title: item.name,
+                meta: item.lifecycleStatus,
+                body: item.description || item.slug,
+              }))}
+              selectedId={selectedCitadelId}
+              onSelect={setSelectedCitadelId}
+              emptyLabel="No Citadels in this view."
+              maxHeight="14rem"
+            />
+            <SettingsFieldGrid>
+              <SettingsField label="New Citadel">
+                <input
+                  className="mc-next-settings-input"
+                  value={citadelCreateForm.name}
+                  onChange={(event) => setCitadelCreateForm((current) => ({ ...current, name: event.target.value }))}
+                />
+              </SettingsField>
+              <SettingsField label="Kind">
+                <select
+                  className="mc-next-settings-input"
+                  value={citadelCreateForm.kind}
+                  onChange={(event) => setCitadelCreateForm((current) => ({ ...current, kind: event.target.value }))}
+                >
+                  {CITADEL_KIND_OPTIONS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind}
+                    </option>
+                  ))}
+                </select>
+              </SettingsField>
+              <SettingsField label="Slug">
+                <input
+                  className="mc-next-settings-input"
+                  value={citadelCreateForm.slug}
+                  onChange={(event) => setCitadelCreateForm((current) => ({ ...current, slug: event.target.value }))}
+                />
+              </SettingsField>
+              <SettingsField label="Description">
+                <input
+                  className="mc-next-settings-input"
+                  value={citadelCreateForm.description}
+                  onChange={(event) =>
+                    setCitadelCreateForm((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
+              </SettingsField>
+            </SettingsFieldGrid>
+            {selectedCitadel ? (
+              <>
+                <SettingsFieldGrid>
+                  <SettingsField label="Selected name">
+                    <input
+                      className="mc-next-settings-input"
+                      value={citadelEditForm.name}
+                      onChange={(event) => setCitadelEditForm((current) => ({ ...current, name: event.target.value }))}
+                    />
+                  </SettingsField>
+                  <SettingsField label="Selected kind">
+                    <select
+                      className="mc-next-settings-input"
+                      value={citadelEditForm.kind}
+                      onChange={(event) => setCitadelEditForm((current) => ({ ...current, kind: event.target.value }))}
+                    >
+                      {CITADEL_KIND_OPTIONS.map((kind) => (
+                        <option key={kind} value={kind}>
+                          {kind}
+                        </option>
+                      ))}
+                    </select>
+                  </SettingsField>
+                  <SettingsField label="Selected slug">
+                    <input
+                      className="mc-next-settings-input"
+                      value={citadelEditForm.slug}
+                      onChange={(event) => setCitadelEditForm((current) => ({ ...current, slug: event.target.value }))}
+                    />
+                  </SettingsField>
+                  <SettingsField label="Selected description">
+                    <input
+                      className="mc-next-settings-input"
+                      value={citadelEditForm.description}
+                      onChange={(event) =>
+                        setCitadelEditForm((current) => ({ ...current, description: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                </SettingsFieldGrid>
+                <SettingsButtonRow>
+                  <NativeButton variant="default" onClick={() => setActiveCitadelId?.(selectedCitadel.citadelId)}>
+                    <CheckCircle2 size={16} />
+                    Make active
+                  </NativeButton>
+                  <NativeButton variant="secondary" onClick={() => void handleSaveCitadel()}>
+                    <Save size={16} />
+                    Save Citadel
+                  </NativeButton>
+                  {selectedCitadel.lifecycleStatus === "archived" ? (
+                    <NativeButton variant="secondary" onClick={() => void handleRestoreCitadel()}>
+                      <RotateCcw size={16} />
+                      Restore
+                    </NativeButton>
+                  ) : (
+                    <NativeButton variant="destructive" onClick={() => void handleArchiveCitadel()}>
+                      <Trash2 size={16} />
+                      Archive
+                    </NativeButton>
+                  )}
+                </SettingsButtonRow>
+              </>
+            ) : null}
+            <SettingsButtonRow>
+              <NativeButton variant="default" onClick={() => void handleCreateCitadel()}>
+                <Plus size={16} />
+                Create Citadel
+              </NativeButton>
+            </SettingsButtonRow>
+          </NativeCard>
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"

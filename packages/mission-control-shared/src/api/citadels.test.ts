@@ -23,6 +23,31 @@ function body(init: RequestInit | undefined): unknown {
 }
 
 describe("citadel api client", () => {
+  it("listCitadels reads the Citadel identity directory with clamped limits", async () => {
+    await citadels.listCitadels("all", 999);
+    expect(lastCall()[0]).toBe("/api/v1/citadels?view=all&limit=500");
+  });
+
+  it("creates, updates, archives, and restores Citadel identity records", async () => {
+    await citadels.createCitadel({ citadelId: "client", name: "Client", kind: "client" } as never);
+    expect(lastCall()[0]).toBe("/api/v1/citadels");
+    expect(lastCall()[1]?.method).toBe("POST");
+    expect(body(lastCall()[1])).toEqual({ citadelId: "client", name: "Client", kind: "client" });
+
+    await citadels.updateCitadel("client/one", { name: "Client One" } as never);
+    expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone");
+    expect(lastCall()[1]?.method).toBe("PATCH");
+    expect(body(lastCall()[1])).toEqual({ name: "Client One" });
+
+    await citadels.archiveCitadel("client/one");
+    expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone/archive");
+    expect(lastCall()[1]?.method).toBe("POST");
+
+    await citadels.restoreCitadel("client/one");
+    expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone/restore");
+    expect(lastCall()[1]?.method).toBe("POST");
+  });
+
   it("getCitadel reads the citadel resource", async () => {
     await citadels.getCitadel("c1");
     expect(lastCall()[0]).toBe("/api/v1/citadels/c1");

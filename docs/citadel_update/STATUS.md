@@ -5,6 +5,11 @@
 **Date:** 2026-06-16
 **Rule followed:** TDD (failing test first), one concept per commit, push only when green. The tree is never left broken.
 
+**Superseded product-model note (2026-06-21):** this status snapshot predates
+the parent Citadel operating model. Current runtime direction is
+`Citadel -> Workspaces -> Projects`, with legacy workspace-as-Citadel behavior
+kept only as a compatibility fallback during migration.
+
 ---
 
 ## TL;DR
@@ -14,7 +19,7 @@ The **structural MVP data model is complete** end-to-end (contracts logic + stor
 1. **The Mason's conversational layer (§9)** — `POST /api/v1/mason/sessions/:id/message` interprets a freeform message with the **real configured model** (`llmService.chatCompletions`), strictly parses the output (hallucinated/injected fields can't poison setup), and merges only valid answers. Degrades gracefully to the structured-answers path when no model is configured. End-to-end wired through composition.
 2. **The UI data layer (§6)** — typed citadel/Mason API client in `mission-control-shared` over the existing `request()` transport, covering all 22 citadel + Mason endpoints, barrel-exported for the React screens.
 
-**Every spec surface is now built.** The mission-control UI (§6) spans all six Citadel surfaces — Mason (stage), Overview (manage), Wards (policy), Council, Blueprint (portability), Vault; the **Vault MVP (§13)** is end-to-end (sealed per-Citadel storage, master key in the OS keychain, fails closed); and **engine.ts enforcement (§27/§20)** now honors citadel scope — citadel-scoped grants + Citadel Wards (deny-wins, via the chosen **engine-consults-Wards** architecture) — behind a **wrap-first flag** (`GOATCITADEL_CITADEL_ENFORCEMENT=1`, OFF by default, byte-identical when off, no per-site threading because citadelId aliases the workspaceId requests already carry). All typecheck/lint/test green (policy-engine 495/495). The only deferred items are the operator's own product decisions: the Vault **advanced key hierarchy** (per-Chamber keys, rotation, E2EE) and the deliberate **flip of the enforcement flag** in production. Remaining engine follow-on (non-blocking): wiring the non-`deny` `WardEffect`s (require_approval/redact/route_local) to enforcement.
+**Every spec surface is now built.** The mission-control UI (§6) spans all six Citadel surfaces — Mason (stage), Overview (manage), Wards (policy), Council, Blueprint (portability), Vault; the **Vault MVP (§13)** is end-to-end (sealed per-Citadel storage, master key in the OS keychain, fails closed); and **engine.ts enforcement (§27/§20)** now honors citadel scope — citadel-scoped grants + Citadel Wards (deny-wins, via the chosen **engine-consults-Wards** architecture) — behind a **wrap-first flag** (`GOATCITADEL_CITADEL_ENFORCEMENT=1`, OFF by default, byte-identical when off). That flag is now a legacy compatibility bridge while the gateway threads parent `citadelId` scope directly. All typecheck/lint/test green (policy-engine 495/495). The only deferred items are the operator's own product decisions: the Vault **advanced key hierarchy** (per-Chamber keys, rotation, E2EE) and the deliberate **flip of the enforcement flag** in production. Remaining engine follow-on (non-blocking): wiring the non-`deny` `WardEffect`s (require_approval/redact/route_local) to enforcement.
 
 ---
 
@@ -35,7 +40,10 @@ The **structural MVP data model is complete** end-to-end (contracts logic + stor
 | **Watchtower** (§19) | `cron_jobs.citadel_id` (v112) + `listByCitadel` | (scheduler wiring pending) |
 | **Scope spine** | `resolveCitadelScope` / `isWithinCitadelScope` | enforced in repo isolation tests |
 
-All routes operator-gated + zod-validated. Citadel = Workspace (`citadelId` aliases `workspaceId`).
+All routes operator-gated + zod-validated. Historical note: this branch treated
+Citadel as workspace-shaped. Current product direction has Citadel as the parent
+operating world, with workspace-shaped Citadel IDs retained only as migration
+compatibility.
 
 ### Pure logic modules (built; wiring into enforcement points is the follow-on)
 Self-contained, tested contracts modules (100 contracts citadel tests total) — several built by **parallel agents**:
@@ -86,7 +94,7 @@ Full history: `git log --oneline f52faa81e..fix/workspace-isolation-leaks`.
 - **engine.ts enforcement (§27/§20) — built behind a wrap-first flag** — the policy engine that gates *every* privileged tool call now honors citadel scope:
   - `ToolGrantScope` gains `"citadel"`/`"chamber"`; `ToolAccessEvaluateRequest` gains optional `citadelId`/`chamberId`; `buildScopeCandidates` emits those candidates → the engine honors citadel-scoped tool grants (deny-wins). The union ripple was handled (engine `listGrants`, gateway `listToolGrants`, approval runtime/lifecycle widened to `ToolGrantScope`). Commit `49a0f4656`.
   - **Architecture decision made + implemented: engine-consults-Wards** — when a request has a citadel scope, the engine evaluates the Citadel's Wards via `evaluateWards` BEFORE grants and denies on a Ward deny (reason `citadel_ward_deny`). Chosen over Wards-as-grants to preserve the rich `WardEffect`s. Connects the `citadel_wards` table to real enforcement. Commit `99c86903d`.
-  - **Wrap-first activation switch** (operator direction #1) — `citadelEnforcementEnabled` hook wired to `GOATCITADEL_CITADEL_ENFORCEMENT=1`, **OFF by default**. When on, each workspace acts as its Citadel (citadelId aliases the `workspaceId` requests already carry), so **no ~20-site threading is needed**. Commit `b82198b3f`.
+  - **Wrap-first activation switch** (operator direction #1) — `citadelEnforcementEnabled` hook wired to `GOATCITADEL_CITADEL_ENFORCEMENT=1`, **OFF by default**. This is now a legacy compatibility bridge; new gateway paths should pass parent `citadelId` directly where available. Commit `b82198b3f`.
   - Verified: full `policy-engine` suite **495/495** (incl. flag on/off + dormant-by-default invariants proving OFF is byte-identical), gateway typecheck clean.
   - **Follow-on (not blocking):** only the `deny` `WardEffect` is wired to the engine gate; `require_approval`/`redact`/`route_local`/`require_dry_run` are produced by `evaluateWards` but their enforcement (approval gating / execution-layer transforms) is the next increment. And the flag wants a deliberate operator flip + production validation before it's "on".
 

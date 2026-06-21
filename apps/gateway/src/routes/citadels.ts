@@ -3,19 +3,27 @@ import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
+const listCitadelsQuerySchema = z.object({
+  view: z.enum(["active", "archived", "all"]).default("active"),
+  limit: z.coerce.number().int().positive().max(500).default(200),
+});
+
+const citadelRecordSchema = z.object({
+  citadelId: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  slug: z.string().min(1).optional(),
+  kind: z
+    .enum(["personal", "company", "project", "household", "client", "creator", "learning", "team", "custom"])
+    .optional(),
+  defaultWorkspaceId: z.string().min(1).optional(),
+});
+
+const citadelRecordPatchSchema = citadelRecordSchema.partial();
+
 const charterSchema = z.object({
   purpose: z.string().min(1),
-  kind: z.enum([
-    "personal",
-    "company",
-    "project",
-    "household",
-    "client",
-    "creator",
-    "learning",
-    "team",
-    "custom",
-  ]),
+  kind: z.enum(["personal", "company", "project", "household", "client", "creator", "learning", "team", "custom"]),
   goals: z.array(z.string().min(1)).optional(),
   boundaries: z.array(z.string().min(1)).optional(),
   successDefinition: z.array(z.string().min(1)).optional(),
@@ -133,6 +141,33 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const citadels = fastify.services.citadels;
 
+  fastify.get("/api/v1/citadels", operatorOnly, async (request, reply) => {
+    const query = listCitadelsQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: citadels.listRecords(query.data.view, query.data.limit),
+        view: query.data.view,
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels", operatorOnly, async (request, reply) => {
+    const parsed = citadelRecordSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(citadels.createRecord(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/citadels/:citadelId", operatorOnly, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
     if (!params.success) {
@@ -144,6 +179,48 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
       return reply.send(citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.patch("/api/v1/citadels/:citadelId", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const parsed = citadelRecordPatchSchema.safeParse(request.body ?? {});
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: parsed.success ? undefined : parsed.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(citadels.updateRecord(params.data.citadelId, parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/archive", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(citadels.archiveRecord(params.data.citadelId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/citadels/:citadelId/restore", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(citadels.restoreRecord(params.data.citadelId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -404,26 +481,22 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get(
-    "/api/v1/citadels/:citadelId/vault-secrets/:secretId/reveal",
-    operatorOnly,
-    async (request, reply) => {
-      const params = vaultSecretParamsSchema.safeParse(request.params);
-      if (!params.success) {
-        return reply.code(400).send({ error: params.error.flatten() });
+  fastify.get("/api/v1/citadels/:citadelId/vault-secrets/:secretId/reveal", operatorOnly, async (request, reply) => {
+    const params = vaultSecretParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const result = citadels.revealVaultSecret(params.data.citadelId, params.data.secretId);
+      if (!result.ok) {
+        const code = result.reason === "not_found" ? 404 : 503;
+        return reply.code(code).send({ error: `Vault secret ${params.data.secretId} ${result.reason}.` });
       }
-      try {
-        const result = citadels.revealVaultSecret(params.data.citadelId, params.data.secretId);
-        if (!result.ok) {
-          const code = result.reason === "not_found" ? 404 : 503;
-          return reply.code(code).send({ error: `Vault secret ${params.data.secretId} ${result.reason}.` });
-        }
-        return reply.send({ value: result.value });
-      } catch (error) {
-        return sendRouteError(reply, error, request.log);
-      }
-    },
-  );
+      return reply.send({ value: result.value });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 
   fastify.delete("/api/v1/citadels/:citadelId/vault-secrets/:secretId", operatorOnly, async (request, reply) => {
     const params = vaultSecretParamsSchema.safeParse(request.params);
@@ -682,7 +755,9 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         }
         return reply
           .code(503)
-          .send({ error: "No language model is configured for the Mason; use the structured /answers endpoint instead." });
+          .send({
+            error: "No language model is configured for the Mason; use the structured /answers endpoint instead.",
+          });
       }
       return reply.send(result.session);
     } catch (error) {

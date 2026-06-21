@@ -7,16 +7,23 @@ const settingsMocks = vi.hoisted(() => {
   const fn = (value: unknown = {}) => vi.fn(async () => value);
   return {
     archiveWorkspace: fn(),
+    archiveCitadel: fn(),
+    archivePermissionProfile: fn(),
+    activatePermissionProfile: fn(),
     bootstrapDemo: fn(),
     bootstrapOnboarding: fn(),
+    createExternalSideEffectReplayAuditRun: fn(),
     completeOnboarding: fn(),
     connectMcpServer: fn(),
     createChannelSetupDraft: fn(),
     createIntegrationConnection: fn(),
+    createLocalOperatorOverride: fn(),
     createMcpServer: fn(),
     createPersonality: fn(),
+    createPermissionProfile: fn(),
     createToolGrant: fn(),
     createWorkspace: fn(),
+    createCitadel: fn(),
     deleteIntegrationConnection: fn(),
     deleteMcpServer: fn(),
     deleteOpenAICodexOAuthCredential: fn(),
@@ -29,7 +36,9 @@ const settingsMocks = vi.hoisted(() => {
     discoverTelegramTargets: fn(),
     fetchAddonStatus: fn(),
     fetchAddonsCatalog: fn(),
+    fetchActiveLocalOperatorOverrides: fn(),
     fetchAgenticRuns: fn(),
+    fetchAutonomousActivationGrants: fn(),
     fetchCapabilityPackPreview: fn(),
     fetchCapabilityPacks: fn(),
     fetchStagedCapabilityPacks: fn(),
@@ -38,7 +47,9 @@ const settingsMocks = vi.hoisted(() => {
     fetchChannelSetupDrafts: fn(),
     fetchDaemonStatus: fn(),
     fetchDemoState: fn(),
+    fetchEffectivePermissionProfile: fn(),
     fetchEvidenceEnvelopes: fn(),
+    fetchExternalConnectorServices: fn(),
     fetchExternalSideEffectRuns: fn(),
     fetchDeviceAccessGrants: fn(),
     fetchGoogleMeetPrerequisiteStatus: fn(),
@@ -49,6 +60,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationConnections: vi.fn(),
     fetchIntegrationFormSchema: fn(),
     fetchIntegrationPlugins: fn(),
+    fetchLlmProviderAdvice: fn(),
     fetchLlamaCppModels: fn(),
     fetchMcpElicitations: fn({ items: [] }),
     fetchMcpRemotePreview: fn(),
@@ -61,6 +73,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchOnboardingState: fn(),
     fetchOpenAICodexOAuthStatus: fn(),
     fetchPersonalities: fn(),
+    fetchPermissionProfiles: fn(),
     fetchProviderSecretStatus: fn(),
     fetchSettings: fn(),
     fetchSlackOAuthStatus: fn(),
@@ -76,6 +89,7 @@ const settingsMocks = vi.hoisted(() => {
     installVoiceRuntime: fn(),
     invokeIntegrationConnectionAction: fn(),
     launchAddon: fn(),
+    listCitadels: fn(),
     materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
     patchSettings: fn(),
@@ -86,7 +100,10 @@ const settingsMocks = vi.hoisted(() => {
     resolveGatewayInstallToken: fn(),
     restartDaemon: fn(),
     restoreWorkspace: fn(),
+    restoreCitadel: fn(),
+    revokeAutonomousActivationGrant: fn(),
     revokeDeviceAccessGrant: fn(),
+    revokeLocalOperatorOverride: fn(),
     revokeToolGrant: fn(),
     runMcpServerHealthCheck: fn(),
     respondMcpElicitation: fn(),
@@ -95,9 +112,11 @@ const settingsMocks = vi.hoisted(() => {
     setDefaultPersonality: fn(),
     startDaemon: fn(),
     startLlamaCppRuntime: fn(),
+    startMcpOAuth: fn(),
     startNpuRuntime: fn(),
     startOpenAICodexOAuthDeviceFlow: fn(),
     startSlackOAuth: fn(),
+    stageExternalConnectorAction: fn(),
     stopAddon: fn(),
     stopDaemon: fn(),
     stopLlamaCppRuntime: fn(),
@@ -106,10 +125,14 @@ const settingsMocks = vi.hoisted(() => {
     uninstallAddon: fn(),
     updateAddon: fn(),
     updateChannelSetupDraft: fn(),
+    updateExternalConnectorActionReviewState: fn(),
+    updateExternalConnectorServiceReviewState: fn(),
     updateIntegrationConnection: fn(),
     updateMcpServer: fn(),
     updatePersonality: fn(),
+    updatePermissionProfile: fn(),
     updateWorkspace: fn(),
+    updateCitadel: fn(),
     validateChannelSetupDraft: fn(),
     providerModelCatalog: {
       config: {
@@ -137,16 +160,23 @@ const settingsMocks = vi.hoisted(() => {
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveWorkspace: settingsMocks.archiveWorkspace,
+  archiveCitadel: settingsMocks.archiveCitadel,
+  archivePermissionProfile: settingsMocks.archivePermissionProfile,
+  activatePermissionProfile: settingsMocks.activatePermissionProfile,
   bootstrapDemo: settingsMocks.bootstrapDemo,
   bootstrapOnboarding: settingsMocks.bootstrapOnboarding,
   completeOnboarding: settingsMocks.completeOnboarding,
   connectMcpServer: settingsMocks.connectMcpServer,
   createChannelSetupDraft: settingsMocks.createChannelSetupDraft,
+  createExternalSideEffectReplayAuditRun: settingsMocks.createExternalSideEffectReplayAuditRun,
   createIntegrationConnection: settingsMocks.createIntegrationConnection,
+  createLocalOperatorOverride: settingsMocks.createLocalOperatorOverride,
   createMcpServer: settingsMocks.createMcpServer,
   createPersonality: settingsMocks.createPersonality,
+  createPermissionProfile: settingsMocks.createPermissionProfile,
   createToolGrant: settingsMocks.createToolGrant,
   createWorkspace: settingsMocks.createWorkspace,
+  createCitadel: settingsMocks.createCitadel,
   deleteIntegrationConnection: settingsMocks.deleteIntegrationConnection,
   deleteMcpServer: settingsMocks.deleteMcpServer,
   deleteOpenAICodexOAuthCredential: settingsMocks.deleteOpenAICodexOAuthCredential,
@@ -159,7 +189,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
   fetchAddonStatus: settingsMocks.fetchAddonStatus,
   fetchAddonsCatalog: settingsMocks.fetchAddonsCatalog,
+  fetchActiveLocalOperatorOverrides: settingsMocks.fetchActiveLocalOperatorOverrides,
   fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
+  fetchAutonomousActivationGrants: settingsMocks.fetchAutonomousActivationGrants,
   fetchCapabilityPackPreview: settingsMocks.fetchCapabilityPackPreview,
   fetchCapabilityPacks: settingsMocks.fetchCapabilityPacks,
   fetchStagedCapabilityPacks: settingsMocks.fetchStagedCapabilityPacks,
@@ -168,7 +200,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
   fetchDaemonStatus: settingsMocks.fetchDaemonStatus,
   fetchDemoState: settingsMocks.fetchDemoState,
+  fetchEffectivePermissionProfile: settingsMocks.fetchEffectivePermissionProfile,
   fetchEvidenceEnvelopes: settingsMocks.fetchEvidenceEnvelopes,
+  fetchExternalConnectorServices: settingsMocks.fetchExternalConnectorServices,
   fetchExternalSideEffectRuns: settingsMocks.fetchExternalSideEffectRuns,
   fetchDeviceAccessGrants: settingsMocks.fetchDeviceAccessGrants,
   fetchGoogleMeetPrerequisiteStatus: settingsMocks.fetchGoogleMeetPrerequisiteStatus,
@@ -179,6 +213,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationConnections: settingsMocks.fetchIntegrationConnections,
   fetchIntegrationFormSchema: settingsMocks.fetchIntegrationFormSchema,
   fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
+  fetchLlmProviderAdvice: settingsMocks.fetchLlmProviderAdvice,
   fetchLlamaCppModels: settingsMocks.fetchLlamaCppModels,
   fetchMcpElicitations: settingsMocks.fetchMcpElicitations,
   fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
@@ -191,6 +226,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchOnboardingState: settingsMocks.fetchOnboardingState,
   fetchOpenAICodexOAuthStatus: settingsMocks.fetchOpenAICodexOAuthStatus,
   fetchPersonalities: settingsMocks.fetchPersonalities,
+  fetchPermissionProfiles: settingsMocks.fetchPermissionProfiles,
   fetchProviderSecretStatus: settingsMocks.fetchProviderSecretStatus,
   fetchSettings: settingsMocks.fetchSettings,
   fetchSlackOAuthStatus: settingsMocks.fetchSlackOAuthStatus,
@@ -198,6 +234,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchToolGrants: settingsMocks.fetchToolGrants,
   fetchVoiceRuntimeStatus: settingsMocks.fetchVoiceRuntimeStatus,
   fetchWorkspaces: settingsMocks.fetchWorkspaces,
+  listCitadels: settingsMocks.listCitadels,
   finalizeChannelSetupDraft: settingsMocks.finalizeChannelSetupDraft,
   installAddon: settingsMocks.installAddon,
   installCapabilityPack: settingsMocks.installCapabilityPack,
@@ -213,7 +250,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   resolveGatewayInstallToken: settingsMocks.resolveGatewayInstallToken,
   restartDaemon: settingsMocks.restartDaemon,
   restoreWorkspace: settingsMocks.restoreWorkspace,
+  restoreCitadel: settingsMocks.restoreCitadel,
+  revokeAutonomousActivationGrant: settingsMocks.revokeAutonomousActivationGrant,
   revokeDeviceAccessGrant: settingsMocks.revokeDeviceAccessGrant,
+  revokeLocalOperatorOverride: settingsMocks.revokeLocalOperatorOverride,
   revokeToolGrant: settingsMocks.revokeToolGrant,
   runMcpServerHealthCheck: settingsMocks.runMcpServerHealthCheck,
   respondMcpElicitation: settingsMocks.respondMcpElicitation,
@@ -222,9 +262,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   setDefaultPersonality: settingsMocks.setDefaultPersonality,
   startDaemon: settingsMocks.startDaemon,
   startLlamaCppRuntime: settingsMocks.startLlamaCppRuntime,
+  startMcpOAuth: settingsMocks.startMcpOAuth,
   startNpuRuntime: settingsMocks.startNpuRuntime,
   startOpenAICodexOAuthDeviceFlow: settingsMocks.startOpenAICodexOAuthDeviceFlow,
   startSlackOAuth: settingsMocks.startSlackOAuth,
+  stageExternalConnectorAction: settingsMocks.stageExternalConnectorAction,
   stopAddon: settingsMocks.stopAddon,
   stopDaemon: settingsMocks.stopDaemon,
   stopLlamaCppRuntime: settingsMocks.stopLlamaCppRuntime,
@@ -233,10 +275,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   uninstallAddon: settingsMocks.uninstallAddon,
   updateAddon: settingsMocks.updateAddon,
   updateChannelSetupDraft: settingsMocks.updateChannelSetupDraft,
+  updateExternalConnectorActionReviewState: settingsMocks.updateExternalConnectorActionReviewState,
+  updateExternalConnectorServiceReviewState: settingsMocks.updateExternalConnectorServiceReviewState,
   updateIntegrationConnection: settingsMocks.updateIntegrationConnection,
   updateMcpServer: settingsMocks.updateMcpServer,
   updatePersonality: settingsMocks.updatePersonality,
+  updatePermissionProfile: settingsMocks.updatePermissionProfile,
   updateWorkspace: settingsMocks.updateWorkspace,
+  updateCitadel: settingsMocks.updateCitadel,
   validateChannelSetupDraft: settingsMocks.validateChannelSetupDraft,
 }));
 
@@ -342,10 +388,54 @@ function setupResponses() {
   ];
   settingsMocks.fetchSettings.mockResolvedValue(settings);
   settingsMocks.fetchWorkspaces.mockResolvedValue({ items: workspaces });
+  settingsMocks.listCitadels.mockResolvedValue({
+    items: [
+      {
+        citadelId: "personal",
+        slug: "personal",
+        name: "Personal",
+        kind: "personal",
+        description: "Personal operating world",
+        lifecycleStatus: "active",
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+      },
+      {
+        citadelId: "company",
+        slug: "company",
+        name: "Company",
+        kind: "company",
+        description: "Company operating world",
+        lifecycleStatus: "active",
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+      },
+    ],
+  });
   settingsMocks.createWorkspace.mockResolvedValue({ ...workspaces[0], workspaceId: "created", name: "Created" });
   settingsMocks.updateWorkspace.mockResolvedValue({ ...workspaces[0], name: "Updated" });
   settingsMocks.archiveWorkspace.mockResolvedValue({ ...workspaces[0], lifecycleStatus: "archived" });
   settingsMocks.restoreWorkspace.mockResolvedValue({ ...workspaces[1], lifecycleStatus: "active" });
+  settingsMocks.createCitadel.mockResolvedValue({
+    citadelId: "created-citadel",
+    slug: "created-citadel",
+    name: "Created Citadel",
+    kind: "custom",
+    lifecycleStatus: "active",
+    createdAt: "2026-05-01T00:00:00.000Z",
+    updatedAt: "2026-05-01T00:00:00.000Z",
+  });
+  settingsMocks.updateCitadel.mockResolvedValue({
+    citadelId: "company",
+    slug: "company",
+    name: "Company updated",
+    kind: "company",
+    lifecycleStatus: "active",
+    createdAt: "2026-05-01T00:00:00.000Z",
+    updatedAt: "2026-05-01T00:00:00.000Z",
+  });
+  settingsMocks.archiveCitadel.mockResolvedValue({ citadelId: "company", lifecycleStatus: "archived" });
+  settingsMocks.restoreCitadel.mockResolvedValue({ citadelId: "company", lifecycleStatus: "active" });
   settingsMocks.fetchIntegrationCatalog.mockResolvedValue({
     items: [
       {
@@ -422,7 +512,29 @@ function setupResponses() {
   });
   settingsMocks.invokeIntegrationConnectionAction.mockResolvedValue({ message: "Synced issues." });
   settingsMocks.fetchIntegrationPlugins.mockResolvedValue({ items: [] });
+  settingsMocks.fetchExternalConnectorServices.mockResolvedValue({ items: [] });
+  settingsMocks.createExternalSideEffectReplayAuditRun.mockResolvedValue({ runId: "external-run-1" });
+  settingsMocks.stageExternalConnectorAction.mockResolvedValue({ status: "staged", approvalRequired: true });
+  settingsMocks.updateExternalConnectorActionReviewState.mockResolvedValue({ ok: true });
+  settingsMocks.updateExternalConnectorServiceReviewState.mockResolvedValue({ ok: true });
   settingsMocks.fetchExternalSideEffectRuns.mockResolvedValue({ items: [] });
+  settingsMocks.fetchLlmProviderAdvice.mockResolvedValue({
+    recommendations: [],
+    activeProviderId: "openai",
+    activeModel: "gpt-5.4-mini",
+  });
+  settingsMocks.fetchEffectivePermissionProfile.mockResolvedValue({ items: [] });
+  settingsMocks.fetchPermissionProfiles.mockResolvedValue({ items: [] });
+  settingsMocks.fetchActiveLocalOperatorOverrides.mockResolvedValue({ items: [] });
+  settingsMocks.fetchAutonomousActivationGrants.mockResolvedValue({ items: [] });
+  settingsMocks.createPermissionProfile.mockResolvedValue({ profileId: "profile-created" });
+  settingsMocks.updatePermissionProfile.mockResolvedValue({ profileId: "profile-1" });
+  settingsMocks.activatePermissionProfile.mockResolvedValue({ active: true });
+  settingsMocks.archivePermissionProfile.mockResolvedValue({ profileId: "profile-1", lifecycleStatus: "archived" });
+  settingsMocks.createLocalOperatorOverride.mockResolvedValue({ overrideId: "override-1" });
+  settingsMocks.revokeLocalOperatorOverride.mockResolvedValue({ revoked: true });
+  settingsMocks.revokeAutonomousActivationGrant.mockResolvedValue({ revoked: true });
+  settingsMocks.startMcpOAuth.mockResolvedValue({ authorizationUrl: "https://oauth.example/start" });
   settingsMocks.fetchGoogleMeetPrerequisiteStatus.mockResolvedValue({
     ready: true,
     state: "ready",
@@ -924,9 +1036,12 @@ function renderPage(section: string, extras: Record<string, unknown> = {}) {
   return create(
     <SettingsNativePage
       route={{ area: "settings", section, theme: "ops" } as any}
+      activeCitadelId="personal"
+      activeCitadelName="Personal"
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       navigate={vi.fn()}
+      setActiveCitadelId={vi.fn()}
       setActiveWorkspaceId={vi.fn()}
       {...extras}
     />,
@@ -979,6 +1094,10 @@ function findExactButton(root: ReactTestInstance, label: string) {
     throw new Error(`Missing exact button ${label}`);
   }
   return match;
+}
+
+function exactButtons(root: ReactTestInstance, label: string) {
+  return root.findAll((node) => node.type === "button" && collectText(node).trim() === label);
 }
 
 async function click(button: ReactTestInstance) {
@@ -1164,8 +1283,8 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(workspacesPage.root)).toContain("Workspace directory");
     const initialWorkspaceInputs = workspacesPage.root.findAllByType("input");
     const initialWorkspaceTextareas = workspacesPage.root.findAllByType("textarea");
-    await change(initialWorkspaceInputs[2]!, "Default edited");
-    await change(initialWorkspaceInputs[3]!, "default-edited");
+    await change(initialWorkspaceInputs[8]!, "Default edited");
+    await change(initialWorkspaceInputs[9]!, "default-edited");
     await change(initialWorkspaceTextareas[1]!, "Updated default workspace description");
     await click(findButton(workspacesPage.root, "Save changes"));
     expect(settingsMocks.updateWorkspace).toHaveBeenCalledWith("default", {
@@ -1173,20 +1292,21 @@ describe("SettingsNativePage broad native sections", () => {
       slug: "default-edited",
       description: "Updated default workspace description",
     });
-    await click(findButton(workspacesPage.root, "Make active"));
+    await click(exactButtons(workspacesPage.root, "Make active")[1]!);
     expect(workspaceSetter).toHaveBeenCalledWith("default");
-    await click(findExactButton(workspacesPage.root, "Archive"));
+    await click(exactButtons(workspacesPage.root, "Archive")[1]!);
     expect(settingsMocks.archiveWorkspace).toHaveBeenCalledWith("default");
-    await click(findButton(workspacesPage.root, "Archived"));
+    await click(buttons(workspacesPage.root, "Archived")[1]!);
     await click(findExactButton(workspacesPage.root, "Restore"));
     expect(settingsMocks.restoreWorkspace).toHaveBeenCalledWith("archive-1");
     const workspaceInputs = workspacesPage.root.findAllByType("input");
     const workspaceTextareas = workspacesPage.root.findAllByType("textarea");
-    await change(workspaceInputs[0]!, "Created workspace");
-    await change(workspaceInputs[1]!, "created-workspace");
+    await change(workspaceInputs[6]!, "Created workspace");
+    await change(workspaceInputs[7]!, "created-workspace");
     await change(workspaceTextareas[0]!, "Created workspace description");
     await click(findButton(workspacesPage.root, "Create workspace"));
     expect(settingsMocks.createWorkspace).toHaveBeenCalledWith({
+      citadelId: "personal",
       name: "Created workspace",
       slug: "created-workspace",
       description: "Created workspace description",

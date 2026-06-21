@@ -13,6 +13,7 @@ export interface WorkspacePrefs {
 
 export interface WorkspaceRecord {
   workspaceId: string;
+  citadelId?: string;
   name: string;
   description?: string;
   slug: string;
@@ -24,6 +25,7 @@ export interface WorkspaceRecord {
 }
 
 export interface WorkspaceCreateInput {
+  citadelId?: string;
   name: string;
   description?: string;
   slug?: string;
@@ -31,6 +33,7 @@ export interface WorkspaceCreateInput {
 }
 
 export interface WorkspaceUpdateInput {
+  citadelId?: string;
   name?: string;
   description?: string;
   slug?: string;

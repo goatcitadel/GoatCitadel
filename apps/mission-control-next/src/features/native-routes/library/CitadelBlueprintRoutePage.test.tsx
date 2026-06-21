@@ -107,13 +107,13 @@ describe("CitadelBlueprintRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
     });
-    expect(treeString(renderer!)).toContain("nothing to export");
+    expect(treeString(renderer!)).toContain("needs a Charter before export");
   });
 
   it("builds export proof rows from the staged blueprint artifact", () => {
     expect(buildBlueprintProofItems('{"schemaVersion":"goatcitadel.blueprint.v1"}', "default")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ title: "Workspace", meta: "default" }),
+        expect.objectContaining({ title: "Citadel", meta: "default" }),
         expect.objectContaining({ title: "Schema", meta: "goatcitadel.blueprint.v1" }),
         expect.objectContaining({ title: "Secret posture", meta: "secret-free contract" }),
       ]),

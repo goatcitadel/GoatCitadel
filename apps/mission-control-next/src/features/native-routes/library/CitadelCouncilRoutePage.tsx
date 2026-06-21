@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
-import { Users } from "lucide-react";
-import type { CitadelCouncilAssignment } from "@goatcitadel/contracts";
-import { listCitadelCouncil } from "@goatcitadel/mission-control-shared/api/client";
+import { Plus, Trash2, Users } from "lucide-react";
+import type { AgentProfileRecord, CitadelCouncilAssignment } from "@goatcitadel/contracts";
+import {
+  assignCitadelCouncilAgent,
+  fetchAgents,
+  listCitadelCouncil,
+  unassignCitadelCouncilAgent,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
@@ -11,6 +16,7 @@ interface CouncilState {
   loading: boolean;
   error: string | null;
   items: CitadelCouncilAssignment[];
+  agents: AgentProfileRecord[];
 }
 
 /**
@@ -19,27 +25,76 @@ interface CouncilState {
  * an agent binds it to the Citadel, it does not duplicate the agent. Binding each
  * seat to a scoped grant ceiling is the policy-engine work tracked separately.
  */
-export function CitadelCouncilRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
-  const [council, setCouncil] = useState<CouncilState>({ loading: true, error: null, items: [] });
+export function CitadelCouncilRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  activeCitadelId = activeWorkspaceId,
+  activeCitadelName = activeWorkspaceName,
+}: NativeRoutePagesProps) {
+  const [council, setCouncil] = useState<CouncilState>({ loading: true, error: null, items: [], agents: [] });
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setCouncil((current) => ({ ...current, loading: true, error: null }));
-    void listCitadelCouncil(activeWorkspaceId)
-      .then((items) => {
+    void Promise.all([listCitadelCouncil(activeCitadelId), fetchAgents("active", 300)])
+      .then(([items, agents]) => {
         if (!cancelled) {
-          setCouncil({ loading: false, error: null, items });
+          setCouncil({ loading: false, error: null, items, agents: agents.items });
         }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setCouncil({ loading: false, error: getErrorMessage(error), items: [] });
+          setCouncil({ loading: false, error: getErrorMessage(error), items: [], agents: [] });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
+
+  useEffect(() => {
+    const seated = new Set(council.items.map((item) => item.agentId));
+    const firstAvailable = council.agents.find((agent) => !seated.has(agent.agentId));
+    setSelectedAgentId((current) =>
+      current && council.agents.some((agent) => agent.agentId === current) ? current : (firstAvailable?.agentId ?? ""),
+    );
+  }, [council.agents, council.items]);
+
+  const reloadCouncil = async () => {
+    const [items, agents] = await Promise.all([listCitadelCouncil(activeCitadelId), fetchAgents("active", 300)]);
+    setCouncil({ loading: false, error: null, items, agents: agents.items });
+  };
+
+  const handleSeatAgent = async () => {
+    if (!selectedAgentId) {
+      return;
+    }
+    try {
+      await assignCitadelCouncilAgent(activeCitadelId, selectedAgentId);
+      setNotice("Agent seated in this Citadel.");
+      await reloadCouncil();
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    }
+  };
+
+  const handleRemoveSeat = async () => {
+    if (!selectedAgentId) {
+      return;
+    }
+    try {
+      await unassignCitadelCouncilAgent(activeCitadelId, selectedAgentId);
+      setNotice("Agent removed from this Citadel Council.");
+      await reloadCouncil();
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    }
+  };
+
+  const seatedAgentIds = new Set(council.items.map((item) => item.agentId));
 
   return (
     <NativePageFrame
@@ -47,19 +102,50 @@ export function CitadelCouncilRoutePage({ route, activeWorkspaceId, activeWorksp
       area="library"
       kicker={routeKicker(route)}
       title="Council"
-      description={`Agents seated in the ${activeWorkspaceName} Citadel. Seats reference the agents this workspace already owns.`}
+      description={`Agents seated in the ${activeCitadelName} Citadel. Seats reference agents by id without duplicating their profiles.`}
       loading={council.loading}
-      error={council.error}    >
+      error={council.error}
+    >
       <NativeGrid>
         <NativeCard
           title="Seated agents"
           subtitle="Each seat binds an existing agent to this Citadel by reference."
           stats={[{ label: "Seats", value: String(council.items.length) }]}
+          actions={
+            <div className="mc-next-settings-actions">
+              <select
+                aria-label="Council agent"
+                value={selectedAgentId}
+                onChange={(event) => setSelectedAgentId(event.target.value)}
+              >
+                <option value="">Select agent</option>
+                {council.agents.map((agent) => (
+                  <option key={agent.agentId} value={agent.agentId}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={handleSeatAgent} disabled={!selectedAgentId}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Seat
+              </button>
+              <button
+                type="button"
+                onClick={handleRemoveSeat}
+                disabled={!selectedAgentId || !seatedAgentIds.has(selectedAgentId)}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                Remove
+              </button>
+            </div>
+          }
         >
+          {notice ? <p className="mc-next-citadel-footnote">{notice}</p> : null}
           <NativeList
             items={council.items.map((assignment) => ({
-              title: assignment.agentId,
+              title: council.agents.find((agent) => agent.agentId === assignment.agentId)?.name ?? assignment.agentId,
               meta: assignment.assignmentId,
+              body: assignment.agentId,
             }))}
             emptyLabel="No agents seated yet — seat one from the agents catalog to add it to this Citadel."
             density="compact"

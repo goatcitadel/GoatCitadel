@@ -11,6 +11,7 @@ import {
   applyChatModePresetToPatch,
   chatModeAllowsDynamicTeamGrowth,
   chatModeRequiresProjectBinding,
+  DEFAULT_CITADEL_ID,
 } from "@goatcitadel/contracts";
 import type {
   ChatCompletionRequest,
@@ -97,6 +98,7 @@ type ChatTurnPrepStorage = Pick<
   | "chatSessionProjects"
   | "chatSideChats"
   | "chatSpecialistCandidates"
+  | "workspaces"
 > & {
   audit?: Pick<Storage["audit"], "append">;
 };
@@ -148,6 +150,7 @@ export interface ChatTurnPrepHost {
 export interface PreparedAgentChatTurn {
   session: SessionMeta;
   route: ChatTurnRoute;
+  citadelId: string;
   workspaceId: string;
   content: string;
   userEventId: string;
@@ -309,6 +312,7 @@ export async function prepareAgentChatTurn(
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
+  const citadelId = host.storage.workspaces.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
   const content = (options?.existingUserMessage?.content ?? input.content).trim();
   if (!content) {
@@ -490,6 +494,7 @@ export async function prepareAgentChatTurn(
   const prepared: PreparedAgentChatTurn = {
     session,
     route,
+    citadelId,
     workspaceId,
     content,
     userEventId,
@@ -552,6 +557,7 @@ function recordPreparedTurnDecisions(
   safeRecordRuntimeDecision(host, {
     kind: "chat_turn_prepared",
     scope: {
+      citadelId: prepared.citadelId,
       workspaceId: prepared.workspaceId,
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,
@@ -599,6 +605,7 @@ function recordPreparedTurnDecisions(
   safeRecordRuntimeDecision(host, {
     kind: "memory_context",
     scope: {
+      citadelId: prepared.citadelId,
       workspaceId: prepared.workspaceId,
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,

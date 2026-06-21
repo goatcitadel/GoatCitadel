@@ -45,9 +45,12 @@ export type { LoadState, NativeLoadIssue, NativeLoadResult, Notice };
 
 export interface SettingsNativePageProps {
   route: AppRoute;
+  activeCitadelId?: string;
+  activeCitadelName?: string;
   activeWorkspaceId: string;
   activeWorkspaceName: string;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
+  setActiveCitadelId?: (citadelId: string) => void;
   setActiveWorkspaceId: (workspaceId: string) => void;
 }
 

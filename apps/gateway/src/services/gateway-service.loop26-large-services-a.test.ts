@@ -10,6 +10,23 @@ import { GatewayService } from "./gateway-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+  const storage = {
+    chatMessages: { get: vi.fn() },
+    chatSessionMeta: { get: vi.fn(() => undefined) },
+    chatStreamEvents: {
+      append: vi.fn(),
+      getByEventId: vi.fn(),
+      getLatestSequence: vi.fn(() => 0),
+      listByTurn: vi.fn(() => []),
+      purgeBefore: vi.fn(),
+    },
+    chatTurnTraces: { get: vi.fn() },
+    durableRuns: { getRun: vi.fn() },
+    workspaces: { find: vi.fn(() => ({ citadelId: "personal" })) },
+  };
+  const storageOverrides = overrides.storage as Record<string, unknown> | undefined;
+  const restOverrides = { ...overrides };
+  delete restOverrides.storage;
   Object.assign(gateway, {
     chatTurnExecutionRegistry: {
       getActiveStream: vi.fn(() => undefined),
@@ -30,19 +47,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     },
     lastChatStreamPurgeAt: Date.now(),
     storage: {
-      chatMessages: { get: vi.fn() },
-      chatStreamEvents: {
-        append: vi.fn(),
-        getByEventId: vi.fn(),
-        getLatestSequence: vi.fn(() => 0),
-        listByTurn: vi.fn(() => []),
-        purgeBefore: vi.fn(),
-      },
-      chatTurnTraces: { get: vi.fn() },
-      durableRuns: { getRun: vi.fn() },
+      ...storage,
+      ...(storageOverrides ?? {}),
     },
   });
-  Object.assign(gateway, overrides);
+  Object.assign(gateway, restOverrides);
   return gateway;
 }
 
@@ -468,6 +477,9 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         chatSessionMeta: {
           get: vi.fn(() => ({ workspaceId: "workspace-1" })),
         },
+        workspaces: {
+          find: vi.fn(() => ({ citadelId: "company" })),
+        },
         permissionProfiles: {
           resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
         },
@@ -486,6 +498,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         sessionId: "session-1",
         toolName: "browser.search",
         workspaceId: "workspace-1",
+        citadelId: "company",
         policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
       }),
     );

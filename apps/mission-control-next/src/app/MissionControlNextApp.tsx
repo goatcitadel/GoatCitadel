@@ -28,7 +28,7 @@ import {
   getGatewayApiBaseUrl,
   type EventStreamConnectionState,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
-import { fetchRuntimeLifecycleExport } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchRuntimeLifecycleExport, listCitadels } from "@goatcitadel/mission-control-shared/api/client";
 import {
   buildThreadedGatewayStatusSummary,
   type ThreadedGatewayStatusSummary,
@@ -145,6 +145,8 @@ export function MissionControlNextApp() {
     showTechnicalDetails,
     detailPanelPinned,
     setDetailPanelPinned,
+    activeCitadelId,
+    setActiveCitadelId,
     activeWorkspaceId,
     setActiveWorkspaceId,
     theme,
@@ -159,6 +161,7 @@ export function MissionControlNextApp() {
   // and routed by useShellKeyboardManager. State stays here because Esc
   // priority needs to know whether the palette is the topmost dismissible.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [citadelOptions, setCitadelOptions] = useState<Array<{ citadelId: string; name: string }>>([]);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
 
   // W4.4: cohesive state moved into dedicated hooks. The shell still composes
@@ -317,6 +320,7 @@ export function MissionControlNextApp() {
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+  const activeCitadelName = citadelOptions.find((item) => item.citadelId === activeCitadelId)?.name ?? activeCitadelId;
 
   const copyTrustReportForRoute = useCallback(
     async (targetRoute: AppRoute) => {
@@ -361,6 +365,7 @@ export function MissionControlNextApp() {
       title: currentRouteLabel,
       subtitle: (
         <div className="mc-next-inspector-subtitle">
+          <span>{activeCitadelName}</span>
           <span>{activeWorkspaceName}</span>
           <span>{currentRouteDescription}</span>
         </div>
@@ -399,6 +404,7 @@ export function MissionControlNextApp() {
           <section className="mc-next-inspector-section">
             <h4>Context</h4>
             <ul className="mc-next-inspector-list">
+              <li>Citadel: {activeCitadelName}</li>
               <li>Workspace: {activeWorkspaceName}</li>
               <li>Area: {currentAreaMeta.label}</li>
               <li>Realtime: {realtimeStatusCopy.inspector}</li>
@@ -420,6 +426,7 @@ export function MissionControlNextApp() {
       ),
     };
   }, [
+    activeCitadelName,
     activeWorkspaceName,
     currentAreaMeta.kicker,
     currentAreaMeta.label,
@@ -488,16 +495,36 @@ export function MissionControlNextApp() {
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
   const railSignalLines =
     route.area === "settings"
-      ? [`${activeWorkspaceName} active`, `${pendingApprovals} approvals waiting`, realtimeStatusCopy.rail]
+      ? [`${activeCitadelName} Citadel`, `${activeWorkspaceName} active`, realtimeStatusCopy.rail]
       : [
           `${status.dashboard?.sessions.length ?? 0} recent sessions`,
           `${status.dashboard?.activeSubagents ?? 0} active subagents`,
           `${formatUsd(status.dashboard?.dailyCostUsd ?? 0)} daily spend`,
         ];
 
+  const loadCitadelOptions = useCallback(async () => {
+    try {
+      const response = await listCitadels("all", 200);
+      const options = response.items.map((item) => ({
+        citadelId: item.citadelId,
+        name: item.name,
+      }));
+      setCitadelOptions(options);
+      if (!response.items.some((item) => item.citadelId === activeCitadelId)) {
+        const fallbackCitadelId =
+          response.items.find((item) => item.citadelId === "personal")?.citadelId ?? response.items[0]?.citadelId;
+        if (fallbackCitadelId) {
+          setActiveCitadelId(fallbackCitadelId);
+        }
+      }
+    } catch {
+      setCitadelOptions([]);
+    }
+  }, [activeCitadelId, setActiveCitadelId]);
+
   const loadWorkspaceOptions = useCallback(async () => {
     try {
-      const response = await fetchWorkspaces("all", 400);
+      const response = await fetchWorkspaces("all", 400, activeCitadelId);
       setWorkspaceOptions(
         response.items.map((item) => ({
           workspaceId: item.workspaceId,
@@ -513,7 +540,30 @@ export function MissionControlNextApp() {
     } catch {
       setWorkspaceOptions([]);
     }
-  }, [activeWorkspaceId, setActiveWorkspaceId]);
+  }, [activeCitadelId, activeWorkspaceId, setActiveWorkspaceId]);
+
+  const clearInvalidProjectSelection = useCallback(() => {
+    if (route.area !== "projects" || (!route.projectId && !route.artifactId)) {
+      return;
+    }
+    navigate({ area: "projects", theme: route.theme }, { replace: true });
+  }, [navigate, route.area, route.artifactId, route.projectId, route.theme]);
+
+  const handleSelectCitadel = useCallback(
+    (citadelId: string) => {
+      setActiveCitadelId(citadelId);
+      clearInvalidProjectSelection();
+    },
+    [clearInvalidProjectSelection, setActiveCitadelId],
+  );
+
+  const handleSelectWorkspace = useCallback(
+    (workspaceId: string) => {
+      setActiveWorkspaceId(workspaceId);
+      clearInvalidProjectSelection();
+    },
+    [clearInvalidProjectSelection, setActiveWorkspaceId],
+  );
 
   // F1: shared handlers so each inline topbar control and its overflow-menu
   // counterpart stay behaviorally identical (one source of truth per action).
@@ -612,11 +662,12 @@ export function MissionControlNextApp() {
   // sources warm up together (status hook itself does not trigger first load).
   useEffect(() => {
     if (!gatewayReady) {
+      setCitadelOptions([]);
       setWorkspaceOptions([]);
       return;
     }
-    void Promise.all([loadWorkspaceOptions(), refreshStatus()]);
-  }, [gatewayReady, loadWorkspaceOptions, refreshStatus]);
+    void Promise.all([loadCitadelOptions(), loadWorkspaceOptions(), refreshStatus()]);
+  }, [gatewayReady, loadCitadelOptions, loadWorkspaceOptions, refreshStatus]);
 
   useEffect(() => {
     document.title = `GoatCitadel ${currentRouteLabel}`;
@@ -637,11 +688,14 @@ export function MissionControlNextApp() {
   const pageErrorResetKey = buildAppHref(route);
   const routeContent = renderRouteContent({
     route,
+    activeCitadelId,
+    activeCitadelName,
     activeWorkspaceId,
     activeWorkspaceName,
     gatewayStatus: threadedGatewayStatus,
     pendingApprovals,
     navigate,
+    setActiveCitadelId,
     setActiveWorkspaceId,
   });
 
@@ -739,8 +793,23 @@ export function MissionControlNextApp() {
                 </>
               ) : null}
               <label className="mc-next-select-field">
+                <span>Citadel</span>
+                <select value={activeCitadelId} onChange={(event) => handleSelectCitadel(event.target.value)}>
+                  {[...citadelOptions, { citadelId: activeCitadelId, name: activeCitadelName }]
+                    .filter(
+                      (item, index, items) =>
+                        items.findIndex((candidate) => candidate.citadelId === item.citadelId) === index,
+                    )
+                    .map((item) => (
+                      <option key={item.citadelId} value={item.citadelId}>
+                        {item.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="mc-next-select-field">
                 <span>Workspace</span>
-                <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
+                <select value={activeWorkspaceId} onChange={(event) => handleSelectWorkspace(event.target.value)}>
                   {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
                     .filter(
                       (item, index, items) =>
@@ -1059,11 +1128,14 @@ export function MissionControlNextApp() {
 
 export function renderRouteContent(input: {
   route: AppRoute;
+  activeCitadelId?: string;
+  activeCitadelName?: string;
   activeWorkspaceId: string;
   activeWorkspaceName: string;
   gatewayStatus: ThreadedGatewayStatusSummary;
   pendingApprovals: number;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
+  setActiveCitadelId?: (citadelId: string) => void;
   setActiveWorkspaceId: (workspaceId: string) => void;
 }): ReactNode {
   const route = normalizeAppRoute(input.route);

@@ -43,17 +43,28 @@ function parseBlueprint(text: string): { blueprint: unknown } | { parseError: st
  * (schema + secret-scan) before applying, so a shared Blueprint can never smuggle
  * credentials or silently activate connections.
  */
-export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelBlueprintRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  activeCitadelId = activeWorkspaceId,
+  activeCitadelName = activeWorkspaceName,
+}: NativeRoutePagesProps) {
   const importId = useId();
-  const [exportState, setExportState] = useState<ExportState>({ loading: true, error: null, staged: false, json: null });
+  const [exportState, setExportState] = useState<ExportState>({
+    loading: true,
+    error: null,
+    staged: false,
+    json: null,
+  });
   const [importText, setImportText] = useState("");
   const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
-  const exportProofItems = buildBlueprintProofItems(exportState.json, activeWorkspaceId);
+  const exportProofItems = buildBlueprintProofItems(exportState.json, activeCitadelId);
 
   useEffect(() => {
     let cancelled = false;
     setExportState((current) => ({ ...current, loading: true, error: null }));
-    void exportCitadelBlueprint(activeWorkspaceId)
+    void exportCitadelBlueprint(activeCitadelId)
       .then((blueprint) => {
         if (!cancelled) {
           setExportState({ loading: false, error: null, staged: true, json: JSON.stringify(blueprint, null, 2) });
@@ -72,7 +83,7 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
 
   const validate = useCallback(async () => {
     const parsed = parseBlueprint(importText);
@@ -95,12 +106,12 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
     }
     setImportState((current) => ({ ...current, busy: true, error: null }));
     try {
-      await importCitadelBlueprint(activeWorkspaceId, parsed.blueprint as CitadelBlueprint);
+      await importCitadelBlueprint(activeCitadelId, parsed.blueprint as CitadelBlueprint);
       setImportState((current) => ({ ...current, busy: false, done: true }));
     } catch (error) {
       setImportState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
     }
-  }, [activeWorkspaceId, importText]);
+  }, [activeCitadelId, importText]);
 
   const canApply = importState.validation?.ok === true && !importState.busy;
 
@@ -110,15 +121,12 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
       area="library"
       kicker={routeKicker(route)}
       title="Blueprint"
-      description={`Export ${activeWorkspaceName} as a portable, secret-free Blueprint, or import one. Imports are validated and secret-scanned before they apply.`}
+      description={`Export ${activeCitadelName} as a portable, secret-free Blueprint, or import one. Imports are validated and secret-scanned before they apply.`}
       loading={exportState.loading}
       error={exportState.error}
     >
       <NativeGrid>
-        <NativeCard
-          title="Export"
-          subtitle="The current Citadel as a Blueprint. Secrets are never included."
-        >
+        <NativeCard title="Export" subtitle="The current Citadel as a Blueprint. Secrets are never included.">
           {exportState.staged && exportState.json ? (
             <>
               <NativeList items={exportProofItems} emptyLabel="No export proof available." density="compact" />
@@ -127,7 +135,7 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
               </pre>
             </>
           ) : (
-            <EmptyState size="compact" title={`${activeWorkspaceName} isn't a Citadel yet — nothing to export.`} />
+            <EmptyState size="compact" title={`${activeCitadelName} needs a Charter before export.`} />
           )}
         </NativeCard>
 
@@ -150,19 +158,11 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
             />
           </label>
           <div className="mc-next-blueprint-actions">
-            <NativeButton
-              variant="default"
-              disabled={importText.trim().length === 0}
-              onClick={() => void validate()}
-            >
+            <NativeButton variant="default" disabled={importText.trim().length === 0} onClick={() => void validate()}>
               <Check className="h-4 w-4" />
               Validate
             </NativeButton>
-            <NativeButton
-              variant="outline"
-              disabled={!canApply}
-              onClick={() => void applyImport()}
-            >
+            <NativeButton variant="outline" disabled={!canApply} onClick={() => void applyImport()}>
               <Upload className="h-4 w-4" />
               {importState.busy ? "Importing…" : "Import"}
             </NativeButton>
@@ -198,7 +198,7 @@ export function CitadelBlueprintRoutePage({ route, activeWorkspaceId, activeWork
 
 export function buildBlueprintProofItems(
   exportedJson: string | null,
-  workspaceId: string,
+  citadelId: string,
 ): Array<{ title: string; meta?: string; body?: string }> {
   if (!exportedJson) {
     return [];
@@ -210,8 +210,8 @@ export function buildBlueprintProofItems(
       : {};
   return [
     {
-      title: "Workspace",
-      meta: workspaceId,
+      title: "Citadel",
+      meta: citadelId,
       body: "Export is generated through the Gateway-backed Citadel blueprint API.",
     },
     {

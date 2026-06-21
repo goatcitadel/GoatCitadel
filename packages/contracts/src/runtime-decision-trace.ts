@@ -92,6 +92,7 @@ export interface RuntimeDecisionAlternative {
 }
 
 export interface RuntimeDecisionScope {
+  citadelId?: string;
   workspaceId?: string;
   sessionId?: string;
   turnId?: string;

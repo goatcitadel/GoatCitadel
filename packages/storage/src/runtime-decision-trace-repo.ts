@@ -54,6 +54,7 @@ const KNOWN_RUNTIME_DECISION_KINDS = [
 interface RuntimeDecisionTraceRow {
   decision_id: string;
   kind: string;
+  citadel_id: string | null;
   workspace_id: string | null;
   session_id: string | null;
   turn_id: string | null;
@@ -85,10 +86,10 @@ export class RuntimeDecisionTraceRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO runtime_decision_traces (
-        decision_id, kind, workspace_id, session_id, turn_id, run_id, plan_id, step_id,
+        decision_id, kind, citadel_id, workspace_id, session_id, turn_id, run_id, plan_id, step_id,
         tool_run_id, approval_id, task_id, durable_run_id, payload_json, created_at
       ) VALUES (
-        @decisionId, @kind, @workspaceId, @sessionId, @turnId, @runId, @planId, @stepId,
+        @decisionId, @kind, @citadelId, @workspaceId, @sessionId, @turnId, @runId, @planId, @stepId,
         @toolRunId, @approvalId, @taskId, @durableRunId, @payloadJson, @createdAt
       )
     `);
@@ -113,6 +114,7 @@ export class RuntimeDecisionTraceRepository {
     this.insertStmt.run({
       decisionId: record.decisionId,
       kind: record.kind,
+      citadelId: record.scope.citadelId ?? null,
       workspaceId: record.scope.workspaceId ?? null,
       sessionId: record.scope.sessionId ?? null,
       turnId: record.scope.turnId ?? null,
@@ -132,6 +134,7 @@ export class RuntimeDecisionTraceRepository {
   public list(query: RuntimeDecisionTraceQuery = {}): RuntimeDecisionTraceRecord[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
+    addOptionalFilter(clauses, params, "citadel_id", query.citadelId);
     addOptionalFilter(clauses, params, "workspace_id", query.workspaceId);
     addOptionalFilter(clauses, params, "session_id", query.sessionId);
     addOptionalFilter(clauses, params, "turn_id", query.turnId);
@@ -180,6 +183,7 @@ function addOptionalFilter(clauses: string[], params: unknown[], column: string,
 function mapRow(row: RuntimeDecisionTraceRow): RuntimeDecisionTraceRecord {
   const kind = normalizeKind(row.kind);
   const scope = normalizeScope({
+    citadelId: row.citadel_id ?? undefined,
     workspaceId: row.workspace_id ?? undefined,
     sessionId: row.session_id ?? undefined,
     turnId: row.turn_id ?? undefined,
@@ -344,6 +348,7 @@ function sanitizeEvidenceRef(evidence: RuntimeDecisionEvidenceRef): RuntimeDecis
 
 function normalizeScope(scope: RuntimeDecisionScope): RuntimeDecisionScope {
   return {
+    citadelId: normalizeOptionalString(scope.citadelId),
     workspaceId: normalizeOptionalString(scope.workspaceId),
     sessionId: normalizeOptionalString(scope.sessionId),
     turnId: normalizeOptionalString(scope.turnId),

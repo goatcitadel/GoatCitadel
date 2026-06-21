@@ -169,18 +169,26 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
 
 function SettingsNativePage({
   route,
+  activeCitadelId,
+  activeCitadelName,
   activeWorkspaceId,
   activeWorkspaceName,
   navigate,
+  setActiveCitadelId,
   setActiveWorkspaceId,
 }: NativeRoutePagesProps) {
+  const citadelId = activeCitadelId ?? activeWorkspaceId;
+  const citadelName = activeCitadelName ?? activeWorkspaceName;
   return (
     <Suspense fallback={<SettingsNativePageFallback activeWorkspaceName={activeWorkspaceName} />}>
       <NextSettingsNativePage
         route={route}
+        activeCitadelId={citadelId}
+        activeCitadelName={citadelName}
         activeWorkspaceId={activeWorkspaceId}
         activeWorkspaceName={activeWorkspaceName}
         navigate={navigate}
+        setActiveCitadelId={setActiveCitadelId}
         setActiveWorkspaceId={setActiveWorkspaceId}
       />
     </Suspense>

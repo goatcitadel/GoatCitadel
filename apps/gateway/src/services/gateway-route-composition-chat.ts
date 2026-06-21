@@ -17,6 +17,7 @@ import {
 import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
+import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { createChatThreadKnowledgeDependenciesForGateway } from "./gateway-route-composition-shared.js";
@@ -93,7 +94,17 @@ export function composeChatRouteDependencies(
   };
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId) => chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId),
-    archiveChatSessionsBulk: (input) => chatSessionService.archiveChatSessionsBulk(ChatSessionDependencies, input),
+    archiveChatSessionsBulk: (input) => {
+      const { citadelId, ...sessionInput } = input ?? {};
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        workspaceId: sessionInput.workspaceId,
+      });
+      return chatSessionService.archiveChatSessionsBulk(ChatSessionDependencies, {
+        ...sessionInput,
+        workspaceId: scope.workspaceId,
+      });
+    },
     applyChatSessionWorkbenchPatch: (sessionId, input) =>
       chatWorkbenchService.applyChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId, input),
     assignChatSessionProject: (sessionId, projectId) =>
@@ -104,14 +115,32 @@ export function composeChatRouteDependencies(
       chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(ChatGeneratedArtifactDependencies, input),
     createChatSideChat: (sessionId, input) =>
       chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
-    createChatSession: (input) => chatSessionService.createChatSession(ChatSessionDependencies, input),
+    createChatSession: (input) => {
+      const { citadelId, ...sessionInput } = input ?? {};
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        workspaceId: sessionInput.workspaceId,
+        projectId: sessionInput.projectId,
+      });
+      return chatSessionService.createChatSession(ChatSessionDependencies, {
+        ...sessionInput,
+        workspaceId: scope.workspaceId,
+      });
+    },
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),
     deleteChatSession: (sessionId) => chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId),
     exportChatSessionWorkbenchPatch: (sessionId) =>
       chatWorkbenchService.exportChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId),
-    getChatGeneratedArtifact: (artifactId, options) =>
-      chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
+    getChatGeneratedArtifact: (artifactId, options) => {
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId: options?.citadelId,
+        workspaceId: options?.workspaceId,
+      });
+      return chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, {
+        workspaceId: scope.workspaceId,
+      });
+    },
     getChatSessionBinding: (sessionId) => chatSessionService.getChatSessionBinding(ChatSessionDependencies, sessionId),
     getChatSessionWorkbench: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbench(ChatWorkbenchDependencies, sessionId),
@@ -126,13 +155,44 @@ export function composeChatRouteDependencies(
     getChatSessionWorkbenchTree: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbenchTree(ChatWorkbenchDependencies, sessionId),
     getChatSideChat: (sessionId) => chatSessionService.getChatSideChat(ChatSessionDependencies, sessionId),
-    listChatGeneratedArtifacts: (input) =>
-      chatGeneratedArtifactService.listChatGeneratedArtifacts(ChatGeneratedArtifactDependencies, input),
-    listChatSessions: (query) => chatSessionService.listChatSessions(ChatSessionDependencies, query),
+    listChatGeneratedArtifacts: (input) => {
+      const { citadelId, ...artifactInput } = input ?? {};
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        sessionId: artifactInput.sessionId,
+        workspaceId: artifactInput.workspaceId,
+        projectId: artifactInput.projectId,
+      });
+      return chatGeneratedArtifactService.listChatGeneratedArtifacts(ChatGeneratedArtifactDependencies, {
+        ...artifactInput,
+        workspaceId: scope.workspaceId,
+      });
+    },
+    listChatSessions: (query) => {
+      const { citadelId, ...sessionQuery } = query ?? {};
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        workspaceId: sessionQuery.workspaceId,
+        projectId: sessionQuery.projectId,
+      });
+      return chatSessionService.listChatSessions(ChatSessionDependencies, {
+        ...sessionQuery,
+        workspaceId: scope.workspaceId,
+      });
+    },
     listChatThreadKnowledgeAttachments: (sessionId) =>
       chatThreadKnowledgeService.listChatThreadKnowledgeAttachments(ChatThreadKnowledgeDependencies, sessionId),
-    listRecentCrossProjectSessions: (input) =>
-      chatSessionService.listRecentCrossProjectSessions(ChatSessionDependencies, input),
+    listRecentCrossProjectSessions: (input) => {
+      const { citadelId, ...sessionInput } = input;
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        workspaceId: sessionInput.workspaceId,
+      });
+      return chatSessionService.listRecentCrossProjectSessions(ChatSessionDependencies, {
+        ...sessionInput,
+        workspaceId: scope.workspaceId,
+      });
+    },
     pinChatSession: (sessionId) => chatSessionService.pinChatSession(ChatSessionDependencies, sessionId),
     removeChatThreadKnowledgeAttachment: (sessionId, attachmentId) =>
       chatThreadKnowledgeService.removeChatThreadKnowledgeAttachment(
@@ -151,7 +211,17 @@ export function composeChatRouteDependencies(
       chatWorkbenchService.runChatSessionWorkbenchFileOperation(ChatWorkbenchDependencies, sessionId, input),
     saveChatSessionWorkbenchFile: (sessionId, input) =>
       chatWorkbenchService.saveChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
-    searchChatSessions: (input) => chatSessionService.searchChatSessions(ChatSessionDependencies, input),
+    searchChatSessions: (input) => {
+      const { citadelId, ...searchInput } = input;
+      const scope = resolveChatRuntimeScope(gateway, {
+        citadelId,
+        workspaceId: searchInput.workspaceId,
+      });
+      return chatSessionService.searchChatSessions(ChatSessionDependencies, {
+        ...searchInput,
+        workspaceId: scope.workspaceId,
+      });
+    },
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),
     unpinChatSession: (sessionId) => chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId),
     updateChatSession: (sessionId, input) =>
@@ -220,13 +290,40 @@ export function composeChatRouteDependencies(
     chatMessages,
     chatProjects: {
       archiveChatProject: (projectId) => gateway.chatProjectService.archiveChatProject(projectId),
-      createChatProject: (input) => gateway.chatProjectService.createChatProject(input),
+      createChatProject: (input) => {
+        const { citadelId, ...projectInput } = input;
+        const scope = resolveChatRuntimeScope(gateway, {
+          citadelId,
+          workspaceId: projectInput.workspaceId,
+        });
+        return gateway.chatProjectService.createChatProject({ ...projectInput, workspaceId: scope.workspaceId });
+      },
       hardDeleteChatProject: (projectId) => gateway.chatProjectService.hardDeleteChatProject(projectId),
-      importChatProject: (input) => gateway.chatProjectService.importChatProject(input),
-      listChatProjects: (view, limit, workspaceId) =>
-        gateway.chatProjectService.listChatProjects(view, limit, workspaceId),
+      importChatProject: (input) => {
+        const { citadelId, ...projectInput } = input;
+        const scope = resolveChatRuntimeScope(gateway, {
+          citadelId,
+          workspaceId: projectInput.workspaceId,
+        });
+        return gateway.chatProjectService.importChatProject({ ...projectInput, workspaceId: scope.workspaceId });
+      },
+      listChatProjects: (view, limit, workspaceId, citadelId) => {
+        const scope = resolveChatRuntimeScope(gateway, { citadelId, workspaceId });
+        return gateway.chatProjectService.listChatProjects(view, limit, scope.workspaceId);
+      },
       restoreChatProject: (projectId) => gateway.chatProjectService.restoreChatProject(projectId),
-      updateChatProject: (projectId, input) => gateway.chatProjectService.updateChatProject(projectId, input),
+      updateChatProject: (projectId, input) => {
+        const { citadelId, ...projectInput } = input;
+        const scope = resolveChatRuntimeScope(gateway, {
+          citadelId,
+          projectId,
+          workspaceId: projectInput.workspaceId,
+        });
+        return gateway.chatProjectService.updateChatProject(projectId, {
+          ...projectInput,
+          workspaceId: scope.workspaceId,
+        });
+      },
     },
     chatSessions,
     chatSupport: {
@@ -294,6 +391,19 @@ export function composeChatRouteDependencies(
     },
     chatTools,
   };
+}
+
+function resolveChatRuntimeScope(
+  gateway: GatewayRouteCompositionPort,
+  source: Parameters<typeof resolveEffectiveRuntimeScopeFromStorage>[1],
+) {
+  return resolveEffectiveRuntimeScopeFromStorage(
+    {
+      storage: gateway.storage,
+      normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
+    },
+    source,
+  );
 }
 
 function resolvePortablePath(rootDir: string, workspaceDir: string, relativePath: string): string {

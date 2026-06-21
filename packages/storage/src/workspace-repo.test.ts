@@ -44,6 +44,7 @@ describe("WorkspaceRepository", () => {
     );
 
     assert.equal(created.slug, "launch-bay");
+    assert.equal(created.citadelId, "personal");
     assert.equal(repo.findBySlug("Launch Bay")?.workspaceId, created.workspaceId);
 
     const updated = repo.update(
@@ -51,10 +52,20 @@ describe("WorkspaceRepository", () => {
       {
         name: "Launch Bay 2",
         slug: "launch-bay-two",
+        citadelId: "company",
       },
       "2026-03-05T10:05:00.000Z",
     );
     assert.equal(updated.slug, "launch-bay-two");
+    assert.equal(updated.citadelId, "company");
+    assert.deepEqual(
+      repo.listByCitadel("company").map((workspace) => workspace.workspaceId),
+      [created.workspaceId],
+    );
+    assert.equal(
+      repo.listByCitadel("personal").some((workspace) => workspace.workspaceId === created.workspaceId),
+      false,
+    );
 
     const archived = repo.archive(created.workspaceId, "2026-03-05T10:10:00.000Z");
     assert.equal(archived.lifecycleStatus, "archived");

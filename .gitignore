@@ -19,6 +19,7 @@ data/index.db
 data/index.db-shm
 data/index.db-wal
 data/*.json
+data/cache/
 data/transcripts/*.jsonl
 !data/transcripts/.gitkeep
 data/audit/*.jsonl

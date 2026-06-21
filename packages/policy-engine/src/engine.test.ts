@@ -452,6 +452,61 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(evaluation.reasonCodes).toContain("citadel_ward_deny");
   });
 
+  it("keeps Citadel Ward approval requirements stronger than workspace allow grants", () => {
+    const storage = createStorageStub();
+    const workspaceGrant = {
+      grantId: "workspace-shell-allow",
+      toolPattern: "shell.exec",
+      decision: "allow",
+      scope: "workspace",
+      scopeRef: "engineering",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: "2026-03-22T12:00:00.000Z",
+    } as const;
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "company"
+            ? [
+                {
+                  wardId: "ward-shell-review",
+                  citadelId: "company",
+                  name: "Review shell",
+                  actionPattern: "shell.*",
+                  effect: "require_approval",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    Object.assign(storage.toolGrants, {
+      listActive: vi.fn((scope: string, scopeRef: string) =>
+        scope === "workspace" && scopeRef === "engineering" ? [workspaceGrant] : [],
+      ),
+    });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "company",
+      workspaceId: "engineering",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.matchedGrantId).toBe("workspace-shell-allow");
+    expect(evaluation.reasonCodes).toContain("citadel_ward_requires_approval");
+  });
+
   it("does not consult Citadel Wards when the request carries no citadelId", () => {
     const storage = createStorageStub();
     const listWards = vi.fn(() => []);
@@ -468,7 +523,7 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(listWards).not.toHaveBeenCalled();
   });
 
-  it("activates enforcement for a workspace when the wrap-first flag is on (workspace acts as its Citadel)", () => {
+  it("activates legacy workspace fallback enforcement when the wrap-first flag is on", () => {
     const storage = createStorageStub();
     Object.assign(storage, {
       citadels: {

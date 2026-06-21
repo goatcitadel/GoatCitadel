@@ -29,6 +29,8 @@ interface UiPreferencesValue {
   setDetailPanelPinned: (enabled: boolean) => void;
   statusCenterExpanded: boolean;
   setStatusCenterExpanded: (enabled: boolean) => void;
+  activeCitadelId: string;
+  setActiveCitadelId: (citadelId: string) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
   theme: UiTheme;
@@ -47,6 +49,7 @@ const NAV_MODE_KEY = "goatcitadel.ui.nav_mode.v1";
 const DETAILS_KEY = "goatcitadel.ui.technical_details.v1";
 const DETAIL_PANEL_PINNED_KEY = "goatcitadel.ui.detail_panel_pinned.v1";
 const STATUS_CENTER_EXPANDED_KEY = "goatcitadel.ui.status_center_expanded.v1";
+const CITADEL_KEY = "goatcitadel.ui.citadel_id.v1";
 const WORKSPACE_KEY = "goatcitadel.ui.workspace_id.v1";
 const THEME_KEY = "goatcitadel.ui.theme.v1";
 const NOTIFICATION_TOASTS_KEY = "goatcitadel.notifications.toasts.v1";
@@ -69,6 +72,8 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setDetailPanelPinned: () => {},
   statusCenterExpanded: false,
   setStatusCenterExpanded: () => {},
+  activeCitadelId: "personal",
+  setActiveCitadelId: () => {},
   activeWorkspaceId: "default",
   setActiveWorkspaceId: () => {},
   theme: "dark",
@@ -95,6 +100,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   const [statusCenterExpanded, setStatusCenterExpandedState] = useState<boolean>(() =>
     readStatusCenterExpandedFromStorage(),
   );
+  const [activeCitadelId, setActiveCitadelIdState] = useState<string>(() => readCitadelIdFromStorage());
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
   const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
   const [notifications, setNotificationsState] = useState<UiNotificationPreferences>(() =>
@@ -141,6 +147,12 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         setStatusCenterExpandedState(enabled);
         writeStorage(STATUS_CENTER_EXPANDED_KEY, String(enabled));
       },
+      activeCitadelId,
+      setActiveCitadelId: (citadelId) => {
+        const normalized = normalizeCitadelId(citadelId);
+        setActiveCitadelIdState(normalized);
+        writeStorage(CITADEL_KEY, normalized);
+      },
       activeWorkspaceId,
       setActiveWorkspaceId: (workspaceId) => {
         const normalized = normalizeWorkspaceId(workspaceId);
@@ -178,6 +190,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       showTechnicalDetails,
       detailPanelPinned,
       statusCenterExpanded,
+      activeCitadelId,
       activeWorkspaceId,
       theme,
       notifications,
@@ -289,6 +302,21 @@ function readWorkspaceIdFromStorage(): string {
     return "default";
   }
   return normalizeWorkspaceId(readStorage(WORKSPACE_KEY));
+}
+
+function readCitadelIdFromStorage(): string {
+  if (typeof window === "undefined") {
+    return "personal";
+  }
+  return normalizeCitadelId(readStorage(CITADEL_KEY));
+}
+
+function normalizeCitadelId(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return "personal";
+  }
+  return /^[a-zA-Z0-9._-]{1,80}$/.test(trimmed) ? trimmed : "personal";
 }
 
 function normalizeWorkspaceId(value: string | null | undefined): string {

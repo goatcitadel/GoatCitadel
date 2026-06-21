@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
+import { AGENTIC_DIAGNOSTIC_CODES, ValidationError, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
@@ -81,6 +81,7 @@ const a2aHttpJsonEventsQuerySchema = z.object({
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(50),
   cursor: z.string().optional(),
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   status: statusSchema.optional(),
   view: z.enum(["active", "trash", "all"]).optional(),
@@ -88,6 +89,7 @@ const listQuerySchema = z.object({
 });
 
 const createTaskSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   title: z.string().min(1),
   description: z.string().optional(),
@@ -183,6 +185,7 @@ const updateSubagentSchema = z.object({
 });
 
 const agenticRunsQuerySchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   status: agenticRunStatusSchema.optional(),
   surface: z.enum(["chat", "cowork", "code"]).optional(),
@@ -198,6 +201,7 @@ const agenticRunParamsSchema = z.object({
 });
 
 const agenticRunAccessQuerySchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
 });
 
@@ -547,10 +551,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
+      const access = readTaskWorkspaceAccess(request);
       return reply.send(
         fastify.services.tasks.listAgenticRuns({
-          ...parsed.data,
-          workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          ...omitCitadelId(parsed.data),
+          workspaceId: access.workspaceId ?? DEFAULT_WORKSPACE_ID,
         }),
       );
     } catch (error) {
@@ -572,6 +577,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         fastify.services.tasks.getAgenticRunTree(parsed.data.runId, {
+          citadelId: query.data.citadelId,
           workspaceId: query.data.workspaceId,
         }),
       );
@@ -606,7 +612,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
               ...body.data,
               actorId: request.authActorId,
             },
-            { workspaceId: query.data.workspaceId },
+            { citadelId: query.data.citadelId, workspaceId: query.data.workspaceId },
           ),
         );
       } catch (error) {
@@ -636,17 +642,22 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const view = parsed.data.view ?? (parsed.data.includeDeleted ? "all" : "active");
-    const items = fastify.services.tasks.listTasks(
-      parsed.data.limit,
-      parsed.data.status,
-      parsed.data.cursor,
-      view,
-      parsed.data.workspaceId,
-    );
-    const last = items[items.length - 1];
-    const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.taskId}` : undefined;
-    return reply.send({ items, nextCursor, view });
+    try {
+      const access = readTaskWorkspaceAccess(request);
+      const view = parsed.data.view ?? (parsed.data.includeDeleted ? "all" : "active");
+      const items = fastify.services.tasks.listTasks(
+        parsed.data.limit,
+        parsed.data.status,
+        parsed.data.cursor,
+        view,
+        access.workspaceId,
+      );
+      const last = items[items.length - 1];
+      const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.taskId}` : undefined;
+      return reply.send({ items, nextCursor, view });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/tasks", async (request, reply) => {
@@ -655,8 +666,16 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const task = fastify.services.tasks.createTask(parsed.data);
-    return reply.code(201).send(task);
+    try {
+      const access = readTaskWorkspaceAccess(request);
+      const task = fastify.services.tasks.createTask({
+        ...omitCitadelId(parsed.data),
+        workspaceId: access.workspaceId,
+      });
+      return reply.code(201).send(task);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/tasks/:taskId", async (request, reply) => {
@@ -916,12 +935,61 @@ function sendA2AHttpJsonRouteError(reply: FastifyReply, error: unknown, request:
 }
 
 function readTaskWorkspaceAccess(request: FastifyRequest): TaskWorkspaceAccessOptions {
-  return {
+  const access = {
+    citadelId:
+      readCitadelIdFromQuery(request.query) ??
+      readCitadelIdFromBody(request.body) ??
+      readCitadelIdFromHeader(request.headers["x-goatcitadel-citadel-id"]),
     workspaceId:
       readWorkspaceIdFromQuery(request.query) ??
       readWorkspaceIdFromBody(request.body) ??
       readWorkspaceIdFromHeader(request.headers["x-goatcitadel-workspace-id"]),
   };
+  assertTaskCitadelWorkspaceMatch(request, access);
+  return access;
+}
+
+function assertTaskCitadelWorkspaceMatch(request: FastifyRequest, access: TaskWorkspaceAccessOptions): void {
+  const citadelId = access.citadelId?.trim();
+  if (!citadelId) {
+    return;
+  }
+  const workspaceId = access.workspaceId?.trim() || DEFAULT_WORKSPACE_ID;
+  const workspace = request.server.services.workspaces.getWorkspace(workspaceId);
+  if (workspace.citadelId && workspace.citadelId !== citadelId) {
+    throw new ValidationError({
+      message: `workspace ${workspaceId} belongs to citadel ${workspace.citadelId}, not ${citadelId}`,
+    });
+  }
+}
+
+function omitCitadelId<T extends { citadelId?: string }>(input: T): Omit<T, "citadelId"> {
+  const { citadelId: _citadelId, ...rest } = input;
+  return rest;
+}
+
+function readCitadelIdFromQuery(query: unknown): string | undefined {
+  if (!query || typeof query !== "object") {
+    return undefined;
+  }
+  const value = (query as Record<string, unknown>).citadelId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readCitadelIdFromBody(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>).citadelId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readCitadelIdFromHeader(value: string | string[] | undefined): string | undefined {
+  if (!value || Array.isArray(value)) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function readWorkspaceIdFromQuery(query: unknown): string | undefined {
