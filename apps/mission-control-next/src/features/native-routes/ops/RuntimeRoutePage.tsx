@@ -18,8 +18,10 @@ import {
   EmptyState,
   ErrorState,
   NativeButton,
+  NativeMetricGrid as MetricGrid,
   NativeTable,
   NoticeBanner,
+  ResultCount,
   StatusChip,
   ThreePartChip,
   type ChipTone,
@@ -821,6 +823,9 @@ export function RuntimeRoutePage({
                   { key: "cost", header: "Cost", numeric: true, cell: (item) => formatUsd(item.costUsd) },
                 ]}
               />
+              {(data.cost?.items ?? []).length > 10 ? (
+                <ResultCount shown={10} total={(data.cost?.items ?? []).length} noun="providers" />
+              ) : null}
             </NativeCard>
             <NativeCard
               title="Quality and QMD signal"
@@ -1786,20 +1791,6 @@ function OpsNeedsAttentionCard({
         </ul>
       )}
     </NativeCard>
-  );
-}
-
-function MetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-runtime-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-runtime-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
   );
 }
 

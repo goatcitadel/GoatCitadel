@@ -40,5 +40,8 @@ export type { NativeMetricGridItem } from "./NativeMetricGrid";
 export { NativeTable } from "./NativeTable";
 export type { NativeTableColumn, NativeTableProps } from "./NativeTable";
 
+export { ResultCount } from "./ResultCount";
+export type { ResultCountProps } from "./ResultCount";
+
 export { NativeButton } from "./NativeButton";
 export type { NativeButtonProps, NativeButtonVariant } from "./NativeButton";
