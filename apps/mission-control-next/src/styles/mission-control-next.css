@@ -90,6 +90,70 @@
   }
 }
 
+/* C2: keyboard-shortcuts overlay (opened with "?"). Self-contained modal. */
+.mc-next-shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: var(--bg-scrim);
+}
+
+.mc-next-shortcuts-card {
+  width: min(28rem, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 1.1rem 1.2rem 1.3rem;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  box-shadow: var(--mc-shadow-strong);
+}
+
+.mc-next-shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.85rem;
+}
+
+.mc-next-shortcuts-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+
+.mc-next-shortcuts-list {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+}
+
+.mc-next-shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0.1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mc-next-shortcuts-row:last-child {
+  border-bottom: none;
+}
+
+.mc-next-shortcuts-row dt {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.mc-next-shortcuts-row dd {
+  margin: 0;
+}
+
 .mc-next-shell[data-area="chat"] {
   --mc-area-color: var(--area-chat);
 }

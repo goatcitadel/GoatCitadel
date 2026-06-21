@@ -16,6 +16,7 @@ type Listeners = {
   onClosePalette: Mock<() => void>;
   onDismissTopmost: Mock<() => boolean>;
   onJumpToArea: Mock<(area: PrimaryArea) => void>;
+  onToggleShortcuts: Mock<() => void>;
 };
 
 function Driver({ isPaletteOpen, listeners }: { isPaletteOpen: boolean; listeners: Listeners }) {
@@ -25,6 +26,7 @@ function Driver({ isPaletteOpen, listeners }: { isPaletteOpen: boolean; listener
     isPaletteOpen,
     onDismissTopmost: listeners.onDismissTopmost,
     onJumpToArea: listeners.onJumpToArea,
+    onToggleShortcuts: listeners.onToggleShortcuts,
   });
   return null;
 }
@@ -45,6 +47,7 @@ describe("useShellKeyboardManager", () => {
       onClosePalette: vi.fn<() => void>(),
       onDismissTopmost: vi.fn<() => boolean>().mockReturnValue(false),
       onJumpToArea: vi.fn<(area: PrimaryArea) => void>(),
+      onToggleShortcuts: vi.fn<() => void>(),
     };
     renderer = null;
   });
@@ -144,5 +147,23 @@ describe("useShellKeyboardManager", () => {
     expect(SHELL_ROUTE_SHORTCUT_LETTERS.get("chat")).toBe("c");
     expect(SHELL_ROUTE_SHORTCUT_LETTERS.get("settings")).toBe("s");
     expect(SHELL_ROUTE_SHORTCUT_LETTERS.get("cowork")).toBe("w");
+  });
+
+  it("toggles the shortcuts overlay on ?", () => {
+    mount(false);
+    emitKey({ key: "?", shiftKey: true });
+    expect(listeners.onToggleShortcuts).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not toggle shortcuts when focus is in an input", () => {
+    mount(false);
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    const event = new KeyboardEvent("keydown", { key: "?", shiftKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(event, "target", { value: input, writable: false });
+    document.dispatchEvent(event);
+    expect(listeners.onToggleShortcuts).not.toHaveBeenCalled();
+    document.body.removeChild(input);
   });
 });

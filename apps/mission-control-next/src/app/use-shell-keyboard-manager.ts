@@ -55,6 +55,8 @@ export type ShellKeyboardManagerOptions = {
    * Letters: c=chat w=cowork o=code p=projects l=library m=ops s=settings
    */
   onJumpToArea?: (area: PrimaryArea) => void;
+  /** Called when the user presses "?" (Shift+/) to toggle the shortcuts overlay. */
+  onToggleShortcuts?: () => void;
 };
 
 /** True if the focused element is an editable input the user is typing into. */
@@ -133,6 +135,17 @@ export function useShellKeyboardManager(options: ShellKeyboardManagerOptions): v
       if (isEditableFocus(event.target)) {
         // Still respect a g-prefix that was set while focus was elsewhere —
         // clear it so a stale prefix doesn't survive into typing.
+        clearGPrefix();
+        return;
+      }
+
+      // "?" (Shift+/) — toggle the keyboard-shortcuts overlay. Reached only when
+      // focus is NOT in an editable element (handled by the check above).
+      if (event.key === "?") {
+        if (opts.onToggleShortcuts) {
+          event.preventDefault();
+          opts.onToggleShortcuts();
+        }
         clearGPrefix();
         return;
       }

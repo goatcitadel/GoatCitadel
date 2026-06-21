@@ -83,6 +83,7 @@ import {
 } from "./route-model";
 import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
+import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { useGatewayAccess } from "./use-gateway-access";
 import { useShellStatus, type ShellStatusState } from "./use-shell-status";
 import { useShellNotifications } from "./use-shell-notifications";
@@ -161,6 +162,9 @@ export function MissionControlNextApp() {
   // and routed by useShellKeyboardManager. State stays here because Esc
   // priority needs to know whether the palette is the topmost dismissible.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // C2: "?" toggles a keyboard-shortcuts cheat-sheet. State lives here so Esc
+  // dismiss priority can close it as the topmost dismissible.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [citadelOptions, setCitadelOptions] = useState<Array<{ citadelId: string; name: string }>>([]);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
 
@@ -261,6 +265,10 @@ export function MissionControlNextApp() {
   // separately because it's already a controlled dialog). Order matters:
   // inspector > nav drawer.
   const dismissTopmost = useCallback((): boolean => {
+    if (shortcutsOpen) {
+      setShortcutsOpen(false);
+      return true;
+    }
     if (inspectorOpen) {
       setInspectorOpen(false);
       return true;
@@ -270,7 +278,16 @@ export function MissionControlNextApp() {
       return true;
     }
     return false;
-  }, [inspectorOpen, navOpen, setInspectorOpen]);
+  }, [inspectorOpen, navOpen, setInspectorOpen, shortcutsOpen]);
+
+  const routeShortcuts = useMemo(
+    () =>
+      PRIMARY_NAV.map(({ area }) => ({
+        label: AREA_META[area].label,
+        letter: SHELL_ROUTE_SHORTCUT_LETTERS.get(area) ?? "",
+      })).filter((shortcut) => shortcut.letter),
+    [],
+  );
 
   useShellKeyboardManager({
     onOpenPalette: () => setPaletteOpen(true),
@@ -278,6 +295,7 @@ export function MissionControlNextApp() {
     isPaletteOpen: paletteOpen,
     onDismissTopmost: dismissTopmost,
     onJumpToArea: (area) => navigate(buildPrimaryAreaRoute(area)),
+    onToggleShortcuts: () => setShortcutsOpen((open) => !open),
   });
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
@@ -1124,6 +1142,11 @@ export function MissionControlNextApp() {
         {/* H-7: shell command palette. Cmd/Ctrl+K opens; Esc closes via the
             palette's own handler (priority over useShellKeyboardManager). */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
+        <ShortcutsOverlay
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
+          routeShortcuts={routeShortcuts}
+        />
       </div>
     </ShellDetailPanelProvider>
   );
