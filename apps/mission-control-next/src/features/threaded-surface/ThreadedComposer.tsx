@@ -15,6 +15,11 @@ import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
+/* C7: soft character ceiling for the draft. Not enforced (sending isn't
+   blocked); the counter only surfaces once a message gets long. */
+const COMPOSER_SOFT_LIMIT = 8000;
+const COMPOSER_COUNT_VISIBLE_AT = Math.round(COMPOSER_SOFT_LIMIT * 0.7);
+
 function getSurfaceLabel(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
   if (mode === "code") {
     return "Code";
@@ -941,6 +946,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
         {composerStatus ? <p className="mc-next-composer-helper">{composerStatus}</p> : null}
         <div className="mc-next-composer-controls-end">
+          {props.draft.length >= COMPOSER_COUNT_VISIBLE_AT ? (
+            <span
+              className="mc-next-composer-count"
+              data-near-limit={props.draft.length >= COMPOSER_SOFT_LIMIT ? "true" : undefined}
+              aria-hidden="true"
+            >
+              {props.draft.length.toLocaleString()} / {COMPOSER_SOFT_LIMIT.toLocaleString()}
+            </span>
+          ) : null}
           {props.sending && props.hasActiveStream ? (
             <button type="button" className="mc-next-composer-primary" onClick={props.onStopActiveTurn}>
               {props.activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}

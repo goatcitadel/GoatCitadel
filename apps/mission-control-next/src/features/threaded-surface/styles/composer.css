@@ -2361,3 +2361,16 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
     min-height: 2.5rem;
   }
 }
+
+/* C7: soft draft character counter (surfaces only on long messages). */
+.mc-next-composer-count {
+  align-self: center;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.mc-next-composer-count[data-near-limit="true"] {
+  color: var(--warning);
+}
