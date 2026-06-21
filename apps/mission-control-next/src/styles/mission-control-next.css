@@ -14,7 +14,7 @@
  * authoritative source. See `scripts/check-mission-control-next-token-drift.mjs`.
  */
 .mc-next-shell {
-  --density-type-scale: 0.92;
+  --density-type-scale: 0.96;
   --gc-area-chat: var(--area-chat);
   --gc-area-cowork: var(--area-cowork);
   --gc-area-code: var(--area-code);
@@ -28,7 +28,7 @@
   --gc-risk-nuclear: var(--risk-nuclear);
   --mc-area-color: var(--area-chat);
   --mc-scrollbar-safe-gutter: 0.85rem;
-  --shell-inspector-width: min(20.25rem, calc(100vw - 1.5rem));
+  --shell-inspector-width: min(18.4rem, calc(100vw - 1.5rem));
   --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1.1rem);
   --text-xs: calc(0.75rem * var(--density-type-scale));
   --text-sm: calc(0.8125rem * var(--density-type-scale));
@@ -339,7 +339,7 @@
 .mc-next-app-frame {
   position: relative;
   display: grid;
-  grid-template-rows: 38px minmax(0, 1fr) auto;
+  grid-template-rows: 42px minmax(0, 1fr) auto;
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
@@ -353,8 +353,8 @@
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  min-height: 38px;
-  padding: 0 10px;
+  min-height: 42px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--background) 94%, var(--mc-surface-2));
   backdrop-filter: none;
@@ -495,7 +495,7 @@
   flex: 1 1 16rem;
   min-width: 11rem;
   max-width: 32rem;
-  height: 30px;
+  height: 32px;
   display: flex;
   align-items: center;
   gap: 0.38rem;
@@ -938,8 +938,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.36rem;
-  min-height: calc(100dvh - 58px);
-  max-height: calc(100dvh - 58px);
+  min-height: calc(100dvh - 62px);
+  max-height: calc(100dvh - 62px);
   overflow: auto;
   padding: 8px;
   padding-inline-end: calc(8px + var(--mc-scrollbar-safe-gutter));
@@ -1264,17 +1264,17 @@
 
 .mc-next-shell-inspector.side-inspector-drawer {
   position: fixed;
-  top: 4.85rem;
-  right: 0.75rem;
+  top: 4.65rem;
+  right: 0.9rem;
   z-index: var(--z-panel);
   width: var(--shell-inspector-width);
-  max-height: calc(100dvh - 5.7rem);
-  padding: 0.68rem;
-  padding-inline-end: calc(0.68rem + var(--mc-scrollbar-safe-gutter));
+  max-height: calc(100dvh - 5.45rem);
+  padding: 0.72rem;
+  padding-inline-end: calc(0.72rem + var(--mc-scrollbar-safe-gutter));
   border-radius: var(--r-sm);
-  border: 1px solid color-mix(in oklab, var(--border) 58%, transparent);
-  background: color-mix(in oklab, var(--mc-surface-2) 84%, var(--background));
-  box-shadow: 0 0.8rem 1.9rem color-mix(in oklab, black 18%, transparent);
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 34%, var(--mc-surface-3));
+  background: color-mix(in oklab, var(--mc-surface-2) 72%, var(--background));
+  box-shadow: 0 1rem 2.35rem color-mix(in oklab, black 14%, transparent);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -1316,8 +1316,18 @@
 }
 
 .side-inspector-drawer-actions {
-  grid-auto-flow: row;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
   justify-content: start;
+}
+
+.mc-next-shell-inspector .side-inspector-drawer-actions .gc-nav-tier-chip {
+  min-height: 1.55rem;
+  padding: 0.12rem 0.45rem;
+  border-color: color-mix(in oklab, var(--border) 46%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 58%, transparent);
+  font-size: var(--text-2xs);
 }
 
 .mc-next-inspector-subtitle {
@@ -1351,7 +1361,9 @@
 
 .mc-next-inspector-section {
   display: grid;
-  gap: 0.24rem;
+  gap: 0.28rem;
+  padding-top: 0.48rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent);
 }
 
 .mc-next-inspector-section h4 {
@@ -1365,6 +1377,48 @@
   padding-left: 0.85rem;
   display: grid;
   gap: 0.26rem;
+}
+
+.mc-next-inspector-disclosure {
+  display: grid;
+  gap: 0.4rem;
+  padding-top: 0.48rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent);
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.mc-next-inspector-disclosure-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-height: 1.75rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid rgba(58, 78, 92, 0.54) !important;
+  border-radius: var(--r-sm);
+  background: rgba(16, 22, 31, 0.92);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-inspector-disclosure-summary span {
+  color: var(--text-secondary);
+}
+
+.mc-next-inspector-disclosure .mc-next-inspector-list {
+  margin-top: 0.12rem;
+  padding-left: 0.9rem;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-inspector-disclosure-summary strong {
+  color: color-mix(in oklab, var(--mc-area-color) 68%, var(--foreground));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .mc-next-status-strip {
@@ -1991,7 +2045,7 @@
 
 @media (max-width: 1279px) {
   .mc-next-shell {
-    --shell-inspector-width: min(19.5rem, calc(100vw - 1.5rem));
+    --shell-inspector-width: min(18.4rem, calc(100vw - 1.5rem));
     --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1rem);
   }
 
@@ -2102,11 +2156,15 @@
     max-height: 100dvh;
     border-radius: 0 var(--r-lg) var(--r-lg) 0;
     transform: translateX(-108%);
+    visibility: hidden;
+    pointer-events: none;
     transition: transform var(--motion-slow) var(--motion-ease);
   }
 
   .mc-next-rail.open {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
 
   /* WS-B: mobile drawer area switcher. Lives only inside the rail drawer (hidden

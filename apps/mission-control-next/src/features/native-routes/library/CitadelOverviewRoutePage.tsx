@@ -256,6 +256,41 @@ export function CitadelOverviewRoutePage({
               />
             </NativeCard>
           ) : null}
+          <NativeCard
+            title="Default Citadels"
+            subtitle="Personal and Company are the default operating spaces available from the Mason."
+            className="mc-next-citadel-default-card mc-next-citadel-default-card-promoted"
+            stats={[
+              { label: "Defaults", value: String(defaultTemplates.length || 2) },
+              { label: "Active", value: charter?.kind ?? "workspace" },
+            ]}
+          >
+            {templateState.error ? <NoticeBanner tone="warning" message={templateState.error} /> : null}
+            {templateState.loading ? (
+              <EmptyState size="compact" title="Loading default Citadels..." />
+            ) : defaultTemplates.length > 0 ? (
+              <div className="mc-next-citadel-template-grid">
+                {defaultTemplates.map((template) => (
+                  <article key={template.id} className="mc-next-citadel-template-card">
+                    <header>
+                      <span>{template.kind}</span>
+                      <strong>{template.name}</strong>
+                    </header>
+                    <p>{template.description}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState size="compact" title="Default Citadel templates are unavailable." />
+            )}
+            <NativeButton
+              variant="outline"
+              onClick={() => navigate({ area: "library", section: "citadel", theme: route.theme })}
+            >
+              <Hammer className="h-4 w-4" />
+              Open the Mason
+            </NativeButton>
+          </NativeCard>
         </NativeGrid>
       )}
 

@@ -111,6 +111,14 @@ export function ProjectsRoutePage({
     navigate({ area: "settings", section: "onboarding", theme: route.theme });
   }, [navigate, route.theme]);
 
+  const handleOpenCitadels = useCallback(() => {
+    navigate({ area: "library", section: "citadel-overview", theme: route.theme });
+  }, [navigate, route.theme]);
+
+  const handleOpenMason = useCallback(() => {
+    navigate({ area: "library", section: "citadel", theme: route.theme });
+  }, [navigate, route.theme]);
+
   const loadProjects = useCallback(async () => {
     const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -485,7 +493,7 @@ export function ProjectsRoutePage({
   // continuing the project's freshest surface. Suppressed when no project exists
   // so the existing guided empty state leads instead.
   const recentLeadSession = projectHome?.recentSessions[0] ?? null;
-  const leadContent =
+  const projectContinuationLead =
     selectedProject && projectHome ? (
       <article className="mc-next-project-lead-card" aria-label="Continue where you left off">
         <div className="mc-next-settings-selectable-head">
@@ -515,16 +523,51 @@ export function ProjectsRoutePage({
             <MessageSquarePlus className="h-4 w-4" />
             {recentLeadSession ? "Open latest thread" : "Open project"}
           </NativeButton>
-          <NativeButton
-            variant="outline"
-            onClick={() => navigate({ area: "library", section: "citadel-overview", theme: route.theme })}
-          >
+          <NativeButton variant="outline" onClick={handleOpenCitadels}>
             <Castle className="h-4 w-4" />
             Open Citadel
           </NativeButton>
         </div>
       </article>
-    ) : undefined;
+    ) : null;
+  const citadelLead = (
+    <article className="mc-next-project-citadel-lead" aria-label="Default Citadels">
+      <div>
+        <span>Citadels</span>
+        <strong>Personal and Company operating spaces ship by default.</strong>
+        <p>
+          Use Citadels to govern projects with a Charter, Chambers, Wards, and Gatehouse posture before work crosses
+          sensitive boundaries.
+        </p>
+      </div>
+      <div className="mc-next-project-citadel-defaults" aria-label="Default Citadel types">
+        <div>
+          <strong>Personal</strong>
+          <span>Private goals, routines, notes, and approval-gated assistance.</span>
+        </div>
+        <div>
+          <strong>Company</strong>
+          <span>Shared work, business memory, roles, and governed operating posture.</span>
+        </div>
+      </div>
+      <div className="mc-next-settings-button-row">
+        <NativeButton onClick={handleOpenCitadels}>
+          <Castle className="h-4 w-4" />
+          Open Citadels
+        </NativeButton>
+        <NativeButton variant="outline" onClick={handleOpenMason}>
+          <FolderPlus className="h-4 w-4" />
+          Use Mason
+        </NativeButton>
+      </div>
+    </article>
+  );
+  const leadContent = (
+    <div className="mc-next-project-lead-stack">
+      {projectContinuationLead}
+      {citadelLead}
+    </div>
+  );
 
   return (
     <NativePageFrame

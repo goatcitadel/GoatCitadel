@@ -397,20 +397,23 @@ export function MissionControlNextApp() {
             <p>{currentRouteDescription}</p>
           </section>
           <section className="mc-next-inspector-section">
-            <h4>Release readiness</h4>
+            <h4>Context</h4>
+            <ul className="mc-next-inspector-list">
+              <li>Workspace: {activeWorkspaceName}</li>
+              <li>Area: {currentAreaMeta.label}</li>
+              <li>Realtime: {realtimeStatusCopy.inspector}</li>
+            </ul>
+          </section>
+          <section className="mc-next-inspector-disclosure" aria-label="Release readiness">
+            <div className="mc-next-inspector-disclosure-summary">
+              <span>Release readiness</span>
+              <strong>{currentReleaseStatusLabel}</strong>
+            </div>
             <ul className="mc-next-inspector-list">
               <li>Scope: {currentReleaseStatusLabel}</li>
               <li>Action: {currentReleaseScope.releaseAction}</li>
               <li>Verification: {currentReleaseScope.verification}</li>
               <li>Constraint: {currentReleaseScope.note}</li>
-            </ul>
-          </section>
-          <section className="mc-next-inspector-section">
-            <h4>Keep in view</h4>
-            <ul className="mc-next-inspector-list">
-              <li>Workspace: {activeWorkspaceName}</li>
-              <li>Area: {currentAreaMeta.label}</li>
-              <li>Realtime: {realtimeStatusCopy.inspector}</li>
             </ul>
           </section>
         </div>
