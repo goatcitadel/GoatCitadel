@@ -54,6 +54,9 @@
     position: sticky;
     bottom: 0;
     z-index: 10;
+    /* B8: clear the iOS home indicator / keyboard inset when docked at the
+       bottom; max() keeps the normal 0.85rem padding on non-notch devices. */
+    padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
   }
 
   .mc-next-surface-host-work .mc-next-threaded-side-panel,

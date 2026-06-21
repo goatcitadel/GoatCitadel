@@ -2351,6 +2351,12 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
     justify-content: center;
   }
 
+  /* B6: the send button uses a 3-class base selector (min-height 1.78rem), so
+     this coarse override matches that specificity to actually win on touch. */
+  .mc-next-threaded-surface.unified .mc-next-composer-primary {
+    min-height: 2.75rem;
+  }
+
   .mc-next-composer-inline-button {
     min-height: 2.5rem;
   }

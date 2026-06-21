@@ -733,6 +733,21 @@
   line-height: 1.44;
 }
 
+/* B5: cap the prose measure (~72ch) so assistant text stays readable even when
+   a side panel removes the column's outer width cap. Code blocks and tables
+   keep their own full width (they scroll). */
+.mc-assistant-markdown p,
+.mc-assistant-markdown li,
+.mc-assistant-markdown h1,
+.mc-assistant-markdown h2,
+.mc-assistant-markdown h3,
+.mc-assistant-markdown h4,
+.mc-assistant-markdown h5,
+.mc-assistant-markdown h6,
+.mc-assistant-markdown blockquote {
+  max-width: 72ch;
+}
+
 .mc-assistant-markdown pre {
   max-width: 100%;
   overflow: auto;
