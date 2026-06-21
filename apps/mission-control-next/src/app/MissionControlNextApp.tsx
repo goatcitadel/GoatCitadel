@@ -722,6 +722,9 @@ export function MissionControlNextApp() {
         data-section={route.section ?? "root"}
         data-route={pageErrorResetKey.split("?")[0]}
       >
+        <a className="mc-next-skip-link" href="#main-content">
+          Skip to content
+        </a>
         <div className="mc-next-app-frame">
           <header className="mc-next-topbar">
             <div className="mc-next-topbar-left">
@@ -995,7 +998,7 @@ export function MissionControlNextApp() {
               </div>
             </aside>
 
-            <main className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}>
+            <main id="main-content" tabIndex={-1} className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}>
               {showStageHeader ? (
                 <div className="mc-next-stage-header">
                   <div>

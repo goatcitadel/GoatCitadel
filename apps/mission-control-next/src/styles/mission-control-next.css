@@ -59,6 +59,37 @@
   --density-type-scale: 0.88;
 }
 
+/* C1: skip-to-content link — the first focusable element, hidden until focused
+   (WCAG 2.4.1 bypass blocks). Targets <main id="main-content">. */
+.mc-next-skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: var(--z-modal);
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-skip-link:focus,
+.mc-next-skip-link:focus-visible {
+  transform: translateY(0);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-skip-link {
+    transition: none;
+  }
+}
+
 .mc-next-shell[data-area="chat"] {
   --mc-area-color: var(--area-chat);
 }
