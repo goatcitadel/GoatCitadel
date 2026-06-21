@@ -315,7 +315,6 @@ export function MissionControlNextApp() {
   const currentRouteDescription = getRouteDescription(route);
   const currentReleaseScope = getRouteReleaseScope(route);
   const currentReleaseStatusLabel = describeReleaseSurfaceStatus(currentReleaseScope.status);
-  const currentReleaseScopeOperatorSummary = describeReleaseScopeForOperator(currentReleaseScope);
   const realtimeStatusCopy = useMemo(
     () => describeRealtimeTruthUi(streamState, streamTruthMode),
     [streamState, streamTruthMode],
@@ -334,7 +333,6 @@ export function MissionControlNextApp() {
   const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
-  const showStageHeader = !usesFullStageLayout && !usesEmbeddedRouteHeader(route);
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
@@ -461,7 +459,6 @@ export function MissionControlNextApp() {
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
-  const shellStatusError = status.dashboardError ?? status.healthError;
   const daemonStatusUnavailable = Boolean(status.healthError);
   // F-H4: the dashboard-derived footer pills (approvals/sessions/spend) must
   // read stale/unavailable on a dashboard refresh failure instead of confidently
@@ -1017,34 +1014,6 @@ export function MissionControlNextApp() {
             </aside>
 
             <main id="main-content" tabIndex={-1} className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}>
-              {showStageHeader ? (
-                <div className="mc-next-stage-header">
-                  <div>
-                    <p>{currentAreaMeta.label}</p>
-                    <h2>{currentRouteLabel}</h2>
-                    <span>{currentRouteDescription}</span>
-                  </div>
-                  <div className="mc-next-stage-chips">
-                    <span className="mc-next-stage-chip">{activeWorkspaceName}</span>
-                    <span className={`mc-next-stage-chip${realtimeStatusCopy.degraded ? " warning" : ""}`}>
-                      {realtimeStatusCopy.stage}
-                    </span>
-                    {currentReleaseScope.status === "ship" ? null : (
-                      <span
-                        className="mc-next-stage-chip warning"
-                        data-release-status={currentReleaseScope.status}
-                        title={currentReleaseScopeOperatorSummary}
-                        aria-label={currentReleaseScopeOperatorSummary}
-                      >
-                        {currentReleaseStatusLabel}
-                      </span>
-                    )}
-                    {shellStatusError ? (
-                      <span className="mc-next-stage-chip warning">Shell status needs refresh</span>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
               <PageErrorBoundary
                 resetKey={pageErrorResetKey}
                 pageLabel={currentRouteLabel}
