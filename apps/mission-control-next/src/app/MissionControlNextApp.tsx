@@ -797,6 +797,8 @@ export function MissionControlNextApp() {
                 variant="secondary"
                 className="mc-next-wa-button"
                 onClick={() => setInspectorOpen((current) => !current)}
+                aria-label={inspectorOpen ? "Hide Context" : "Open Context"}
+                title={inspectorOpen ? "Hide Context" : "Open Context"}
               >
                 {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
                 {inspectorOpen ? "Hide Context" : "Open Context"}

@@ -349,14 +349,14 @@
   z-index: var(--z-topbar);
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 38px;
   padding: 0 10px;
   border-bottom: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--background) 94%, var(--mc-surface-2));
   backdrop-filter: none;
-  overflow: clip;
+  overflow: visible;
 }
 
 .mc-next-topbar-left,
@@ -367,12 +367,12 @@
 }
 
 .mc-next-topbar-left {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
 .mc-next-topbar-right {
-  flex: 0 1 auto;
+  flex: 1 1 34rem;
   flex-wrap: nowrap;
   justify-content: flex-end;
   min-width: 0;
@@ -490,9 +490,9 @@
 
 .mc-next-command-search {
   order: -1;
-  flex: 1 1 18rem;
-  min-width: 9rem;
-  max-width: 25rem;
+  flex: 1 1 16rem;
+  min-width: 11rem;
+  max-width: 32rem;
   height: 30px;
   display: flex;
   align-items: center;
@@ -578,7 +578,7 @@
   background: var(--border-strong);
 }
 
-.mc-next-topbar-right > button:not(.mc-next-command-search) {
+.mc-next-topbar-right > .mc-next-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -591,7 +591,7 @@
   white-space: nowrap;
 }
 
-.mc-next-topbar-right > button:not(.mc-next-command-search) svg {
+.mc-next-topbar-right > .mc-next-icon-button svg {
   width: 0.8rem;
   height: 0.8rem;
 }
@@ -603,7 +603,8 @@
 }
 
 .mc-next-topbar-right > button.mc-next-start-button,
-.mc-next-topbar-right > button.mc-next-mode-toggle {
+.mc-next-topbar-right > button.mc-next-mode-toggle,
+.mc-next-topbar-right > button.mc-next-wa-button {
   width: auto;
   min-width: 4.6rem;
   flex-shrink: 0;
@@ -615,6 +616,19 @@
 
 .mc-next-topbar-right > button.mc-next-mode-toggle {
   min-width: 3.7rem;
+}
+
+.mc-next-topbar-right > button.mc-next-wa-button {
+  width: 1.9rem;
+  min-width: 1.9rem;
+  padding: 0;
+  font-size: 0;
+  overflow: hidden;
+}
+
+.mc-next-topbar-right > button.mc-next-wa-button svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 /* F1: topbar overflow ("⋯ More") menu. Lives in a positioned wrapper so the
@@ -747,6 +761,12 @@
   appearance: none;
   cursor: pointer;
   font: inherit;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  padding-inline: 0.45rem;
+  font-size: var(--text-2xs);
+  overflow: visible;
 }
 
 .mc-next-badge-button:hover,
@@ -2174,7 +2194,8 @@
   }
 
   .mc-next-topbar-right > button.mc-next-start-button,
-  .mc-next-topbar-right > button.mc-next-mode-toggle {
+  .mc-next-topbar-right > button.mc-next-mode-toggle,
+  .mc-next-topbar-right > button.mc-next-wa-button {
     width: 1.65rem;
     min-width: 1.65rem;
     padding: 0;

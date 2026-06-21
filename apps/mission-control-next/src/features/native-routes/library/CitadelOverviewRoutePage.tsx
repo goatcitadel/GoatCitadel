@@ -1,9 +1,15 @@
-import { useEffect, useState } from "react";
-import { Castle, Hammer, Lock, Shield } from "lucide-react";
-import type { Citadel, CitadelGatehouseSummary } from "@goatcitadel/contracts";
-import { getCitadel, getCitadelGatehouse, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
+import { useEffect, useMemo, useState } from "react";
+import { Castle, Hammer, Lock, Shield, Sparkles } from "lucide-react";
+import type { Citadel, CitadelGatehouseSummary, CitadelTemplate } from "@goatcitadel/contracts";
+import {
+  createCitadelFromTemplate,
+  getCitadel,
+  getCitadelGatehouse,
+  isApiRequestError,
+  listCitadelTemplates,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, NativeButton } from "../primitives";
+import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -19,10 +25,26 @@ interface OverviewState {
   gatehouse: Gatehouse | null;
 }
 
+interface TemplateState {
+  loading: boolean;
+  error: string | null;
+  items: CitadelTemplate[];
+  busyTemplateId: string | null;
+}
+
 const INITIAL: OverviewState = { loading: true, error: null, staged: false, citadel: null, gatehouse: null };
+const INITIAL_TEMPLATES: TemplateState = { loading: true, error: null, items: [], busyTemplateId: null };
+const DEFAULT_CITADEL_KINDS: Array<CitadelTemplate["kind"]> = ["personal", "company"];
 
 function listSection(label: string, values: string[]): { title: string; body?: string } | null {
   return values.length > 0 ? { title: label, body: values.join(" · ") } : null;
+}
+
+function selectDefaultTemplates(templates: CitadelTemplate[]): CitadelTemplate[] {
+  return DEFAULT_CITADEL_KINDS.flatMap((kind) => {
+    const template = templates.find((item) => item.kind === kind);
+    return template ? [template] : [];
+  });
 }
 
 /**
@@ -30,8 +52,14 @@ function listSection(label: string, values: string[]): { title: string; body?: s
  * the active workspace *as* a Citadel — the workspace becomes a Citadel the moment
  * it has a Charter, so a workspace with none routes the operator to the Mason.
  */
-export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+export function CitadelOverviewRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  navigate,
+}: NativeRoutePagesProps) {
   const [state, setState] = useState<OverviewState>(INITIAL);
+  const [templateState, setTemplateState] = useState<TemplateState>(INITIAL_TEMPLATES);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,7 +85,27 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
     };
   }, [activeWorkspaceId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setTemplateState((current) => ({ ...current, loading: true, error: null }));
+    void listCitadelTemplates()
+      .then((items) => {
+        if (!cancelled) {
+          setTemplateState({ loading: false, error: null, items, busyTemplateId: null });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setTemplateState({ loading: false, error: getErrorMessage(error), items: [], busyTemplateId: null });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const { citadel, gatehouse } = state;
+  const defaultTemplates = useMemo(() => selectDefaultTemplates(templateState.items), [templateState.items]);
   const charter = citadel?.charter ?? null;
   const charterRows = charter
     ? [
@@ -67,6 +115,26 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
       ].filter((row): row is { title: string; body?: string } => row !== null)
     : [];
 
+  const handleCreateFromTemplate = async (template: CitadelTemplate) => {
+    setTemplateState((current) => ({ ...current, error: null, busyTemplateId: template.id }));
+    try {
+      const nextCitadel = await createCitadelFromTemplate(activeWorkspaceId, template.id);
+      let nextGatehouse: Gatehouse | null = null;
+      try {
+        nextGatehouse = await getCitadelGatehouse(activeWorkspaceId);
+      } catch (error: unknown) {
+        if (!isApiRequestError(error) || error.status !== 404) {
+          throw error;
+        }
+      }
+      setState({ loading: false, error: null, staged: true, citadel: nextCitadel, gatehouse: nextGatehouse });
+    } catch (error: unknown) {
+      setTemplateState((current) => ({ ...current, error: getErrorMessage(error) }));
+    } finally {
+      setTemplateState((current) => ({ ...current, busyTemplateId: null }));
+    }
+  };
+
   return (
     <NativePageFrame
       icon={Castle}
@@ -75,22 +143,56 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
       title="Citadel"
       description={`How ${activeWorkspaceName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture.`}
       loading={state.loading}
-      error={state.error}    >
+      error={state.error}
+    >
       {!state.staged ? (
-        <EmptyState
-          icon={<Castle className="h-5 w-5" />}
-          title={`${activeWorkspaceName} isn't a Citadel yet`}
-          description="A workspace becomes a Citadel once it has a Charter. The Mason can stage one for you — nothing is connected or activated until you confirm."
-          primaryAction={
-            <NativeButton
-              variant="default"
-              onClick={() => navigate({ area: "library", section: "citadel" })}
-            >
-              <Hammer className="h-4 w-4" />
-              Open the Mason
-            </NativeButton>
-          }
-        />
+        <div className="mc-next-citadel-defaults">
+          <EmptyState
+            icon={<Castle className="h-5 w-5" />}
+            title={`${activeWorkspaceName} isn't a Citadel yet`}
+            description="A workspace becomes a Citadel once it has a Charter. Start with one of the two default operating spaces, or use the Mason for a custom Blueprint."
+            primaryAction={
+              <NativeButton variant="outline" onClick={() => navigate({ area: "library", section: "citadel" })}>
+                <Hammer className="h-4 w-4" />
+                Open the Mason
+              </NativeButton>
+            }
+          />
+          <NativeCard
+            title="Default Citadels"
+            subtitle="Personal and Company are the two default starting points; both stay approval-governed until you connect Gates."
+            stats={[
+              { label: "Defaults", value: String(defaultTemplates.length || 2) },
+              { label: "Posture", value: "governed" },
+            ]}
+          >
+            {templateState.error ? <NoticeBanner tone="warning" message={templateState.error} /> : null}
+            {templateState.loading ? (
+              <EmptyState size="compact" title="Loading default Citadels..." />
+            ) : defaultTemplates.length > 0 ? (
+              <div className="mc-next-citadel-template-grid">
+                {defaultTemplates.map((template) => (
+                  <article key={template.id} className="mc-next-citadel-template-card">
+                    <header>
+                      <span>{template.kind}</span>
+                      <strong>{template.name}</strong>
+                    </header>
+                    <p>{template.description}</p>
+                    <NativeButton
+                      onClick={() => void handleCreateFromTemplate(template)}
+                      disabled={templateState.busyTemplateId !== null}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      {templateState.busyTemplateId === template.id ? "Creating..." : "Use template"}
+                    </NativeButton>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState size="compact" title="Default Citadel templates are unavailable." />
+            )}
+          </NativeCard>
+        </div>
       ) : (
         <NativeGrid>
           <NativeCard
@@ -108,11 +210,7 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
             {charter ? (
               <>
                 <p className="mc-next-citadel-purpose">{charter.purpose}</p>
-                <NativeList
-                  items={charterRows}
-                  emptyLabel="No goals or boundaries captured yet."
-                  density="compact"
-                />
+                <NativeList items={charterRows} emptyLabel="No goals or boundaries captured yet." density="compact" />
               </>
             ) : (
               <EmptyState size="compact" title="No Charter found." />
@@ -163,8 +261,8 @@ export function CitadelOverviewRoutePage({ route, activeWorkspaceId, activeWorks
       {state.staged ? (
         <p className="mc-next-citadel-footnote">
           <Shield className="h-3 w-3" aria-hidden="true" />
-          Wards and Gates are evaluated deny-wins. <Lock className="h-3 w-3" aria-hidden="true" /> Sealed Chambers
-          never widen access.
+          Wards and Gates are evaluated deny-wins. <Lock className="h-3 w-3" aria-hidden="true" /> Sealed Chambers never
+          widen access.
         </p>
       ) : null}
     </NativePageFrame>

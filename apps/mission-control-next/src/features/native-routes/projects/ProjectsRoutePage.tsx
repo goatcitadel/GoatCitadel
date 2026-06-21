@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
+  Castle,
   FolderPlus,
   MessageSquarePlus,
   Pencil,
@@ -486,7 +487,7 @@ export function ProjectsRoutePage({
   const recentLeadSession = projectHome?.recentSessions[0] ?? null;
   const leadContent =
     selectedProject && projectHome ? (
-      <article className="mc-next-project-card is-selected" aria-label="Continue where you left off">
+      <article className="mc-next-project-lead-card" aria-label="Continue where you left off">
         <div className="mc-next-settings-selectable-head">
           <strong>{selectedProject.name}</strong>
           <span>{projectHome.healthLabel}</span>
@@ -513,6 +514,13 @@ export function ProjectsRoutePage({
           >
             <MessageSquarePlus className="h-4 w-4" />
             {recentLeadSession ? "Open latest thread" : "Open project"}
+          </NativeButton>
+          <NativeButton
+            variant="outline"
+            onClick={() => navigate({ area: "library", section: "citadel-overview", theme: route.theme })}
+          >
+            <Castle className="h-4 w-4" />
+            Open Citadel
           </NativeButton>
         </div>
       </article>
@@ -696,10 +704,7 @@ export function ProjectsRoutePage({
         >
           {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
           {state.artifactIssue ? (
-            <NoticeBanner
-              tone="warning"
-              message={`Project artifact records could not load: ${state.artifactIssue}`}
-            />
+            <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
           ) : null}
           {selectedProject && projectHome ? (
             <ProjectHomeBasePanel

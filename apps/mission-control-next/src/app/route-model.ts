@@ -246,8 +246,78 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Browse project containers and their cross-surface threads.",
       area: "projects",
     },
+    {
+      id: "projects-citadels",
+      label: "Citadels",
+      description: "Govern personal, company, and project context with Charter, Chambers, and Gatehouse posture.",
+      area: "library",
+      section: "citadel-overview",
+    },
+    {
+      id: "projects-artifacts",
+      label: "Artifacts",
+      description: "Reopen generated outputs tied to project work.",
+      area: "library",
+      section: "artifacts",
+    },
+    {
+      id: "projects-sessions",
+      label: "Sessions",
+      description: "Review retained project runs, timelines, and evidence.",
+      area: "ops",
+      section: "sessions",
+    },
+    {
+      id: "projects-memory",
+      label: "Memory",
+      description: "Inspect reusable context and provenance before continuing work.",
+      area: "library",
+      section: "memory",
+    },
   ],
   library: [
+    {
+      id: "library-citadel-overview",
+      label: "Overview",
+      description: "See the active Citadel Charter, Chambers, and Gatehouse posture.",
+      area: "library",
+      section: "citadel-overview",
+    },
+    {
+      id: "library-citadel",
+      label: "Mason",
+      description: "Stage Personal or Company Citadels before connecting accounts or opening Gates.",
+      area: "library",
+      section: "citadel",
+    },
+    {
+      id: "library-citadel-wards",
+      label: "Wards",
+      description: "List, add, and test deny-wins Gatehouse Wards.",
+      area: "library",
+      section: "citadel-wards",
+    },
+    {
+      id: "library-citadel-council",
+      label: "Council",
+      description: "Inspect agents seated in the Citadel from the agents catalog.",
+      area: "library",
+      section: "citadel-council",
+    },
+    {
+      id: "library-citadel-vault",
+      label: "Vault",
+      description: "Store, reveal, and delete sealed Citadel secrets.",
+      area: "library",
+      section: "citadel-vault",
+    },
+    {
+      id: "library-citadel-blueprint",
+      label: "Blueprint",
+      description: "Export a secret-free Blueprint, or validate and import one.",
+      area: "library",
+      section: "citadel-blueprint",
+    },
     {
       id: "library-agents",
       label: "Agents",
@@ -324,50 +394,6 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Review ranked skill health, immunity flags, and archive proposals.",
       area: "library",
       section: "curator",
-    },
-    {
-      id: "library-citadel-overview",
-      label: "Overview",
-      description:
-        "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
-      area: "library",
-      section: "citadel-overview",
-    },
-    {
-      id: "library-citadel",
-      label: "Mason",
-      description:
-        "Stage a Citadel with the Mason and review the drafted Blueprint before connecting accounts or opening Gates.",
-      area: "library",
-      section: "citadel",
-    },
-    {
-      id: "library-citadel-wards",
-      label: "Wards",
-      description: "List, add, and test Gatehouse Wards (deny-wins) for the active Citadel.",
-      area: "library",
-      section: "citadel-wards",
-    },
-    {
-      id: "library-citadel-council",
-      label: "Council",
-      description: "Inspect the agents seated in the Citadel by reference to the agents catalog.",
-      area: "library",
-      section: "citadel-council",
-    },
-    {
-      id: "library-citadel-vault",
-      label: "Vault",
-      description: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
-      area: "library",
-      section: "citadel-vault",
-    },
-    {
-      id: "library-citadel-blueprint",
-      label: "Blueprint",
-      description: "Export the active Citadel as a secret-free Blueprint, or validate and import one.",
-      area: "library",
-      section: "citadel-blueprint",
     },
   ],
   ops: [
@@ -592,18 +618,8 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
   ],
   library: [
     {
-      id: "library-knowledge",
-      label: "Knowledge",
-      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
-    },
-    {
-      id: "library-assets",
-      label: "Assets",
-      sections: ["files", "artifacts", "communications", "prompt-packs", "curator"],
-    },
-    {
-      id: "library-citadel",
-      label: "Citadel",
+      id: "library-citadels",
+      label: "Citadels",
       sections: [
         "citadel-overview",
         "citadel",
@@ -612,6 +628,16 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
         "citadel-vault",
         "citadel-blueprint",
       ],
+    },
+    {
+      id: "library-knowledge",
+      label: "Knowledge",
+      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
+    },
+    {
+      id: "library-assets",
+      label: "Assets",
+      sections: ["files", "artifacts", "communications", "prompt-packs", "curator"],
     },
   ],
   ops: [

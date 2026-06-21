@@ -393,13 +393,15 @@ describe("MissionControlNextApp", () => {
       "\n",
     );
 
-    expect(css).toContain(".mc-next-topbar-left {\n  flex: 1 1 auto;");
-    expect(css).toContain(".mc-next-topbar-right {\n  flex: 0 1 auto;");
+    expect(css).toContain(".mc-next-topbar-left {\n  flex: 0 1 auto;");
+    expect(css).toContain(".mc-next-topbar-right {\n  flex: 1 1 34rem;");
     expect(css).toContain(".mc-next-primary-nav {\n  display: inline-flex;");
     expect(css).toContain("overflow-x: auto;");
-    expect(css).toContain(".mc-next-command-search {\n  order: -1;\n  flex: 1 1 18rem;\n  min-width: 9rem;");
+    expect(css).toContain(".mc-next-command-search {\n  order: -1;\n  flex: 1 1 16rem;\n  min-width: 11rem;");
+    expect(css).toContain(".mc-next-topbar-right > .mc-next-icon-button {");
+    expect(css).not.toContain(".mc-next-topbar-right > button:not(.mc-next-command-search)");
     // F1: lower-priority controls collapse into the overflow ⋯ More menu at the
-    // laptop breakpoint instead of clipping behind the topbar's `overflow: clip`.
+    // laptop breakpoint, while text badges stay outside the icon-only selector.
     expect(css).toContain(".mc-next-topbar-more-menu {");
     expect(css).toContain("z-index: var(--z-dropdown);");
     expect(css).toContain("@media (max-width: 1180px) {");
