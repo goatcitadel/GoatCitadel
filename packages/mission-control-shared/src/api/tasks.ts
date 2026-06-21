@@ -2,15 +2,25 @@ import type { TaskActivityRecord, TaskDeliverableRecord, TaskRecord, TaskSubagen
 import type { TaskArtifactClaim, TaskDistressSignalCode, TaskDistressSeverity } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
-function withWorkspaceQuery(path: string, workspaceId?: string): string {
-  const trimmed = workspaceId?.trim();
-  if (!trimmed) {
+function withWorkspaceQuery(path: string, workspaceId?: string, citadelId?: string): string {
+  const query = new URLSearchParams();
+  const trimmedCitadelId = citadelId?.trim();
+  const trimmedWorkspaceId = workspaceId?.trim();
+  if (trimmedCitadelId) {
+    query.set("citadelId", trimmedCitadelId);
+  }
+  if (trimmedWorkspaceId) {
+    query.set("workspaceId", trimmedWorkspaceId);
+  }
+  const suffix = query.toString();
+  if (!suffix) {
     return path;
   }
-  return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(trimmed)}`;
+  return `${path}${path.includes("?") ? "&" : "?"}${suffix}`;
 }
 
 interface FetchTasksOptions {
+  citadelId?: string;
   limit?: number;
   cursor?: string;
 }
@@ -26,6 +36,9 @@ export async function fetchTasks(
   }
   if (options.cursor?.trim()) {
     query.set("cursor", options.cursor.trim());
+  }
+  if (options.citadelId?.trim()) {
+    query.set("citadelId", options.citadelId.trim());
   }
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
@@ -46,6 +59,9 @@ export async function fetchTasksByView(
   if (options.cursor?.trim()) {
     query.set("cursor", options.cursor.trim());
   }
+  if (options.citadelId?.trim()) {
+    query.set("citadelId", options.citadelId.trim());
+  }
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
   }
@@ -55,6 +71,7 @@ export async function fetchTasksByView(
 }
 
 export async function createTask(input: {
+  citadelId?: string;
   workspaceId?: string;
   title: string;
   description?: string;
@@ -70,13 +87,17 @@ export async function updateTask(
   taskId: string,
   input: Partial<Pick<TaskRecord, "status" | "priority" | "title" | "description" | "dueAt">> & {
     assignedAgentId?: string | null;
+    citadelId?: string;
     workspaceId?: string;
   },
 ): Promise<TaskRecord> {
-  return request<TaskRecord>(withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}`, input.workspaceId), {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
+  return request<TaskRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}`, input.workspaceId, input.citadelId),
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function deleteTask(
@@ -86,12 +107,17 @@ export async function deleteTask(
     deletedBy?: string;
     deleteReason?: string;
     confirmToken?: string;
+    citadelId?: string;
     workspaceId?: string;
   },
 ): Promise<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }> {
   const mode = input?.mode ?? "soft";
   return request<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`, input?.workspaceId),
+    withWorkspaceQuery(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`,
+      input?.workspaceId,
+      input?.citadelId,
+    ),
     {
       method: "DELETE",
       body: JSON.stringify({
@@ -99,6 +125,7 @@ export async function deleteTask(
         deletedBy: input?.deletedBy,
         deleteReason: input?.deleteReason,
         confirmToken: input?.confirmToken,
+        citadelId: input?.citadelId,
         workspaceId: input?.workspaceId,
       }),
     },
@@ -108,12 +135,13 @@ export async function deleteTask(
 export async function restoreTask(
   taskId: string,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<{ restored: boolean; taskId: string }> {
   return request<{ restored: boolean; taskId: string }>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ workspaceId }),
+      body: JSON.stringify({ citadelId, workspaceId }),
     },
   );
 }
@@ -121,9 +149,10 @@ export async function restoreTask(
 export async function fetchTaskActivities(
   taskId: string,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<{ items: TaskActivityRecord[] }> {
   return request<{ items: TaskActivityRecord[] }>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, workspaceId, citadelId),
   );
 }
 
@@ -133,14 +162,16 @@ export async function addTaskActivity(
     message: string;
     activityType?: TaskActivityRecord["activityType"];
     agentId?: string;
+    citadelId?: string;
     workspaceId?: string;
   },
 ): Promise<TaskActivityRecord> {
   return request<TaskActivityRecord>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, input.workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, input.workspaceId, input.citadelId),
     {
       method: "POST",
       body: JSON.stringify({
+        citadelId: input.citadelId,
         workspaceId: input.workspaceId,
         activityType: input.activityType ?? "comment",
         message: input.message,
@@ -153,9 +184,10 @@ export async function addTaskActivity(
 export async function fetchTaskDeliverables(
   taskId: string,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<{ items: TaskDeliverableRecord[] }> {
   return request<{ items: TaskDeliverableRecord[] }>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, workspaceId, citadelId),
   );
 }
 
@@ -166,14 +198,16 @@ export async function addTaskDeliverable(
     deliverableType?: TaskDeliverableRecord["deliverableType"];
     path?: string;
     description?: string;
+    citadelId?: string;
     workspaceId?: string;
   },
 ): Promise<TaskDeliverableRecord> {
   return request<TaskDeliverableRecord>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, input.workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, input.workspaceId, input.citadelId),
     {
       method: "POST",
       body: JSON.stringify({
+        citadelId: input.citadelId,
         workspaceId: input.workspaceId,
         deliverableType: input.deliverableType ?? "artifact",
         title: input.title,
@@ -187,18 +221,19 @@ export async function addTaskDeliverable(
 export async function fetchTaskSubagents(
   taskId: string,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<{ items: TaskSubagentSession[] }> {
   return request<{ items: TaskSubagentSession[] }>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, workspaceId, citadelId),
   );
 }
 
 export async function registerTaskSubagent(
   taskId: string,
-  input: { agentSessionId: string; agentName?: string; workspaceId?: string },
+  input: { agentSessionId: string; agentName?: string; citadelId?: string; workspaceId?: string },
 ): Promise<TaskSubagentSession> {
   return request<TaskSubagentSession>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, input.workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, input.workspaceId, input.citadelId),
     {
       method: "POST",
       body: JSON.stringify(input),
@@ -227,10 +262,10 @@ export interface EmitTaskDistressBody {
 
 export async function emitTaskDistress(
   taskId: string,
-  input: EmitTaskDistressBody & { workspaceId?: string },
+  input: EmitTaskDistressBody & { citadelId?: string; workspaceId?: string },
 ): Promise<TaskRecord> {
   return request<TaskRecord>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress`, input.workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress`, input.workspaceId, input.citadelId),
     {
       method: "POST",
       body: JSON.stringify(input),
@@ -241,12 +276,13 @@ export async function emitTaskDistress(
 export async function resolveTaskDistress(
   taskId: string,
   signalId: string,
-  input?: { workspaceId?: string },
+  input?: { citadelId?: string; workspaceId?: string },
 ): Promise<TaskRecord> {
   return request<TaskRecord>(
     withWorkspaceQuery(
       `/api/v1/tasks/${encodeURIComponent(taskId)}/distress/${encodeURIComponent(signalId)}`,
       input?.workspaceId,
+      input?.citadelId,
     ),
     {
       method: "DELETE",
@@ -259,12 +295,13 @@ export async function setTaskRetryBudget(
   taskId: string,
   maxRetries: number,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<TaskRecord> {
   return request<TaskRecord>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ maxRetries, workspaceId }),
+      body: JSON.stringify({ citadelId, maxRetries, workspaceId }),
     },
   );
 }
@@ -273,12 +310,13 @@ export async function verifyTaskArtifacts(
   taskId: string,
   claims: TaskArtifactClaim[],
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<TaskRecord> {
   return request<TaskRecord>(
-    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, workspaceId),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ claims, workspaceId }),
+      body: JSON.stringify({ citadelId, claims, workspaceId }),
     },
   );
 }
@@ -290,7 +328,7 @@ export type BulkTaskActionInput =
   | { action: "close"; taskIds: string[] };
 
 export async function bulkTaskAction(
-  input: BulkTaskActionInput & { workspaceId?: string },
+  input: BulkTaskActionInput & { citadelId?: string; workspaceId?: string },
 ): Promise<{ tasks: TaskRecord[] }> {
   return request<{ tasks: TaskRecord[] }>(`/api/v1/tasks/bulk`, {
     method: "POST",

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 const listChatSessionsSchema = z.object({
   scope: z.enum(["mission", "external", "all"]).optional(),
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),
@@ -21,6 +22,7 @@ const listChatSessionsSchema = z.object({
 const searchChatSessionsSchema = z.object({
   query: z.string().trim().min(1),
   mode: z.enum(["discovery", "scroll", "browse"]).default("discovery"),
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   surface: z.enum(["chat", "cowork", "code"]).optional(),
   limit: z.coerce.number().int().positive().max(200).default(20),
@@ -45,10 +47,12 @@ const artifactParamsSchema = z.object({
 });
 
 const artifactWorkspaceQuerySchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1),
 });
 
 const createSessionSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   title: z.string().optional(),
   folderId: z.string().optional(),
@@ -66,6 +70,7 @@ const createSideChatSchema = z.object({
 });
 
 const bulkArchiveSessionsSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   scope: z.enum(["mission", "external", "all"]).default("mission"),
   includeHidden: z.boolean().optional(),
@@ -128,6 +133,7 @@ const workbenchRevertFileBodySchema = z.object({
 });
 
 const generatedArtifactsQuerySchema = z.object({
+  citadelId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
@@ -152,6 +158,7 @@ const attachKnowledgeSchema = z
   });
 
 const crossProjectRecentsQuerySchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1),
   limit: z.coerce.number().int().positive().max(20).default(8),
 });
@@ -186,6 +193,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.send({
         item: fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
           workspaceId: query.data.workspaceId,
+          citadelId: query.data.citadelId,
         }),
       });
     } catch (error) {
@@ -248,6 +256,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     const workspaceId = parsed.data.workspaceId;
     const items = fastify.services.chatSessions.listRecentCrossProjectSessions({
+      citadelId: parsed.data.citadelId,
       workspaceId,
       limit: parsed.data.limit,
     });

@@ -78,6 +78,7 @@ const COWORK_TASK_PAGE_CAP = 20;
 
 export function CoworkNativePage({
   route,
+  activeCitadelId,
   activeWorkspaceId,
   activeWorkspaceName,
   pendingApprovals,
@@ -126,11 +127,11 @@ export function CoworkNativePage({
     const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     const [tasks, deletedTasks, operators] = await Promise.all([
-      nativeLoad("Cowork tasks", fetchTasksByViewPaged("active", activeWorkspaceId), {
+      nativeLoad("Cowork tasks", fetchTasksByViewPaged("active", activeWorkspaceId, activeCitadelId), {
         items: [],
         view: "active",
       }),
-      nativeLoad("Deleted tasks", fetchTasksByViewPaged("trash", activeWorkspaceId), {
+      nativeLoad("Deleted tasks", fetchTasksByViewPaged("trash", activeWorkspaceId, activeCitadelId), {
         items: [],
         view: "trash",
       }),
@@ -160,7 +161,7 @@ export function CoworkNativePage({
       itemCount: tasks.data.items.length + deletedTasks.data.items.length + operators.data.items.length,
       issueCount: issues.length,
     });
-  }, [activeWorkspaceId, isMounted, section]);
+  }, [activeCitadelId, activeWorkspaceId, isMounted, section]);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,7 +261,7 @@ export function CoworkNativePage({
     }
     let cancelled = false;
     setDeliverables((current) => ({ ...current, loading: true, error: null }));
-    void fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId)
+    void fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId, activeCitadelId)
       .then((result) => {
         if (!cancelled) {
           setDeliverables({ loading: false, error: null, data: result.items });
@@ -274,7 +275,7 @@ export function CoworkNativePage({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, selectedTask]);
+  }, [activeCitadelId, activeWorkspaceId, selectedTask]);
 
   const refreshCowork = async () => {
     try {
@@ -293,6 +294,7 @@ export function CoworkNativePage({
     }
     try {
       const created = await createTask({
+        citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         title: createDraft.title.trim(),
         description: createDraft.description.trim() || undefined,
@@ -325,6 +327,7 @@ export function CoworkNativePage({
     }
     try {
       await updateTask(selectedTask.taskId, {
+        citadelId: activeCitadelId,
         workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
         title: detailDraft.title.trim() || selectedTask.title,
         description: detailDraft.description.trim() || undefined,
@@ -358,6 +361,7 @@ export function CoworkNativePage({
     }
     try {
       await addTaskDeliverable(selectedTask.taskId, {
+        citadelId: activeCitadelId,
         workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
         title: deliverableDraft.title.trim(),
         deliverableType: deliverableDraft.deliverableType,
@@ -373,7 +377,11 @@ export function CoworkNativePage({
       });
       setNotice({ tone: "success", message: "Deliverable added." });
       setDeliverableDraft({ title: "", deliverableType: "artifact", path: "", description: "" });
-      const result = await fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
+      const result = await fetchTaskDeliverables(
+        selectedTask.taskId,
+        selectedTask.workspaceId ?? activeWorkspaceId,
+        activeCitadelId,
+      );
       if (!isMounted()) {
         return;
       }
@@ -391,6 +399,7 @@ export function CoworkNativePage({
     }
     try {
       await deleteTask(selectedTask.taskId, {
+        citadelId: activeCitadelId,
         mode: "soft",
         deletedBy: "operator",
         workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
@@ -413,7 +422,7 @@ export function CoworkNativePage({
       return;
     }
     try {
-      await restoreTask(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
+      await restoreTask(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId, activeCitadelId);
       if (!isMounted()) {
         return;
       }
@@ -838,10 +847,7 @@ export function CoworkNativePage({
       </div>
       <p>{coworkContinuation.nextActionDetail}</p>
       {leadIsBlocker ? (
-        <NativeButton
-          variant="secondary"
-          onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}
-        >
+        <NativeButton variant="secondary" onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}>
           <AlertTriangle className="h-4 w-4" />
           Open blocker
         </NativeButton>
@@ -887,11 +893,13 @@ export function CoworkNativePage({
 async function fetchTasksByViewPaged(
   view: "active" | "trash",
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<{ items: TaskRecord[]; nextCursor?: string; view: "active" | "trash" }> {
   const items: TaskRecord[] = [];
   let nextCursor: string | undefined;
   for (let page = 0; page < COWORK_TASK_PAGE_CAP; page += 1) {
     const result = await fetchTasksByView(view, undefined, workspaceId, {
+      citadelId,
       limit: COWORK_TASK_PAGE_LIMIT,
       cursor: nextCursor,
     });

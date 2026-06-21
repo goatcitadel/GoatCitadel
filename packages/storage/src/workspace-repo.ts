@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import type { WorkspaceCreateInput, WorkspacePrefs, WorkspaceRecord, WorkspaceUpdateInput } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import type {
+  WorkspaceCreateInput,
+  WorkspacePrefs,
+  WorkspaceRecord,
+  WorkspaceUpdateInput,
+} from "@goatcitadel/contracts";
+import { ConflictError, DEFAULT_CITADEL_ID, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface WorkspaceRow {
   workspace_id: string;
+  citadel_id: string | null;
   name: string;
   description: string | null;
   slug: string;
@@ -18,6 +24,7 @@ interface WorkspaceRow {
 
 export class WorkspaceRepository {
   private readonly listStmt;
+  private readonly listByCitadelStmt;
   private readonly getStmt;
   private readonly getBySlugStmt;
   private readonly insertStmt;
@@ -36,19 +43,33 @@ export class WorkspaceRepository {
       ORDER BY updated_at DESC, workspace_id ASC
       LIMIT @limit
     `);
+    this.listByCitadelStmt = db.prepare(`
+      SELECT * FROM workspaces
+      WHERE citadel_id = @citadelId
+        AND (
+          @view = 'all'
+          OR (@view = 'active' AND lifecycle_status = 'active')
+          OR (@view = 'archived' AND lifecycle_status = 'archived')
+        )
+      ORDER BY updated_at DESC, workspace_id ASC
+      LIMIT @limit
+    `);
     this.getStmt = db.prepare("SELECT * FROM workspaces WHERE workspace_id = ?");
     this.getBySlugStmt = db.prepare("SELECT * FROM workspaces WHERE slug = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO workspaces (
-        workspace_id, name, description, slug, lifecycle_status, archived_at, workspace_prefs_json, created_at, updated_at
+        workspace_id, citadel_id, name, description, slug, lifecycle_status, archived_at,
+        workspace_prefs_json, created_at, updated_at
       ) VALUES (
-        @workspaceId, @name, @description, @slug, 'active', NULL, @workspacePrefsJson, @createdAt, @updatedAt
+        @workspaceId, @citadelId, @name, @description, @slug, 'active', NULL,
+        @workspacePrefsJson, @createdAt, @updatedAt
       )
     `);
     this.updateStmt = db.prepare(`
       UPDATE workspaces
       SET
         name = @name,
+        citadel_id = @citadelId,
         description = @description,
         slug = @slug,
         workspace_prefs_json = @workspacePrefsJson,
@@ -74,10 +95,27 @@ export class WorkspaceRepository {
   }
 
   public list(view: "active" | "archived" | "all" = "active", limit = 200): WorkspaceRecord[] {
-    const rows = toWorkspaceRows(this.listStmt.all({
-      view,
-      limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }));
+    const rows = toWorkspaceRows(
+      this.listStmt.all({
+        view,
+        limit: Math.max(1, Math.min(2000, Math.floor(limit))),
+      }),
+    );
+    return rows.map(mapRow);
+  }
+
+  public listByCitadel(
+    citadelId: string,
+    view: "active" | "archived" | "all" = "active",
+    limit = 200,
+  ): WorkspaceRecord[] {
+    const rows = toWorkspaceRows(
+      this.listByCitadelStmt.all({
+        citadelId: normalizeCitadelId(citadelId),
+        view,
+        limit: Math.max(1, Math.min(2000, Math.floor(limit))),
+      }),
+    );
     return rows.map(mapRow);
   }
 
@@ -106,6 +144,7 @@ export class WorkspaceRepository {
     this.assertSlugAvailable(slug);
     this.insertStmt.run({
       workspaceId,
+      citadelId: normalizeCitadelId(input.citadelId),
       name,
       description: sanitizeOptional(input.description),
       slug,
@@ -119,18 +158,25 @@ export class WorkspaceRepository {
   public update(workspaceId: string, input: WorkspaceUpdateInput, now = new Date().toISOString()): WorkspaceRecord {
     const current = this.get(workspaceId);
     const nextName = input.name !== undefined ? sanitizeRequired(input.name, "name") : current.name;
-    const nextSlug = input.slug !== undefined
-      ? normalizeSlug(input.slug)
-      : (input.name !== undefined ? normalizeSlug(input.name) : current.slug);
+    const nextSlug =
+      input.slug !== undefined
+        ? normalizeSlug(input.slug)
+        : input.name !== undefined
+          ? normalizeSlug(input.name)
+          : current.slug;
     this.assertSlugAvailable(nextSlug, workspaceId);
     this.updateStmt.run({
       workspaceId,
+      citadelId:
+        input.citadelId !== undefined ? normalizeCitadelId(input.citadelId) : normalizeCitadelId(current.citadelId),
       name: nextName,
-      description: input.description !== undefined ? sanitizeOptional(input.description) : current.description ?? null,
+      description:
+        input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
       slug: nextSlug,
-      workspacePrefsJson: input.workspacePrefs !== undefined
-        ? serializeWorkspacePrefs(input.workspacePrefs)
-        : serializeWorkspacePrefs(current.workspacePrefs),
+      workspacePrefsJson:
+        input.workspacePrefs !== undefined
+          ? serializeWorkspacePrefs(input.workspacePrefs)
+          : serializeWorkspacePrefs(current.workspacePrefs),
       updatedAt: now,
     });
     return this.get(workspaceId);
@@ -176,6 +222,7 @@ function mapRow(row: WorkspaceRow): WorkspaceRecord {
   const prefs = safeJsonParse<WorkspacePrefs | undefined>(row.workspace_prefs_json ?? "{}", {});
   return {
     workspaceId: row.workspace_id,
+    citadelId: normalizeCitadelId(row.citadel_id ?? undefined),
     name: row.name,
     description: row.description ?? undefined,
     slug: row.slug,
@@ -226,6 +273,11 @@ function serializeWorkspacePrefs(value: WorkspacePrefs | undefined): string {
   return JSON.stringify(value);
 }
 
+function normalizeCitadelId(value?: string): string {
+  const trimmed = value?.trim();
+  return trimmed || DEFAULT_CITADEL_ID;
+}
+
 function toWorkspaceRow(value: unknown): WorkspaceRow | undefined {
   return isWorkspaceRow(value) ? value : undefined;
 }
@@ -241,19 +293,20 @@ function isWorkspaceRow(value: unknown): value is WorkspaceRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.workspace_id === "string"
-    && typeof value.name === "string"
-    && (typeof value.description === "string" || value.description === null)
-    && typeof value.slug === "string"
-    && typeof value.lifecycle_status === "string"
-    && (typeof value.archived_at === "string" || value.archived_at === null)
-    && (typeof value.workspace_prefs_json === "string" || value.workspace_prefs_json === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.workspace_id === "string" &&
+    (typeof value.citadel_id === "string" || value.citadel_id === null || value.citadel_id === undefined) &&
+    typeof value.name === "string" &&
+    (typeof value.description === "string" || value.description === null) &&
+    typeof value.slug === "string" &&
+    typeof value.lifecycle_status === "string" &&
+    (typeof value.archived_at === "string" || value.archived_at === null) &&
+    (typeof value.workspace_prefs_json === "string" || value.workspace_prefs_json === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

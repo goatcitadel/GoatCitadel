@@ -35,7 +35,13 @@ const INITIAL_DRAFT: DraftState = { name: "", actionPattern: "", effect: "deny",
  * the most restrictive matching effect governs an action. This surface lists the
  * Citadel's Wards, adds new ones, and lets the operator test an action against them.
  */
-export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelWardsRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  activeCitadelId = activeWorkspaceId,
+  activeCitadelName = activeWorkspaceName,
+}: NativeRoutePagesProps) {
   const nameId = useId();
   const patternId = useId();
   const effectId = useId();
@@ -48,7 +54,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
   useEffect(() => {
     let cancelled = false;
     setWards((current) => ({ ...current, loading: true, error: null }));
-    void listCitadelWards(activeWorkspaceId)
+    void listCitadelWards(activeCitadelId)
       .then((items) => {
         if (!cancelled) {
           setWards({ loading: false, error: null, items });
@@ -62,7 +68,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
 
   const addWard = useCallback(async () => {
     if (draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0) {
@@ -70,7 +76,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
     }
     setDraft((current) => ({ ...current, busy: true, error: null }));
     try {
-      const record = await addCitadelWard(activeWorkspaceId, {
+      const record = await addCitadelWard(activeCitadelId, {
         name: draft.name.trim(),
         actionPattern: draft.actionPattern.trim(),
         effect: draft.effect,
@@ -80,7 +86,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
     } catch (error) {
       setDraft((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
     }
-  }, [activeWorkspaceId, draft.actionPattern, draft.effect, draft.name]);
+  }, [activeCitadelId, draft.actionPattern, draft.effect, draft.name]);
 
   const evaluate = useCallback(async () => {
     const action = probe.trim();
@@ -88,12 +94,12 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
       return;
     }
     try {
-      const result = await evaluateCitadelGatehouseAction(activeWorkspaceId, action);
+      const result = await evaluateCitadelGatehouseAction(activeCitadelId, action);
       setProbeResult(result);
     } catch (error) {
       setProbeResult({ action, effect: getErrorMessage(error) });
     }
-  }, [activeWorkspaceId, probe]);
+  }, [activeCitadelId, probe]);
 
   return (
     <NativePageFrame
@@ -101,7 +107,7 @@ export function CitadelWardsRoutePage({ route, activeWorkspaceId, activeWorkspac
       area="library"
       kicker={routeKicker(route)}
       title="Wards"
-      description={`Access policy for ${activeWorkspaceName}. Wards are evaluated deny-wins — the most restrictive matching effect governs an action.`}
+      description={`Access policy for ${activeCitadelName}. Wards are evaluated deny-wins; the most restrictive matching effect governs an action.`}
       loading={wards.loading}
       error={wards.error}
     >

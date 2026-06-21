@@ -146,10 +146,14 @@ export async function fetchChatProjects(
   view: "active" | "archived" | "all" = "active",
   limit = 300,
   workspaceId?: string,
+  citadelId?: string,
 ): Promise<ChatProjectsResponse> {
   const query = new URLSearchParams();
   query.set("view", view);
   query.set("limit", String(limit));
+  if (citadelId?.trim()) {
+    query.set("citadelId", citadelId.trim());
+  }
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
   }
@@ -157,6 +161,7 @@ export async function fetchChatProjects(
 }
 
 export async function createChatProject(input: {
+  citadelId?: string;
   workspaceId?: string;
   name: string;
   description?: string;
@@ -170,6 +175,7 @@ export async function createChatProject(input: {
 }
 
 export async function importChatProject(input: {
+  citadelId?: string;
   workspaceId?: string;
   name?: string;
   sourceType: "local_folder" | "github_repo";
@@ -186,6 +192,7 @@ export async function importChatProject(input: {
 export async function updateChatProject(
   projectId: string,
   input: {
+    citadelId?: string;
     workspaceId?: string;
     name?: string;
     description?: string;
@@ -227,6 +234,7 @@ export async function hardDeleteChatProject(
 
 export async function fetchChatSessions(input?: {
   scope?: "mission" | "external" | "all";
+  citadelId?: string;
   workspaceId?: string;
   projectId?: string;
   folderId?: string;
@@ -240,6 +248,7 @@ export async function fetchChatSessions(input?: {
 }): Promise<ChatSessionsResponse> {
   const query = new URLSearchParams();
   if (input?.scope) query.set("scope", input.scope);
+  if (input?.citadelId) query.set("citadelId", input.citadelId);
   if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input?.projectId) query.set("projectId", input.projectId);
   if (input?.folderId) query.set("folderId", input.folderId);
@@ -256,6 +265,7 @@ export async function fetchChatSessions(input?: {
 export async function fetchChatSessionSearch(input: {
   query: string;
   mode?: ChatSessionSearchMode;
+  citadelId?: string;
   workspaceId?: string;
   surface?: ChatMode;
   limit?: number;
@@ -265,6 +275,7 @@ export async function fetchChatSessionSearch(input: {
   const query = new URLSearchParams();
   query.set("query", input.query);
   if (input.mode) query.set("mode", input.mode);
+  if (input.citadelId) query.set("citadelId", input.citadelId);
   if (input.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input.surface) query.set("surface", input.surface);
   if (input.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
@@ -275,6 +286,7 @@ export async function fetchChatSessionSearch(input: {
 
 export async function createChatSession(
   input?: {
+    citadelId?: string;
     workspaceId?: string;
     title?: string;
     folderId?: string;
@@ -554,6 +566,7 @@ export async function fetchChatMessages(
 }
 
 export async function fetchChatGeneratedArtifacts(input?: {
+  citadelId?: string;
   sessionId?: string;
   workspaceId?: string;
   projectId?: string;
@@ -562,6 +575,7 @@ export async function fetchChatGeneratedArtifacts(input?: {
   limit?: number;
 }): Promise<ChatGeneratedArtifactsResponse> {
   const query = new URLSearchParams();
+  if (input?.citadelId) query.set("citadelId", input.citadelId);
   if (input?.sessionId) query.set("sessionId", input.sessionId);
   if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input?.projectId) query.set("projectId", input.projectId);
@@ -574,8 +588,12 @@ export async function fetchChatGeneratedArtifacts(input?: {
 export async function fetchChatGeneratedArtifact(
   artifactId: string,
   workspaceId: string,
+  citadelId?: string,
 ): Promise<ChatGeneratedArtifactResponse> {
   const query = new URLSearchParams({ workspaceId });
+  if (citadelId?.trim()) {
+    query.set("citadelId", citadelId.trim());
+  }
   return request<ChatGeneratedArtifactResponse>(
     `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}?${query.toString()}`,
   );

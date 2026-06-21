@@ -8,6 +8,7 @@ const globalDocTypeSchema = z.enum(["goatcitadel", "agents", "claude", "contribu
 const listWorkspacesQuerySchema = z.object({
   view: z.enum(["active", "archived", "all"]).default("active"),
   limit: z.coerce.number().int().positive().max(500).default(200),
+  citadelId: z.string().min(1).optional(),
 });
 
 const workspaceParamsSchema = z.object({
@@ -15,6 +16,7 @@ const workspaceParamsSchema = z.object({
 });
 
 const createWorkspaceSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
   slug: z.string().min(1).optional(),
@@ -22,6 +24,7 @@ const createWorkspaceSchema = z.object({
 });
 
 const updateWorkspaceSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   slug: z.string().min(1).optional(),
@@ -48,8 +51,9 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.workspaces.listWorkspaces(query.data.view, query.data.limit),
+      items: fastify.services.workspaces.listWorkspaces(query.data.view, query.data.limit, query.data.citadelId),
       view: query.data.view,
+      citadelId: query.data.citadelId,
     });
   });
 

@@ -64,7 +64,10 @@ export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies)
     getWorkspace,
     listGlobalGuidance: () => deps.listGlobalGuidance(),
     listWorkspaceGuidance: (workspaceId) => deps.listWorkspaceGuidance(workspaceId),
-    listWorkspaces: (view = "active", limit = 200) => deps.storage.workspaces.list(view, limit),
+    listWorkspaces: (view = "active", limit = 200, citadelId?: string) =>
+      citadelId?.trim()
+        ? deps.storage.workspaces.listByCitadel(citadelId, view, limit)
+        : deps.storage.workspaces.list(view, limit),
     restoreWorkspace: (workspaceId) => {
       const restored = deps.storage.workspaces.restore(deps.normalizeWorkspaceId(workspaceId));
       deps.publishRealtime("workspace_restored", "system", {

@@ -9,10 +9,12 @@ import type {
 } from "./citadels.js";
 import {
   CITADEL_TEMPLATES,
+  DEFAULT_CITADEL_ID,
   applyCitadelTemplate,
   findCitadelTemplate,
   isWithinCitadelScope,
   resolveCitadelScope,
+  resolveEffectiveRuntimeScope,
   summarizeCitadelGatehouse,
 } from "./citadels.js";
 
@@ -36,6 +38,33 @@ describe("resolveCitadelScope", () => {
     expect(resolveCitadelScope({})).toBeUndefined();
     expect(resolveCitadelScope(undefined)).toBeUndefined();
     expect(resolveCitadelScope({ workspaceId: "   " })).toBeUndefined();
+  });
+});
+
+describe("resolveEffectiveRuntimeScope", () => {
+  it("defaults to the Personal Citadel and default workspace for legacy callers", () => {
+    expect(resolveEffectiveRuntimeScope({})).toEqual({
+      citadelId: DEFAULT_CITADEL_ID,
+      workspaceId: "default",
+    });
+  });
+
+  it("preserves explicit Citadel, workspace, project, session, and mode scope", () => {
+    expect(
+      resolveEffectiveRuntimeScope({
+        citadelId: "company",
+        workspaceId: "engineering",
+        projectId: "project-1",
+        sessionId: "session-1",
+        mode: "code",
+      }),
+    ).toEqual({
+      citadelId: "company",
+      workspaceId: "engineering",
+      projectId: "project-1",
+      sessionId: "session-1",
+      mode: "code",
+    });
   });
 });
 

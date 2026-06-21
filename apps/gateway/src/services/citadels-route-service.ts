@@ -7,18 +7,22 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCreateInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
   CitadelGatehouseSummary,
   CitadelIntegrationGrant,
   CitadelIntegrationGrantInput,
+  CitadelLifecycleStatus,
   CitadelMember,
   CitadelMemberInput,
   MasonAnswers,
   MasonSession,
   CitadelPassage,
   CitadelPassageInput,
+  CitadelRecord,
   CitadelTemplate,
+  CitadelUpdateInput,
   CitadelVaultSecretInput,
   CitadelVaultSecretMetadata,
   CitadelVaultSecretRecord,
@@ -79,6 +83,12 @@ export type MasonMessageResult =
  * storage CitadelRepository) so routes depend on behaviour, not the concrete repo.
  */
 export interface CitadelsRoutePort {
+  listRecords(view?: CitadelLifecycleStatus | "all", limit?: number): CitadelRecord[];
+  getRecord(citadelId: string): CitadelRecord;
+  createRecord(input: CitadelCreateInput): CitadelRecord;
+  updateRecord(citadelId: string, input: CitadelUpdateInput): CitadelRecord;
+  archiveRecord(citadelId: string): CitadelRecord;
+  restoreRecord(citadelId: string): CitadelRecord;
   getCitadel(citadelId: string): Citadel | undefined;
   upsertCharter(input: CitadelCharterInput): CitadelCharter;
   createChamber(input: CitadelChamberInput): CitadelChamber;
@@ -114,6 +124,30 @@ export class CitadelsRouteService {
     private readonly masonInterpret?: MasonInterpret,
     private readonly vaultKey?: VaultKeyProvider,
   ) {}
+
+  public listRecords(view: CitadelLifecycleStatus | "all" = "active", limit = 200): CitadelRecord[] {
+    return this.citadels.listRecords(view, limit);
+  }
+
+  public getRecord(citadelId: string): CitadelRecord {
+    return this.citadels.getRecord(citadelId);
+  }
+
+  public createRecord(input: CitadelCreateInput): CitadelRecord {
+    return this.citadels.createRecord(input);
+  }
+
+  public updateRecord(citadelId: string, input: CitadelUpdateInput): CitadelRecord {
+    return this.citadels.updateRecord(citadelId, input);
+  }
+
+  public archiveRecord(citadelId: string): CitadelRecord {
+    return this.citadels.archiveRecord(citadelId);
+  }
+
+  public restoreRecord(citadelId: string): CitadelRecord {
+    return this.citadels.restoreRecord(citadelId);
+  }
 
   public getCitadel(citadelId: string): Citadel | undefined {
     return this.citadels.getCitadel(citadelId);

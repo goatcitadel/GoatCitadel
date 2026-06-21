@@ -506,6 +506,8 @@ function renderRoute(area: string, section?: string, extras: Record<string, unkn
   return create(
     <NativeRoutePages
       route={{ area, section, theme: "ops" } as any}
+      activeCitadelId="company"
+      activeCitadelName="Company"
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={1}
@@ -733,7 +735,10 @@ describe("NativeRoutePages library coverage", () => {
     await change(field(files.root, "Template", "select"), "brief");
     await change(files.root.findByProps({ placeholder: "Optional target path override" }), "docs/new-brief.md");
     await click(findButton(files.root, "Create file"));
-    expect(routeMocks.createFileFromTemplate).toHaveBeenCalledWith("brief", "docs/new-brief.md");
+    expect(routeMocks.createFileFromTemplate).toHaveBeenCalledWith("brief", "docs/new-brief.md", {
+      citadelId: "company",
+      workspaceId: "default",
+    });
 
     const artifacts = await mount("library", "artifacts");
     expect(collectText(artifacts.root)).toContain("Generated artifacts");
@@ -744,7 +749,11 @@ describe("NativeRoutePages library coverage", () => {
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     expect(collectText(artifacts.root)).toContain("# Release");
     await click(findButton(artifacts.root, "Refresh"));
-    expect(routeMocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({ workspaceId: "default", limit: 80 });
+    expect(routeMocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({
+      citadelId: "company",
+      workspaceId: "default",
+      limit: 80,
+    });
   });
 
   it("covers Cowork task creation, editing, deliverables, trash restore, and board lanes", async () => {
@@ -759,10 +768,12 @@ describe("NativeRoutePages library coverage", () => {
     routeMocks.fetchTasksByView.mockClear();
     await click(findButton(cowork.root, "Refresh"));
     expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("active", undefined, "default", {
+      citadelId: "company",
       cursor: undefined,
       limit: 100,
     });
     expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("trash", undefined, "default", {
+      citadelId: "company",
       cursor: undefined,
       limit: 100,
     });
@@ -775,7 +786,12 @@ describe("NativeRoutePages library coverage", () => {
     await change(field(cowork.root, "Priority", "select"), "high");
     await click(findButton(cowork.root, "Create task"));
     expect(routeMocks.createTask).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "default", title: "Created task", priority: "high" }),
+      expect.objectContaining({
+        citadelId: "company",
+        workspaceId: "default",
+        title: "Created task",
+        priority: "high",
+      }),
     );
 
     await change(field(cowork.root, "Title", "input"), "Plan coverage updated");
@@ -786,6 +802,7 @@ describe("NativeRoutePages library coverage", () => {
     expect(routeMocks.updateTask).toHaveBeenCalledWith(
       "task-planning",
       expect.objectContaining({
+        citadelId: "company",
         title: "Plan coverage updated",
         description: "Updated coverage plan.",
         status: "testing",
@@ -801,11 +818,17 @@ describe("NativeRoutePages library coverage", () => {
     await click(findButton(cowork.root, "Add deliverable"));
     expect(routeMocks.addTaskDeliverable).toHaveBeenCalledWith(
       "task-planning",
-      expect.objectContaining({ title: "Coverage report", deliverableType: "file", path: "artifacts/coverage.md" }),
+      expect.objectContaining({
+        citadelId: "company",
+        title: "Coverage report",
+        deliverableType: "file",
+        path: "artifacts/coverage.md",
+      }),
     );
 
     await click(findButton(cowork.root, "Move to trash"));
     expect(routeMocks.deleteTask).toHaveBeenCalledWith("task-planning", {
+      citadelId: "company",
       mode: "soft",
       deletedBy: "operator",
       workspaceId: "default",
@@ -833,7 +856,7 @@ describe("NativeRoutePages library coverage", () => {
     }));
     const trashOnly = await mount("cowork");
     await click(exactButton(trashOnly.root, "Restore"));
-    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted", "default");
+    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted", "default", "company");
 
     setupResponses();
     const board = await mount("cowork", "board");

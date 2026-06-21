@@ -173,15 +173,16 @@ describe("chat API origin surface headers", () => {
       const turnId = "turn 1";
       const genericMessage = { content: "Coordinate the release", mode: "cowork" } as never;
 
-      await chat.fetchChatProjects("all", 25, " workspace-1 ");
-      await chat.createChatProject({ name: "Project", workspacePath: "F:/repo" });
-      await chat.importChatProject({ sourceType: "local_folder", sourcePath: "F:/repo" });
-      await chat.updateChatProject("project 1", { name: "Renamed" });
+      await chat.fetchChatProjects("all", 25, " workspace-1 ", "company");
+      await chat.createChatProject({ citadelId: "company", name: "Project", workspacePath: "F:/repo" });
+      await chat.importChatProject({ citadelId: "company", sourceType: "local_folder", sourcePath: "F:/repo" });
+      await chat.updateChatProject("project 1", { citadelId: "company", name: "Renamed" });
       await chat.archiveChatProject("project 1");
       await chat.restoreChatProject("project 1");
       await chat.hardDeleteChatProject("project 1");
       await chat.fetchChatSessions({
         scope: "all",
+        citadelId: "company",
         workspaceId: "workspace-1",
         projectId: "project-1",
         folderId: "folder-1",
@@ -192,7 +193,7 @@ describe("chat API origin surface headers", () => {
         limit: 17,
         cursor: "cursor-1",
       });
-      await chat.createChatSession({ title: "Chat", mode: "chat" }, { originSurface: "chat" });
+      await chat.createChatSession({ citadelId: "company", title: "Chat", mode: "chat" }, { originSurface: "chat" });
       await chat.archiveWorkspaceChatSessions({ workspaceId: "workspace-1", scope: "mission", includeHidden: true });
       await chat.updateChatSession(sessionId, { title: "Updated", folderName: "Ops", tags: ["release"] });
       await chat.deleteChatSession(sessionId);
@@ -231,6 +232,7 @@ describe("chat API origin surface headers", () => {
       await chat.revertChatSessionWorkbenchChanges(sessionId);
       await chat.fetchChatMessages(sessionId, 5000, "cursor-2");
       await chat.fetchChatGeneratedArtifacts({
+        citadelId: "company",
         sessionId,
         workspaceId: "workspace-1",
         projectId: "project-1",
@@ -238,7 +240,7 @@ describe("chat API origin surface headers", () => {
         kind: "document",
         limit: 3,
       });
-      await chat.fetchChatGeneratedArtifact("artifact 1", "workspace 1");
+      await chat.fetchChatGeneratedArtifact("artifact 1", "workspace 1", "company");
       await chat.fetchChatSessionGeneratedArtifacts(sessionId, { kind: "document", sourceSurface: "code", limit: 4 });
       await chat.createChatGeneratedArtifact(sessionId, turnId, { supersedeLatest: true });
       await chat.fetchThreadKnowledgeAttachments(sessionId);
@@ -299,7 +301,9 @@ describe("chat API origin surface headers", () => {
       expect(downloaded.fileName).toBe("note.txt");
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/projects?"))).toBe(true);
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("workspaceId=workspace-1"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("citadelId=company"))).toBe(true);
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("projectId=project-1"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([, init]) => String(init?.body).includes('"citadelId":"company"'))).toBe(true);
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/sessions/session%201/agent-send")),
       ).toBe(true);

@@ -25,12 +25,18 @@ import {
   LibrarySelectableList,
 } from "../shared/library-primitives";
 
-export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: NativeRoutePagesProps) {
+export function LibraryArtifactsSection({
+  activeCitadelId,
+  activeWorkspaceId,
+  route,
+  navigate,
+}: NativeRoutePagesProps) {
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const artifactQuery = {
+      citadelId: activeCitadelId,
       workspaceId: activeWorkspaceId,
       ...(route.projectId ? { projectId: route.projectId } : {}),
       limit: 80,
@@ -40,7 +46,7 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
       issues: nativeLoadIssues([artifacts]),
       artifacts: artifacts.data.items,
     };
-  }, [activeWorkspaceId, route.projectId]);
+  }, [activeCitadelId, activeWorkspaceId, route.projectId]);
 
   const visibleArtifacts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -89,6 +95,7 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
           subtitle="Actual artifact records, not just a folder listing."
           stats={[
             { label: "Visible", value: String(visibleArtifacts.length) },
+            { label: "Citadel", value: activeCitadelId ?? "legacy" },
             { label: "Workspace", value: activeWorkspaceId },
             { label: "Project", value: route.projectId ? "Scoped" : "All" },
           ]}

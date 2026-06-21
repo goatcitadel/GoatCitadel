@@ -90,6 +90,7 @@ export interface ChatProjectRecord {
 export type ChatProjectImportSource = "local_folder" | "github_repo";
 
 export interface ChatProjectImportInput {
+  citadelId?: string;
   workspaceId?: string;
   name?: string;
   sourceType: ChatProjectImportSource;
@@ -236,6 +237,7 @@ export interface ChatSessionRecord {
 }
 
 export interface ChatSessionCreateInput {
+  citadelId?: string;
   workspaceId?: string;
   title?: string;
   folderId?: string;
@@ -249,6 +251,7 @@ export interface ChatSessionCreateInput {
 
 export interface ChatSessionListQuery {
   scope?: ChatSessionScope | "all";
+  citadelId?: string;
   workspaceId?: string;
   projectId?: string;
   folderId?: string;
@@ -266,6 +269,7 @@ export type ChatSessionSearchMode = "discovery" | "scroll" | "browse";
 export interface ChatSessionSearchQuery {
   query: string;
   mode?: ChatSessionSearchMode;
+  citadelId?: string;
   workspaceId?: string;
   surface?: ChatMode;
   limit?: number;

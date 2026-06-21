@@ -11,6 +11,8 @@ const composeSchema = z.object({
   taskId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
   phaseId: z.string().min(1).optional(),
+  citadelId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   workspace: z.string().min(1).optional(),
   relationScope: z.enum(["self", "peer", "project"]).optional(),
   maxContextTokens: z.number().int().positive().optional(),

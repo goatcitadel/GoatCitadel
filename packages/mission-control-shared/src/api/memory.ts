@@ -105,6 +105,8 @@ export async function composeMemoryContext(input: {
   taskId?: string;
   runId?: string;
   phaseId?: string;
+  citadelId?: string;
+  workspaceId?: string;
   workspace?: string;
   relationScope?: "self" | "peer" | "project";
   maxContextTokens?: number;

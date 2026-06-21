@@ -188,10 +188,10 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
 export interface ToolPolicyEngineRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
   /**
-   * Wrap-first activation switch for Citadel enforcement. When it returns true, a
-   * request's workspace acts as its Citadel (citadelId aliases workspaceId), so
-   * Citadel Wards and citadel-scoped grants take effect. Default (absent) → false →
-   * fully dormant: behavior is byte-identical to a non-Citadel build.
+   * Compatibility switch for legacy callers that do not pass citadelId yet. When
+   * it returns true, the request workspace is used as a compatibility Citadel
+   * fallback. Gateway-owned runtime paths should pass the effective parent
+   * Citadel directly.
    */
   citadelEnforcementEnabled?: () => boolean;
 }
@@ -693,9 +693,9 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
-    // Effective Citadel scope. citadelId aliases workspaceId; with the wrap-first
-    // flag on, the workspace acts as its Citadel. Default (flag off, no explicit
-    // citadelId) → undefined → fully dormant, so existing decisions are unchanged.
+    // Effective Citadel scope. Gateway runtime paths pass the parent Citadel
+    // directly; the flag is a compatibility bridge for older callers that only
+    // know workspaceId.
     const effectiveCitadelId =
       request.citadelId ?? (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
     const scopedRequest =
@@ -706,6 +706,7 @@ export class ToolPolicyEngine {
     if (wardEffect === "deny") {
       return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
     }
+    const wardRequiresApproval = wardEffect === "require_approval";
 
     const grantDecision = this.resolveGrantDecision(scopedRequest, toolDef);
     if (grantDecision?.decision === "deny") {
@@ -761,7 +762,8 @@ export class ToolPolicyEngine {
     }
 
     let requiresApproval =
-      !hasAllowGrant && (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval));
+      wardRequiresApproval ||
+      (!hasAllowGrant && (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
     const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrants);
 
     if (
@@ -798,6 +800,7 @@ export class ToolPolicyEngine {
     const isRemoteA2APeer = request.policyContext?.authActorSource === "a2a_peer";
     if (
       policy.approvalMode === "bypass" &&
+      !wardRequiresApproval &&
       !isRemoteA2APeer &&
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
@@ -816,6 +819,9 @@ export class ToolPolicyEngine {
     if (codeModeRunPreapproved) {
       reasonCodes.push("approved_code_mode_run");
     }
+    if (wardRequiresApproval) {
+      reasonCodes.push("citadel_ward_requires_approval");
+    }
     if (policy.approvalMode === "bypass") {
       reasonCodes.push("approval_bypass_mode");
       if (riskLevel === "nuclear") {
@@ -827,7 +833,9 @@ export class ToolPolicyEngine {
       reasonCodes.push("approval_mode_risky");
     }
     let policyReason = "allowed";
-    if (policy.approvalMode === "bypass" && riskLevel === "nuclear") {
+    if (wardRequiresApproval) {
+      policyReason = "approval required by Citadel Ward";
+    } else if (policy.approvalMode === "bypass" && riskLevel === "nuclear") {
       policyReason = "nuclear-risk tools require approval even when normal approvals are bypassed";
     } else if (codeModeRunPreapproved && !requiresApproval) {
       policyReason = "allowed by approved Code Mode run";
@@ -1662,9 +1670,8 @@ function buildScopeCandidates(request: ToolAccessEvaluateRequest): ScopeCandidat
   }
   out.push({ scope: "agent", scopeRef: request.agentId });
   out.push({ scope: "session", scopeRef: request.sessionId });
-  // Citadel/Chamber scope is dormant by default: candidates only appear when the
-  // request carries the ids, which nothing on the request path sets yet. Ordered
-  // specific→broad so a Chamber grant's constraints win over a Citadel-wide one;
+  // Citadel/Chamber scope appears only when the gateway has resolved those ids.
+  // Ordered specific→broad so a Chamber grant's constraints win over a Citadel-wide one;
   // deny-wins is order-independent, so a deny at any of these scopes still blocks.
   if (request.chamberId) {
     out.push({ scope: "chamber", scopeRef: request.chamberId });

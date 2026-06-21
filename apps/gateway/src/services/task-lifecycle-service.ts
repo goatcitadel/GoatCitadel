@@ -67,6 +67,7 @@ export interface TaskLifecycleServiceDependencies {
 }
 
 export interface TaskWorkspaceAccessOptions {
+  citadelId?: string;
   workspaceId?: string;
 }
 

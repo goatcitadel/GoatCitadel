@@ -30,7 +30,7 @@ describe("chat project routes", () => {
     });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual({ items: [{ projectId: "project-1" }], view: "all" });
-    expect(services.listChatProjects).toHaveBeenCalledWith("all", 2, "workspace-1");
+    expect(services.listChatProjects).toHaveBeenCalledWith("all", 2, "workspace-1", undefined);
 
     const created = await app.inject({
       method: "POST",
@@ -51,6 +51,12 @@ describe("chat project routes", () => {
       workspacePath: "projects/new",
       color: "#00ffaa",
     });
+
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/projects?citadelId=company&workspaceId=engineering&view=active&limit=5",
+    });
+    expect(services.listChatProjects).toHaveBeenLastCalledWith("active", 5, "engineering", "company");
 
     const updated = await app.inject({
       method: "PATCH",

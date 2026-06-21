@@ -36,6 +36,7 @@ describe("RuntimeDecisionTraceRepository", () => {
       decisionId: "decision-2",
       kind: "tool_selected",
       scope: {
+        citadelId: "company",
         workspaceId: "default",
         sessionId: "session-1",
         turnId: "turn-1",
@@ -53,6 +54,7 @@ describe("RuntimeDecisionTraceRepository", () => {
       decisionId: "decision-1",
       kind: "workflow_choice",
       scope: {
+        citadelId: "company",
         workspaceId: "default",
         sessionId: "session-1",
         turnId: "turn-1",
@@ -86,6 +88,7 @@ describe("RuntimeDecisionTraceRepository", () => {
     );
     assert.equal(byTurn[0]?.alternatives[0]?.label, "Direct answer");
     assert.equal(byTurn[1]?.signals[0]?.source, "capability");
+    assert.equal(byTurn[0]?.scope.citadelId, "company");
 
     const byRun = repo.list({ runId: "run-1" });
     assert.deepEqual(
@@ -97,6 +100,12 @@ describe("RuntimeDecisionTraceRepository", () => {
     assert.deepEqual(
       byTool.map((item) => item.decisionId),
       ["decision-2"],
+    );
+
+    const byCitadel = repo.list({ citadelId: "company" });
+    assert.deepEqual(
+      byCitadel.map((item) => item.decisionId),
+      ["decision-1", "decision-2"],
     );
   });
 

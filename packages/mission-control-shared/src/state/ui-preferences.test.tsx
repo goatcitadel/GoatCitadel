@@ -117,6 +117,7 @@ describe("ui preferences", () => {
       showTechnicalDetails: false,
       detailPanelPinned: false,
       statusCenterExpanded: false,
+      activeCitadelId: "personal",
       activeWorkspaceId: "default",
       theme: "dark",
       notifications: {
@@ -134,6 +135,7 @@ describe("ui preferences", () => {
       latest.setShowTechnicalDetails(true);
       latest.setDetailPanelPinned(true);
       latest.setStatusCenterExpanded(true);
+      latest.setActiveCitadelId("company");
       latest.setActiveWorkspaceId("workspace-1");
       latest.setTheme("light");
       latest.setNotificationToastsEnabled(false);
@@ -143,7 +145,7 @@ describe("ui preferences", () => {
     });
   });
 
-  it("loads valid stored preferences and normalizes invalid workspace ids", () => {
+  it("loads valid stored preferences and normalizes invalid Citadel and workspace ids", () => {
     const storage = installWindow();
     storage.setItem("goatcitadel.ui.mode.v1", "advanced");
     storage.setItem("goatcitadel.ui.density.v1", "comfortable");
@@ -152,6 +154,7 @@ describe("ui preferences", () => {
     storage.setItem("goatcitadel.ui.technical_details.v1", "false");
     storage.setItem("goatcitadel.ui.detail_panel_pinned.v1", "true");
     storage.setItem("goatcitadel.ui.status_center_expanded.v1", "true");
+    storage.setItem("goatcitadel.ui.citadel_id.v1", "../bad");
     storage.setItem("goatcitadel.ui.workspace_id.v1", "../bad");
     storage.setItem("goatcitadel.ui.theme.v1", "light");
     storage.setItem("goatcitadel.notifications.toasts.v1", "false");
@@ -169,6 +172,7 @@ describe("ui preferences", () => {
       showTechnicalDetails: false,
       detailPanelPinned: true,
       statusCenterExpanded: true,
+      activeCitadelId: "personal",
       activeWorkspaceId: "default",
       theme: "light",
       notifications: {
@@ -201,6 +205,7 @@ describe("ui preferences", () => {
       hook.result.setShowTechnicalDetails(false);
       hook.result.setDetailPanelPinned(true);
       hook.result.setStatusCenterExpanded(true);
+      hook.result.setActiveCitadelId("company.alpha-1");
       hook.result.setActiveWorkspaceId("workspace.alpha-1");
       hook.result.setTheme("light");
       hook.result.setNotificationToastsEnabled(false);
@@ -216,6 +221,7 @@ describe("ui preferences", () => {
       showTechnicalDetails: false,
       detailPanelPinned: true,
       statusCenterExpanded: true,
+      activeCitadelId: "company.alpha-1",
       activeWorkspaceId: "workspace.alpha-1",
       theme: "light",
       notifications: {
@@ -230,6 +236,7 @@ describe("ui preferences", () => {
     expect(storage.getItem("goatcitadel.ui.nav_mode.v1")).toBe("expanded");
     expect(storage.getItem("goatcitadel.ui.detail_panel_pinned.v1")).toBe("true");
     expect(storage.getItem("goatcitadel.ui.status_center_expanded.v1")).toBe("true");
+    expect(storage.getItem("goatcitadel.ui.citadel_id.v1")).toBe("company.alpha-1");
     expect(storage.getItem("goatcitadel.ui.workspace_id.v1")).toBe("workspace.alpha-1");
     expect(storage.getItem("goatcitadel.ui.theme.v1")).toBe("light");
     expect(storage.getItem("goatcitadel.notifications.toasts.v1")).toBe("false");
@@ -238,9 +245,11 @@ describe("ui preferences", () => {
     expect(storage.getItem("goatcitadel.notifications.only_unfocused.v1")).toBe("true");
 
     act(() => {
+      hook.result.setActiveCitadelId(" ");
       hook.result.setActiveWorkspaceId(" ");
       hook.result.setMode("simple");
     });
+    expect(hook.result.activeCitadelId).toBe("personal");
     expect(hook.result.activeWorkspaceId).toBe("default");
     expect(hook.result.showTechnicalDetails).toBe(false);
 
@@ -283,6 +292,7 @@ describe("ui preferences", () => {
       showTechnicalDetails: false,
       detailPanelPinned: false,
       statusCenterExpanded: false,
+      activeCitadelId: "personal",
       activeWorkspaceId: "default",
       theme: "dark",
       notifications: {
@@ -294,9 +304,11 @@ describe("ui preferences", () => {
     });
     act(() => {
       serverHook.result.setDensity("comfortable");
+      serverHook.result.setActiveCitadelId("company");
       serverHook.result.setActiveWorkspaceId("server");
     });
     expect(serverHook.result.density).toBe("comfortable");
+    expect(serverHook.result.activeCitadelId).toBe("company");
     expect(serverHook.result.activeWorkspaceId).toBe("server");
     serverHook.renderer.unmount();
 
@@ -305,6 +317,7 @@ describe("ui preferences", () => {
     storage.setItem("goatcitadel.ui.effects_mode.v1", "full");
     storage.setItem("goatcitadel.ui.nav_mode.v1", "expanded");
     storage.setItem("goatcitadel.ui.technical_details.v1", "true");
+    storage.setItem("goatcitadel.ui.citadel_id.v1", "company_2");
     storage.setItem("goatcitadel.ui.workspace_id.v1", "workspace_2");
     storage.setItem("goatcitadel.ui.theme.v1", "dark");
 
@@ -314,6 +327,7 @@ describe("ui preferences", () => {
       effectsMode: "full",
       navMode: "expanded",
       showTechnicalDetails: true,
+      activeCitadelId: "company_2",
       activeWorkspaceId: "workspace_2",
       theme: "dark",
     });

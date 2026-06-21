@@ -453,7 +453,7 @@ export class MemoryContextService {
     }
 
     throwIfMemoryContextAborted(input.signal);
-    for (const item of this.collectMemoryItemSources()) {
+    for (const item of this.collectMemoryItemSources(input.workspaceId)) {
       sources.push(item);
     }
 
@@ -479,10 +479,10 @@ export class MemoryContextService {
     return sources;
   }
 
-  private collectMemoryItemSources(): MemoryItemSource[] {
+  private collectMemoryItemSources(workspaceId?: string): MemoryItemSource[] {
     try {
       return this.storage.memoryMaintenance
-        .listActiveMemoryItems(this.config.assistant.memory.qmd.maxMemoryFiles)
+        .listActiveMemoryItems(this.config.assistant.memory.qmd.maxMemoryFiles, normalizeMemoryWorkspaceId(workspaceId))
         .map((item) => ({
           type: "memory_item",
           itemId: item.itemId,
@@ -729,6 +729,11 @@ function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryR
     return "peer";
   }
   return "self";
+}
+
+function normalizeMemoryWorkspaceId(workspaceId?: string): string | undefined {
+  const trimmed = workspaceId?.trim();
+  return trimmed || undefined;
 }
 
 function classifyMemoryFreshness(timestamp?: string): MemoryFreshness {

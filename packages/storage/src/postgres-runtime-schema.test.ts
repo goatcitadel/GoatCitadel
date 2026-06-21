@@ -284,6 +284,21 @@ describe("Postgres runtime schema generation", () => {
     assert.match(degradedMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
   });
 
+  it("adds Citadel parent scope as a NEW migration for already-migrated Postgres runtimes", () => {
+    const citadelMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "citadel_operating_model_parent_scope",
+    );
+
+    assert.equal(citadelMigration?.version, 65);
+    assert.match(citadelMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS citadel_records/);
+    assert.match(citadelMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS citadel_id TEXT NOT NULL DEFAULT 'personal'/);
+    assert.match(citadelMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS citadel_id TEXT/);
+    assert.match(citadelMigration?.sql ?? "", /Legacy workspace Citadel preserved/);
+    assert.match(citadelMigration?.sql ?? "", /SET citadel_id = workspace_id/);
+    assert.match(citadelMigration?.sql ?? "", /idx_workspaces_citadel_updated/);
+    assert.match(citadelMigration?.sql ?? "", /idx_runtime_decision_traces_citadel_created/);
+  });
+
   it("repairs execution plan step durable run columns for older Postgres runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 15);
 

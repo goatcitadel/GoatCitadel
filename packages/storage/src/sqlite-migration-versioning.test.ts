@@ -78,6 +78,80 @@ describe("sqlite schema migrations", () => {
     db.close();
   });
 
+  it("creates Citadel parent records and parent-scope columns", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-citadels-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    const citadels = db.prepare("SELECT citadel_id, kind, default_workspace_id FROM citadel_records").all() as Array<{
+      citadel_id: string;
+      kind: string;
+      default_workspace_id: string | null;
+    }>;
+    assert.deepEqual(citadels.map((row) => [row.citadel_id, row.kind, row.default_workspace_id]).sort(), [
+      ["company", "company", null],
+      ["personal", "personal", "default"],
+    ]);
+
+    const workspaceColumns = db.prepare("PRAGMA table_info(workspaces)").all() as Array<{ name: string }>;
+    assert.ok(workspaceColumns.some((column) => column.name === "citadel_id"));
+
+    const defaultWorkspace = db.prepare("SELECT citadel_id FROM workspaces WHERE workspace_id = 'default'").get() as {
+      citadel_id: string;
+    };
+    assert.equal(defaultWorkspace.citadel_id, "personal");
+
+    const decisionTraceColumns = db.prepare("PRAGMA table_info(runtime_decision_traces)").all() as Array<{
+      name: string;
+    }>;
+    assert.ok(decisionTraceColumns.some((column) => column.name === "citadel_id"));
+
+    db.close();
+  });
+
+  it("backfills legacy workspace-as-Citadel records during the parent-scope migration", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-legacy-citadel-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const now = "2026-06-20T00:00:00.000Z";
+
+    db.prepare(
+      `
+      INSERT INTO workspaces (
+        workspace_id, name, description, slug, lifecycle_status, archived_at, workspace_prefs_json, created_at, updated_at
+      ) VALUES (?, ?, NULL, ?, 'active', NULL, '{}', ?, ?)
+      ON CONFLICT(workspace_id) DO NOTHING
+    `,
+    ).run("legacy-team", "Legacy Team", "legacy-team", now, now);
+    db.prepare(
+      `
+      INSERT INTO citadel_charters (
+        citadel_id, purpose, kind, goals_json, boundaries_json, success_definition_json,
+        default_chamber_id, risk_posture, model_policy_default, created_at, updated_at
+      ) VALUES (?, ?, ?, '[]', '[]', '[]', NULL, 'balanced', 'hybrid_guarded', ?, ?)
+      ON CONFLICT(citadel_id) DO UPDATE SET updated_at = excluded.updated_at
+    `,
+    ).run("legacy-team", "Existing workspace Citadel", "team", now, now);
+    db.prepare("DELETE FROM citadel_records WHERE citadel_id = ?").run("legacy-team");
+    db.prepare("UPDATE workspaces SET citadel_id = 'personal' WHERE workspace_id = ?").run("legacy-team");
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(121);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const record = migrated
+      .prepare("SELECT name, kind FROM citadel_records WHERE citadel_id = ?")
+      .get("legacy-team") as { name: string; kind: string } | undefined;
+    assert.deepEqual(record ? { ...record } : undefined, { name: "Legacy Team", kind: "team" });
+
+    const workspace = migrated
+      .prepare("SELECT citadel_id FROM workspaces WHERE workspace_id = ?")
+      .get("legacy-team") as {
+      citadel_id: string;
+    };
+    assert.equal(workspace.citadel_id, "legacy-team");
+    migrated.close();
+  });
+
   it("backfills generated artifact project scope from existing session assignments", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-artifact-project-${randomUUID()}.db`);
     createdFiles.push(dbPath);

@@ -11,16 +11,21 @@ import { request } from "./client-core.js";
 export interface WorkspacesResponse {
   items: WorkspaceRecord[];
   view?: "active" | "archived" | "all";
+  citadelId?: string;
 }
 
 export async function fetchWorkspaces(
   view: "active" | "archived" | "all" = "active",
   limit = 200,
+  citadelId?: string,
 ): Promise<WorkspacesResponse> {
   const query = new URLSearchParams({
     view,
     limit: String(Math.max(1, Math.min(limit, 500))),
   });
+  if (citadelId?.trim()) {
+    query.set("citadelId", citadelId.trim());
+  }
   return request<WorkspacesResponse>(`/api/v1/workspaces?${query.toString()}`);
 }
 

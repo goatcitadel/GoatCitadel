@@ -165,6 +165,21 @@ function createGateway() {
       },
     },
     storage: {
+      workspaces: {
+        find: fn((workspaceId: string) =>
+          workspaceId === "normalized:engineering"
+            ? { workspaceId, citadelId: "company" }
+            : workspaceId === "normalized:workspace-1"
+              ? { workspaceId, citadelId: "personal" }
+              : { workspaceId, citadelId: "personal" },
+        ),
+      },
+      chatProjects: {
+        get: fn((projectId: string) => ({
+          projectId,
+          workspaceId: projectId === "project-engineering" ? "engineering" : "workspace-1",
+        })),
+      },
       chatDelegationRuns: {
         get: fn((runId: string) => ({ runId, sessionId: runId === "foreign-run" ? "other-session" : "session-1" })),
       },
@@ -508,7 +523,7 @@ describe("composeChatRouteDependencies", () => {
     expect(deps.chatProjects.importChatProject({ name: "Import" })).toMatchObject({ projectId: "imported" });
     expect(deps.chatProjects.listChatProjects("active", 5, "workspace-1")).toMatchObject({
       view: "active",
-      workspaceId: "workspace-1",
+      workspaceId: "normalized:workspace-1",
     });
     expect(deps.chatProjects.restoreChatProject("project-1")).toMatchObject({ archived: false });
     expect(deps.chatProjects.updateChatProject("project-1", { name: "New" })).toMatchObject({
@@ -596,5 +611,15 @@ describe("composeChatRouteDependencies", () => {
         role: "QA",
       }),
     ).toThrow("Specialist candidate does not belong to this session.");
+  });
+
+  it("rejects explicit Citadel and workspace mismatches before chat project services run", () => {
+    const gateway = createGateway();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+
+    expect(() => deps.chatProjects.listChatProjects("active", 5, "engineering", "personal")).toThrow(
+      /belongs to citadel company, not personal/,
+    );
+    expect(gateway.chatProjectService.listChatProjects).not.toHaveBeenCalled();
   });
 });

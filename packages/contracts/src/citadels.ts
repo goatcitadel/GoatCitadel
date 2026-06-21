@@ -1,9 +1,8 @@
 // Citadel domain types and scope helpers.
 //
-// A Citadel is a protected AI operating space. Identity decision (see
-// docs/citadel_update/reuse-audit.md): a Citadel IS a Workspace — `citadelId`
-// is an alias for `workspaceId` — enriched with a Charter and one or more
-// Chambers (sub-scopes). A workspace becomes a Citadel once it has a Charter.
+// A Citadel is a protected AI operating world. Workspaces live inside Citadels;
+// older compatibility paths may still treat `citadelId` as a `workspaceId` while
+// the runtime migrates to the parent Citadel -> Workspace -> Project hierarchy.
 //
 // These helpers are the reusable enforcement primitives. They currently live in
 // @goatcitadel/contracts; they can be extracted into a dedicated `citadel-core`
@@ -26,8 +25,44 @@ export type CitadelRiskPosture = "conservative" | "balanced" | "collaborative" |
 
 export type CitadelModelPolicy = "local_only" | "hybrid_guarded" | "approved_cloud" | "hosted_team";
 
+export const DEFAULT_PERSONAL_CITADEL_ID = "personal";
+export const DEFAULT_COMPANY_CITADEL_ID = "company";
+export const DEFAULT_CITADEL_ID = DEFAULT_PERSONAL_CITADEL_ID;
+
+export type CitadelLifecycleStatus = "active" | "archived";
+
+export interface CitadelRecord {
+  citadelId: string;
+  name: string;
+  description?: string;
+  slug: string;
+  kind: CitadelKind;
+  lifecycleStatus: CitadelLifecycleStatus;
+  archivedAt?: string;
+  defaultWorkspaceId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CitadelCreateInput {
+  citadelId?: string;
+  name: string;
+  description?: string;
+  slug?: string;
+  kind?: CitadelKind;
+  defaultWorkspaceId?: string;
+}
+
+export interface CitadelUpdateInput {
+  name?: string;
+  description?: string;
+  slug?: string;
+  kind?: CitadelKind;
+  defaultWorkspaceId?: string;
+}
+
 export interface CitadelCharter {
-  /** 1:1 with its Citadel (= workspace). Its presence is what makes a workspace a Citadel. */
+  /** Stable Citadel identity. Legacy rows may still match a workspaceId during migration. */
   citadelId: string;
   purpose: string;
   kind: CitadelKind;
@@ -52,8 +87,8 @@ export interface CitadelChamber {
 }
 
 export interface Citadel {
-  /** Equal to the underlying workspaceId. */
   citadelId: string;
+  record?: CitadelRecord;
   charter: CitadelCharter;
   chambers: CitadelChamber[];
 }
@@ -130,9 +165,9 @@ export interface CitadelScope {
 }
 
 /**
- * A request-like object that may carry Citadel scope. `citadelId` is treated as
- * an alias for `workspaceId` (a Citadel IS a workspace), so either field resolves
- * the scope.
+ * A request-like object that may carry Citadel scope. During migration,
+ * `workspaceId` remains accepted as a legacy fallback so old callers continue to
+ * resolve to a Citadel-shaped scope.
  */
 export interface CitadelScopeSource {
   citadelId?: string;
@@ -154,6 +189,36 @@ export function resolveCitadelScope(source: CitadelScopeSource | null | undefine
   }
   const chamberId = trimmedOrUndefined(source.chamberId);
   return chamberId ? { citadelId, chamberId } : { citadelId };
+}
+
+export interface EffectiveRuntimeScopeSource {
+  citadelId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  sessionId?: string;
+  mode?: string;
+}
+
+export interface EffectiveRuntimeScope {
+  citadelId: string;
+  workspaceId: string;
+  projectId?: string;
+  sessionId?: string;
+  mode?: string;
+}
+
+export function resolveEffectiveRuntimeScope(
+  source: EffectiveRuntimeScopeSource,
+  fallbackCitadelId = DEFAULT_CITADEL_ID,
+): EffectiveRuntimeScope {
+  const workspaceId = trimmedOrUndefined(source.workspaceId) ?? "default";
+  return {
+    citadelId: trimmedOrUndefined(source.citadelId) ?? fallbackCitadelId,
+    workspaceId,
+    projectId: trimmedOrUndefined(source.projectId),
+    sessionId: trimmedOrUndefined(source.sessionId),
+    mode: trimmedOrUndefined(source.mode),
+  };
 }
 
 /**

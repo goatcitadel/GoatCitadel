@@ -28,6 +28,63 @@ function createRepo(): CitadelRepository {
 }
 
 describe("CitadelRepository", () => {
+  it("creates, updates, archives, restores, and lists Citadel records", () => {
+    const repo = createRepo();
+    const created = repo.createRecord(
+      {
+        name: "Client Alpha",
+        description: "Scoped client operating world",
+        kind: "client",
+        defaultWorkspaceId: "engineering",
+      },
+      "2026-06-20T00:00:00.000Z",
+    );
+
+    assert.equal(created.citadelId, "client-alpha");
+    assert.equal(created.slug, "client-alpha");
+    assert.equal(created.lifecycleStatus, "active");
+    assert.equal(created.defaultWorkspaceId, "engineering");
+    assert.deepEqual(
+      repo
+        .listRecords("active")
+        .map((record) => record.citadelId)
+        .sort(),
+      ["client-alpha", "company", "personal"],
+    );
+
+    const updated = repo.updateRecord(
+      created.citadelId,
+      { name: "Client Alpha HQ", slug: "client-alpha-hq", description: "  ", kind: "company" },
+      "2026-06-20T00:05:00.000Z",
+    );
+    assert.equal(updated.name, "Client Alpha HQ");
+    assert.equal(updated.slug, "client-alpha-hq");
+    assert.equal(updated.description, undefined);
+    assert.equal(updated.kind, "company");
+
+    assert.throws(() => repo.createRecord({ name: "Client Alpha HQ" }), /already in use/);
+
+    const archived = repo.archiveRecord(created.citadelId, "2026-06-20T00:10:00.000Z");
+    assert.equal(archived.lifecycleStatus, "archived");
+    assert.equal(
+      repo.listRecords("active").some((record) => record.citadelId === created.citadelId),
+      false,
+    );
+    assert.equal(repo.listRecords("archived")[0]?.citadelId, created.citadelId);
+
+    const restored = repo.restoreRecord(created.citadelId, "2026-06-20T00:15:00.000Z");
+    assert.equal(restored.lifecycleStatus, "active");
+  });
+
+  it("seeds Personal and Company Citadel records for new databases", () => {
+    const repo = createRepo();
+
+    assert.equal(repo.getRecord("personal").kind, "personal");
+    assert.equal(repo.getRecord("personal").defaultWorkspaceId, "default");
+    assert.equal(repo.getRecord("company").kind, "company");
+    assert.equal(repo.getRecord("company").defaultWorkspaceId, undefined);
+  });
+
   it("upserts and reads a charter with defaults applied", () => {
     const repo = createRepo();
     const charter = repo.upsertCharter({
@@ -75,10 +132,7 @@ describe("CitadelRepository", () => {
     assert.equal(general.sealed, false);
 
     const chambers = repo.listChambers("ws-1");
-    assert.deepEqual(
-      chambers.map((chamber) => chamber.name).sort(),
-      ["Finance", "General"],
-    );
+    assert.deepEqual(chambers.map((chamber) => chamber.name).sort(), ["Finance", "General"]);
     const finance = chambers.find((chamber) => chamber.name === "Finance");
     assert.equal(finance?.sealed, true);
     assert.equal(finance?.sensitivity, "restricted");
@@ -108,7 +162,10 @@ describe("CitadelRepository", () => {
 
     assert.equal(architect.agentId, "agent-architect");
     assert.deepEqual(
-      repo.listCouncilAssignments("ws-1").map((assignment) => assignment.agentId).sort(),
+      repo
+        .listCouncilAssignments("ws-1")
+        .map((assignment) => assignment.agentId)
+        .sort(),
       ["agent-architect", "agent-coder"],
     );
 
@@ -133,7 +190,10 @@ describe("CitadelRepository", () => {
 
     assert.equal(ward.effect, "require_approval");
     assert.deepEqual(
-      repo.listWards("ws-1").map((entry) => entry.name).sort(),
+      repo
+        .listWards("ws-1")
+        .map((entry) => entry.name)
+        .sort(),
       ["No email send", "No prod writes"],
     );
 
@@ -153,7 +213,10 @@ describe("CitadelRepository", () => {
     repo.storeVaultSecret({ citadelId: "ws-2", secretName: "other", sealedValue: sealed });
 
     assert.deepEqual(
-      repo.listVaultSecrets("ws-1").map((entry) => entry.secretName).sort(),
+      repo
+        .listVaultSecrets("ws-1")
+        .map((entry) => entry.secretName)
+        .sort(),
       ["openai", "stripe"],
     );
 
@@ -265,7 +328,10 @@ describe("CitadelRepository", () => {
     assert.equal(grant.mode, "read");
     assert.equal(grant.account, "user@example.com");
     assert.deepEqual(
-      repo.listIntegrationGrants("ws-1").map((entry) => entry.provider).sort(),
+      repo
+        .listIntegrationGrants("ws-1")
+        .map((entry) => entry.provider)
+        .sort(),
       ["google_calendar", "stripe"],
     );
 

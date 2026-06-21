@@ -42,7 +42,13 @@ function describeStoreError(error: unknown): string {
  * master key held in the OS keychain; the plaintext is never persisted. The list
  * shows names only — revealing a value is an explicit, per-secret action.
  */
-export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelVaultRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  activeCitadelId = activeWorkspaceId,
+  activeCitadelName = activeWorkspaceName,
+}: NativeRoutePagesProps) {
   const nameId = useId();
   const valueId = useId();
   const [secrets, setSecrets] = useState<SecretsState>({ loading: true, error: null, items: [] });
@@ -56,17 +62,17 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
   const load = useCallback(async () => {
     setSecrets((current) => ({ ...current, loading: true, error: null }));
     try {
-      const items = await listCitadelVaultSecrets(activeWorkspaceId);
+      const items = await listCitadelVaultSecrets(activeCitadelId);
       setSecrets({ loading: false, error: null, items });
     } catch (error) {
       setSecrets({ loading: false, error: getErrorMessage(error), items: [] });
     }
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
 
   useEffect(() => {
     let cancelled = false;
     setSecrets((current) => ({ ...current, loading: true, error: null }));
-    void listCitadelVaultSecrets(activeWorkspaceId)
+    void listCitadelVaultSecrets(activeCitadelId)
       .then((items) => {
         if (!cancelled) {
           setSecrets({ loading: false, error: null, items });
@@ -80,7 +86,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
 
   const store = useCallback(async () => {
     if (draft.name.trim().length === 0 || draft.value.length === 0) {
@@ -88,13 +94,13 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
     }
     setDraft((current) => ({ ...current, busy: true, error: null }));
     try {
-      await storeCitadelVaultSecret(activeWorkspaceId, draft.name.trim(), draft.value);
+      await storeCitadelVaultSecret(activeCitadelId, draft.name.trim(), draft.value);
       setDraft(INITIAL_DRAFT);
       await load();
     } catch (error) {
       setDraft((current) => ({ ...current, busy: false, error: describeStoreError(error) }));
     }
-  }, [activeWorkspaceId, draft.name, draft.value, load]);
+  }, [activeCitadelId, draft.name, draft.value, load]);
 
   const clearRevealError = useCallback((secretId: string) => {
     setRevealErrors((current) => {
@@ -110,7 +116,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
   const reveal = useCallback(
     async (secretId: string) => {
       try {
-        const value = await revealCitadelVaultSecret(activeWorkspaceId, secretId);
+        const value = await revealCitadelVaultSecret(activeCitadelId, secretId);
         setRevealed((current) => ({ ...current, [secretId]: value }));
         clearRevealError(secretId);
       } catch (error) {
@@ -119,7 +125,7 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
         setRevealErrors((current) => ({ ...current, [secretId]: describeStoreError(error) }));
       }
     },
-    [activeWorkspaceId, clearRevealError],
+    [activeCitadelId, clearRevealError],
   );
 
   const hide = useCallback(
@@ -137,14 +143,14 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
   const remove = useCallback(
     async (secretId: string) => {
       try {
-        await deleteCitadelVaultSecret(activeWorkspaceId, secretId);
+        await deleteCitadelVaultSecret(activeCitadelId, secretId);
         hide(secretId);
         await load();
       } catch (error) {
         setSecrets((current) => ({ ...current, error: getErrorMessage(error) }));
       }
     },
-    [activeWorkspaceId, hide, load],
+    [activeCitadelId, hide, load],
   );
 
   return (
@@ -153,10 +159,11 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
       area="library"
       kicker={routeKicker(route)}
       title="Vault"
-      description={`Secrets for ${activeWorkspaceName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
+      description={`Secrets for ${activeCitadelName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
       loading={secrets.loading}
       error={secrets.error}
-      onRetry={() => void load()}    >
+      onRetry={() => void load()}
+    >
       <NativeGrid>
         <NativeCard
           title="Stored secrets"
@@ -207,7 +214,10 @@ export function CitadelVaultRoutePage({ route, activeWorkspaceId, activeWorkspac
           )}
         </NativeCard>
 
-        <NativeCard title="Store a secret" subtitle="It is sealed before it leaves the request and never written in plaintext.">
+        <NativeCard
+          title="Store a secret"
+          subtitle="It is sealed before it leaves the request and never written in plaintext."
+        >
           {draft.error ? <NoticeBanner tone="error" message={draft.error} /> : null}
           <label className="mc-next-mason-field" htmlFor={nameId}>
             <span>Name</span>

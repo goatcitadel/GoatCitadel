@@ -7,9 +7,12 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCreateInput,
   CitadelCouncilAssignment,
   CitadelGatehouseSummary,
+  CitadelRecord,
   CitadelTemplate,
+  CitadelUpdateInput,
   CitadelVaultSecretMetadata,
   CitadelWardInput,
   CitadelWardRecord,
@@ -23,11 +26,55 @@ type ChamberBody = Omit<CitadelChamberInput, "citadelId">;
 type CharterBody = Omit<CitadelCharterInput, "citadelId">;
 type WardBody = Omit<CitadelWardInput, "citadelId">;
 
+export interface CitadelsResponse {
+  items: CitadelRecord[];
+  view?: "active" | "archived" | "all";
+}
+
 function id(value: string): string {
   return encodeURIComponent(value);
 }
 
 // --- Citadel identity ---
+
+export async function listCitadels(
+  view: "active" | "archived" | "all" = "active",
+  limit = 200,
+): Promise<CitadelsResponse> {
+  const query = new URLSearchParams({
+    view,
+    limit: String(Math.max(1, Math.min(limit, 500))),
+  });
+  return request<CitadelsResponse>(`/api/v1/citadels?${query.toString()}`);
+}
+
+export async function createCitadel(input: CitadelCreateInput): Promise<CitadelRecord> {
+  return request<CitadelRecord>("/api/v1/citadels", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCitadel(citadelId: string, input: CitadelUpdateInput): Promise<CitadelRecord> {
+  return request<CitadelRecord>(`/api/v1/citadels/${id(citadelId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function archiveCitadel(citadelId: string): Promise<CitadelRecord> {
+  return request<CitadelRecord>(`/api/v1/citadels/${id(citadelId)}/archive`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function restoreCitadel(citadelId: string): Promise<CitadelRecord> {
+  return request<CitadelRecord>(`/api/v1/citadels/${id(citadelId)}/restore`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
 
 export async function getCitadel(citadelId: string): Promise<Citadel> {
   return request<Citadel>(`/api/v1/citadels/${id(citadelId)}`);
@@ -57,6 +104,19 @@ export async function createCitadelChamber(citadelId: string, chamber: ChamberBo
 export async function listCitadelCouncil(citadelId: string): Promise<CitadelCouncilAssignment[]> {
   const { items } = await request<{ items: CitadelCouncilAssignment[] }>(`/api/v1/citadels/${id(citadelId)}/council`);
   return items;
+}
+
+export async function assignCitadelCouncilAgent(citadelId: string, agentId: string): Promise<CitadelCouncilAssignment> {
+  return request<CitadelCouncilAssignment>(`/api/v1/citadels/${id(citadelId)}/council`, {
+    method: "POST",
+    body: JSON.stringify({ agentId }),
+  });
+}
+
+export async function unassignCitadelCouncilAgent(citadelId: string, agentId: string): Promise<void> {
+  await request<void>(`/api/v1/citadels/${id(citadelId)}/council/${id(agentId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getCitadelGatehouse(citadelId: string): Promise<CitadelGatehouseSummary & { wardCount: number }> {
@@ -140,7 +200,10 @@ export async function getMasonSession(sessionId: string): Promise<MasonSession> 
   return request<MasonSession>(`/api/v1/mason/sessions/${id(sessionId)}`);
 }
 
-export async function updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): Promise<MasonSession> {
+export async function updateMasonSessionAnswers(
+  sessionId: string,
+  patch: Partial<MasonAnswers>,
+): Promise<MasonSession> {
   return request<MasonSession>(`/api/v1/mason/sessions/${id(sessionId)}/answers`, {
     method: "POST",
     body: JSON.stringify(patch),

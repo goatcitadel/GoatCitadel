@@ -20,6 +20,59 @@ describe("citadels routes", () => {
     app = null;
   });
 
+  it("lists Citadel identity records with bounded query parameters", async () => {
+    const listRecords = vi.fn(() => [{ citadelId: "personal", name: "Personal" }]);
+    const built = buildApp({ listRecords });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/citadels?view=all&limit=999" });
+
+    expect(response.statusCode).toBe(400);
+
+    const ok = await app.inject({ method: "GET", url: "/api/v1/citadels?view=all&limit=500" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ items: [{ citadelId: "personal", name: "Personal" }], view: "all" });
+    expect(listRecords).toHaveBeenCalledWith("all", 500);
+  });
+
+  it("creates, updates, archives, and restores Citadel identity records", async () => {
+    const createRecord = vi.fn((input: Record<string, unknown>) => ({ citadelId: "client", ...input }));
+    const updateRecord = vi.fn((citadelId: string, input: Record<string, unknown>) => ({ citadelId, ...input }));
+    const archiveRecord = vi.fn((citadelId: string) => ({ citadelId, lifecycleStatus: "archived" }));
+    const restoreRecord = vi.fn((citadelId: string) => ({ citadelId, lifecycleStatus: "active" }));
+    const built = buildApp({ createRecord, updateRecord, archiveRecord, restoreRecord });
+    app = built.app;
+    await app.register(citadelsRoutes);
+
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/citadels",
+      payload: { citadelId: "client", name: "Client", kind: "client", defaultWorkspaceId: "delivery" },
+    });
+    const updateResponse = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/citadels/client",
+      payload: { name: "Client One" },
+    });
+    const archiveResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/archive" });
+    const restoreResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/restore" });
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(updateResponse.statusCode).toBe(200);
+    expect(archiveResponse.statusCode).toBe(200);
+    expect(restoreResponse.statusCode).toBe(200);
+    expect(createRecord).toHaveBeenCalledWith({
+      citadelId: "client",
+      name: "Client",
+      kind: "client",
+      defaultWorkspaceId: "delivery",
+    });
+    expect(updateRecord).toHaveBeenCalledWith("client", { name: "Client One" });
+    expect(archiveRecord).toHaveBeenCalledWith("client");
+    expect(restoreRecord).toHaveBeenCalledWith("client");
+  });
+
   it("returns 404 when the citadel has no charter", async () => {
     const built = buildApp({ getCitadel: vi.fn(() => undefined) });
     app = built.app;
@@ -132,7 +185,11 @@ describe("citadels routes", () => {
   });
 
   it("creates a citadel from a template", async () => {
-    const createFromTemplate = vi.fn((citadelId: string) => ({ citadelId, charter: { kind: "company" }, chambers: [] }));
+    const createFromTemplate = vi.fn((citadelId: string) => ({
+      citadelId,
+      charter: { kind: "company" },
+      chambers: [],
+    }));
     const built = buildApp({ createFromTemplate });
     app = built.app;
     await app.register(citadelsRoutes);
@@ -352,7 +409,9 @@ describe("citadels routes", () => {
 
   it("reveals a vault secret, and 404s a missing one", async () => {
     const revealVaultSecret = vi.fn((_cid: string, secretId: string) =>
-      secretId === "s1" ? { ok: true as const, value: "sk-live-123" } : { ok: false as const, reason: "not_found" as const },
+      secretId === "s1"
+        ? { ok: true as const, value: "sk-live-123" }
+        : { ok: false as const, reason: "not_found" as const },
     );
     const built = buildApp({ revealVaultSecret });
     app = built.app;
@@ -398,7 +457,11 @@ describe("citadels routes", () => {
     });
     expect(create.statusCode).toBe(201);
     expect(createPassage).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceCitadelId: "ws-1", destinationCitadelId: "ws-2", allowedFields: ["availability"] }),
+      expect.objectContaining({
+        sourceCitadelId: "ws-1",
+        destinationCitadelId: "ws-2",
+        allowedFields: ["availability"],
+      }),
     );
   });
 
@@ -614,7 +677,11 @@ describe("citadels routes", () => {
       answers: patch,
       status: "collecting",
     }));
-    const getMasonSession = vi.fn(() => ({ sessionId: "s1", answers: { kind: "company", purpose: "x" }, status: "collecting" }));
+    const getMasonSession = vi.fn(() => ({
+      sessionId: "s1",
+      answers: { kind: "company", purpose: "x" },
+      status: "collecting",
+    }));
     const draftFromSession = vi.fn(() => ({ ok: true, blueprint: { schemaVersion: "goatcitadel.blueprint.v1" } }));
     const built = buildApp({ createMasonSession, updateMasonSessionAnswers, getMasonSession, draftFromSession });
     app = built.app;

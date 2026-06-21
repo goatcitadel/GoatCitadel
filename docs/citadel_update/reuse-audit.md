@@ -4,6 +4,10 @@
 **Purpose:** Map every Citadel concept onto an existing service/package and give a `Reuse / Extend / Build-new` verdict, the current scope key, and the change needed to isolate it per Citadel.
 **Grounded in:** the monorepo at HEAD as of 2026-06-15. File paths are reliable; line numbers are indicative and may drift.
 
+> **Superseded product-model note (2026-06-21):** this audit is retained as
+> historical reuse analysis. Its "Citadel = Workspace" recommendation has been
+> superseded by the parent hierarchy `Citadel -> Workspaces -> Projects`.
+
 > **Decisions this audit assumes** (from the 2026-06-15 spec review):
 > 1. **Reuse existing services, isolated per Citadel** — do not rebuild.
 > 2. Replacement is the eventual goal; wrap-first behind a flag.
@@ -73,7 +77,7 @@ This is why Phase 1 is a **scoping layer, not six new packages**: `citadel-core`
 
 - **Today:** `WorkspaceRecord` (`packages/contracts/src/workspaces.ts`) has a stable `workspaceId`, `slug`, `workspacePrefs`, lifecycle status, and **already partitions chats** (`list(view, limit, workspaceId)`). It even scopes guidance docs as `"global" | "workspace"`. `ChatProjectRecord` (`chat-project-service.ts`) is thinner — `projectId`, optional `workspaceId`, `workspacePath`, color/name.
 - **Decision needed — is a Citadel a Workspace or a Project?** The evidence favors **Citadel ≈ Workspace (extended)**: the workspace is already the top-level partition the rest of the system keys off. `Project` is too thin to be the security boundary, but is a natural fit for a **Mission grouping** or a Chamber-ish sub-unit under a Citadel.
-  - *Recommendation:* `Citadel = Workspace + Charter`. Add `chamberId` as a new sub-scope. Fold `Project` into "a way to group Missions/work inside a Citadel" later; don't promote it to the boundary.
+  - *Historical recommendation, superseded 2026-06-21:* extend workspace with Charter metadata. Current direction is a parent Citadel above one or more workspaces.
 - **Scoping change:** add `purpose/charter`, `kind`, `defaultChamberId`, `vaultRef` to the workspace (or a `citadel_meta` row keyed by `workspaceId`). No new top-level partition is invented — you're naming and enriching the one that exists.
 - **Landmine:** the optional-ness of `workspaceId` in several places (it's `workspaceId?`) is exactly what lets data leak across boundaries (see §4). Citadel work should make the scope **required and enforced**, not best-effort.
 
@@ -170,7 +174,7 @@ Everything else in the spec is a validation-gated phase on top of this spine.
 
 ## 6. Open engineering decisions (need a product call)
 
-1. **Citadel = Workspace or Project?** Recommendation: **Workspace** (it's already the partition). Confirm so the schema work doesn't fork.
+1. **Citadel parent scope:** the earlier workspace recommendation is superseded. Current direction is `Citadel -> Workspaces -> Projects`.
 2. **Chamber = new sub-scope vs. namespace-prefix convention** on existing tables? Affects whether `chamberId` is a column or an encoding.
 3. **Tamper-evident audit** — needed for MVP claim, or defer the hash-chain? Recommendation: defer; keep append-only + sanitized for now.
 4. **Global-grant inheritance** — should a new Citadel inherit *any* global grants, or start fully empty? Recommendation: empty by default (least privilege).

@@ -56,7 +56,11 @@ function describeAnswers(answers: Partial<MasonAnswers>): Array<{ title: string;
  * step (freeform → model interpretation → merged answers) and the
  * review-before-activation summary. Staging never connects accounts or opens Gates.
  */
-export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRoutePagesProps) {
+export function CitadelMasonRoutePage({
+  route,
+  activeWorkspaceName,
+  activeCitadelName = activeWorkspaceName,
+}: NativeRoutePagesProps) {
   const messageInputId = useId();
   const [questions, setQuestions] = useState<QuestionsState>({ loading: true, error: null, items: [] });
   const [sessionState, setSessionState] = useState<SessionState>({ session: null, busy: false, error: null });
@@ -139,9 +143,10 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
       area="library"
       kicker={routeKicker(route)}
       title="The Mason"
-      description={`Stage a Citadel for ${activeWorkspaceName} by answering the Mason — nothing is connected or activated until you review and confirm.`}
+      description={`Stage a Citadel for ${activeCitadelName} by answering the Mason — nothing is connected or activated until you review and confirm.`}
       loading={questions.loading}
-      error={questions.error}    >
+      error={questions.error}
+    >
       <NativeGrid>
         <NativeCard
           title="Setup questions"
@@ -183,11 +188,7 @@ export function CitadelMasonRoutePage({ route, activeWorkspaceName }: NativeRout
           {!session ? (
             <div className="mc-next-mason-start">
               <p>Start a session and tell the Mason what this Citadel is for.</p>
-              <NativeButton
-                variant="default"
-                disabled={sessionState.busy}
-                onClick={() => void startSession()}
-              >
+              <NativeButton variant="default" disabled={sessionState.busy} onClick={() => void startSession()}>
                 <Hammer className="h-4 w-4" />
                 {sessionState.busy ? "Starting…" : "Start setup"}
               </NativeButton>

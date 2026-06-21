@@ -91,6 +91,8 @@ function artifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): ChatGen
 function defaultProps(overrides: Record<string, unknown> = {}) {
   return {
     route: { area: "projects", theme: "ops" },
+    activeCitadelId: "company",
+    activeCitadelName: "Company",
     activeWorkspaceId: "default",
     activeWorkspaceName: "Default workspace",
     pendingApprovals: 0,
@@ -221,8 +223,9 @@ describe("ProjectsRoutePage", () => {
     const navigate = vi.fn();
     const renderer = await renderPage(defaultProps({ navigate }));
 
-    expect(mockedFetchChatProjects).toHaveBeenCalledWith("all", 300, "default");
+    expect(mockedFetchChatProjects).toHaveBeenCalledWith("all", 300, "default", "company");
     expect(mockedFetchChatSessions).toHaveBeenCalledWith({
+      citadelId: "company",
       workspaceId: "default",
       scope: "all",
       view: "all",
@@ -230,6 +233,7 @@ describe("ProjectsRoutePage", () => {
       limit: 1000,
     });
     expect(mockedFetchChatGeneratedArtifacts).toHaveBeenCalledWith({
+      citadelId: "company",
       workspaceId: "default",
       limit: 1000,
     });
@@ -328,6 +332,7 @@ describe("ProjectsRoutePage", () => {
     });
     expect(mockedCreateChatSession).toHaveBeenCalledWith(
       {
+        citadelId: "company",
         workspaceId: "default",
         projectId: "project-beta",
         mode: "code",
@@ -357,6 +362,7 @@ describe("ProjectsRoutePage", () => {
 
     expect(mockedCreateChatSession).toHaveBeenCalledWith(
       {
+        citadelId: "company",
         workspaceId: "default",
         projectId: "project-alpha",
         mode: "code",
@@ -423,6 +429,7 @@ describe("ProjectsRoutePage", () => {
       await Promise.resolve();
     });
     expect(mockedCreateChatProject).toHaveBeenCalledWith({
+      citadelId: "company",
       workspaceId: "default",
       name: "Created",
       workspacePath: "F:\\code\\created",
@@ -441,7 +448,7 @@ describe("ProjectsRoutePage", () => {
     });
     expect(mockedUpdateChatProject).toHaveBeenCalledWith(
       "project-alpha",
-      expect.objectContaining({ name: "Alpha renamed", workspaceId: "default" }),
+      expect.objectContaining({ citadelId: "company", name: "Alpha renamed", workspaceId: "default" }),
     );
 
     await act(async () => {

@@ -71,6 +71,8 @@ type ProjectSessionStartOptions = {
 
 export function ProjectsRoutePage({
   route,
+  activeCitadelId,
+  activeCitadelName,
   activeWorkspaceId,
   activeWorkspaceName,
   pendingApprovals,
@@ -123,7 +125,7 @@ export function ProjectsRoutePage({
     const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const nextData = await fetchProjectData(activeWorkspaceId);
+      const nextData = await fetchProjectData(activeWorkspaceId, activeCitadelId);
       if (!isMounted()) {
         return;
       }
@@ -145,14 +147,14 @@ export function ProjectsRoutePage({
         error: getErrorMessage(error),
       }));
     }
-  }, [activeWorkspaceId, isMounted]);
+  }, [activeCitadelId, activeWorkspaceId, isMounted]);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       const startedAt = readRouteDiagnosticNow();
       setState((current) => ({ ...current, loading: true, error: null }));
-      const nextData = await fetchProjectData(activeWorkspaceId);
+      const nextData = await fetchProjectData(activeWorkspaceId, activeCitadelId);
       if (cancelled) {
         return;
       }
@@ -181,7 +183,7 @@ export function ProjectsRoutePage({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId, activeWorkspaceId]);
 
   const countsByProject = useMemo(() => {
     const next = new Map<string, ProjectCounts>();
@@ -287,6 +289,7 @@ export function ProjectsRoutePage({
     try {
       const session = await createChatSession(
         {
+          citadelId: activeCitadelId,
           workspaceId: activeWorkspaceId,
           projectId: selectedProject.projectId,
           mode,
@@ -354,6 +357,7 @@ export function ProjectsRoutePage({
     setProjectActionBusy("create");
     try {
       const project = await createChatProject({
+        citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         name,
         workspacePath,
@@ -396,6 +400,7 @@ export function ProjectsRoutePage({
     setProjectActionBusy("save");
     try {
       const project = await updateChatProject(selectedProject.projectId, {
+        citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         name,
         workspacePath,
@@ -572,15 +577,16 @@ export function ProjectsRoutePage({
   return (
     <NativePageFrame
       area="projects"
-      kicker="Projects · Workspace"
+      kicker="Citadel > Workspace > Project"
       title="Project containers"
-      description={`Cross-surface project threads for ${activeWorkspaceName}.`}
+      description={`Cross-surface project threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`}
       loading={state.loading}
       error={state.error}
       lead={leadContent}
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
         { label: "Project sessions", value: String(totalProjectSessions) },
+        { label: "Citadel", value: activeCitadelId ?? "legacy" },
       ]}
       actions={
         <>
@@ -947,8 +953,10 @@ function ProjectThreadGroup({
 
 async function fetchProjectData(
   activeWorkspaceId: string,
+  activeCitadelId?: string,
 ): Promise<Pick<ProjectsState, "projects" | "sessions" | "artifacts" | "artifactIssue">> {
   const artifactsRequest = fetchChatGeneratedArtifacts({
+    citadelId: activeCitadelId,
     workspaceId: activeWorkspaceId,
     limit: 1000,
   })
@@ -958,8 +966,9 @@ async function fetchProjectData(
       issue: getErrorMessage(error),
     }));
   const [projectsResponse, sessionsResponse, artifactsResponse] = await Promise.all([
-    fetchChatProjects("all", 300, activeWorkspaceId),
+    fetchChatProjects("all", 300, activeWorkspaceId, activeCitadelId),
     fetchChatSessions({
+      citadelId: activeCitadelId,
       workspaceId: activeWorkspaceId,
       scope: "all",
       view: "all",

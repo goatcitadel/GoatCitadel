@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appMocks = vi.hoisted(() => ({
+  activeCitadelId: "personal",
   activeWorkspaceId: "workspace-1",
   closeEventStream: vi.fn(),
   connectEventStream: vi.fn(),
@@ -13,6 +14,7 @@ const appMocks = vi.hoisted(() => ({
   emitRefresh: vi.fn(),
   fetchDashboardState: vi.fn(),
   fetchHealthSummary: vi.fn(),
+  listCitadels: vi.fn(),
   fetchRuntimeLifecycleExport: vi.fn(),
   fetchWorkspaces: vi.fn(),
   getGatewayApiBaseUrl: vi.fn(),
@@ -21,6 +23,7 @@ const appMocks = vi.hoisted(() => ({
   publishChannelActivityFromRealtimeEvent: vi.fn(),
   resetEventStreamStatus: vi.fn(),
   resetChannelActivitySnapshots: vi.fn(),
+  setActiveCitadelId: vi.fn(),
   setActiveWorkspaceId: vi.fn(),
   setDetailPanelPinned: vi.fn(),
   setMode: vi.fn(),
@@ -49,6 +52,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchDashboardState: appMocks.fetchDashboardState,
   fetchHealthSummary: appMocks.fetchHealthSummary,
+  listCitadels: appMocks.listCitadels,
   fetchRuntimeLifecycleExport: appMocks.fetchRuntimeLifecycleExport,
 }));
 
@@ -166,6 +170,8 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
     showTechnicalDetails: true,
     detailPanelPinned: false,
     setDetailPanelPinned: appMocks.setDetailPanelPinned,
+    activeCitadelId: appMocks.activeCitadelId,
+    setActiveCitadelId: appMocks.setActiveCitadelId,
     activeWorkspaceId: appMocks.activeWorkspaceId,
     setActiveWorkspaceId: appMocks.setActiveWorkspaceId,
     theme: "dark",
@@ -330,6 +336,7 @@ describe("MissionControlNextApp", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    appMocks.activeCitadelId = "personal";
     appMocks.activeWorkspaceId = "workspace-1";
     appMocks.threadedRouteProps = null;
     appMocks.closeEventStream.mockReset();
@@ -364,6 +371,12 @@ describe("MissionControlNextApp", () => {
     });
     appMocks.fetchHealthSummary.mockResolvedValue({
       daemonStatus: { running: false },
+    });
+    appMocks.listCitadels.mockResolvedValue({
+      items: [
+        { citadelId: "personal", name: "Personal" },
+        { citadelId: "company", name: "Company" },
+      ],
     });
     appMocks.fetchRuntimeLifecycleExport.mockResolvedValue({
       trustReport: { shareableMarkdown: "# Trust\n\nReady." },
@@ -458,7 +471,7 @@ describe("MissionControlNextApp", () => {
         label: "Gateway ready",
       }),
     });
-    expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400);
+    expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400, "personal");
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
     expect(appMocks.connectEventStream).toHaveBeenCalled();
 
@@ -572,9 +585,17 @@ describe("MissionControlNextApp", () => {
     });
     expect(window.location.pathname).toBe("/ops/approvals");
 
-    const workspaceSelect = renderer.root.findByType("select");
+    const selects = renderer.root.findAllByType("select");
+    const citadelSelect = selects.find((node) => node.props.value === "personal");
+    const workspaceSelect = selects.find((node) => node.props.value === "workspace-1");
+    expect(citadelSelect).toBeDefined();
+    expect(workspaceSelect).toBeDefined();
     await act(async () => {
-      workspaceSelect.props.onChange({ target: { value: "workspace-2" } });
+      citadelSelect?.props.onChange({ target: { value: "company" } });
+    });
+    expect(appMocks.setActiveCitadelId).toHaveBeenCalledWith("company");
+    await act(async () => {
+      workspaceSelect?.props.onChange({ target: { value: "workspace-2" } });
     });
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
 

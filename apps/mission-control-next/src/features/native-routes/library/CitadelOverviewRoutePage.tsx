@@ -49,13 +49,15 @@ function selectDefaultTemplates(templates: CitadelTemplate[]): CitadelTemplate[]
 
 /**
  * The Citadel overview (spec §2 Charter + Chambers, §20 Gatehouse posture). Reads
- * the active workspace *as* a Citadel — the workspace becomes a Citadel the moment
- * it has a Charter, so a workspace with none routes the operator to the Mason.
+ * the active Citadel as the parent operating world; workspaces remain functional
+ * zones inside it.
  */
 export function CitadelOverviewRoutePage({
   route,
   activeWorkspaceId,
   activeWorkspaceName,
+  activeCitadelId = activeWorkspaceId,
+  activeCitadelName = activeWorkspaceName,
   navigate,
 }: NativeRoutePagesProps) {
   const [state, setState] = useState<OverviewState>(INITIAL);
@@ -64,7 +66,7 @@ export function CitadelOverviewRoutePage({
   useEffect(() => {
     let cancelled = false;
     setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([getCitadel(activeWorkspaceId), getCitadelGatehouse(activeWorkspaceId)])
+    void Promise.all([getCitadel(activeCitadelId), getCitadelGatehouse(activeCitadelId)])
       .then(([citadel, gatehouse]) => {
         if (!cancelled) {
           setState({ loading: false, error: null, staged: true, citadel, gatehouse });
@@ -83,7 +85,7 @@ export function CitadelOverviewRoutePage({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeCitadelId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,10 +120,10 @@ export function CitadelOverviewRoutePage({
   const handleCreateFromTemplate = async (template: CitadelTemplate) => {
     setTemplateState((current) => ({ ...current, error: null, busyTemplateId: template.id }));
     try {
-      const nextCitadel = await createCitadelFromTemplate(activeWorkspaceId, template.id);
+      const nextCitadel = await createCitadelFromTemplate(activeCitadelId, template.id);
       let nextGatehouse: Gatehouse | null = null;
       try {
-        nextGatehouse = await getCitadelGatehouse(activeWorkspaceId);
+        nextGatehouse = await getCitadelGatehouse(activeCitadelId);
       } catch (error: unknown) {
         if (!isApiRequestError(error) || error.status !== 404) {
           throw error;
@@ -141,7 +143,7 @@ export function CitadelOverviewRoutePage({
       area="library"
       kicker={routeKicker(route)}
       title="Citadel"
-      description={`How ${activeWorkspaceName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture.`}
+      description={`How ${activeCitadelName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture. Active workspace: ${activeWorkspaceName}.`}
       loading={state.loading}
       error={state.error}
     >
@@ -149,8 +151,8 @@ export function CitadelOverviewRoutePage({
         <div className="mc-next-citadel-defaults">
           <EmptyState
             icon={<Castle className="h-5 w-5" />}
-            title={`${activeWorkspaceName} isn't a Citadel yet`}
-            description="A workspace becomes a Citadel once it has a Charter. Start with one of the two default operating spaces, or use the Mason for a custom Blueprint."
+            title={`${activeCitadelName} needs a Charter`}
+            description="A Citadel becomes operational once it has a Charter. Start with one of the default operating spaces, or use the Mason for a custom Blueprint."
             primaryAction={
               <NativeButton variant="outline" onClick={() => navigate({ area: "library", section: "citadel" })}>
                 <Hammer className="h-4 w-4" />

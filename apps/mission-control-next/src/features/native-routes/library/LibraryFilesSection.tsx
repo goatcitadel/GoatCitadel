@@ -33,7 +33,12 @@ import {
   LibrarySelectableList,
 } from "../shared/library-primitives";
 
-export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
+export function LibraryFilesSection({
+  activeCitadelId,
+  activeCitadelName,
+  activeWorkspaceId,
+  activeWorkspaceName,
+}: NativeRoutePagesProps) {
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [targetPath, setTargetPath] = useState("");
@@ -46,7 +51,9 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
   });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [files, templates] = await Promise.all([
-      nativeLoad("Files", fetchFilesList(".", 120), { items: [] }),
+      nativeLoad("Files", fetchFilesList(".", 120, { citadelId: activeCitadelId, workspaceId: activeWorkspaceId }), {
+        items: [],
+      }),
       nativeLoad("File templates", fetchFileTemplates(), { items: [] }),
     ]);
     return {
@@ -54,7 +61,7 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
       files: files.data.items,
       templates: templates.data.items,
     };
-  }, []);
+  }, [activeCitadelId, activeWorkspaceId]);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -89,7 +96,7 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
     }
     let cancelled = false;
     setPreview({ loading: true, error: null, data: null });
-    void downloadFile(selectedFilePath)
+    void downloadFile(selectedFilePath, { citadelId: activeCitadelId, workspaceId: activeWorkspaceId })
       .then((file) => {
         if (!cancelled) {
           setPreview({
@@ -110,7 +117,7 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
     return () => {
       cancelled = true;
     };
-  }, [selectedFilePath]);
+  }, [activeCitadelId, activeWorkspaceId, selectedFilePath]);
 
   const handleCreateFromTemplate = async () => {
     if (!selectedTemplateId) {
@@ -118,7 +125,10 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
       return;
     }
     try {
-      const created = await createFileFromTemplate(selectedTemplateId, targetPath.trim() || undefined);
+      const created = await createFileFromTemplate(selectedTemplateId, targetPath.trim() || undefined, {
+        citadelId: activeCitadelId,
+        workspaceId: activeWorkspaceId,
+      });
       setNotice({ tone: "success", message: `${created.relativePath} created from template.` });
       setTargetPath("");
       await reload();
@@ -139,6 +149,7 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
           stats={[
             { label: "Visible", value: String(data?.files.length ?? 0) },
             { label: "Templates", value: String(data?.templates.length ?? 0) },
+            { label: "Citadel", value: activeCitadelName ?? activeCitadelId ?? "legacy" },
           ]}
         >
           <div className="mc-next-settings-field-grid">

@@ -2,12 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 const projectViewSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   view: z.enum(["active", "archived", "all"]).default("active"),
   limit: z.coerce.number().int().positive().max(1000).default(300),
 });
 
 const createProjectSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
@@ -18,6 +20,7 @@ const createProjectSchema = z.object({
 const importProjectSchema = z
   .object({
     workspaceId: z.string().min(1).optional(),
+    citadelId: z.string().min(1).optional(),
     name: z.string().optional(),
     sourceType: z.enum(["local_folder", "github_repo"]),
     sourcePath: z.string().optional(),
@@ -42,6 +45,7 @@ const importProjectSchema = z
   });
 
 const updateProjectSchema = z.object({
+  citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
@@ -68,6 +72,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
         parsed.data.view,
         parsed.data.limit,
         parsed.data.workspaceId,
+        parsed.data.citadelId,
       ),
       view: parsed.data.view,
     });

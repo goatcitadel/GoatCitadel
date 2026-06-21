@@ -67,7 +67,7 @@ describe("workspace and guidance routes", () => {
     return service;
   }
 
-  it("lists workspaces through gateway service", async () => {
+  it("lists workspaces through gateway service with optional Citadel scope", async () => {
     const listWorkspaces = vi.fn(() => [
       {
         workspaceId: "default",
@@ -84,13 +84,14 @@ describe("workspace and guidance routes", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/workspaces?view=active&limit=25",
+      url: "/api/v1/workspaces?view=active&limit=25&citadelId=company",
     });
 
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { items: unknown[] };
+    const body = response.json() as { items: unknown[]; citadelId?: string };
     expect(body.items).toHaveLength(1);
-    expect(listWorkspaces).toHaveBeenCalledWith("active", 25);
+    expect(body.citadelId).toBe("company");
+    expect(listWorkspaces).toHaveBeenCalledWith("active", 25, "company");
   });
 
   it("rejects workspace security doc override endpoint by schema", async () => {
@@ -141,6 +142,7 @@ describe("workspace and guidance routes", () => {
       method: "POST",
       url: "/api/v1/workspaces",
       payload: {
+        citadelId: "company",
         name: "Research",
         slug: "research",
         description: "Research workspace",
@@ -175,6 +177,7 @@ describe("workspace and guidance routes", () => {
     expect(archiveResponse.statusCode).toBe(200);
     expect(restoreResponse.statusCode).toBe(200);
     expect(service.createWorkspace).toHaveBeenCalledWith({
+      citadelId: "company",
       name: "Research",
       slug: "research",
       description: "Research workspace",

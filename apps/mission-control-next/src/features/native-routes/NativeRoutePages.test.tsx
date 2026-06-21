@@ -812,6 +812,7 @@ describe("NativeRoutePages Cowork task board", () => {
       findButton(renderer!.root, "Create task").props.onClick();
     });
     expect(mocks.createTask).toHaveBeenCalledWith({
+      citadelId: "company",
       workspaceId: "default",
       title: "New task",
       description: undefined,
@@ -824,7 +825,10 @@ describe("NativeRoutePages Cowork task board", () => {
     await act(async () => {
       findButton(renderer!.root, "Save task").props.onClick();
     });
-    expect(mocks.updateTask).toHaveBeenCalledWith("task-1", expect.objectContaining({ status: "done" }));
+    expect(mocks.updateTask).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({ citadelId: "company", status: "done" }),
+    );
 
     await act(async () => {
       findFieldControl(renderer!.root, "Deliverable title", "input").props.onChange({
@@ -836,13 +840,14 @@ describe("NativeRoutePages Cowork task board", () => {
     });
     expect(mocks.addTaskDeliverable).toHaveBeenCalledWith(
       "task-1",
-      expect.objectContaining({ title: "Release evidence", deliverableType: "artifact" }),
+      expect.objectContaining({ citadelId: "company", title: "Release evidence", deliverableType: "artifact" }),
     );
 
     await act(async () => {
       findButton(renderer!.root, "Move to trash").props.onClick();
     });
     expect(mocks.deleteTask).toHaveBeenCalledWith("task-1", {
+      citadelId: "company",
       mode: "soft",
       deletedBy: "operator",
       workspaceId: "default",
@@ -879,7 +884,7 @@ describe("NativeRoutePages Cowork task board", () => {
       findButton(renderer!.root, "Restore").props.onClick();
     });
 
-    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default");
+    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default", "company");
   });
 });
 
@@ -1085,6 +1090,7 @@ describe("NativeRoutePages Library provenance helpers", () => {
     });
 
     expect(mocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({
+      citadelId: "company",
       workspaceId: "default",
       limit: 80,
     });
@@ -1200,6 +1206,8 @@ function renderCoworkTasks(): ReactTestRenderer {
   return create(
     <NativeRoutePages
       route={{ area: "cowork", section: "tasks", theme: "ops" } as any}
+      activeCitadelId="company"
+      activeCitadelName="Company"
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={0}
@@ -1226,6 +1234,8 @@ function renderLibraryArtifacts(navigate = vi.fn()): ReactTestRenderer {
   return create(
     <NativeRoutePages
       route={{ area: "library", section: "artifacts", artifactId: "artifact-1", theme: "ops" } as any}
+      activeCitadelId="company"
+      activeCitadelName="Company"
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={0}

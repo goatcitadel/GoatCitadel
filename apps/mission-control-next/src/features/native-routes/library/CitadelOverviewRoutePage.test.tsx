@@ -167,7 +167,7 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelOverviewRoutePage {...makeProps(navigate)} />);
     });
-    expect(treeString(renderer!)).toContain("isn't a Citadel yet");
+    expect(treeString(renderer!)).toContain("needs a Charter");
     expect(treeString(renderer!)).toContain("Personal Chief of Staff");
     expect(treeString(renderer!)).toContain("Company Co-Founder");
 

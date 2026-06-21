@@ -4,16 +4,20 @@ import type {
   CitadelChamberInput,
   CitadelCharter,
   CitadelCharterInput,
+  CitadelCreateInput,
   CitadelCouncilAssignment,
   CitadelCouncilAssignmentInput,
   CitadelIntegrationGrant,
   CitadelIntegrationGrantInput,
   CitadelIntegrationMode,
+  CitadelLifecycleStatus,
   CitadelMember,
   CitadelMemberInput,
   CitadelPassage,
   CitadelPassageInput,
+  CitadelRecord,
   CitadelRole,
+  CitadelUpdateInput,
   CitadelVaultSecretInput,
   CitadelVaultSecretRecord,
   CitadelWardInput,
@@ -28,6 +32,7 @@ import type {
   MasonSessionStatus,
   WardEffect,
 } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
@@ -42,6 +47,19 @@ interface CharterRow {
   default_chamber_id: string | null;
   risk_posture: string;
   model_policy_default: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CitadelRecordRow {
+  citadel_id: string;
+  name: string;
+  description: string | null;
+  slug: string;
+  kind: string;
+  lifecycle_status: "active" | "archived";
+  archived_at: string | null;
+  default_workspace_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -124,6 +142,13 @@ interface IntegrationGrantRow {
  * its Chambers. A Citadel is a workspace that has a Charter.
  */
 export class CitadelRepository {
+  private readonly listRecordsStmt;
+  private readonly getRecordStmt;
+  private readonly getRecordBySlugStmt;
+  private readonly insertRecordStmt;
+  private readonly updateRecordStmt;
+  private readonly archiveRecordStmt;
+  private readonly restoreRecordStmt;
   private readonly upsertCharterStmt;
   private readonly getCharterStmt;
   private readonly createChamberStmt;
@@ -159,6 +184,48 @@ export class CitadelRepository {
   private readonly deleteIntegrationGrantStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.listRecordsStmt = db.prepare(`
+      SELECT * FROM citadel_records
+      WHERE (
+        @view = 'all'
+        OR (@view = 'active' AND lifecycle_status = 'active')
+        OR (@view = 'archived' AND lifecycle_status = 'archived')
+      )
+      ORDER BY updated_at DESC, citadel_id ASC
+      LIMIT @limit
+    `);
+    this.getRecordStmt = db.prepare("SELECT * FROM citadel_records WHERE citadel_id = ?");
+    this.getRecordBySlugStmt = db.prepare("SELECT * FROM citadel_records WHERE slug = ?");
+    this.insertRecordStmt = db.prepare(`
+      INSERT INTO citadel_records (
+        citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+        default_workspace_id, created_at, updated_at
+      ) VALUES (
+        @citadelId, @name, @description, @slug, @kind, 'active', NULL,
+        @defaultWorkspaceId, @createdAt, @updatedAt
+      )
+    `);
+    this.updateRecordStmt = db.prepare(`
+      UPDATE citadel_records
+      SET
+        name = @name,
+        description = @description,
+        slug = @slug,
+        kind = @kind,
+        default_workspace_id = @defaultWorkspaceId,
+        updated_at = @updatedAt
+      WHERE citadel_id = @citadelId
+    `);
+    this.archiveRecordStmt = db.prepare(`
+      UPDATE citadel_records
+      SET lifecycle_status = 'archived', archived_at = @archivedAt, updated_at = @updatedAt
+      WHERE citadel_id = @citadelId
+    `);
+    this.restoreRecordStmt = db.prepare(`
+      UPDATE citadel_records
+      SET lifecycle_status = 'active', archived_at = NULL, updated_at = @updatedAt
+      WHERE citadel_id = @citadelId
+    `);
     this.upsertCharterStmt = db.prepare(`
       INSERT INTO citadel_charters (
         citadel_id, purpose, kind, goals_json, boundaries_json, success_definition_json,
@@ -289,6 +356,97 @@ export class CitadelRepository {
     );
   }
 
+  public listRecords(view: CitadelLifecycleStatus | "all" = "active", limit = 200): CitadelRecord[] {
+    const rows = this.listRecordsStmt.all({
+      view,
+      limit: Math.max(1, Math.min(2000, Math.floor(limit))),
+    }) as CitadelRecordRow[];
+    return rows.map(mapCitadelRecord);
+  }
+
+  public getRecord(citadelId: string): CitadelRecord {
+    const row = this.getRecordStmt.get(citadelId) as CitadelRecordRow | undefined;
+    if (!row) {
+      throw new NotFoundError({ entity: "Citadel", id: citadelId });
+    }
+    return mapCitadelRecord(row);
+  }
+
+  public findRecord(citadelId: string): CitadelRecord | undefined {
+    const row = this.getRecordStmt.get(citadelId) as CitadelRecordRow | undefined;
+    return row ? mapCitadelRecord(row) : undefined;
+  }
+
+  public findRecordBySlug(slug: string): CitadelRecord | undefined {
+    const row = this.getRecordBySlugStmt.get(normalizeSlug(slug)) as CitadelRecordRow | undefined;
+    return row ? mapCitadelRecord(row) : undefined;
+  }
+
+  public createRecord(input: CitadelCreateInput, now = new Date().toISOString()): CitadelRecord {
+    const name = sanitizeRequired(input.name, "name");
+    const slug = normalizeSlug(input.slug ?? input.name);
+    const citadelId = slug;
+    this.assertRecordSlugAvailable(slug);
+    if (this.findRecord(citadelId)) {
+      throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel id "${citadelId}" is already in use` });
+    }
+    this.insertRecordStmt.run({
+      citadelId,
+      name,
+      description: sanitizeOptional(input.description),
+      slug,
+      kind: input.kind ?? "custom",
+      defaultWorkspaceId: sanitizeOptional(input.defaultWorkspaceId),
+      createdAt: now,
+      updatedAt: now,
+    });
+    return this.getRecord(citadelId);
+  }
+
+  public updateRecord(citadelId: string, input: CitadelUpdateInput, now = new Date().toISOString()): CitadelRecord {
+    const current = this.getRecord(citadelId);
+    const nextName = input.name !== undefined ? sanitizeRequired(input.name, "name") : current.name;
+    const nextSlug =
+      input.slug !== undefined
+        ? normalizeSlug(input.slug)
+        : input.name !== undefined
+          ? normalizeSlug(input.name)
+          : current.slug;
+    this.assertRecordSlugAvailable(nextSlug, citadelId);
+    this.updateRecordStmt.run({
+      citadelId,
+      name: nextName,
+      description:
+        input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
+      slug: nextSlug,
+      kind: input.kind ?? current.kind,
+      defaultWorkspaceId:
+        input.defaultWorkspaceId !== undefined
+          ? sanitizeOptional(input.defaultWorkspaceId)
+          : (current.defaultWorkspaceId ?? null),
+      updatedAt: now,
+    });
+    return this.getRecord(citadelId);
+  }
+
+  public archiveRecord(citadelId: string, now = new Date().toISOString()): CitadelRecord {
+    const current = this.getRecord(citadelId);
+    if (current.lifecycleStatus === "archived") {
+      return current;
+    }
+    this.archiveRecordStmt.run({ citadelId, archivedAt: now, updatedAt: now });
+    return this.getRecord(citadelId);
+  }
+
+  public restoreRecord(citadelId: string, now = new Date().toISOString()): CitadelRecord {
+    const current = this.getRecord(citadelId);
+    if (current.lifecycleStatus === "active") {
+      return current;
+    }
+    this.restoreRecordStmt.run({ citadelId, updatedAt: now });
+    return this.getRecord(citadelId);
+  }
+
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
     const now = new Date().toISOString();
     this.upsertCharterStmt.run({
@@ -350,6 +508,7 @@ export class CitadelRepository {
     }
     return {
       citadelId,
+      record: this.findRecord(citadelId),
       charter,
       chambers: this.listChambers(citadelId),
     };
@@ -575,6 +734,28 @@ export class CitadelRepository {
     const result = this.deleteIntegrationGrantStmt.run({ citadelId, grantId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
+
+  private assertRecordSlugAvailable(slug: string, excludingCitadelId?: string): void {
+    const existing = this.findRecordBySlug(slug);
+    if (existing && existing.citadelId !== excludingCitadelId) {
+      throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel slug "${slug}" is already in use` });
+    }
+  }
+}
+
+function mapCitadelRecord(row: CitadelRecordRow): CitadelRecord {
+  return {
+    citadelId: row.citadel_id,
+    name: row.name,
+    description: row.description ?? undefined,
+    slug: row.slug,
+    kind: row.kind as CitadelKind,
+    lifecycleStatus: row.lifecycle_status,
+    archivedAt: row.archived_at ?? undefined,
+    defaultWorkspaceId: row.default_workspace_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function mapCharter(row: CharterRow): CitadelCharter {
@@ -680,4 +861,36 @@ function mapIntegrationGrant(row: IntegrationGrantRow): CitadelIntegrationGrant 
     expiresAt: row.expires_at ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+function sanitizeRequired(value: string, field: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
+  }
+  return trimmed;
+}
+
+function sanitizeOptional(value?: string): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function normalizeSlug(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!normalized) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "slug" });
+  }
+  if (normalized.length > 64) {
+    return normalized.slice(0, 64).replace(/-+$/g, "");
+  }
+  return normalized;
 }

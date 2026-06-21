@@ -269,6 +269,10 @@ describe("shared API wrapper tail coverage", () => {
     });
     await expectCall(operatorsAgentsFiles.fetchFilesList("docs", 20), "/api/v1/files/list?dir=docs&limit=20");
     await expectCall(
+      operatorsAgentsFiles.fetchFilesList("docs", 20, { citadelId: "company", workspaceId: "engineering" }),
+      "/api/v1/files/list?dir=docs&limit=20&citadelId=company&workspaceId=engineering",
+    );
+    await expectCall(
       operatorsAgentsFiles.fetchPathSuggestions("root", 999),
       "/api/v1/files/path-suggestions?root=root&limit=500",
     );
@@ -280,8 +284,23 @@ describe("shared API wrapper tail coverage", () => {
         method: "POST",
       },
     );
+    await expectCall(
+      operatorsAgentsFiles.createFileFromTemplate("tpl/1", "out.md", {
+        citadelId: "company",
+        workspaceId: "engineering",
+      }),
+      "/api/v1/files/templates/tpl%2F1/create",
+      {
+        method: "POST",
+        body: JSON.stringify({ targetPath: "out.md", citadelId: "company", workspaceId: "engineering" }),
+      },
+    );
     await expectCall(operatorsAgentsFiles.uploadFile("out.md", "body"), "/api/v1/files/upload", { method: "POST" });
     await expectCall(operatorsAgentsFiles.downloadFile("out.md"), "/api/v1/files/download?relativePath=out.md");
+    await expectCall(
+      operatorsAgentsFiles.downloadFile("out.md", { citadelId: "company", workspaceId: "engineering" }),
+      "/api/v1/files/download?relativePath=out.md&citadelId=company&workspaceId=engineering",
+    );
 
     await expectCall(settings.fetchSettings(), "/api/v1/settings");
     await expectCall(settings.fetchDeviceAccessGrants(), "/api/v1/auth/devices?view=active");

@@ -572,7 +572,23 @@ describe("shared API wrappers", () => {
       tasks.fetchTasksByView("active", undefined, "w", { limit: 50, cursor: "cursor-1" }),
       "/api/v1/tasks?limit=50&view=active&cursor=cursor-1&workspaceId=w",
     );
+    await expectCall(
+      tasks.fetchTasksByView("active", undefined, "engineering", {
+        citadelId: "company",
+        limit: 50,
+        cursor: "cursor-1",
+      }),
+      "/api/v1/tasks?limit=50&view=active&cursor=cursor-1&citadelId=company&workspaceId=engineering",
+    );
     await expectCall(tasks.createTask({ title: "Task" }), "/api/v1/tasks", { method: "POST" });
+    await expectCall(
+      tasks.createTask({ citadelId: "company", workspaceId: "engineering", title: "Scoped task" }),
+      "/api/v1/tasks",
+      {
+        method: "POST",
+        body: JSON.stringify({ citadelId: "company", workspaceId: "engineering", title: "Scoped task" }),
+      },
+    );
     await expectCall(tasks.updateTask("task/1", { title: "New" }), "/api/v1/tasks/task%2F1", { method: "PATCH" });
     await expectCall(
       tasks.deleteTask("task/1", { mode: "hard", deletedBy: "me" }),
@@ -582,6 +598,11 @@ describe("shared API wrappers", () => {
       },
     );
     await expectCall(tasks.restoreTask("task/1"), "/api/v1/tasks/task%2F1/restore", { method: "POST" });
+    await expectCall(
+      tasks.restoreTask("task/1", "engineering", "company"),
+      "/api/v1/tasks/task%2F1/restore?citadelId=company&workspaceId=engineering",
+      { method: "POST" },
+    );
     await expectCall(tasks.fetchTaskActivities("task/1"), "/api/v1/tasks/task%2F1/activities");
     await expectCall(tasks.addTaskActivity("task/1", { message: "hi" }), "/api/v1/tasks/task%2F1/activities", {
       method: "POST",
