@@ -96,6 +96,47 @@ describe("shared API wrappers", () => {
       "/api/v1/integrations/connections?kind=chat&limit=300",
     );
     await expectCall(integrations.fetchIntegrationConnections(), "/api/v1/integrations/connections?limit=300");
+    await expectCall(integrations.fetchExternalConnectorSources(), "/api/v1/integrations/external-connectors/sources");
+    await expectCall(
+      integrations.fetchExternalConnectorServices({
+        workspaceId: "workspace/1",
+        search: "notion",
+        status: "new",
+        includeActions: true,
+        limit: 9999,
+      }),
+      "/api/v1/integrations/external-connectors/services?workspaceId=workspace%2F1&search=notion&status=new&includeActions=true&limit=1000",
+    );
+    await expectCall(
+      integrations.fetchExternalConnectorService("mscr", "notion", { workspaceId: "workspace/1" }),
+      "/api/v1/integrations/external-connectors/services/mscr/notion?workspaceId=workspace%2F1",
+    );
+    await expectCall(
+      integrations.fetchExternalConnectorAction("mscr", "notion", "append-block-children"),
+      "/api/v1/integrations/external-connectors/services/mscr/notion/actions/append-block-children",
+    );
+    await expectCall(
+      integrations.updateExternalConnectorServiceReviewState("mscr", "notion", {
+        status: "reviewed",
+        pinned: true,
+      }),
+      "/api/v1/integrations/external-connectors/services/mscr/notion/review",
+      { method: "PATCH" },
+    );
+    await expectCall(
+      integrations.updateExternalConnectorActionReviewState("mscr", "notion", "append-block-children", {
+        status: "hidden",
+      }),
+      "/api/v1/integrations/external-connectors/services/mscr/notion/actions/append-block-children/review",
+      { method: "PATCH" },
+    );
+    await expectCall(
+      integrations.stageExternalConnectorAction("mscr", "notion", "append-block-children", {
+        workspaceId: "workspace/1",
+      }),
+      "/api/v1/integrations/external-connectors/services/mscr/notion/actions/append-block-children/stage",
+      { method: "POST" },
+    );
     await expectCall(integrations.fetchConnectorRecords("gmail" as never), "/api/v1/connectors?connectorType=gmail");
     await expectCall(integrations.fetchConnectorRecords(), "/api/v1/connectors");
     await expectCall(

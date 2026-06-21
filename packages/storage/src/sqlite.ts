@@ -1284,6 +1284,158 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 121,
+    name: "citadel_operating_model_parent_scope",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS citadel_records (
+          citadel_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          slug TEXT NOT NULL UNIQUE,
+          kind TEXT NOT NULL DEFAULT 'custom',
+          lifecycle_status TEXT NOT NULL DEFAULT 'active',
+          archived_at TEXT,
+          default_workspace_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_citadel_records_lifecycle_updated
+          ON citadel_records(lifecycle_status, updated_at DESC);
+      `);
+
+      addColumnIfMissingIfTableExists(db, "workspaces", "citadel_id", "TEXT NOT NULL DEFAULT 'personal'");
+      addColumnIfMissingIfTableExists(db, "runtime_decision_traces", "citadel_id", "TEXT");
+
+      const now = new Date().toISOString();
+      db.prepare(
+        `
+        INSERT INTO citadel_records (
+          citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+          default_workspace_id, created_at, updated_at
+        ) VALUES (
+          'personal',
+          'Personal',
+          'Default personal operating world for private work, memory, files, agents, and projects.',
+          'personal',
+          'personal',
+          'active',
+          NULL,
+          'default',
+          @now,
+          @now
+        )
+        ON CONFLICT(citadel_id) DO UPDATE SET
+          default_workspace_id = COALESCE(citadel_records.default_workspace_id, excluded.default_workspace_id),
+          updated_at = citadel_records.updated_at
+      `,
+      ).run({ now });
+      db.prepare(
+        `
+        INSERT INTO citadel_records (
+          citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+          default_workspace_id, created_at, updated_at
+        ) VALUES (
+          'company',
+          'Company',
+          'Default company operating world for shared workspaces such as Engineering, Product, Sales, Finance, HR, Legal, and Support.',
+          'company',
+          'company',
+          'active',
+          NULL,
+          NULL,
+          @now,
+          @now
+        )
+        ON CONFLICT(citadel_id) DO UPDATE SET
+          updated_at = citadel_records.updated_at
+      `,
+      ).run({ now });
+
+      if (tableExists(db, "citadel_charters")) {
+        db.exec(`
+          INSERT INTO citadel_records (
+            citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+            default_workspace_id, created_at, updated_at
+          )
+          SELECT
+            charter.citadel_id,
+            COALESCE(NULLIF(TRIM(workspace.name), ''), charter.citadel_id),
+            'Legacy workspace Citadel preserved during parent-scope migration.',
+            LOWER(REPLACE(charter.citadel_id, ' ', '-')),
+            charter.kind,
+            'active',
+            NULL,
+            workspace.workspace_id,
+            charter.created_at,
+            charter.updated_at
+          FROM citadel_charters AS charter
+          LEFT JOIN workspaces AS workspace
+            ON workspace.workspace_id = charter.citadel_id
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM citadel_records AS existing
+            WHERE existing.citadel_id = charter.citadel_id
+          )
+          ON CONFLICT(citadel_id) DO NOTHING;
+        `);
+      }
+
+      if (tableExists(db, "workspaces")) {
+        db.exec(`
+          UPDATE workspaces
+          SET citadel_id = 'personal'
+          WHERE citadel_id IS NULL OR TRIM(citadel_id) = '';
+
+          UPDATE workspaces
+          SET citadel_id = workspace_id
+          WHERE EXISTS (
+            SELECT 1
+            FROM citadel_records
+            WHERE citadel_records.citadel_id = workspaces.workspace_id
+              AND citadel_records.citadel_id NOT IN ('personal', 'company')
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_workspaces_citadel_updated
+            ON workspaces(citadel_id, lifecycle_status, updated_at DESC);
+        `);
+      }
+      if (tableExists(db, "runtime_decision_traces")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_runtime_decision_traces_citadel_created
+            ON runtime_decision_traces(citadel_id, created_at ASC);
+        `);
+      }
+    },
+  },
+  {
+    version: 122,
+    name: "external_connector_review_states",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS external_connector_review_states (
+          workspace_id TEXT NOT NULL DEFAULT 'default',
+          source_id TEXT NOT NULL,
+          service_id TEXT NOT NULL,
+          action_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          note TEXT,
+          proposal_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, source_id, service_id, action_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_external_connector_review_states_workspace
+          ON external_connector_review_states(workspace_id, status, pinned, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_external_connector_review_states_service
+          ON external_connector_review_states(source_id, service_id, action_id);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

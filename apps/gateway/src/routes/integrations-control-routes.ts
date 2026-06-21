@@ -9,6 +9,12 @@ import {
   connectionsQuerySchema,
   createConnectionSchema,
   discordPairingParamsSchema,
+  externalConnectorActionParamsSchema,
+  externalConnectorDetailQuerySchema,
+  externalConnectorReviewPatchSchema,
+  externalConnectorServiceParamsSchema,
+  externalConnectorServicesQuerySchema,
+  externalConnectorStageActionSchema,
   externalSideEffectRunsQuerySchema,
   pluginInstallSchema,
   pluginParamsSchema,
@@ -83,6 +89,166 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       summary: buildExternalSideEffectHealthSummary(items),
     });
   });
+
+  fastify.get("/api/v1/integrations/external-connectors/sources", async (_request, reply) => {
+    return reply.send({
+      items: fastify.services.integrations.listExternalConnectorSources(),
+    });
+  });
+
+  fastify.get("/api/v1/integrations/external-connectors/services", async (request, reply) => {
+    const parsed = externalConnectorServicesQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.services.integrations.listExternalConnectorServices(parsed.data),
+    });
+  });
+
+  fastify.get("/api/v1/integrations/external-connectors/services/:sourceId/:serviceId", async (request, reply) => {
+    const params = externalConnectorServiceParamsSchema.safeParse(request.params);
+    const query = externalConnectorDetailQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        fastify.services.integrations.getExternalConnectorService(
+          params.data.sourceId,
+          params.data.serviceId,
+          query.data.workspaceId,
+        ),
+      );
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get(
+    "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId",
+    async (request, reply) => {
+      const params = externalConnectorActionParamsSchema.safeParse(request.params);
+      const query = externalConnectorDetailQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          fastify.services.integrations.getExternalConnectorAction(
+            params.data.sourceId,
+            params.data.serviceId,
+            params.data.actionId,
+            query.data.workspaceId,
+          ),
+        );
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+    },
+  );
+
+  fastify.patch(
+    "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/review",
+    integrationMutationRoute,
+    async (request, reply) => {
+      const params = externalConnectorServiceParamsSchema.safeParse(request.params);
+      const parsed = externalConnectorReviewPatchSchema.safeParse(request.body ?? {});
+      if (!params.success || !parsed.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: parsed.success ? undefined : parsed.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          fastify.services.integrations.updateExternalConnectorReviewState(
+            {
+              sourceId: params.data.sourceId,
+              serviceId: params.data.serviceId,
+            },
+            parsed.data,
+          ),
+        );
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+    },
+  );
+
+  fastify.patch(
+    "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/review",
+    integrationMutationRoute,
+    async (request, reply) => {
+      const params = externalConnectorActionParamsSchema.safeParse(request.params);
+      const parsed = externalConnectorReviewPatchSchema.safeParse(request.body ?? {});
+      if (!params.success || !parsed.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: parsed.success ? undefined : parsed.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          fastify.services.integrations.updateExternalConnectorReviewState(
+            {
+              sourceId: params.data.sourceId,
+              serviceId: params.data.serviceId,
+              actionId: params.data.actionId,
+            },
+            parsed.data,
+          ),
+        );
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/stage",
+    integrationMutationRoute,
+    async (request, reply) => {
+      const params = externalConnectorActionParamsSchema.safeParse(request.params);
+      const parsed = externalConnectorStageActionSchema.safeParse(request.body ?? {});
+      if (!params.success || !parsed.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: parsed.success ? undefined : parsed.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply
+          .code(201)
+          .send(
+            fastify.services.integrations.stageExternalConnectorAction(
+              params.data.sourceId,
+              params.data.serviceId,
+              params.data.actionId,
+              parsed.data,
+            ),
+          );
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.post("/api/v1/integrations/connections", async (request, reply) => {
     const parsed = createConnectionSchema.safeParse(request.body);

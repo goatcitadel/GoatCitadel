@@ -34,6 +34,7 @@ import {
 } from "./integration-channel-service.js";
 import { IntegrationDiagnosticsService } from "./integration-diagnostics-service.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
+import { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -46,6 +47,10 @@ export function composeIntegrationChannelRouteDependencies(
 > {
   const integrationDiagnostics = createIntegrationDiagnosticsServiceForGateway(gateway);
   const integrationChannel = createIntegrationChannelServiceForGateway(gateway, integrationDiagnostics);
+  const externalConnectorCatalog = new ExternalConnectorCatalogService({
+    reviewStates: gateway.storage.externalConnectorReviewStates,
+    createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
+  });
   const channelSetupDeps: channelSetupService.ChannelSetupHost = {
     storage: gateway.storage,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
@@ -104,11 +109,14 @@ export function composeIntegrationChannelRouteDependencies(
         .map((item) => item.pluginId.trim().toLowerCase())
         .filter((item) => item.length > 0),
     );
-    const mapped = INTEGRATION_CATALOG.map((entry) => ({
-      ...entry,
-      maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
-      runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry, pluginIds),
-    }));
+    const mapped: IntegrationCatalogEntry[] = [
+      ...INTEGRATION_CATALOG.map((entry) => ({
+        ...entry,
+        maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
+        runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry, pluginIds),
+      })),
+      ...externalConnectorCatalog.listIntegrationCatalogEntries(),
+    ];
     return kind ? mapped.filter((entry) => entry.kind === kind) : mapped;
   };
   const integrations = createIntegrationRoutePort({
@@ -118,12 +126,21 @@ export function composeIntegrationChannelRouteDependencies(
     deleteIntegrationConnection: (connectionId) => integrationChannel.deleteIntegrationConnection(connectionId),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     getIntegrationFormSchema: (catalogId) => {
+      if (catalogId.startsWith("external_connector.")) {
+        throw new Error(
+          `External connector catalog entries are review-only and do not expose connection forms: ${catalogId}`,
+        );
+      }
       const schema = getIntegrationFormSchema(catalogId);
       if (!schema) {
         throw new Error(`Unknown integration catalog id: ${catalogId}`);
       }
       return schema;
     },
+    getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
+      externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),
+    getExternalConnectorService: (sourceId, serviceId, workspaceId) =>
+      externalConnectorCatalog.getService(sourceId, serviceId, workspaceId),
     installIntegrationPlugin: (input) => integrationChannel.installIntegrationPlugin(input),
     invokeIntegrationConnectionAction: (connectionId, actionId, input = {}) =>
       invokeIntegrationConnectionActionImpl(
@@ -150,6 +167,8 @@ export function composeIntegrationChannelRouteDependencies(
             limit: query.limit,
           })
         : gateway.storage.externalSideEffectRuns.listByWorkspace(query.workspaceId ?? "default", query.limit),
+    listExternalConnectorServices: (query) => externalConnectorCatalog.listServices(query),
+    listExternalConnectorSources: () => externalConnectorCatalog.listSources(),
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
     listIntegrationPlugins: () => integrationChannel.listIntegrationPlugins(),
@@ -157,6 +176,9 @@ export function composeIntegrationChannelRouteDependencies(
     revokeDiscordPairing: (connectionId, pairingId) => integrationChannel.revokeDiscordPairing(connectionId, pairingId),
     runIntegrationConnectionDiagnostics: (connectionId) =>
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
+    stageExternalConnectorAction: (sourceId, serviceId, actionId, input) =>
+      externalConnectorCatalog.stageAction({ sourceId, serviceId, actionId }, input),
+    updateExternalConnectorReviewState: (lookup, patch) => externalConnectorCatalog.updateReviewState(lookup, patch),
     setIntegrationPluginEnabled: (pluginId, enabled) =>
       integrationChannel.setIntegrationPluginEnabled(pluginId, enabled),
     updateIntegrationConnection: (connectionId, input) =>

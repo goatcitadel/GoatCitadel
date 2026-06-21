@@ -47,7 +47,13 @@ export interface AuthSettingsUpdateInput {
   basicPassword?: string;
 }
 
-export type IntegrationKind = "channel" | "model_provider" | "productivity" | "automation" | "platform";
+export type IntegrationKind =
+  | "channel"
+  | "model_provider"
+  | "productivity"
+  | "automation"
+  | "platform"
+  | "external_connector";
 
 export type IntegrationMaturity = "native" | "plugin" | "disabled" | "beta" | "planned";
 export type IntegrationRuntimeAvailability = "runnable" | "blocked";
@@ -67,6 +73,15 @@ export interface IntegrationCatalogEntry {
   formSchema?: IntegrationFormSchema;
   pluginId?: string;
   operatorActions?: IntegrationOperatorAction[];
+  externalConnector?: {
+    sourceId: string;
+    serviceId: string;
+    sourceCommit: string;
+    actionCount: number;
+    activeActionCount: number;
+    runtimePosture: "catalog_only";
+    callable: false;
+  };
 }
 
 export interface IntegrationOperatorAction {

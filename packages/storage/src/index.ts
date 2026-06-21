@@ -35,6 +35,7 @@ import { ContextManifestRepository } from "./context-manifest-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
 import { AgentProfileRepository } from "./agent-profile-repo.js";
 import { ImportedAgentCatalogRepository } from "./imported-agent-catalog-repo.js";
+import { ExternalConnectorReviewStateRepository } from "./external-connector-state-repo.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
 import { ToolAccessDecisionRepository } from "./tool-access-decision-repo.js";
 import { PermissionProfileRepository } from "./permission-profile-repo.js";
@@ -148,6 +149,7 @@ export class Storage {
   public readonly realtimeEvents: RealtimeEventRepository;
   public readonly cronJobs: CronJobRepository;
   public readonly integrationConnections: IntegrationConnectionRepository;
+  public readonly externalConnectorReviewStates: ExternalConnectorReviewStateRepository;
   public readonly channelSetupDrafts: ChannelSetupDraftRepository;
   public readonly agentProfiles: AgentProfileRepository;
   public readonly importedAgentCatalog: ImportedAgentCatalogRepository;
@@ -259,6 +261,7 @@ export class Storage {
     this.realtimeEvents = new RealtimeEventRepository(this.db);
     this.cronJobs = new CronJobRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
+    this.externalConnectorReviewStates = new ExternalConnectorReviewStateRepository(this.db);
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
     this.importedAgentCatalog = new ImportedAgentCatalogRepository(this.db);

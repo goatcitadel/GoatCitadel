@@ -12,6 +12,8 @@ import {
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
+  type ExternalConnectorActionSummary,
+  type ExternalConnectorServiceSummary,
   type ExternalSideEffectRunHealthSummary,
   type ExternalSideEffectRunRecord,
   type LlmProviderAdviceResponse,
@@ -130,6 +132,7 @@ import {
   fetchDemoState,
   fetchProviderSecretStatus,
   fetchEvidenceEnvelopes,
+  fetchExternalConnectorServices,
   fetchExternalSideEffectRuns,
   fetchSettings,
   fetchToolCatalog,
@@ -163,6 +166,7 @@ import {
   startDaemon,
   startMcpOAuth,
   startSlackOAuth,
+  stageExternalConnectorAction,
   startOpenAICodexOAuthDeviceFlow,
   startLlamaCppRuntime,
   stopAddon,
@@ -172,6 +176,8 @@ import {
   uninstallAddon,
   updateAddon,
   updateChannelSetupDraft,
+  updateExternalConnectorActionReviewState,
+  updateExternalConnectorServiceReviewState,
   updateIntegrationConnection,
   updateMcpServer,
   updatePersonality,
@@ -548,7 +554,7 @@ function labelForDensity(value: UiDensity): string {
   return "Default";
 }
 
-function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
+function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const {
     density,
     setDensity,
@@ -561,7 +567,11 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
   const load = useCallback(async () => {
     const [settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness] = await Promise.all([
       nativeLoad("Settings", fetchSettings(), null),
-      nativeLoad("Workspaces", fetchWorkspaces("all", 400), { items: [] }),
+      nativeLoad(
+        "Workspaces",
+        activeCitadelId ? fetchWorkspaces("all", 400, activeCitadelId) : fetchWorkspaces("all", 400),
+        { items: [] },
+      ),
       nativeLoad("Integrations", fetchIntegrationConnections(), { items: [] }),
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("Tools", fetchToolCatalog(), { items: [] }),
@@ -578,7 +588,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
       addons: addons.data.items,
       meshReadiness: meshReadiness.data,
     };
-  }, []);
+  }, [activeCitadelId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
 
   return (
@@ -4480,9 +4490,17 @@ function RuntimeSection(_props: SettingsSectionProps) {
   );
 }
 
-function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: SettingsSectionProps) {
+function WorkspacesSection({
+  activeCitadelId,
+  activeCitadelName,
+  activeWorkspaceId,
+  setActiveWorkspaceId,
+}: SettingsSectionProps) {
   const [view, setView] = useState<"active" | "archived" | "all">("all");
-  const load = useCallback(async () => fetchWorkspaces("all", 500), []);
+  const load = useCallback(
+    async () => (activeCitadelId ? fetchWorkspaces("all", 500, activeCitadelId) : fetchWorkspaces("all", 500)),
+    [activeCitadelId],
+  );
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -4535,6 +4553,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
     }
     try {
       const created = await createWorkspace({
+        ...(activeCitadelId ? { citadelId: activeCitadelId } : {}),
         name: createForm.name.trim(),
         description: createForm.description.trim() || undefined,
         slug: createForm.slug.trim() || undefined,
@@ -4611,7 +4630,11 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
             density="compact"
             className="mc-next-settings-panel"
             title="Create workspace"
-            subtitle="Add a new workspace before digging through the directory."
+            subtitle={
+              activeCitadelName
+                ? `Add a functional workspace inside ${activeCitadelName}.`
+                : "Add a new workspace before digging through the directory."
+            }
           >
             <SettingsFieldGrid>
               <SettingsField label="Name">
@@ -4652,6 +4675,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
             bodyMaxHeight="min(54vh, 30rem)"
             stats={[
               { label: "Total", value: String(data?.items.length ?? 0) },
+              ...(activeCitadelId ? [{ label: "Citadel", value: activeCitadelId }] : []),
               { label: "Active workspace", value: activeWorkspaceId },
             ]}
           >
@@ -4756,22 +4780,36 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
 
 function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns] = await Promise.all([
-      nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
-      nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
-      nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
-      nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
-      nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
-      nativeLoad(
-        "External side-effect runs",
-        fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
-        {
-          items: [],
-        },
-      ),
-    ]);
+    const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns, externalConnectors] =
+      await Promise.all([
+        nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
+        nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
+        nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
+        nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
+        nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
+        nativeLoad(
+          "External side-effect runs",
+          fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
+          {
+            items: [],
+          },
+        ),
+        nativeLoad(
+          "Dormant external connector catalog",
+          fetchExternalConnectorServices({ workspaceId: activeWorkspaceId, includeActions: true, limit: 50 }),
+          { items: [] },
+        ),
+      ]);
     return {
-      issues: nativeLoadIssues([catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns]),
+      issues: nativeLoadIssues([
+        catalog,
+        connections,
+        plugins,
+        meetStatus,
+        meetSessions,
+        sideEffectRuns,
+        externalConnectors,
+      ]),
       catalog: catalog.data.items.filter((item) => item.kind !== "channel"),
       connections: connections.data.items.filter((item) => item.kind !== "channel"),
       plugins: plugins.data.items,
@@ -4779,6 +4817,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
       meetSessions: meetSessions.data,
       sideEffectRuns: sideEffectRuns.data.items,
       sideEffectSummary: sideEffectRuns.data.summary,
+      externalConnectorServices: externalConnectors.data.items,
     };
   }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
@@ -4804,9 +4843,14 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
   const [operatorActionIdempotencyKeys, setOperatorActionIdempotencyKeys] = useState<Record<string, string>>({});
   const [replayAuditBusy, setReplayAuditBusy] = useState(false);
   const [lastReplayAuditRunId, setLastReplayAuditRunId] = useState<string | null>(null);
+  const [externalConnectorBusyId, setExternalConnectorBusyId] = useState<string | null>(null);
   const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
+  const createableCatalog = useMemo(
+    () => data?.catalog.filter((item) => item.kind !== "external_connector") ?? [],
+    [data?.catalog],
+  );
   const selectedConnection =
     data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? data?.connections[0] ?? null;
   const selectedCatalog =
@@ -4815,12 +4859,16 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
     null;
 
   useEffect(() => {
-    if (!data?.catalog.length) {
+    if (!createableCatalog.length) {
       setCreateCatalogId("");
       return;
     }
-    setCreateCatalogId((current) => current || data.catalog[0]?.catalogId || "");
-  }, [data?.catalog]);
+    setCreateCatalogId((current) =>
+      current && createableCatalog.some((item) => item.catalogId === current)
+        ? current
+        : createableCatalog[0]?.catalogId || "",
+    );
+  }, [createableCatalog]);
 
   useEffect(() => {
     if (!data?.connections.length) {
@@ -5017,6 +5065,71 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
     }
   };
 
+  const handleReviewExternalConnectorService = async (
+    service: ExternalConnectorServiceSummary,
+    status: "reviewed" | "hidden",
+  ) => {
+    const busyId = `service:${service.sourceId}:${service.serviceId}`;
+    setExternalConnectorBusyId(busyId);
+    try {
+      await updateExternalConnectorServiceReviewState(service.sourceId, service.serviceId, {
+        workspaceId: activeWorkspaceId,
+        status,
+      });
+      setNotice({
+        tone: status === "hidden" ? "warning" : "success",
+        message: `${service.label} marked ${status}.`,
+      });
+      await reload();
+    } catch (reviewError) {
+      setNotice({ tone: "error", message: getErrorMessage(reviewError) });
+    } finally {
+      setExternalConnectorBusyId(null);
+    }
+  };
+
+  const handleReviewExternalConnectorAction = async (
+    action: ExternalConnectorActionSummary,
+    status: "reviewed" | "hidden",
+  ) => {
+    const busyId = `action:${action.sourceId}:${action.serviceId}:${action.actionId}`;
+    setExternalConnectorBusyId(busyId);
+    try {
+      await updateExternalConnectorActionReviewState(action.sourceId, action.serviceId, action.actionId, {
+        workspaceId: activeWorkspaceId,
+        status,
+      });
+      setNotice({
+        tone: status === "hidden" ? "warning" : "success",
+        message: `${action.label} marked ${status}.`,
+      });
+      await reload();
+    } catch (reviewError) {
+      setNotice({ tone: "error", message: getErrorMessage(reviewError) });
+    } finally {
+      setExternalConnectorBusyId(null);
+    }
+  };
+
+  const handleStageExternalConnectorAction = async (action: ExternalConnectorActionSummary) => {
+    const busyId = `action:${action.sourceId}:${action.serviceId}:${action.actionId}`;
+    setExternalConnectorBusyId(busyId);
+    try {
+      const result = await stageExternalConnectorAction(action.sourceId, action.serviceId, action.actionId, {
+        workspaceId: activeWorkspaceId,
+      });
+      setNotice({
+        tone: "success",
+        message: `${action.label} staged as ${result.proposal.proposalId}. It remains non-callable.`,
+      });
+      await reload();
+    } catch (stageError) {
+      setNotice({ tone: "error", message: getErrorMessage(stageError) });
+    } finally {
+      setExternalConnectorBusyId(null);
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
@@ -5037,7 +5150,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                     value={createCatalogId}
                     onChange={(event) => setCreateCatalogId(event.target.value)}
                   >
-                    {data.catalog.map((item) => (
+                    {createableCatalog.map((item) => (
                       <option key={item.catalogId} value={item.catalogId}>
                         {item.label}
                       </option>
@@ -5128,6 +5241,13 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
           </SettingsStack>
           <SettingsStack>
             <PluginTrustPanel plugins={data.plugins} />
+            <DormantExternalConnectorsPanel
+              services={data.externalConnectorServices}
+              busyId={externalConnectorBusyId}
+              onReviewService={(service, status) => void handleReviewExternalConnectorService(service, status)}
+              onReviewAction={(action, status) => void handleReviewExternalConnectorAction(action, status)}
+              onStageAction={(action) => void handleStageExternalConnectorAction(action)}
+            />
             <ExternalSideEffectLedgerPanel
               runs={data.sideEffectRuns}
               summary={data.sideEffectSummary}
@@ -5294,14 +5414,17 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
               </>
             ) : (
               <SettingsActionList
-                items={data.catalog.map((item) => ({
-                  id: item.catalogId,
-                  label: item.label,
-                  description: item.description,
-                  meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
-                  actionLabel: createCatalogId === item.catalogId ? "Selected" : "Use",
-                  onClick: () => setCreateCatalogId(item.catalogId),
-                }))}
+                items={data.catalog.map((item) => {
+                  const reviewOnly = item.kind === "external_connector";
+                  return {
+                    id: item.catalogId,
+                    label: item.label,
+                    description: item.description,
+                    meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
+                    actionLabel: reviewOnly ? "Review-only" : createCatalogId === item.catalogId ? "Selected" : "Use",
+                    onClick: reviewOnly ? undefined : () => setCreateCatalogId(item.catalogId),
+                  };
+                })}
                 emptyLabel="No integration catalog entries are available."
                 maxHeight="min(58vh, 34rem)"
               />
@@ -5407,6 +5530,157 @@ function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
         })}
         emptyLabel="No integration plugins installed."
       />
+    </NativeCard>
+  );
+}
+
+function DormantExternalConnectorsPanel({
+  services,
+  busyId,
+  onReviewService,
+  onReviewAction,
+  onStageAction,
+}: {
+  services: ExternalConnectorServiceSummary[];
+  busyId?: string | null;
+  onReviewService: (service: ExternalConnectorServiceSummary, status: "reviewed" | "hidden") => void;
+  onReviewAction: (action: ExternalConnectorActionSummary, status: "reviewed" | "hidden") => void;
+  onStageAction: (action: ExternalConnectorActionSummary) => void;
+}) {
+  const visibleServices = services.filter((service) => service.reviewState.status !== "hidden").slice(0, 8);
+  const actions = visibleServices
+    .flatMap((service) => service.actions?.slice(0, 3) ?? [])
+    .filter((action) => action.reviewState.status !== "hidden")
+    .slice(0, 10);
+  const actionCount = services.reduce((count, service) => count + service.actionCount, 0);
+  const stagedCount = services.reduce(
+    (count, service) =>
+      count + (service.actions ?? []).filter((action) => action.reviewState.status === "staged").length,
+    0,
+  );
+  const source = services[0]?.source;
+
+  return (
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
+      title="Dormant connector catalog"
+      subtitle="Imported MSCR services are default-off, non-callable, and staged only as capability proposals."
+      scrollBody
+      bodyMaxHeight="min(48vh, 28rem)"
+      stats={[
+        { label: "Services", value: String(services.length) },
+        { label: "Actions", value: String(actionCount) },
+        { label: "Staged", value: String(stagedCount) },
+      ]}
+    >
+      <SettingsNotice
+        notice={{
+          tone: "info",
+          message: source
+            ? `${source.label} pinned at ${source.commit.slice(0, 12)}. Imported handlers are not executed by GoatCitadel.`
+            : "No external connector source is loaded.",
+        }}
+      />
+      {visibleServices.length ? (
+        <div className="mc-next-settings-stack">
+          {visibleServices.map((service) => {
+            const serviceBusyId = `service:${service.sourceId}:${service.serviceId}`;
+            return (
+              <div key={service.catalogId} className="mc-next-settings-panel-body">
+                <NativeMetricGrid
+                  items={[
+                    { label: "Service", value: service.label, meta: service.description || service.serviceId },
+                    {
+                      label: "Actions",
+                      value: String(service.actionCount),
+                      meta: `${service.activeActionCount} active upstream`,
+                    },
+                    {
+                      label: "Review",
+                      value: service.reviewState.status,
+                      meta: service.reviewState.note ?? "No operator note",
+                    },
+                  ]}
+                />
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={busyId === serviceBusyId || service.reviewState.status === "reviewed"}
+                    onClick={() => onReviewService(service, "reviewed")}
+                  >
+                    <ShieldCheck size={16} />
+                    Mark reviewed
+                  </NativeButton>
+                  <NativeButton
+                    variant="ghost"
+                    disabled={busyId === serviceBusyId}
+                    onClick={() => onReviewService(service, "hidden")}
+                  >
+                    <Square size={16} />
+                    Hide
+                  </NativeButton>
+                </SettingsButtonRow>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <SettingsEmptyState label="No visible dormant external connectors." />
+      )}
+      {actions.length ? (
+        <div className="mc-next-settings-stack">
+          {actions.map((action) => {
+            const actionBusyId = `action:${action.sourceId}:${action.serviceId}:${action.actionId}`;
+            const staged = action.reviewState.status === "staged";
+            return (
+              <div key={action.catalogId} className="mc-next-settings-panel-body">
+                <NativeMetricGrid
+                  items={[
+                    { label: "Action", value: action.label, meta: action.description || action.actionId },
+                    {
+                      label: "Fields",
+                      value: String(action.configurationFields.length),
+                      meta: action.active ? "Active upstream" : "Inactive upstream",
+                    },
+                    {
+                      label: "Handler hash",
+                      value: action.handlerSha256?.slice(0, 12) ?? "missing",
+                      meta: action.upstreamPath,
+                    },
+                  ]}
+                />
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="default"
+                    disabled={busyId === actionBusyId || staged}
+                    onClick={() => onStageAction(action)}
+                  >
+                    <Plus size={16} />
+                    {staged ? "Staged" : "Stage proposal"}
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={busyId === actionBusyId || action.reviewState.status === "reviewed"}
+                    onClick={() => onReviewAction(action, "reviewed")}
+                  >
+                    <ShieldCheck size={16} />
+                    Reviewed
+                  </NativeButton>
+                  <NativeButton
+                    variant="ghost"
+                    disabled={busyId === actionBusyId}
+                    onClick={() => onReviewAction(action, "hidden")}
+                  >
+                    <Square size={16} />
+                    Hide
+                  </NativeButton>
+                </SettingsButtonRow>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </NativeCard>
   );
 }
@@ -6395,10 +6669,7 @@ function McpSection(_props: SettingsSectionProps) {
     }
   };
 
-  const handleElicitationResponse = async (
-    request: McpElicitationRequest,
-    action: McpElicitationResponseAction,
-  ) => {
+  const handleElicitationResponse = async (request: McpElicitationRequest, action: McpElicitationResponseAction) => {
     try {
       let content: Record<string, unknown> | undefined;
       if (action === "accept") {

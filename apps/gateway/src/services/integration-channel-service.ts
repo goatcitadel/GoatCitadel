@@ -338,6 +338,11 @@ export function createIntegrationConnection(
   deps: IntegrationChannelPort,
   input: IntegrationConnectionCreateInput,
 ): IntegrationConnection {
+  if (input.catalogId.startsWith("external_connector.")) {
+    throw new Error(
+      "External connector catalog entries are review-only and cannot be connected until promoted through a governed capability proposal.",
+    );
+  }
   const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === input.catalogId);
   if (!catalog) {
     throw new Error(`Unknown integration catalog id: ${input.catalogId}`);

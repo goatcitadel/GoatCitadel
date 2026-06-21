@@ -26,6 +26,7 @@ export * from "./llm.js";
 export type { LlmModelMetadataEntry, LlmModelMetadataManifest } from "./llm-model-metadata.js";
 export * from "./auth.js";
 export * from "./connectors.js";
+export * from "./external-connectors.js";
 export * from "./integrations.js";
 export * from "./citadels.js";
 export * from "./citadel-blueprints.js";

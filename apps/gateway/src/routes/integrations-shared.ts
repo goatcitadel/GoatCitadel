@@ -3,7 +3,14 @@ import { z } from "zod";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
 import { coerceBoundedInteger } from "./runtime-boundary-coercion.js";
 
-export const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
+export const kindEnum = z.enum([
+  "channel",
+  "model_provider",
+  "productivity",
+  "automation",
+  "platform",
+  "external_connector",
+]);
 
 export const catalogQuerySchema = z.object({
   kind: kindEnum.optional(),
@@ -27,6 +34,56 @@ export const externalSideEffectRunsQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).max(200).optional(),
   connectionId: z.string().trim().min(1).max(200).optional(),
   limit: z.preprocess((value) => coerceBoundedInteger(value, { defaultValue: 200, min: 1, max: 500 }), z.number()),
+});
+
+const externalConnectorStatusEnum = z.enum(["new", "reviewed", "hidden", "staged"]);
+
+export const externalConnectorServicesQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+  search: z.string().trim().min(1).max(120).optional(),
+  status: z.union([externalConnectorStatusEnum, z.literal("all")]).optional(),
+  includeActions: z.preprocess((value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "1", "yes", "on"].includes(normalized)) {
+        return true;
+      }
+      if (["false", "0", "no", "off", ""].includes(normalized)) {
+        return false;
+      }
+    }
+    return value;
+  }, z.boolean().optional()),
+  limit: z.preprocess((value) => coerceBoundedInteger(value, { defaultValue: 200, min: 1, max: 1000 }), z.number()),
+});
+
+export const externalConnectorServiceParamsSchema = z.object({
+  sourceId: z.literal("mscr"),
+  serviceId: z.string().trim().min(1).max(120),
+});
+
+export const externalConnectorActionParamsSchema = externalConnectorServiceParamsSchema.extend({
+  actionId: z.string().trim().min(1).max(160),
+});
+
+export const externalConnectorDetailQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+});
+
+export const externalConnectorReviewPatchSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+  status: externalConnectorStatusEnum.optional(),
+  pinned: z.boolean().optional(),
+  note: z.string().max(2000).nullable().optional(),
+  proposalId: z.string().trim().min(1).max(200).nullable().optional(),
+});
+
+export const externalConnectorStageActionSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+  note: z.string().trim().min(1).max(2000).optional(),
 });
 
 export const createConnectionSchema = z.object({

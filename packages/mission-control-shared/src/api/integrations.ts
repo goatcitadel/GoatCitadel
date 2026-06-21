@@ -22,6 +22,15 @@ import type {
   ConnectorRecord,
   DiscordPairingRecord,
   DiscordRuntimeStatus,
+  ExternalConnectorActionSummary,
+  ExternalConnectorReviewStatePatchInput,
+  ExternalConnectorReviewStateRecord,
+  ExternalConnectorServiceDetail,
+  ExternalConnectorServiceListQuery,
+  ExternalConnectorServiceSummary,
+  ExternalConnectorSourceSnapshot,
+  ExternalConnectorStageActionInput,
+  ExternalConnectorStageActionResult,
   ExternalSideEffectRunListQuery,
   ExternalSideEffectRunListResponse,
   GmailReadQuery,
@@ -216,6 +225,110 @@ export async function fetchExternalSideEffectRuns(
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return request<ExternalSideEffectRunListResponse>(`/api/v1/integrations/external-side-effects${suffix}`);
+}
+
+export async function fetchExternalConnectorSources(): Promise<{ items: ExternalConnectorSourceSnapshot[] }> {
+  return request<{ items: ExternalConnectorSourceSnapshot[] }>("/api/v1/integrations/external-connectors/sources");
+}
+
+export async function fetchExternalConnectorServices(
+  query?: ExternalConnectorServiceListQuery,
+): Promise<{ items: ExternalConnectorServiceSummary[] }> {
+  const params = new URLSearchParams();
+  if (query?.workspaceId) {
+    params.set("workspaceId", query.workspaceId);
+  }
+  if (query?.search) {
+    params.set("search", query.search);
+  }
+  if (query?.status) {
+    params.set("status", query.status);
+  }
+  if (query?.includeActions !== undefined) {
+    params.set("includeActions", query.includeActions ? "true" : "false");
+  }
+  if (typeof query?.limit === "number") {
+    params.set("limit", String(Math.min(Math.max(Math.trunc(query.limit), 1), 1000)));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request<{ items: ExternalConnectorServiceSummary[] }>(
+    `/api/v1/integrations/external-connectors/services${suffix}`,
+  );
+}
+
+export async function fetchExternalConnectorService(
+  sourceId: string,
+  serviceId: string,
+  query?: { workspaceId?: string },
+): Promise<ExternalConnectorServiceDetail> {
+  const params = new URLSearchParams();
+  if (query?.workspaceId) {
+    params.set("workspaceId", query.workspaceId);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request<ExternalConnectorServiceDetail>(
+    `/api/v1/integrations/external-connectors/services/${encodeURIComponent(sourceId)}/${encodeURIComponent(serviceId)}${suffix}`,
+  );
+}
+
+export async function fetchExternalConnectorAction(
+  sourceId: string,
+  serviceId: string,
+  actionId: string,
+  query?: { workspaceId?: string },
+): Promise<ExternalConnectorActionSummary> {
+  const params = new URLSearchParams();
+  if (query?.workspaceId) {
+    params.set("workspaceId", query.workspaceId);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request<ExternalConnectorActionSummary>(
+    `/api/v1/integrations/external-connectors/services/${encodeURIComponent(sourceId)}/${encodeURIComponent(serviceId)}/actions/${encodeURIComponent(actionId)}${suffix}`,
+  );
+}
+
+export async function updateExternalConnectorServiceReviewState(
+  sourceId: string,
+  serviceId: string,
+  input: ExternalConnectorReviewStatePatchInput,
+): Promise<ExternalConnectorReviewStateRecord> {
+  return request<ExternalConnectorReviewStateRecord>(
+    `/api/v1/integrations/external-connectors/services/${encodeURIComponent(sourceId)}/${encodeURIComponent(serviceId)}/review`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateExternalConnectorActionReviewState(
+  sourceId: string,
+  serviceId: string,
+  actionId: string,
+  input: ExternalConnectorReviewStatePatchInput,
+): Promise<ExternalConnectorReviewStateRecord> {
+  return request<ExternalConnectorReviewStateRecord>(
+    `/api/v1/integrations/external-connectors/services/${encodeURIComponent(sourceId)}/${encodeURIComponent(serviceId)}/actions/${encodeURIComponent(actionId)}/review`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function stageExternalConnectorAction(
+  sourceId: string,
+  serviceId: string,
+  actionId: string,
+  input: ExternalConnectorStageActionInput = {},
+): Promise<ExternalConnectorStageActionResult> {
+  return request<ExternalConnectorStageActionResult>(
+    `/api/v1/integrations/external-connectors/services/${encodeURIComponent(sourceId)}/${encodeURIComponent(serviceId)}/actions/${encodeURIComponent(actionId)}/stage`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function fetchConnectorRecords(

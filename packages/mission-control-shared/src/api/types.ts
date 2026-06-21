@@ -583,11 +583,11 @@ export interface OnboardingCompleteResponse {
 
 export interface IntegrationCatalogEntry {
   catalogId: string;
-  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform";
+  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform" | "external_connector";
   key: string;
   label: string;
   description: string;
-  maturity: "native" | "plugin" | "disabled" | "beta";
+  maturity: "native" | "plugin" | "disabled" | "beta" | "planned";
   runtimeAvailability?: "runnable" | "blocked";
   authMethods: string[];
   capabilities: string[];
@@ -595,12 +595,21 @@ export interface IntegrationCatalogEntry {
   formSchema?: IntegrationFormSchema;
   pluginId?: string;
   operatorActions?: IntegrationOperatorAction[];
+  externalConnector?: {
+    sourceId: string;
+    serviceId: string;
+    sourceCommit: string;
+    actionCount: number;
+    activeActionCount: number;
+    runtimePosture: "catalog_only";
+    callable: false;
+  };
 }
 
 export interface IntegrationConnection {
   connectionId: string;
   catalogId: string;
-  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform";
+  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform" | "external_connector";
   key: string;
   label: string;
   enabled: boolean;
