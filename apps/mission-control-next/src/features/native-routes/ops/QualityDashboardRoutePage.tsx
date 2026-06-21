@@ -18,7 +18,7 @@ import {
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
+import { EmptyState, ErrorState, NativeButton, NoticeBanner, ResultCount, StatusChip } from "../primitives";
 import {
   formatBytes,
   formatDateTime,
@@ -329,6 +329,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 emptyLabel="No prompt packs are available."
                 maxHeight="min(30vh, 18rem)"
               />
+              {packs.length > 6 ? <ResultCount shown={6} total={packs.length} noun="prompt packs" /> : null}
               <div className="mc-next-approvals-inline-actions">
                 {packs.slice(0, 6).map((pack) => (
                   <NativeButton
@@ -706,6 +707,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             emptyLabel="No Pareto-optimal eval results are available yet."
             maxHeight="min(42vh, 26rem)"
           />
+          {paretoModels.length > 8 ? <ResultCount shown={8} total={paretoModels.length} noun="models" /> : null}
         </NativeCard>
 
         <NativeCard
