@@ -512,7 +512,7 @@ function applyChannelDeliveryPlan(channelKey: string, payload: Record<string, un
   };
   return {
     ...payload,
-    ...(plan ? { deliveryChunks: plan.chunks } : {}),
+    ...(plan && plan.chunks.length > 1 ? { messageParts: plan.chunks, deliveryChunks: plan.chunks } : {}),
     deliveryDiagnostics: diagnostics,
   };
 }
@@ -568,7 +568,9 @@ function shouldAttachRichMessageDiagnostics(
   plan: ChannelRichMessageDeliveryPlan,
   richFormat: ChannelDeliveryRichFormat | undefined,
 ): boolean {
-  return plan.attachmentCount > 0 || plan.pendingAttachmentIdCount > 0 || Boolean(richFormat && richFormat !== "plain_text");
+  return (
+    plan.attachmentCount > 0 || plan.pendingAttachmentIdCount > 0 || Boolean(richFormat && richFormat !== "plain_text")
+  );
 }
 
 function assertRichMessagePlanSendable(plan: ChannelRichMessageDeliveryPlan): void {

@@ -53,6 +53,7 @@ const AIDER_PATCH_CANDIDATES = ["aider.patch", "aider.git.patch"];
 const AIDER_RUN_TIMEOUT_MS = 15_000;
 const AIDER_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const AIDER_TERMINATE_GRACE_MS = 3000;
+const AIDER_TERMINATE_CONFIRMATION_MS = 250;
 const OUTPUT_TRUNCATION_MARKER = "\n...[truncated]\n";
 
 export async function executeCodeModeAiderAdapter(
@@ -106,16 +107,18 @@ export async function executeCodeModeAiderAdapter(
     terminate: input.terminateProcessTree ?? terminateProcessTree,
   });
   const finishedAt = new Date().toISOString();
-  const explicitPatch = await readAiderPatchIfPresent(runRoot, repositoryRoot);
-  const sourcePatch =
-    explicitPatch ??
-    buildAiderSourcePatchIfChanged({
-      relPath: toPatchRelPath(repositoryRootRelPath, sourceFilename),
-      originalSource: input.source,
-      currentSource: await fs.readFile(sourcePath, "utf8"),
-    });
-  const patch = explicitPatch ?? sourcePatch;
   const failure = buildAiderFailureEvidence(execution);
+  const mayReadMutableArtifacts = !failure || execution.mutableArtifactsSafe;
+  const explicitPatch = mayReadMutableArtifacts ? await readAiderPatchIfPresent(runRoot, repositoryRoot) : undefined;
+  const sourcePatch =
+    mayReadMutableArtifacts && !explicitPatch
+      ? buildAiderSourcePatchIfChanged({
+          relPath: toPatchRelPath(repositoryRootRelPath, sourceFilename),
+          originalSource: input.source,
+          currentSource: await fs.readFile(sourcePath, "utf8"),
+        })
+      : undefined;
+  const patch = explicitPatch ?? sourcePatch;
   const failed = Boolean(failure);
   const outcome: CodeModeAiderAdapterOutcome = failed ? "failed" : patch ? "patch_produced" : "no_changes";
   const bundle = await persistCodeModeAiderArtifactBundle(input.persister, {
@@ -198,12 +201,15 @@ interface AiderChildExecution {
   stderr: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  mutableArtifactsSafe: boolean;
   failure?: {
     code: "AIDER_TIMEOUT" | "AIDER_ABORTED" | "AIDER_PROCESS_ERROR";
     message: string;
     details: Record<string, unknown>;
   };
 }
+
+type AiderChildFailure = NonNullable<AiderChildExecution["failure"]>;
 
 function waitForAiderChild(
   child: ChildProcess,
@@ -219,10 +225,16 @@ function waitForAiderChild(
     const stdout = createBoundedCapture(options.outputCaptureLimitBytes);
     const stderr = createBoundedCapture(options.outputCaptureLimitBytes);
     let settled = false;
+    let pendingTermination:
+      | {
+          failure: AiderChildFailure;
+          exitCode: number;
+          timer: NodeJS.Timeout;
+        }
+      | undefined;
     const timeoutMs = Math.max(1, Math.round(options.timeoutMs));
     const timer = setTimeout(() => {
-      terminate("Aider adapter timeout");
-      finish({
+      requestTermination("Aider adapter timeout", {
         exitCode: -1,
         failure: {
           code: "AIDER_TIMEOUT",
@@ -236,12 +248,20 @@ function waitForAiderChild(
       });
     }, timeoutMs);
     timer.unref?.();
-    const finish = (result: { exitCode: number; failure?: AiderChildExecution["failure"] }) => {
+    const finish = (result: {
+      exitCode: number;
+      failure?: AiderChildExecution["failure"];
+      mutableArtifactsSafe: boolean;
+    }) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
+      if (pendingTermination) {
+        clearTimeout(pendingTermination.timer);
+        pendingTermination = undefined;
+      }
       options.signal?.removeEventListener("abort", onAbort);
       const stdoutResult = stdout.finish();
       const stderrResult = stderr.finish();
@@ -251,6 +271,7 @@ function waitForAiderChild(
         stderr: stderrResult.text,
         stdoutTruncated: stdoutResult.truncated,
         stderrTruncated: stderrResult.truncated,
+        mutableArtifactsSafe: result.mutableArtifactsSafe,
         ...(result.failure
           ? {
               failure: {
@@ -265,6 +286,28 @@ function waitForAiderChild(
           : {}),
       });
     };
+    const requestTermination = (label: string, result: { exitCode: number; failure: AiderChildFailure }) => {
+      if (settled || pendingTermination) {
+        return;
+      }
+      terminate(label);
+      const timeout = setTimeout(() => {
+        finish({
+          exitCode: result.exitCode,
+          failure: {
+            ...result.failure,
+            details: {
+              ...result.failure.details,
+              processTreeCleanupConfirmed: false,
+              mutableArtifactCapture: "skipped_process_tree_unconfirmed",
+            },
+          },
+          mutableArtifactsSafe: false,
+        });
+      }, AIDER_TERMINATE_CONFIRMATION_MS);
+      timeout.unref?.();
+      pendingTermination = { ...result, timer: timeout };
+    };
     const terminate = (label: string) => {
       options.terminate({
         child,
@@ -277,8 +320,7 @@ function waitForAiderChild(
     };
     const onAbort = () => {
       const reason = formatAbortReason(options.signal);
-      terminate("Aider adapter abort");
-      finish({
+      requestTermination("Aider adapter abort", {
         exitCode: -1,
         failure: {
           code: "AIDER_ABORTED",
@@ -299,8 +341,7 @@ function waitForAiderChild(
       stderr.append(chunk);
     });
     child.on("error", (error) => {
-      terminate("Aider adapter process error");
-      finish({
+      requestTermination("Aider adapter process error", {
         exitCode: -1,
         failure: {
           code: "AIDER_PROCESS_ERROR",
@@ -312,11 +353,27 @@ function waitForAiderChild(
         },
       });
     });
-    child.on("close", (code) =>
+    child.on("close", (code) => {
+      if (pendingTermination) {
+        const pending = pendingTermination;
+        finish({
+          exitCode: code ?? pending.exitCode,
+          failure: {
+            ...pending.failure,
+            details: {
+              ...pending.failure.details,
+              processTreeCleanupConfirmed: true,
+            },
+          },
+          mutableArtifactsSafe: true,
+        });
+        return;
+      }
       finish({
         exitCode: code ?? 1,
-      }),
-    );
+        mutableArtifactsSafe: true,
+      });
+    });
     if (options.signal?.aborted) {
       onAbort();
     }

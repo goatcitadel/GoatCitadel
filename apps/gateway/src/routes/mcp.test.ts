@@ -229,7 +229,7 @@ describe("mcp routes", () => {
             track: { type: "string", enum: ["canary", "hold"] },
           },
         },
-        owner: { sessionId: "session-response" },
+        owner: { operatorId: "operator-1", sessionId: "session-response" },
       },
     });
     const created = createResponse.json();
@@ -244,7 +244,7 @@ describe("mcp routes", () => {
           note: "token=secret-token-value-1234567890",
         },
         owner: {
-          operatorId: "operator-2",
+          operatorId: "operator-1",
           sessionId: "session-response",
         },
       },
@@ -258,7 +258,7 @@ describe("mcp routes", () => {
       response: {
         action: "accept",
         owner: {
-          operatorId: "operator-2",
+          operatorId: "operator-1",
           sessionId: "session-response",
         },
         content: {
@@ -292,12 +292,55 @@ describe("mcp routes", () => {
       url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
       payload: {
         action: "decline",
-        owner: { operatorId: "operator-2" },
+        owner: { operatorId: "operator-1" },
       },
     });
 
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json()).toEqual({ error: "MCP elicitation request has already been resolved." });
+  });
+
+  it("rejects MCP elicitation responses that try to rewrite owner scope", async () => {
+    await registerMcpService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Pick a safe rollout track.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            track: { type: "string", enum: ["canary", "hold"] },
+          },
+        },
+        owner: {
+          operatorId: "operator-1",
+          sessionId: "session-response",
+          workspaceId: "workspace-1",
+        },
+      },
+    });
+    const created = createResponse.json();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
+      payload: {
+        action: "accept",
+        content: { track: "canary" },
+        owner: {
+          operatorId: "operator-2",
+          sessionId: "session-response",
+          workspaceId: "workspace-1",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: "MCP elicitation response owner operatorId must match the original request owner scope.",
+    });
   });
 
   it("maps MCP elicitation decline and cancel actions to terminal statuses without response content", async () => {
@@ -309,6 +352,7 @@ describe("mcp routes", () => {
       payload: {
         prompt: "Can the server use this non-sensitive label?",
         requestedSchema: { type: "object", properties: { label: { type: "string" } } },
+        owner: { operatorId: "operator-3" },
       },
     });
     const cancelCreate = await app!.inject({
@@ -317,6 +361,7 @@ describe("mcp routes", () => {
       payload: {
         prompt: "Continue this optional MCP workflow?",
         requestedSchema: { type: "object", properties: { continue: { type: "boolean" } } },
+        owner: { operatorId: "operator-3" },
       },
     });
 

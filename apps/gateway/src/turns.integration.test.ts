@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
+import { startFakeOpenAiCompatibleServer, type FakeOpenAiServer } from "./test/fake-openai-server.js";
 
 // Full-stack smoke for POST /api/v1/turns/complete (the MatterGoat turn contract).
 // Boots the REAL gateway — operator-bearer auth, the idempotency plugin, route
@@ -26,6 +27,7 @@ const ENV_KEYS = [
 
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
 const tempRoots: string[] = [];
+let fakeProvider: FakeOpenAiServer | undefined;
 
 const validBody = {
   session_id: "mg_session_smoke",
@@ -53,10 +55,13 @@ describe("turns:complete full-stack smoke", () => {
     for (const root of tempRoots.splice(0)) {
       await fs.promises.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
+    await fakeProvider?.close();
+    fakeProvider = undefined;
   });
 
   it("enforces auth + idempotency and routes a well-formed turn to the handler", async () => {
-    configureGateway();
+    fakeProvider = await startFakeOpenAiCompatibleServer();
+    configureGateway(fakeProvider.baseUrl);
     const app = await buildApp();
     try {
       // 1. No bearer token → the auth plugin rejects (operator route).
@@ -116,7 +121,7 @@ describe("turns:complete full-stack smoke", () => {
   }, 45_000);
 });
 
-function configureGateway(): void {
+function configureGateway(providerBaseUrl: string): void {
   process.env.GATEWAY_HOST = "127.0.0.1";
   process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
   process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS = "false";
@@ -124,13 +129,34 @@ function configureGateway(): void {
   process.env.GOATCITADEL_AUTH_TOKEN = TOKEN;
   process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
   process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
-  process.env.GOATCITADEL_ROOT_DIR = createIsolatedConfigRoot();
+  process.env.GOATCITADEL_ROOT_DIR = createIsolatedConfigRoot(providerBaseUrl);
 }
 
-function createIsolatedConfigRoot(): string {
+function createIsolatedConfigRoot(providerBaseUrl: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-turns-smoke-"));
   const repoRoot = path.resolve(process.cwd(), "../..");
   fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "config", "llm-providers.json"),
+    `${JSON.stringify(
+      {
+        activeProviderId: "fake-openai",
+        activeModel: "fake-chat",
+        providers: [
+          {
+            providerId: "fake-openai",
+            label: "Fake OpenAI",
+            baseUrl: providerBaseUrl,
+            apiStyle: "openai-chat-completions",
+            defaultModel: "fake-chat",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   tempRoots.push(root);
   return root;
 }

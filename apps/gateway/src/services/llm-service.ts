@@ -1654,7 +1654,8 @@ function markStaleModelDiscoveryResult(result: ModelDiscoveryResult, origin: "me
   }
   return {
     ...result,
-    warning: result.warning ?? "Loaded from local model catalog cache; remote provider refresh is running in background.",
+    warning:
+      result.warning ?? "Loaded from local model catalog cache; remote provider refresh is running in background.",
   };
 }
 
@@ -1691,13 +1692,13 @@ function isProviderModelCatalogSnapshot(value: unknown): value is ProviderModelC
   const record = value as Partial<ProviderModelCatalogSnapshot> | undefined;
   return Boolean(
     record &&
-      typeof record.snapshotId === "string" &&
-      typeof record.providerId === "string" &&
-      typeof record.baseUrl === "string" &&
-      typeof record.cachedAt === "string" &&
-      (record.source === "live" || record.source === "template_fallback") &&
-      Array.isArray(record.items) &&
-      record.items.every(isLlmModelRecord),
+    typeof record.snapshotId === "string" &&
+    typeof record.providerId === "string" &&
+    typeof record.baseUrl === "string" &&
+    typeof record.cachedAt === "string" &&
+    (record.source === "live" || record.source === "template_fallback") &&
+    Array.isArray(record.items) &&
+    record.items.every(isLlmModelRecord),
   );
 }
 
@@ -3561,7 +3562,7 @@ function normalizeProviderImageUrl(value: unknown): string | undefined {
       return normalized;
     }
   } catch {
-    // Report a stable validation error below.
+    // Intentionally fall through to report a stable validation error below.
   }
   throw new Error("Image generation result URL must be http(s) or a valid base64 data URL.");
 }

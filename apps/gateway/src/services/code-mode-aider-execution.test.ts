@@ -161,6 +161,7 @@ describe("code-mode-aider-execution", () => {
     const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-timeout-"));
     tempRoots.push(runTempRoot);
     const terminateProcessTree = vi.fn();
+    const persisted: Array<{ filename: string; content: string }> = [];
 
     const result = await executeCodeModeAiderAdapter({
       runId: "code-run-aider-timeout",
@@ -176,10 +177,20 @@ describe("code-mode-aider-execution", () => {
         enabled: true,
         image: "ghcr.io/goatcitadel/code-mode-runner:preview",
       },
-      persister: fakePersister([]),
+      persister: fakePersister(persisted),
       timeoutMs: 20,
       terminateProcessTree: terminateProcessTree as never,
-      spawnCommand: vi.fn(() => fakeChild({ stdout: "partial\n", stderr: "", close: false, pid: 4511 })) as never,
+      spawnCommand: vi.fn(() =>
+        fakeChild({
+          stdout: "partial\n",
+          stderr: "",
+          close: false,
+          pid: 4511,
+          beforeClose: async () => {
+            await fs.writeFile(path.join(runTempRoot, "aider-live", "input.ts"), "return { ok: false };\n", "utf8");
+          },
+        }),
+      ) as never,
     });
 
     expect(terminateProcessTree).toHaveBeenCalledWith(
@@ -195,13 +206,19 @@ describe("code-mode-aider-execution", () => {
       errorDetails: expect.objectContaining({
         timeoutMs: 20,
         processTreeCleanup: "requested",
+        processTreeCleanupConfirmed: false,
+        mutableArtifactCapture: "skipped_process_tree_unconfirmed",
       }),
     });
     expect(result.result.aiderAdapter.envelope.error).toMatchObject({
       code: "AIDER_TIMEOUT",
       message: expect.stringContaining("timed out after 20ms"),
-      details: expect.objectContaining({ processTreeCleanup: "requested" }),
+      details: expect.objectContaining({
+        processTreeCleanup: "requested",
+        processTreeCleanupConfirmed: false,
+      }),
     });
+    expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
   });
 
   it("uses process-tree cleanup and records abort evidence", async () => {

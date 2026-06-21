@@ -145,7 +145,7 @@ export class McpElicitationService {
             "responseContent",
           )
         : undefined;
-    const owner = normalizeOwner(input.owner);
+    const owner = normalizeResponseOwner(existing.owner, input.owner);
     const auditEventId = buildAuditEventId(elicitationId, input.action);
     const responseEvidence = buildStatusEvidence({
       status: nextStatus,
@@ -193,11 +193,31 @@ export class McpElicitationService {
   }
 }
 
+function normalizeResponseOwner(
+  existingOwner: McpElicitationOwnerMetadata,
+  responseOwner: McpElicitationOwnerMetadata | undefined,
+): McpElicitationOwnerMetadata {
+  const normalized = normalizeOwner(responseOwner);
+  const ownerKeys = ["operatorId", "agentId", "workspaceId", "sessionId", "taskId", "runId", "surface"] as const;
+  for (const key of ownerKeys) {
+    const responseValue = normalized[key];
+    if (responseValue !== undefined && responseValue !== existingOwner[key]) {
+      throw new McpElicitationServiceError(
+        `MCP elicitation response owner ${key} must match the original request owner scope.`,
+        403,
+      );
+    }
+  }
+  return existingOwner;
+}
+
 function buildBoundedPrompt(prompt: string): McpElicitationBoundedTextBody {
   const redacted = redactSecrets(prompt);
   const maxChars = MCP_ROUTE_ELICITATION_LIMITS.promptMaxChars;
   const truncated = redacted.value.length > maxChars;
-  const text = truncated ? `${redacted.value.slice(0, Math.max(0, maxChars - 24)).trimEnd()}\n[prompt truncated]` : redacted.value;
+  const text = truncated
+    ? `${redacted.value.slice(0, Math.max(0, maxChars - 24)).trimEnd()}\n[prompt truncated]`
+    : redacted.value;
   return {
     text,
     charLength: text.length,
@@ -253,9 +273,7 @@ function redactSecrets(value: string): { value: string; count: number } {
     return "[REDACTED]";
   };
   const redacted = value
-    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, () =>
-      replace(),
-    )
+    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, () => replace())
     .replace(/\bauthorization\s*:\s*Bearer\s+\S+/gi, () => replace())
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, () => replace())
     .replace(

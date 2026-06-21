@@ -504,6 +504,57 @@ describe("GatewayService loop 27 large service coverage", () => {
     expect(sentArgs[1]?.attachments).toBeUndefined();
   });
 
+  it("sends runtime-planned delivery chunks when queued payloads use the deliveryChunks compatibility field", async () => {
+    const sentArgs: Array<Record<string, unknown>> = [];
+    const invokeAndUnwrap = vi.fn(async (request: { args: Record<string, unknown> }) => {
+      sentArgs.push(request.args);
+      return {
+        channelKey: "discord",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        deliveryId: `part-${sentArgs.length}`,
+        providerMessageId: `provider-${sentArgs.length}`,
+        status: "sent",
+        target: "channel-1",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      };
+    });
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    Object.assign(gateway, {
+      buildCommsHost: vi.fn(() => ({
+        emitChannelActivity: vi.fn(),
+        emitDiscordTyping: vi.fn(),
+        getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
+        invokeAndUnwrap,
+        readChatAttachmentContent: vi.fn(),
+      })),
+    });
+    const sendQueuedChannelDelivery = (
+      GatewayService.prototype as unknown as {
+        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+      }
+    ).sendQueuedChannelDelivery;
+
+    await sendQueuedChannelDelivery.call(gateway, {
+      attempts: 1,
+      channelKey: "discord",
+      connectionId: "conn-1",
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryId: "delivery-legacy-chunks",
+      maxAttempts: 3,
+      payload: {
+        connectionId: "conn-1",
+        deliveryChunks: ["part one", "part two"],
+        message: "part one part two",
+        target: "channel-1",
+      },
+      status: "running",
+      target: "channel-1",
+      updatedAt: "2026-05-15T00:00:00.000Z",
+    });
+
+    expect(sentArgs.map((args) => args.message)).toEqual(["part one", "part two"]);
+  });
+
   it("creates internal tool grants, respects deny-wins, and reports failed tool payloads precisely", async () => {
     const createdGrant = vi.fn();
     const publishRealtime = vi.fn();

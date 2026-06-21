@@ -9309,10 +9309,15 @@ function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInpu
 }
 
 function readChannelDeliveryMessageParts(payload: Record<string, unknown>): string[] {
-  if (!Array.isArray(payload.messageParts)) {
+  const parts = Array.isArray(payload.messageParts)
+    ? payload.messageParts
+    : Array.isArray(payload.deliveryChunks)
+      ? payload.deliveryChunks
+      : undefined;
+  if (!parts) {
     return [];
   }
-  return payload.messageParts.filter((item): item is string => typeof item === "string");
+  return parts.filter((item): item is string => typeof item === "string");
 }
 
 function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnostics | undefined {
