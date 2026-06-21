@@ -4997,7 +4997,7 @@
 }
 
 .mc-next-directory-copy h1 {
-  font-size: clamp(1.18rem, 1.4vw, 1.5rem);
+  font-size: var(--text-2xl);
   font-weight: 760;
 }
 

@@ -14,7 +14,7 @@
  * authoritative source. See `scripts/check-mission-control-next-token-drift.mjs`.
  */
 .mc-next-shell {
-  --density-type-scale: 0.96;
+  --density-type-scale: 0.98;
   --gc-area-chat: var(--area-chat);
   --gc-area-cowork: var(--area-cowork);
   --gc-area-code: var(--area-code);
@@ -30,11 +30,16 @@
   --mc-scrollbar-safe-gutter: 0.85rem;
   --shell-inspector-width: min(18.4rem, calc(100vw - 1.5rem));
   --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1.1rem);
-  --text-xs: calc(0.75rem * var(--density-type-scale));
-  --text-sm: calc(0.8125rem * var(--density-type-scale));
-  --text-md: calc(0.875rem * var(--density-type-scale));
-  --text-lg: calc(1rem * var(--density-type-scale));
-  --text-xl: calc(1.125rem * var(--density-type-scale));
+  /* Density multiplier applied consistently across the whole ramp on the
+     canonical bases from mission-control-next-tokens.css (was: xs/sm/md only,
+     on smaller non-canonical bases, and 2xl never scaled). --text-2xs is left
+     unscaled as the absolute mono-chrome floor (status strips, kbd, badges). */
+  --text-xs: calc(0.8125rem * var(--density-type-scale));
+  --text-sm: calc(0.875rem * var(--density-type-scale));
+  --text-md: calc(0.9375rem * var(--density-type-scale));
+  --text-lg: calc(1.0625rem * var(--density-type-scale));
+  --text-xl: calc(1.25rem * var(--density-type-scale));
+  --text-2xl: calc(1.625rem * var(--density-type-scale));
   min-height: 100dvh;
   position: relative;
   overflow-x: clip;
@@ -109,7 +114,7 @@
   --mc-surface-3: var(--bg-surface-3);
   --mc-border-subtle: var(--border-subtle);
   --mc-border-strong: color-mix(in oklab, var(--mc-area-color) 18%, var(--border-strong));
-  --mc-shadow-soft: none;
+  --mc-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.28);
   --mc-shadow-strong: 0 18px 48px rgba(0, 0, 0, 0.36);
   --mc-scrollbar-track: rgba(28, 35, 48, 0.58);
   --mc-scrollbar-thumb: rgba(164, 177, 201, 0.44);
@@ -1395,9 +1400,9 @@
   gap: 0.55rem;
   min-height: 1.75rem;
   padding: 0.42rem 0.5rem;
-  border: 1px solid rgba(58, 78, 92, 0.54) !important;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  background: rgba(16, 22, 31, 0.92);
+  background: var(--bg-surface-2);
   color: var(--text-secondary);
   font-size: var(--text-xs);
 }

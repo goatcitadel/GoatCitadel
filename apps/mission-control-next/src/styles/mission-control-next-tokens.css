@@ -9,13 +9,17 @@
    mission-control-next.css in main.tsx. */
 
 :root {
-  --area-chat: oklch(0.72 0.12 240);
-  --area-cowork: oklch(0.73 0.13 315);
-  --area-code: oklch(0.74 0.12 175);
-  --area-projects: oklch(0.76 0.13 205);
-  --area-library: oklch(0.72 0.1 255);
-  --area-ops: oklch(0.71 0.08 220);
-  --area-settings: oklch(0.78 0.1 85);
+  /* Per-area accents spread across the hue wheel so adjacent areas are
+     distinguishable at a glance (was 4 near-identical blues: chat/projects/
+     library/ops). Dark accents are visual-only (dark --primary = cream brand),
+     so they are not contrast-gated; the light block mirrors the hue spread. */
+  --area-chat: oklch(0.72 0.14 240);
+  --area-cowork: oklch(0.73 0.15 330);
+  --area-code: oklch(0.76 0.13 175);
+  --area-projects: oklch(0.77 0.16 150);
+  --area-library: oklch(0.7 0.14 285);
+  --area-ops: oklch(0.78 0.15 75);
+  --area-settings: oklch(0.8 0.13 95);
 
   --risk-safe: oklch(0.76 0.15 160);
   --risk-caution: oklch(0.84 0.15 85);
@@ -52,6 +56,9 @@
   --text-lg: 1.0625rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.625rem;
+  /* Display step for top-level page titles / hero moments. clamp() passes the
+     typography gate (which forbids static rem/px font-sizes). */
+  --text-display: clamp(1.875rem, 1.6rem + 1.2vw, 2.25rem);
 
   --success: var(--risk-safe);
   --warning: var(--risk-caution);
@@ -88,17 +95,21 @@
    content portaled to document.body inherits the canonical surface palette too.
    See mission-control-next-theme-bridge.css for the rationale. */
 .theme-signal-noir {
-  --bg-app: #14181d;
-  --bg-surface-1: #181d24;
-  --bg-surface-2: #10141a;
-  --bg-surface-3: #222833;
-  --bg-elevated: #2b323e;
-  --bg-inset: #0d1116;
+  /* Widened, monotonic elevation ramp: app darkened so cards (surface-1) read
+     as distinct panels on the page; surface-2 lifted above surface-1 (was an
+     inverted #10141a well); elevated capped where muted text still clears AA.
+     Verify with `pnpm contrast:check` after any change here. */
+  --bg-app: #0f1318;
+  --bg-surface-1: #191f29;
+  --bg-surface-2: #212934;
+  --bg-surface-3: #2b323e;
+  --bg-elevated: #353d4a;
+  --bg-inset: #0a0d12;
 
   --fg-primary: #f4f1ea;
   --fg-secondary: #c9cdd4;
-  --fg-muted: #9aa0a9; /* Brighter so muted text clears AA on elevated card surfaces too (was #898f99 = ~3.7:1 on cards). */
-  --fg-faint: #9aa0a9; /* Merged into the --fg-muted tier to calm the gray spread (was #80868f). */
+  --fg-muted: #a8aeb7; /* Brightened from #9aa0a9 to keep AA (4.5:1) on the widened, lighter --bg-elevated. */
+  --fg-faint: #a8aeb7; /* Merged into the --fg-muted tier to calm the gray spread. */
 
   --border-hairline: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.1);
@@ -130,13 +141,15 @@
   --brand-deep: #2a2419;
   --brand-ink: #f5efde;
 
-  --area-chat: oklch(0.5 0.16 240);
-  --area-cowork: oklch(0.5 0.18 315);
-  --area-code: oklch(0.46 0.14 175);
-  --area-projects: oklch(0.48 0.16 205);
-  --area-library: oklch(0.48 0.14 255);
-  --area-ops: oklch(0.46 0.1 220);
-  --area-settings: oklch(0.5 0.14 85);
+  /* Light mirror of the dark hue spread, kept at low L so white button text
+     clears AA after the 85%->black --primary mix. Verify with contrast:check. */
+  --area-chat: oklch(0.48 0.17 240);
+  --area-cowork: oklch(0.48 0.19 330);
+  --area-code: oklch(0.47 0.14 175);
+  --area-projects: oklch(0.48 0.17 150);
+  --area-library: oklch(0.46 0.15 285);
+  --area-ops: oklch(0.5 0.13 75);
+  --area-settings: oklch(0.49 0.13 95);
 
   --risk-safe: oklch(0.5 0.16 160);
   --risk-caution: oklch(0.62 0.18 85);
