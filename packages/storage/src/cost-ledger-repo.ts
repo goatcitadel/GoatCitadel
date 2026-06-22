@@ -1,11 +1,18 @@
 import type { DatabaseClient } from "./db.js";
 
+export type CostLedgerCredentialType = "api_key" | "oauth" | "unknown";
+export type CostLedgerUsagePool = "standard" | "subscription" | "unknown";
+
 export interface CostLedgerRecord {
   sessionId: string;
   agentId?: string;
   taskId?: string;
   providerId?: string;
   modelId?: string;
+  /** Credential class the call was billed against (Anthropic Jun-2026 pool split). */
+  credentialType?: CostLedgerCredentialType;
+  /** Which billing pool the usage drew from (subscription credit pool vs standard). */
+  usagePool?: CostLedgerUsagePool;
   tokenInput: number;
   tokenOutput: number;
   tokenCachedInput: number;
@@ -64,26 +71,23 @@ export class CostLedgerRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     const providerAttributionSupported = hasCostLedgerColumn(db, "provider_id") && hasCostLedgerColumn(db, "model_id");
+    const credentialDimsSupported = hasCostLedgerColumn(db, "credential_type") && hasCostLedgerColumn(db, "usage_pool");
+    // Build the INSERT column list to match whichever optional columns the schema
+    // actually has (older DBs may predate provider attribution and/or credential dims).
+    const insertColumns = ["session_id", "agent_id", "task_id"];
+    const insertValues = ["@sessionId", "@agentId", "@taskId"];
+    if (providerAttributionSupported) {
+      insertColumns.push("provider_id", "model_id");
+      insertValues.push("@providerId", "@modelId");
+    }
+    insertColumns.push("day", "token_input", "token_output", "token_cached_input", "cost_usd", "created_at");
+    insertValues.push("@day", "@tokenInput", "@tokenOutput", "@tokenCachedInput", "@costUsd", "@createdAt");
+    if (credentialDimsSupported) {
+      insertColumns.push("credential_type", "usage_pool");
+      insertValues.push("@credentialType", "@usagePool");
+    }
     this.insertStmt = db.prepare(
-      providerAttributionSupported
-        ? `
-          INSERT INTO cost_ledger (
-            session_id, agent_id, task_id, provider_id, model_id, day,
-            token_input, token_output, token_cached_input, cost_usd, created_at
-          ) VALUES (
-            @sessionId, @agentId, @taskId, @providerId, @modelId, @day,
-            @tokenInput, @tokenOutput, @tokenCachedInput, @costUsd, @createdAt
-          )
-        `
-        : `
-          INSERT INTO cost_ledger (
-            session_id, agent_id, task_id, day,
-            token_input, token_output, token_cached_input, cost_usd, created_at
-          ) VALUES (
-            @sessionId, @agentId, @taskId, @day,
-            @tokenInput, @tokenOutput, @tokenCachedInput, @costUsd, @createdAt
-          )
-        `,
+      `INSERT INTO cost_ledger (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
     );
 
     this.summaryByDayStmt = db.prepare(`
@@ -208,6 +212,8 @@ export class CostLedgerRepository {
         taskId: record.taskId ?? null,
         providerId: normalizeOptionalText(record.providerId) ?? null,
         modelId: normalizeOptionalText(record.modelId) ?? null,
+        credentialType: normalizeOptionalText(record.credentialType) ?? null,
+        usagePool: normalizeOptionalText(record.usagePool) ?? null,
       });
       if (shouldPrune) {
         const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -425,7 +431,10 @@ function splitModelIds(value: string | null): string[] {
     .filter(Boolean);
 }
 
-function hasCostLedgerColumn(db: DatabaseClient, columnName: "provider_id" | "model_id"): boolean {
+function hasCostLedgerColumn(
+  db: DatabaseClient,
+  columnName: "provider_id" | "model_id" | "credential_type" | "usage_pool",
+): boolean {
   try {
     if (db.dialect === "sqlite") {
       const rows = db.prepare("PRAGMA table_info(cost_ledger)").all() as Array<{ name?: unknown }>;

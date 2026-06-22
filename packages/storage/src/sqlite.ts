@@ -1446,12 +1446,7 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       // table — defaults backfill existing rows without rewriting them. Heartbeat
       // defaults ON (chosen on-by-default posture); the master autonomy switch
       // still gates whether any tick fires.
-      addColumnIfMissingIfTableExists(
-        db,
-        "session_autonomy_prefs",
-        "heartbeat_enabled",
-        "INTEGER NOT NULL DEFAULT 1",
-      );
+      addColumnIfMissingIfTableExists(db, "session_autonomy_prefs", "heartbeat_enabled", "INTEGER NOT NULL DEFAULT 1");
       addColumnIfMissingIfTableExists(
         db,
         "session_autonomy_prefs",
@@ -1493,6 +1488,18 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     // duplicate snapshots). Like v126, this is the only definition (fresh DBs replay
     // it); the Postgres canonical schema auto-derives it from the SQLite blueprint.
     up: createAutonomyAuditSchema,
+  },
+  {
+    version: 128,
+    name: "cost_ledger_credential_pool",
+    // Anthropic Jun-2026 billing pool split: record which credential class (api_key
+    // vs oauth) and billing pool (standard vs subscription) each usage row drew from.
+    // Additive nullable columns; the repo's insert is column-aware so older DBs that
+    // predate this migration keep working.
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cost_ledger", "credential_type", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cost_ledger", "usage_pool", "TEXT");
+    },
   },
 ];
 

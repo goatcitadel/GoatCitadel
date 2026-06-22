@@ -62,6 +62,42 @@ describe("CostLedgerRepository", () => {
     assert.equal(byTask.length, 2);
   });
 
+  it("persists credentialType and usagePool billing-pool dimensions", () => {
+    const repo = createRepo();
+    repo.insert({
+      sessionId: "s-cred",
+      agentId: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-8",
+      credentialType: "oauth",
+      usagePool: "subscription",
+      tokenInput: 10,
+      tokenOutput: 5,
+      tokenCachedInput: 0,
+      costUsd: 0.2,
+      createdAt: "2026-06-22T10:00:00.000Z",
+    });
+
+    const internal = repo as unknown as {
+      db: {
+        prepare: (sql: string) => {
+          get: <T>(params: Record<string, unknown>) => T | undefined;
+        };
+      };
+    };
+    const row = internal.db
+      .prepare(
+        "SELECT credential_type AS credentialType, usage_pool AS usagePool FROM cost_ledger WHERE session_id = @sessionId",
+      )
+      .get<{ credentialType?: string; usagePool?: string }>({ sessionId: "s-cred" });
+    assert.equal(row?.credentialType, "oauth");
+    assert.equal(row?.usagePool, "subscription");
+
+    // Summary aggregation is unaffected by the additional columns.
+    const summary = repo.summary("session", "2026-06-22T00:00:00.000Z", "2026-06-22T23:59:59.999Z");
+    assert.equal(summary[0]?.tokenTotal, 15);
+  });
+
   it("reports tracked vs unknown usage availability for agent events", () => {
     const repo = createRepo();
     repo.insert({

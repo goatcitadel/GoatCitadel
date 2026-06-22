@@ -2030,4 +2030,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON external_connector_review_states(source_id, service_id, action_id);
     `,
   },
+  {
+    version: 67,
+    name: "cost_ledger_credential_pool",
+    sql: `
+      ALTER TABLE cost_ledger
+        ADD COLUMN IF NOT EXISTS credential_type TEXT,
+        ADD COLUMN IF NOT EXISTS usage_pool TEXT;
+    `,
+  },
 ];
