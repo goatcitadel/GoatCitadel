@@ -49,6 +49,7 @@ import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   type IdempotentExternalSideEffectRunInput,
+  type ExternalSideEffectReplayWorkerResult,
   runReplaySafeExternalSideEffectWorker,
 } from "./external-side-effect-runner-service.js";
 
@@ -752,60 +753,144 @@ export async function executeDurableExternalSideEffectReplayRun(
     throw new Error("Durable external side-effect replay payload is invalid or incomplete.");
   }
   const checkedAt = new Date().toISOString();
-  const candidateRuns = collectExternalSideEffectReplayRuns(host, payload);
+  const replayCollection = collectExternalSideEffectReplayRuns(host, payload);
   const results = await runReplaySafeExternalSideEffectWorker<Record<string, unknown>>({
-    runs: candidateRuns,
+    runs: replayCollection.runs,
     checkedAt,
     limit: payload.limit,
     staleClaimedNotSentAfterMs: payload.staleClaimedNotSentAfterMs,
     buildJob: (candidate) => host.buildExternalSideEffectReplayJob?.(candidate, payload),
   });
+  const replayAuditResults = [...replayCollection.auditResults, ...results.map(mapExternalSideEffectReplayResult)];
   const checkpointState = {
     workflow: "external_side_effect.replay",
     version: payload.version,
     workspaceId: payload.workspaceId,
     requestedBy: payload.requestedBy,
     checkedAt,
-    candidates: candidateRuns.length,
-    executed: results.filter((item) => item.status === "executed").length,
-    blocked: results.filter((item) => item.status === "blocked").length,
-    failed: results.filter((item) => item.status === "failed").length,
-    skipped: results.filter((item) => item.status === "skipped").length,
-    results: results.map((item) => ({
-      runId: item.run.runId,
-      status: item.status,
-      ...(item.status === "skipped" ? { reason: item.reason, message: item.message } : {}),
-      ...(item.status !== "skipped"
-        ? {
-            replayOutcome: item.result.claim.replayOutcome,
-            replayAttempt: item.result.claim.replayAttempt,
-            resumeState: item.result.claim.resumeState,
-          }
-        : {}),
-    })),
+    requestedRunIds: replayCollection.requestedRunIds,
+    candidates: replayCollection.runs.length,
+    found: replayCollection.runs.length,
+    missing: replayCollection.missingRunIds.length,
+    missingRunIds: replayCollection.missingRunIds,
+    skippedRunIds: replayCollection.skippedRunIds,
+    executed: replayAuditResults.filter((item) => item.status === "executed").length,
+    replayed: replayAuditResults.filter((item) => item.status === "executed").length,
+    blocked: replayAuditResults.filter((item) => item.status === "blocked").length,
+    failed: replayAuditResults.filter((item) => item.status === "failed").length,
+    skipped: replayAuditResults.filter((item) => item.status === "skipped").length,
+    replayAuditResults,
+    results: replayAuditResults,
   };
   completeDurableWorkflowRun(host, run.runId, checkpointState);
 }
 
+type ExternalSideEffectReplayAuditResult = {
+  runId: string;
+  status: "not_found" | "skipped" | "blocked" | "failed" | "executed";
+  reason?: string;
+  message?: string;
+  replayOutcome?: string;
+  replayAttempt?: string;
+  resumeState?: string;
+};
+
+type ExternalSideEffectReplayRunCollection = {
+  requestedRunIds: string[];
+  runs: ExternalSideEffectRunRecord[];
+  missingRunIds: string[];
+  skippedRunIds: string[];
+  auditResults: ExternalSideEffectReplayAuditResult[];
+};
+
 function collectExternalSideEffectReplayRuns(
   host: DurableExternalSideEffectReplayWorkflowHost,
   payload: ExternalSideEffectReplayWorkflowPayload,
-): ExternalSideEffectRunRecord[] {
+): ExternalSideEffectReplayRunCollection {
   const limit = clampExternalSideEffectReplayLimit(payload.limit);
-  const runs = payload.runIds?.length
-    ? payload.runIds
-        .map((runId) => readExternalSideEffectRunMaybe(host, runId))
-        .filter((item): item is ExternalSideEffectRunRecord => Boolean(item))
-    : payload.connectionId
-      ? host.storage.externalSideEffectRuns.listByConnection(payload.connectionId, {
-          workspaceId: payload.workspaceId,
-          limit,
-        })
-      : host.storage.externalSideEffectRuns.listByWorkspace(payload.workspaceId, limit);
-  return runs
-    .filter((item) => item.workspaceId === payload.workspaceId)
-    .filter((item) => !payload.connectionId || item.connectionId === payload.connectionId)
-    .slice(0, limit);
+  const requestedRunIds = [...(payload.runIds ?? [])];
+  const auditResults: ExternalSideEffectReplayAuditResult[] = [];
+  const missingRunIds: string[] = [];
+  const skippedRunIds: string[] = [];
+  if (requestedRunIds.length > 0) {
+    const scopedRuns: ExternalSideEffectRunRecord[] = [];
+    for (const runId of requestedRunIds) {
+      const run = readExternalSideEffectRunMaybe(host, runId);
+      if (!run) {
+        missingRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "not_found",
+          reason: "requested_run_missing",
+          message: "Requested external side-effect run was not found.",
+        });
+        continue;
+      }
+      if (
+        run.workspaceId !== payload.workspaceId ||
+        (payload.connectionId && run.connectionId !== payload.connectionId)
+      ) {
+        skippedRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "skipped",
+          reason: "out_of_scope",
+          message: "Requested external side-effect run did not match replay scope.",
+        });
+        continue;
+      }
+      scopedRuns.push(run);
+    }
+    const runs = scopedRuns.slice(0, limit);
+    for (const skipped of scopedRuns.slice(limit)) {
+      skippedRunIds.push(skipped.runId);
+      auditResults.push({
+        runId: skipped.runId,
+        status: "skipped",
+        reason: "limit_exceeded",
+        message: "Requested external side-effect run was beyond the replay limit.",
+      });
+    }
+    return { requestedRunIds, runs, missingRunIds, skippedRunIds, auditResults };
+  }
+  const runs = payload.connectionId
+    ? host.storage.externalSideEffectRuns.listByConnection(payload.connectionId, {
+        workspaceId: payload.workspaceId,
+        limit,
+      })
+    : host.storage.externalSideEffectRuns.listByWorkspace(payload.workspaceId, limit);
+  return {
+    requestedRunIds,
+    runs: runs
+      .filter((item) => item.workspaceId === payload.workspaceId)
+      .filter((item) => !payload.connectionId || item.connectionId === payload.connectionId)
+      .slice(0, limit),
+    missingRunIds,
+    skippedRunIds,
+    auditResults,
+  };
+}
+
+function mapExternalSideEffectReplayResult(
+  item: ExternalSideEffectReplayWorkerResult<Record<string, unknown>>,
+): ExternalSideEffectReplayAuditResult {
+  if (item.status === "skipped") {
+    return {
+      runId: item.run.runId,
+      status: "skipped",
+      reason: item.reason,
+      message: item.message,
+    };
+  }
+  return {
+    runId: item.run.runId,
+    status: item.status,
+    replayOutcome: item.result.claim.replayOutcome,
+    replayAttempt: item.result.claim.replayAttempt,
+    resumeState: item.result.claim.resumeState,
+    ...(item.status === "blocked" ? { reason: item.result.blockedReason, message: item.result.message } : {}),
+    ...(item.status === "failed" ? { message: item.result.error.message } : {}),
+  };
 }
 
 function readExternalSideEffectRunMaybe(

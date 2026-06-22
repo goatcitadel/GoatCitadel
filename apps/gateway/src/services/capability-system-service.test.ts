@@ -111,6 +111,72 @@ describe("CapabilitySystemService", () => {
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
   });
 
+  it("validates Code Mode source as syntax instead of rejecting comments and strings", async () => {
+    const harness = await createHarness();
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `
+          // Mentions import("x"), require("x"), process, fetch, and setTimeout without executing them.
+          const metadata = {
+            import: "literal key",
+            require: "literal key",
+            process: "literal key",
+            fetch: "literal key",
+            setTimeout: "literal key",
+          };
+          const text = "import('x') require('x') process fetch setTimeout";
+          return { metadata, text };
+        `,
+        originSurface: "code",
+      }),
+    ).resolves.toMatchObject({ status: "approval_pending" });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `import fs from "node:fs"; return { fs };`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference import statements.");
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `const fs = await import("node:fs"); return { fs };`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference dynamic import.");
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `const fs = require("node:fs"); return { fs };`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference require.");
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `return process.env;`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference process.");
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `return await fetch("https://example.test");`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference fetch.");
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: `setTimeout(() => undefined, 1); return {};`,
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("Code Mode source may not reference timers or schedulers.");
+  });
+
   it("fails closed when an autonomous Code Mode run has no matching grant", async () => {
     const harness = await createHarness();
 
@@ -4045,10 +4111,7 @@ function createPermissionProfileRecord(profileId: string): PermissionProfileReco
   };
 }
 
-function createTool(
-  toolName: string,
-  overrides?: Partial<ToolCatalogEntry>,
-): ToolCatalogEntry {
+function createTool(toolName: string, overrides?: Partial<ToolCatalogEntry>): ToolCatalogEntry {
   return {
     toolName,
     category: overrides?.category ?? "fs",

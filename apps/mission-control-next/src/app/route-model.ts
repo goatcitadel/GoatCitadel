@@ -601,17 +601,17 @@ export interface RailGroup {
  * Single source of truth for rail grouping. Drives both the nav rail
  * (buildRailSections) and breadcrumb derivation (routeKicker), so the two can
  * never disagree. Areas absent here render as one ungrouped rail. Sections
- * intentionally omitted from every group (settings "permissions"/"onboarding")
- * stay reachable via deep link but are not surfaced in grouped navigation
- * (H-13 ship punchlist: keeps the ongoing configuration surface scannable).
+ * intentionally omitted from every group stay reachable via deep link but are
+ * not surfaced in grouped navigation. Release-bearing trust/setup settings stay
+ * grouped so operators can find them without command search.
  */
 export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
   settings: [
-    { id: "settings-foundations", label: "Foundations", sections: ["general", "workspaces"] },
+    { id: "settings-foundations", label: "Foundations", sections: ["general", "onboarding", "workspaces"] },
     {
       id: "settings-identity",
       label: "Identity",
-      sections: ["access", "personalities", "providers", "local-ai", "trust-policy"],
+      sections: ["access", "permissions", "personalities", "providers", "local-ai", "trust-policy"],
     },
     { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
     { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },

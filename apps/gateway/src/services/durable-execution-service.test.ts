@@ -279,7 +279,7 @@ describe("durable-execution-service orchestration workflow", () => {
       workspaceId: "default",
       requestedBy: "operator",
       requestedAt: "2026-05-31T00:00:00.000Z",
-      runIds: ["extfx-retry"],
+      runIds: ["extfx-retry", "extfx-missing"],
     });
     let storedRun = { ...run, status: "running" as const };
     const externalRun = {
@@ -321,7 +321,12 @@ describe("durable-execution-service orchestration workflow", () => {
           createCheckpoint,
         },
         externalSideEffectRuns: {
-          get: vi.fn(() => externalRun),
+          get: vi.fn((runId: string) => {
+            if (runId === "extfx-retry") {
+              return externalRun;
+            }
+            throw new Error(`missing run ${runId}`);
+          }),
           listByConnection: vi.fn(),
           listByWorkspace: vi.fn(),
         },
@@ -357,9 +362,27 @@ describe("durable-execution-service orchestration workflow", () => {
         checkpointKind: "run_completed",
         state: expect.objectContaining({
           workflow: "external_side_effect.replay",
+          requestedRunIds: ["extfx-retry", "extfx-missing"],
           candidates: 1,
+          found: 1,
+          missing: 1,
+          missingRunIds: ["extfx-missing"],
           executed: 1,
+          replayed: 1,
           skipped: 0,
+          replayAuditResults: [
+            expect.objectContaining({
+              runId: "extfx-missing",
+              status: "not_found",
+              reason: "requested_run_missing",
+            }),
+            expect.objectContaining({
+              runId: "extfx-retry",
+              status: "executed",
+              replayOutcome: "claimed",
+              replayAttempt: "retry_after_failure",
+            }),
+          ],
         }),
       }),
     );

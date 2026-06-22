@@ -62,6 +62,7 @@ interface CitadelRecordRow {
   default_workspace_id: string | null;
   created_at: string;
   updated_at: string;
+  has_charter?: number | boolean | null;
 }
 
 interface ChamberRow {
@@ -185,7 +186,14 @@ export class CitadelRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.listRecordsStmt = db.prepare(`
-      SELECT * FROM citadel_records
+      SELECT
+        citadel_records.*,
+        EXISTS (
+          SELECT 1
+          FROM citadel_charters
+          WHERE citadel_charters.citadel_id = citadel_records.citadel_id
+        ) AS has_charter
+      FROM citadel_records
       WHERE (
         @view = 'all'
         OR (@view = 'active' AND lifecycle_status = 'active')
@@ -753,6 +761,7 @@ function mapCitadelRecord(row: CitadelRecordRow): CitadelRecord {
     lifecycleStatus: row.lifecycle_status,
     archivedAt: row.archived_at ?? undefined,
     defaultWorkspaceId: row.default_workspace_id ?? undefined,
+    ...(row.has_charter !== undefined ? { hasCharter: Boolean(row.has_charter) } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

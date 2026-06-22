@@ -22,9 +22,6 @@ describe("MissionControlNextApp shell helpers", () => {
       { id: "settings-foundations", label: "Foundations", items: [item("general")] },
       { id: "settings-surfaces", label: "Surfaces", items: [item("channels"), item("tools")] },
     ]);
-    // H-13 (ship punchlist): "onboarding" and "permissions" are intentionally
-    // hidden from the rail groups. They remain in RAIL_ITEMS for deep-link route
-    // resolution but no group filter selects them, so they fall out here.
     expect(
       buildRailSections("settings", [
         item("onboarding"),
@@ -40,8 +37,8 @@ describe("MissionControlNextApp shell helpers", () => {
         item("addons"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
-      ["workspaces"],
-      ["providers", "trust-policy", "personalities", "access"],
+      ["onboarding", "workspaces"],
+      ["permissions", "providers", "trust-policy", "personalities", "access"],
       ["integrations", "mcp"],
       ["runtime", "addons"],
     ]);
@@ -72,21 +69,31 @@ describe("MissionControlNextApp shell helpers", () => {
   });
 
   it("renders every declared grouped rail item exactly once", () => {
-    /*
-     * H-13: settings carries two RAIL_ITEMS entries that are deliberately
-     * not in any group ("settings-onboarding", "settings-permissions").
-     * Library + ops still surface every declared rail item.
-     */
-    const settingsHiddenFromGroups = new Set(["settings-onboarding", "settings-permissions"]);
-
     for (const area of ["settings", "library", "ops"] as const) {
       const groupedItems = buildRailSections(area, RAIL_ITEMS[area]).flatMap((group) => group.items);
-      const expectedIds = RAIL_ITEMS[area]
-        .map((entry) => entry.id)
-        .filter((id) => area !== "settings" || !settingsHiddenFromGroups.has(id))
-        .sort();
+      const expectedIds = RAIL_ITEMS[area].map((entry) => entry.id).sort();
       expect(groupedItems.map((entry) => entry.id).sort()).toEqual(expectedIds);
       expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(expectedIds.length);
+    }
+  });
+
+  it("keeps non-experimental ship routes represented in primary grouped navigation", () => {
+    const explicitExemptions = new Set<string>();
+
+    for (const area of ["settings", "library", "ops"] as const) {
+      const groupedIds = new Set(
+        buildRailSections(area, RAIL_ITEMS[area])
+          .flatMap((group) => group.items)
+          .map((entry) => entry.id),
+      );
+      for (const entry of RAIL_ITEMS[area]) {
+        const route = { area: entry.area, section: entry.section };
+        const releaseScope = getRouteReleaseScope(route);
+        const routeKey = `${entry.area}/${entry.section ?? "root"}`;
+        if (releaseScope.status === "ship" && !isExperimentalRoute(route) && !explicitExemptions.has(routeKey)) {
+          expect(groupedIds.has(entry.id)).toBe(true);
+        }
+      }
     }
   });
 

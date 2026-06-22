@@ -40,6 +40,7 @@ export interface CitadelRecord {
   lifecycleStatus: CitadelLifecycleStatus;
   archivedAt?: string;
   defaultWorkspaceId?: string;
+  hasCharter?: boolean;
   createdAt: string;
   updatedAt: string;
 }

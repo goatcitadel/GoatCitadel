@@ -2,6 +2,7 @@ import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
+import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -40,9 +41,7 @@ export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationP
 
 export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidationPort {
   createBackup(input: { name?: string; outputPath?: string }): Promise<unknown>;
-  findCronRunById(
-    runId: string,
-  ): { runId: string; jobId: string; status: "ok"; finishedAt?: string; output?: string } | undefined;
+  findCronRunById(runId: string): CronRunSnapshot | undefined;
   getAuthCredentialPlan(): unknown;
   getLlmConfig(): LlmRuntimeConfig;
   getRetentionPolicy(): unknown;

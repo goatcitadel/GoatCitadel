@@ -5966,6 +5966,19 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
   // the Citadel routes, so staging here cannot drift any other route's baseline.
   const citadelId = workspaceId;
   assertOk(
+    await requestJson(gatewayUrl, "/api/v1/citadels", {
+      method: "POST",
+      body: {
+        citadelId,
+        name: "Mission Control Next Verification Citadel",
+        slug: citadelId,
+        kind: "company",
+        defaultWorkspaceId: workspaceId,
+      },
+    }),
+    "create mission-control-next citadel identity",
+  );
+  assertOk(
     await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/charter`, {
       method: "PUT",
       body: {
@@ -6176,6 +6189,7 @@ async function installMissionControlNextBrowserState(browserContext, workspaceId
   await browserContext.addInitScript(
     ({ activeWorkspaceId }) => {
       window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
+      window.localStorage.setItem("goatcitadel.ui.citadel_id.v1", activeWorkspaceId);
       window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
       window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
     },

@@ -7,12 +7,11 @@ import { repoHasConfigMarker } from "./config-files.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { createGatewayAdminRuntime } from "./services/gateway-runtime-factory.js";
+import type { CronRunSnapshot } from "./services/gateway/cron-automation-service.js";
 
 export interface CronCliPort {
   runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }>;
-  findCronRunById(
-    runId: string,
-  ): { runId: string; jobId: string; status: "ok"; finishedAt?: string; output?: string } | undefined;
+  findCronRunById(runId: string): CronRunSnapshot | undefined;
 }
 
 export interface CronCliIo {
