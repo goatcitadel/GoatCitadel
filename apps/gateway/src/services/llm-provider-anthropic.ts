@@ -288,7 +288,26 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
   return Math.max(1, Math.floor(value));
 }
 
-function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
+/**
+ * Newer Anthropic models (Opus 4.7+, Fable 5, Mythos 5) reject sampling controls
+ * (temperature/top_p/top_k) with a 400 — they use always-on adaptive sampling.
+ * Detect them so the adapter omits those parameters instead of forwarding values
+ * that would fail the request. Older models (bare claude-opus-4, claude-opus-4-1,
+ * sonnet-4-6) still accept sampling controls.
+ */
+export function anthropicModelRejectsSamplingControls(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized.includes("fable") || normalized.includes("mythos")) return true;
+  const opusMinor = normalized.match(/claude-opus-4-(\d+)/);
+  if (opusMinor) {
+    const minor = Number.parseInt(opusMinor[1] ?? "", 10);
+    if (Number.isFinite(minor) && minor >= 7) return true;
+  }
+  return false;
+}
+
+export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
   const { system, messages } = buildAnthropicMessagesInput(request.messages);
   const reasoningEffort = request.reasoning?.effort;
   const thinkingEnabled = Boolean(reasoningEffort && reasoningEffort !== "none");
@@ -299,8 +318,10 @@ function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: st
   if (system !== undefined) {
     payload.system = system;
   }
-  if (request.temperature !== undefined) payload.temperature = request.temperature;
-  if (request.top_p !== undefined) payload.top_p = request.top_p;
+  if (!anthropicModelRejectsSamplingControls(model)) {
+    if (request.temperature !== undefined) payload.temperature = request.temperature;
+    if (request.top_p !== undefined) payload.top_p = request.top_p;
+  }
   if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
   else payload.max_tokens = 1024;
   if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];

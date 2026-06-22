@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest } from "@goatcitadel/contracts";
 import type { LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
-import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
+import {
+  anthropicModelRejectsSamplingControls,
+  anthropicProviderAdapter,
+  buildAnthropicMessagesPayload,
+} from "./llm-provider-anthropic.js";
 
 const resolved: LlmProviderResolution = {
   provider: {
@@ -625,5 +629,55 @@ describe("anthropicProviderAdapter", () => {
         content: [{ type: "image", source: { type: "url", url: "https://example.test/cat.jpg" } }],
       },
     ]);
+  });
+});
+
+function samplingRequest(overrides: Partial<ChatCompletionRequest> = {}): ChatCompletionRequest {
+  return {
+    messages: [{ role: "user", content: "hello" }],
+    ...overrides,
+  } as ChatCompletionRequest;
+}
+
+describe("anthropicModelRejectsSamplingControls", () => {
+  it("rejects sampling controls for Opus 4.7+ and Fable/Mythos", () => {
+    expect(anthropicModelRejectsSamplingControls("claude-opus-4-7")).toBe(true);
+    expect(anthropicModelRejectsSamplingControls("claude-opus-4-8")).toBe(true);
+    expect(anthropicModelRejectsSamplingControls("claude-fable-5")).toBe(true);
+    expect(anthropicModelRejectsSamplingControls("claude-mythos-5")).toBe(true);
+  });
+
+  it("allows sampling controls for older Anthropic models", () => {
+    expect(anthropicModelRejectsSamplingControls("claude-sonnet-4-6")).toBe(false);
+    expect(anthropicModelRejectsSamplingControls("claude-opus-4")).toBe(false);
+    expect(anthropicModelRejectsSamplingControls("claude-opus-4-1-20250805")).toBe(false);
+    expect(anthropicModelRejectsSamplingControls("")).toBe(false);
+  });
+});
+
+describe("buildAnthropicMessagesPayload sampling guard", () => {
+  it("forwards temperature/top_p for models that accept them", () => {
+    const payload = buildAnthropicMessagesPayload(
+      samplingRequest({ temperature: 0.5, top_p: 0.9 }),
+      "claude-sonnet-4-6",
+    );
+    expect(payload.temperature).toBe(0.5);
+    expect(payload.top_p).toBe(0.9);
+  });
+
+  it("strips temperature/top_p for Opus 4.8", () => {
+    const payload = buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.5, top_p: 0.9 }), "claude-opus-4-8");
+    expect(payload.temperature).toBeUndefined();
+    expect(payload.top_p).toBeUndefined();
+  });
+
+  it("strips temperature for Fable 5", () => {
+    const payload = buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.2 }), "claude-fable-5");
+    expect(payload.temperature).toBeUndefined();
+  });
+
+  it("still forwards temperature for the deprecated opus-4-1 snapshot", () => {
+    const payload = buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.3 }), "claude-opus-4-1-20250805");
+    expect(payload.temperature).toBe(0.3);
   });
 });
