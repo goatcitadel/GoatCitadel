@@ -64,6 +64,40 @@ describe("LLM model metadata loader", () => {
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]).toContain("does not match manifest shape");
   });
+
+  it("accepts optional lifecycle status and retiresOn fields", () => {
+    const path = join(tmp, "lifecycle.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "anthropic/claude-opus-4-1-20250805": {
+            contextWindow: 1000000,
+            outputTokenLimit: 32000,
+            status: "deprecated",
+            retiresOn: "2026-08-05",
+          },
+          "anthropic/claude-fable-5": { contextWindow: 1000000, outputTokenLimit: 32000, status: "experimental" },
+        },
+      }),
+    );
+    const result = loadLlmModelMetadataManifest(path);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest.entries["anthropic/claude-opus-4-1-20250805"].status).toBe("deprecated");
+    expect(result.manifest.entries["anthropic/claude-opus-4-1-20250805"].retiresOn).toBe("2026-08-05");
+  });
+
+  it("rejects a manifest with an unknown lifecycle status", () => {
+    const path = join(tmp, "bad-status.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, entries: { x: { contextWindow: 1000, outputTokenLimit: 100, status: "sunset" } } }),
+    );
+    const result = loadLlmModelMetadataManifest(path);
+    expect(result.manifest.entries).toEqual({});
+    expect(result.errors[0]).toContain("does not match manifest shape");
+  });
 });
 
 describe("lookupModelMetadata", () => {
@@ -94,6 +128,23 @@ describe("lookupModelMetadata", () => {
     const manifest = { version: 1, entries: {} };
     const entry = lookupModelMetadata(manifest, "unknown", "model");
     expect(entry).toBeUndefined();
+  });
+
+  it("returns lifecycle status and retiresOn when present", () => {
+    const manifest = {
+      version: 1,
+      entries: {
+        "anthropic/claude-opus-4-1-20250805": {
+          contextWindow: 1000000,
+          outputTokenLimit: 32000,
+          status: "deprecated" as const,
+          retiresOn: "2026-08-05",
+        },
+      },
+    };
+    const entry = lookupModelMetadata(manifest, "anthropic", "claude-opus-4-1-20250805");
+    expect(entry?.status).toBe("deprecated");
+    expect(entry?.retiresOn).toBe("2026-08-05");
   });
 
   it("matches nested model ids like openrouter/deepseek/deepseek-v4-pro", () => {

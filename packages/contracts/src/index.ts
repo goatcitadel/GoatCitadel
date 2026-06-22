@@ -23,7 +23,7 @@ export * from "./task-distress.js";
 export * from "./agentic-runtime.js";
 export * from "./monitoring.js";
 export * from "./llm.js";
-export type { LlmModelMetadataEntry, LlmModelMetadataManifest } from "./llm-model-metadata.js";
+export type { LlmModelLifecycleStatus, LlmModelMetadataEntry, LlmModelMetadataManifest } from "./llm-model-metadata.js";
 export * from "./auth.js";
 export * from "./connectors.js";
 export * from "./external-connectors.js";

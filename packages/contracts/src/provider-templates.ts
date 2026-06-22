@@ -32,7 +32,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.anthropic.com/v1",
     defaultModel: "claude-sonnet-4-6",
     apiStyle: "anthropic-messages",
-    knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+    knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
   },
   {
     providerId: "claude-code",
@@ -40,7 +40,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.anthropic.com/v1",
     defaultModel: "claude-sonnet-4-6",
     apiStyle: "anthropic-messages",
-    knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+    knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
   },
   {
     providerId: "google",

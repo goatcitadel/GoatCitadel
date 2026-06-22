@@ -54,6 +54,16 @@ function isManifest(value: unknown): value is LlmModelMetadataManifest {
     if (typeof meta.contextWindow !== "number" || meta.contextWindow <= 0) return false;
     if (typeof meta.outputTokenLimit !== "number" || meta.outputTokenLimit <= 0) return false;
     if (meta.thinking !== undefined && meta.thinking !== "off" && meta.thinking !== "auto") return false;
+    if (
+      meta.status !== undefined &&
+      meta.status !== "available" &&
+      meta.status !== "experimental" &&
+      meta.status !== "deprecated" &&
+      meta.status !== "retired"
+    ) {
+      return false;
+    }
+    if (meta.retiresOn !== undefined && typeof meta.retiresOn !== "string") return false;
   }
   return true;
 }
