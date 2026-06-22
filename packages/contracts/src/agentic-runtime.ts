@@ -6,6 +6,8 @@ export type AgenticRunStatus =
   | "running"
   | "approval_required"
   | "paused"
+  | "checkpointing"
+  | "blocked"
   | "completed"
   | "failed"
   | "cancelled"
@@ -47,6 +49,9 @@ export const AGENTIC_DIAGNOSTIC_CODES = [
   "unsafe_status_transition",
   "provider_fallback_loop",
   "projection_status_drift",
+  "research_evidence_incomplete",
+  "candidate_discovery_incomplete",
+  "source_access_blocked",
   "durable_missing_after_completion",
   "dirty_worktree_without_artifact",
   "missing_claimed_artifact",

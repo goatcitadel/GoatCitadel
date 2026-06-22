@@ -586,6 +586,59 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     ],
   },
   {
+    name: "local_business.research",
+    category: "research",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Build a structured, source-backed local business contact research plan, evidence summary, verification status, and blockers.",
+    pack: "core",
+    readOnly: true,
+    deterministic: true,
+    recommendedContexts: ["cowork"],
+    preferredForIntents: ["local_business_research", "contact_research", "research"],
+    usageHints: [
+      "Use for local-business contact discovery tasks that need candidate, source, email, contact-name, and blocker state.",
+      "Treat public official/contact/about/profile sources as evidence and blocked listings as secondary leads only.",
+    ],
+    argSchema: {
+      type: "object",
+      properties: {
+        objective: { type: "string" },
+        location: { type: "string" },
+        radiusMiles: { type: "number", minimum: 1, maximum: 250 },
+        categories: { type: "array", items: { type: "string" } },
+        requiredContactFields: { type: "array", items: { type: "string", enum: ["email", "contact_name"] } },
+        citations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              snippet: { type: "string" },
+            },
+            required: ["url"],
+          },
+        },
+      },
+      required: ["objective"],
+    },
+    examples: [
+      {
+        title: "Research local tabletop game stores",
+        args: {
+          objective:
+            "Locate boardgame/tabletop game stores within 10 miles of 91303 and find public email/contact-name evidence.",
+          location: "91303",
+          radiusMiles: 10,
+          categories: ["board game and tabletop game store"],
+          requiredContactFields: ["email", "contact_name"],
+        },
+      },
+    ],
+  },
+  {
     name: "browser.screenshot",
     category: "research",
     riskLevel: "danger",

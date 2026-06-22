@@ -40,6 +40,7 @@ describe("chat-agent-budget", () => {
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
         maxToolLoops: 6,
+        loopLimitBehavior: "terminal",
         maxToolRunsPerTurn: 12,
         searchMaxResults: 8,
         maxTokens: 2600,
@@ -74,6 +75,7 @@ describe("chat-agent-budget", () => {
     ).toEqual(
       expect.objectContaining({
         maxToolLoops: 6,
+        loopLimitBehavior: "checkpoint_continue",
         maxToolRunsPerTurn: 8,
         searchMaxResults: 6,
         maxTokens: 2200,
@@ -92,6 +94,7 @@ describe("chat-agent-budget", () => {
     ).toEqual(
       expect.objectContaining({
         maxToolLoops: 6,
+        loopLimitBehavior: "checkpoint_continue",
         maxToolRunsPerTurn: 48,
         searchMaxResults: 8,
         maxTokens: 1600,
@@ -126,7 +129,40 @@ describe("chat-agent-budget", () => {
         model: "gemma-3",
         promptLabExplicitTools: true,
       }),
-    ).toEqual(expect.objectContaining({ maxToolLoops: 4, maxToolRunsPerTurn: 6, maxTokens: 1400 }));
+    ).toEqual(
+      expect.objectContaining({
+        maxToolLoops: 4,
+        loopLimitBehavior: "terminal",
+        maxToolRunsPerTurn: 6,
+        maxTokens: 1400,
+      }),
+    );
+  });
+
+  it("treats Cowork maxToolLoops as checkpoint windows while Chat and Code stay terminal", () => {
+    expect(
+      resolveChatExecutionBudget({
+        mode: "cowork",
+        webMode: "quick",
+        thinkingLevel: "standard",
+      }),
+    ).toEqual(expect.objectContaining({ maxToolLoops: 2, loopLimitBehavior: "checkpoint_continue" }));
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "quick",
+        thinkingLevel: "standard",
+      }),
+    ).toEqual(expect.objectContaining({ maxToolLoops: 2, loopLimitBehavior: "terminal" }));
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "code",
+        webMode: "deep",
+        thinkingLevel: "standard",
+      }),
+    ).toEqual(expect.objectContaining({ maxToolLoops: 6, loopLimitBehavior: "terminal" }));
   });
 
   it("uses generous-but-bounded per-web-mode turn and completion budgets", () => {
@@ -181,6 +217,7 @@ describe("chat-agent-budget", () => {
       turnBudgetMs: 1000,
       completionTimeoutMs: 500,
       maxToolLoops: 10,
+      loopLimitBehavior: "terminal" as const,
       maxToolRunsPerTurn: 30,
       searchMaxResults: 12,
       maxTokens: 5000,
@@ -207,6 +244,7 @@ describe("chat-agent-budget", () => {
       turnBudgetMs: 480_000,
       completionTimeoutMs: 240_000,
       maxToolLoops: 10,
+      loopLimitBehavior: "terminal" as const,
       maxToolRunsPerTurn: 30,
       searchMaxResults: 12,
       maxTokens: 5000,
@@ -224,6 +262,7 @@ describe("chat-agent-budget", () => {
       turnBudgetMs: 1000,
       completionTimeoutMs: 500,
       maxToolLoops: 10,
+      loopLimitBehavior: "terminal" as const,
       maxToolRunsPerTurn: 30,
       searchMaxResults: 12,
       maxTokens: 5000,
@@ -294,6 +333,7 @@ describe("chat-agent-budget", () => {
         turnBudgetMs: 1,
         completionTimeoutMs: 1,
         maxToolLoops: 1,
+        loopLimitBehavior: "terminal",
         maxToolRunsPerTurn: 1,
         searchMaxResults: 1,
         minSynthesisReserveMs: 15000,

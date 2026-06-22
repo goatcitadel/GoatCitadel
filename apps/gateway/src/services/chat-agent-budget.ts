@@ -59,10 +59,13 @@ export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
   default: 150000,
 } as const;
 
+export type ChatLoopLimitBehavior = "terminal" | "checkpoint_continue";
+
 export interface ChatExecutionBudget {
   readonly turnBudgetMs: number;
   readonly completionTimeoutMs: number;
   readonly maxToolLoops: number;
+  readonly loopLimitBehavior: ChatLoopLimitBehavior;
   readonly maxToolRunsPerTurn: number;
   readonly searchMaxResults: number;
   readonly maxTokens?: number;
@@ -109,6 +112,7 @@ export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefi
 
 export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInput): ChatExecutionBudget {
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
+  const loopLimitBehavior = resolveLoopLimitBehavior(input.mode);
   let budget: ChatExecutionBudget;
   if (shouldUseCoworkResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
@@ -116,6 +120,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.coworkResearchList,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.coworkResearchList,
         maxToolLoops: COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS,
+        loopLimitBehavior,
         maxToolRunsPerTurn: COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN,
         searchMaxResults: COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS,
         maxTokens: Math.max(defaultMaxTokens ?? 900, 1600),
@@ -130,6 +135,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
         maxToolLoops: MAX_TOOL_LOOPS,
+        loopLimitBehavior,
         maxToolRunsPerTurn: MAX_TOOL_RUNS_PER_TURN,
         searchMaxResults: 8,
         maxTokens: Math.max(defaultMaxTokens ?? 900, 1200),
@@ -144,6 +150,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quick,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quick,
         maxToolLoops: 2,
+        loopLimitBehavior,
         maxToolRunsPerTurn: 3,
         searchMaxResults: 4,
         maxTokens: Math.min(defaultMaxTokens ?? 600, 600),
@@ -158,6 +165,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.off,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.off,
         maxToolLoops: 2,
+        loopLimitBehavior,
         maxToolRunsPerTurn: 4,
         searchMaxResults: 0,
         maxTokens: Math.min(defaultMaxTokens ?? 700, 800),
@@ -172,6 +180,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.liveData,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.liveData,
         maxToolLoops: 5,
+        loopLimitBehavior,
         maxToolRunsPerTurn: 8,
         searchMaxResults: 6,
         maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
@@ -186,6 +195,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.default,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.default,
         maxToolLoops: 4,
+        loopLimitBehavior,
         maxToolRunsPerTurn: 7,
         searchMaxResults: 5,
         maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
@@ -224,6 +234,10 @@ function applyCoworkResearchListExtendedBudget(
     ...budget,
     maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, COWORK_RESEARCH_LIST_EXTENDED_MAX_TOOL_RUNS_PER_TURN),
   };
+}
+
+function resolveLoopLimitBehavior(mode: ChatMode): ChatLoopLimitBehavior {
+  return mode === "cowork" ? "checkpoint_continue" : "terminal";
 }
 
 function shouldUseCoworkResearchListBudget(input: ResolveChatExecutionBudgetInput): boolean {

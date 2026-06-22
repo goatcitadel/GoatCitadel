@@ -1,19 +1,30 @@
 import { describe, expect, it } from "vitest";
 import type {
   AgenticDiagnosticCode,
+  AgenticRunStatus,
   AgenticScalabilityTrackRecord,
   AgenticSubagentMetadata,
 } from "./agentic-runtime.js";
 
 describe("AgenticDiagnosticCode", () => {
-  it("includes runtime budget and projection reconciliation codes", () => {
+  it("includes runtime budget, projection reconciliation, and Cowork research codes", () => {
     const codes: AgenticDiagnosticCode[] = [
       "max_depth_exceeded",
       "timeout_exceeded",
       "projection_status_drift",
       "durable_missing_after_completion",
+      "research_evidence_incomplete",
+      "candidate_discovery_incomplete",
+      "source_access_blocked",
     ];
-    expect(codes).toHaveLength(4);
+    expect(codes).toHaveLength(7);
+  });
+});
+
+describe("AgenticRunStatus", () => {
+  it("models canonical Cowork checkpoint and blocked states while retaining legacy stop-limit reads", () => {
+    const statuses: AgenticRunStatus[] = ["checkpointing", "blocked", "stopped_by_limit"];
+    expect(statuses).toEqual(["checkpointing", "blocked", "stopped_by_limit"]);
   });
 });
 

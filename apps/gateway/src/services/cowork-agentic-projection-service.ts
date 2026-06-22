@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import type {
   AgenticControlDescriptor,
   AgenticDiagnosticSignal,
@@ -11,18 +12,23 @@ import type {
   ChatDelegationRunStatus,
   ChatDelegationStepRecord,
   ChatMode,
+  ChatToolRunRecord,
   ChatTurnTraceRecord,
   DurableRunRecord,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { buildLocalBusinessResearchAnnotationFromEvidence } from "./local-business-research-service.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 const STALE_ACTIVE_STEP_MS = 24 * 60 * 60 * 1000;
 
 export type CoworkAgenticProjectionStorage = Partial<
-  Pick<Storage, "chatDelegationRuns" | "chatDelegationSteps" | "chatExecutionPlans" | "chatSessionMeta">
+  Pick<
+    Storage,
+    "chatDelegationRuns" | "chatDelegationSteps" | "chatExecutionPlans" | "chatSessionMeta" | "chatToolRuns" | "tasks"
+  >
 > &
   Pick<Storage, "chatTurnTraces" | "durableRuns">;
 
@@ -62,7 +68,8 @@ export class CoworkAgenticProjectionService {
       if (input.surface && surface !== input.surface) {
         continue;
       }
-      const status = mapDelegationRunStatus(run.status, run);
+      const parentTrace = this.resolveParentTurnTrace(run);
+      const status = mapDelegationRunStatus(run.status, run, parentTrace);
       if (input.status && status !== input.status) {
         continue;
       }
@@ -81,7 +88,7 @@ export class CoworkAgenticProjectionService {
         surface,
         parentSessionId: run.sessionId,
         updatedAt: run.finishedAt ?? run.startedAt,
-        diagnostics: this.deriveStoredRunDiagnostics(run),
+        diagnostics: this.deriveStoredRunDiagnostics(run, [], parentTrace),
       });
     }
     return items;
@@ -95,7 +102,11 @@ export class CoworkAgenticProjectionService {
     if (!run) {
       return undefined;
     }
-    const workspaceId = normalizeWorkspaceId(this.resolveRunWorkspaceId(run) ?? options?.workspaceId);
+    const ownerWorkspaceId = this.resolveRunWorkspaceId(run);
+    if (!ownerWorkspaceId) {
+      return undefined;
+    }
+    const workspaceId = normalizeWorkspaceId(ownerWorkspaceId);
     if (options?.workspaceId && workspaceId !== normalizeWorkspaceId(options.workspaceId)) {
       return undefined;
     }
@@ -104,7 +115,8 @@ export class CoworkAgenticProjectionService {
     diagnostics.push(...this.reconcileParentDurableTrace(run));
     const steps = this.reconcileRunSteps(run, diagnostics);
     const currentRun = readOptional(() => this.storage.chatDelegationRuns!.get(runId)) ?? run;
-    const status = mapDelegationRunStatus(currentRun.status, currentRun);
+    const parentTrace = this.resolveParentTurnTrace(currentRun);
+    const status = mapDelegationRunStatus(currentRun.status, currentRun, parentTrace, steps);
     const rootNodeId = `run:${currentRun.runId}`;
     const nodes: AgenticRunTreeNode[] = [
       {
@@ -130,7 +142,6 @@ export class CoworkAgenticProjectionService {
     ];
     const edges: AgenticRunTreeEdge[] = [];
 
-    const parentTrace = this.resolveParentTurnTrace(currentRun);
     const parentDurableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
     if (parentDurableRun) {
       const durableNodeId = `durable:${parentDurableRun.runId}`;
@@ -153,30 +164,45 @@ export class CoworkAgenticProjectionService {
       edges.push({ from: rootNodeId, to: durableNodeId, kind: "contains" });
     }
 
+    let blockedByOperatorGate = false;
     for (const step of steps) {
       const stepNodeId = `subagent:${step.stepId}`;
       const childTrace = step.childTurnId
         ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
         : undefined;
+      const childDurableRun = readDurableRun(this.storage, step.durableRunId);
+      const childToolRuns = this.readTraceToolRuns(childTrace);
+      const childLocalBusinessResearch = collectProjectedLocalBusinessResearchForStep(currentRun, step, childToolRuns);
+      const stepNodeStatus = projectStepNodeStatus(step, childTrace, childDurableRun, blockedByOperatorGate);
+      const stepBlockedByOperatorGate = blockedByOperatorGate && step.status === "pending";
+      if (stepNodeStatus === "approval_required" || stepNodeStatus === "paused") {
+        blockedByOperatorGate = true;
+      }
       nodes.push({
         id: stepNodeId,
         kind: "subagent",
         label: step.label ?? step.role,
-        status: step.status,
+        status: stepNodeStatus,
         parentId: rootNodeId,
         taskId: currentRun.taskId,
         agentSessionId: step.childSessionId,
-        summary: step.summary ?? step.error,
+        summary:
+          step.summary ??
+          step.error ??
+          (stepBlockedByOperatorGate ? "Waiting for an earlier operator gate before this step can start." : undefined),
         metadata: compactRecord({
           projectionSource: "chat_delegation_steps",
           role: step.role,
           index: step.index,
+          blockedByOperatorGate: stepBlockedByOperatorGate ? true : undefined,
           providerId: step.providerId,
           model: step.model,
           durableRunId: step.durableRunId,
           childSessionId: step.childSessionId,
           childTurnId: step.childTurnId,
           childTraceStatus: childTrace?.status,
+          toolRunCount: childToolRuns.length > 0 ? childToolRuns.length : undefined,
+          localBusinessResearch: childLocalBusinessResearch.length > 0 ? childLocalBusinessResearch : undefined,
           startedAt: step.startedAt,
           finishedAt: step.finishedAt,
           durationMs: step.durationMs,
@@ -187,7 +213,6 @@ export class CoworkAgenticProjectionService {
       });
       edges.push({ from: rootNodeId, to: stepNodeId, kind: "spawned" });
 
-      const childDurableRun = readDurableRun(this.storage, step.durableRunId);
       if (childDurableRun) {
         const durableNodeId = `durable:${childDurableRun.runId}`;
         nodes.push({
@@ -210,7 +235,7 @@ export class CoworkAgenticProjectionService {
       }
     }
 
-    diagnostics.push(...this.deriveStoredRunDiagnostics(currentRun));
+    diagnostics.push(...this.deriveStoredRunDiagnostics(currentRun, steps, parentTrace));
     const renderedDiagnosticIds = new Set<string>();
     for (const diagnostic of diagnostics) {
       if (renderedDiagnosticIds.has(diagnostic.signalId)) {
@@ -259,7 +284,88 @@ export class CoworkAgenticProjectionService {
   }
 
   private resolveRunWorkspaceId(run: ChatDelegationRunRecord): string | undefined {
-    return this.storage.chatSessionMeta?.get(run.sessionId)?.workspaceId;
+    const sessionWorkspaceId = this.resolveSessionWorkspaceId(run.sessionId);
+    if (sessionWorkspaceId) {
+      return sessionWorkspaceId;
+    }
+
+    const taskWorkspaceId = normalizeOptionalWorkspaceId(this.storage.tasks?.find(run.taskId)?.workspaceId);
+    if (taskWorkspaceId) {
+      return taskWorkspaceId;
+    }
+
+    const parentTurnId = parseTurnIdFromChatOrchestrationTaskId(run.taskId);
+    const parentTrace = this.resolveParentTurnTrace(run);
+    const parentTraceWorkspaceId = this.resolveTraceWorkspaceId(parentTrace, {
+      sessionId: run.sessionId,
+      turnId: parentTurnId,
+    });
+    if (parentTraceWorkspaceId) {
+      return parentTraceWorkspaceId;
+    }
+
+    const parentDurableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
+    const parentDurableWorkspaceId = resolveLinkedDurableWorkspaceId(parentDurableRun, {
+      sessionId: run.sessionId,
+      turnId: parentTurnId,
+      taskId: run.taskId,
+    });
+    if (parentDurableWorkspaceId) {
+      return parentDurableWorkspaceId;
+    }
+
+    const linkedWorkspaceIds = new Set<string>();
+    for (const step of this.storage.chatDelegationSteps?.listByRun(run.runId) ?? []) {
+      const childSessionWorkspaceId = this.resolveSessionWorkspaceId(step.childSessionId);
+      if (childSessionWorkspaceId) {
+        linkedWorkspaceIds.add(childSessionWorkspaceId);
+      }
+
+      const childTrace = step.childTurnId
+        ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
+        : undefined;
+      const childTraceWorkspaceId = this.resolveTraceWorkspaceId(childTrace, {
+        sessionId: step.childSessionId,
+        turnId: step.childTurnId,
+      });
+      if (childTraceWorkspaceId) {
+        linkedWorkspaceIds.add(childTraceWorkspaceId);
+      }
+
+      const childDurableWorkspaceId = resolveLinkedDurableWorkspaceId(readDurableRun(this.storage, step.durableRunId), {
+        sessionId: step.childSessionId,
+        turnId: step.childTurnId,
+      });
+      if (childDurableWorkspaceId) {
+        linkedWorkspaceIds.add(childDurableWorkspaceId);
+      }
+    }
+    return linkedWorkspaceIds.size === 1 ? [...linkedWorkspaceIds][0] : undefined;
+  }
+
+  private resolveSessionWorkspaceId(sessionId: string | undefined): string | undefined {
+    if (!sessionId) {
+      return undefined;
+    }
+    return normalizeOptionalWorkspaceId(this.storage.chatSessionMeta?.get(sessionId)?.workspaceId);
+  }
+
+  private resolveTraceWorkspaceId(
+    trace: ChatTurnTraceRecord | undefined,
+    expected: { sessionId?: string; turnId?: string },
+  ): string | undefined {
+    if (!trace) {
+      return undefined;
+    }
+    const expectedSessionId = normalizeOptionalWorkspaceId(expected.sessionId);
+    const expectedTurnId = normalizeOptionalWorkspaceId(expected.turnId);
+    if (expectedSessionId && trace.sessionId !== expectedSessionId) {
+      return undefined;
+    }
+    if (expectedTurnId && trace.turnId !== expectedTurnId) {
+      return undefined;
+    }
+    return normalizeOptionalWorkspaceId(trace.guidance?.workspaceId) ?? this.resolveSessionWorkspaceId(trace.sessionId);
   }
 
   private resolveParentTurnTrace(run: ChatDelegationRunRecord): ChatTurnTraceRecord | undefined {
@@ -363,10 +469,16 @@ export class CoworkAgenticProjectionService {
         durationMs: step.durationMs ?? durationMs(step.startedAt, childDurableRun.finishedAt ?? now),
       });
     }
+    if (childDurableRun) {
+      return step;
+    }
 
     const childTrace = step.childTurnId
       ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
       : undefined;
+    if (childTrace && isWaitingTraceStatus(childTrace.status)) {
+      return step;
+    }
     if (childTrace && isTerminalTraceStatus(childTrace.status)) {
       diagnostics.push({
         signalId: `projection-status-drift-${step.runId}-${step.stepId}`,
@@ -428,25 +540,110 @@ export class CoworkAgenticProjectionService {
     return step;
   }
 
-  private deriveStoredRunDiagnostics(run: ChatDelegationRunRecord): AgenticDiagnosticSignal[] {
+  private deriveStoredRunDiagnostics(
+    run: ChatDelegationRunRecord,
+    steps: ChatDelegationStepRecord[] = [],
+    parentTrace = this.resolveParentTurnTrace(run),
+  ): AgenticDiagnosticSignal[] {
     const diagnostics: AgenticDiagnosticSignal[] = [];
-    const trace = this.resolveParentTurnTrace(run);
-    const durableRun = readDurableRun(this.storage, trace?.durable?.runId);
-    if (trace?.durable?.runId && durableRun && trace.durable.status !== durableRun.status) {
+    const now = new Date().toISOString();
+    const durableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
+    if (parentTrace?.durable?.runId && durableRun && parentTrace.durable.status !== durableRun.status) {
       diagnostics.push(
         buildProjectionDriftDiagnostic({
           runId: run.runId,
           durableRun,
-          previousStatus: trace.durable.status ?? "unknown",
-          now: new Date().toISOString(),
+          previousStatus: parentTrace.durable.status ?? "unknown",
+          now,
         }),
       );
     }
-    return diagnostics;
+    const parentToolRuns = this.readTraceToolRuns(parentTrace);
+    diagnostics.push(
+      ...deriveCoworkResearchDiagnostics({
+        runId: run.runId,
+        sourceId: parentTrace?.turnId ?? run.runId,
+        sourceLabel: "parent turn trace",
+        text: joinDiagnosticText(parentTrace?.failure?.message, parentTrace?.routing?.fallbackReason),
+        toolRuns: parentToolRuns,
+        now,
+      }),
+    );
+    for (const step of steps) {
+      const childTrace = step.childTurnId
+        ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
+        : undefined;
+      if (shouldDeriveResearchDiagnosticsForStep(step)) {
+        diagnostics.push(
+          ...deriveCoworkResearchDiagnostics({
+            runId: run.runId,
+            sourceId: childTrace?.turnId ?? step.stepId,
+            sourceLabel: `handoff ${step.label ?? step.role}`,
+            text: joinDiagnosticText(
+              step.output,
+              step.summary,
+              step.error,
+              step.failureGuidance,
+              childTrace?.failure?.message,
+              childTrace?.routing?.fallbackReason,
+            ),
+            toolRuns: this.readTraceToolRuns(childTrace),
+            now,
+          }),
+        );
+      }
+    }
+    return dedupeDiagnostics(diagnostics);
+  }
+
+  private readTraceToolRuns(trace: ChatTurnTraceRecord | undefined): ChatToolRunRecord[] {
+    if (!trace) {
+      return [];
+    }
+    if (trace.toolRuns.length > 0) {
+      return trace.toolRuns;
+    }
+    return readOptional(() => this.storage.chatToolRuns?.listByTurn(trace.turnId)) ?? [];
   }
 }
 
-function mapDelegationRunStatus(status: ChatDelegationRunStatus, run: ChatDelegationRunRecord): AgenticRunStatus {
+type CoworkResearchDiagnosticCode = Extract<
+  AgenticDiagnosticSignal["code"],
+  "research_evidence_incomplete" | "candidate_discovery_incomplete" | "source_access_blocked"
+>;
+
+interface CoworkLocalBusinessResearchMetadata {
+  hasMetadata: boolean;
+  candidateKeys: Set<string>;
+  verifiedCandidateKeys: Set<string>;
+  sourceUrls: Set<string>;
+  blockerKeys: Set<string>;
+  blockedSourceKeys: Set<string>;
+  unresolvedNextStepKeys: Set<string>;
+}
+
+const COWORK_RESEARCH_DIAGNOSTIC_TITLES = {
+  research_evidence_incomplete: "Cowork research evidence incomplete",
+  candidate_discovery_incomplete: "Cowork candidate discovery incomplete",
+  source_access_blocked: "Cowork source access blocked",
+} as const satisfies Record<CoworkResearchDiagnosticCode, string>;
+
+function mapDelegationRunStatus(
+  status: ChatDelegationRunStatus | string,
+  run: ChatDelegationRunRecord,
+  parentTrace?: ChatTurnTraceRecord,
+  steps: ChatDelegationStepRecord[] = [],
+): AgenticRunStatus {
+  if (status === "stopped_by_limit") {
+    return "stopped_by_limit";
+  }
+  const operatorWaitStatus = projectOperatorWaitStatus(parentTrace, readDurableStatus(parentTrace));
+  if (operatorWaitStatus) {
+    return operatorWaitStatus;
+  }
+  if (traceProjectsBlockedCowork(parentTrace)) {
+    return "blocked";
+  }
   if (status === "completed") {
     return "completed";
   }
@@ -454,9 +651,455 @@ function mapDelegationRunStatus(status: ChatDelegationRunStatus, run: ChatDelega
     return "failed";
   }
   if (status === "partial") {
-    return run.stitchedOutput || run.finalSummary ? "completed" : "failed";
+    if (steps.some(stepProjectsBlockedRuntimeLoss)) {
+      return "blocked";
+    }
+    return run.stitchedOutput || run.finalSummary ? "checkpointing" : "blocked";
   }
   return "running";
+}
+
+function stepProjectsBlockedRuntimeLoss(step: ChatDelegationStepRecord): boolean {
+  if (step.status !== "failed") {
+    return false;
+  }
+  const text = joinDiagnosticText(step.summary, step.error, step.failureGuidance).toLowerCase();
+  return text.includes("runtime evidence was lost") || text.includes("stale_worker");
+}
+
+function projectStepNodeStatus(
+  step: ChatDelegationStepRecord,
+  childTrace: ChatTurnTraceRecord | undefined,
+  childDurableRun: DurableRunRecord | undefined,
+  blockedByOperatorGate: boolean,
+): string {
+  const operatorWaitStatus = projectOperatorWaitStatus(childTrace, childDurableRun?.status);
+  if (operatorWaitStatus) {
+    return operatorWaitStatus;
+  }
+  if (blockedByOperatorGate && step.status === "pending") {
+    return "blocked";
+  }
+  return step.status;
+}
+
+function projectOperatorWaitStatus(
+  trace: ChatTurnTraceRecord | undefined,
+  durableStatus: DurableRunStatus | undefined,
+): AgenticRunStatus | undefined {
+  if (trace?.status === "waiting_for_approval") {
+    return "approval_required";
+  }
+  if (trace?.status === "waiting_for_user_input") {
+    return "paused";
+  }
+  if (durableStatus === "waiting") {
+    return "approval_required";
+  }
+  if (durableStatus === "paused") {
+    return "paused";
+  }
+  return undefined;
+}
+
+function readDurableStatus(trace: ChatTurnTraceRecord | undefined): DurableRunStatus | undefined {
+  const status = trace?.durable?.status;
+  return isDurableRunStatus(status) ? status : undefined;
+}
+
+function shouldDeriveResearchDiagnosticsForStep(step: ChatDelegationStepRecord): boolean {
+  const label = `${step.role} ${step.label ?? ""}`.toLowerCase();
+  return !/\bplanner\b/.test(label);
+}
+
+function traceProjectsBlockedCowork(trace: ChatTurnTraceRecord | undefined): boolean {
+  if (!trace) {
+    return false;
+  }
+  const diagnosticText = joinDiagnosticText(trace.failure?.message, trace.routing?.fallbackReason);
+  if (/\brepeated_tool_loop\b|\bsource_access_blocked\b|\bcandidate_discovery_incomplete\b/i.test(diagnosticText)) {
+    return true;
+  }
+  if (trace.status !== "failed") {
+    return false;
+  }
+  return (
+    trace.failure?.failureClass === "tool_loop_guard" ||
+    trace.failure?.failureClass === "tool_blocked" ||
+    trace.failure?.failureClass === "tool_run_budget_exceeded" ||
+    trace.failure?.failureClass === "global_circuit_breaker"
+  );
+}
+
+function deriveCoworkResearchDiagnostics(input: {
+  runId: string;
+  sourceId: string;
+  sourceLabel: string;
+  text: string;
+  toolRuns: ChatToolRunRecord[];
+  now: string;
+}): AgenticDiagnosticSignal[] {
+  const codes = inferCoworkResearchDiagnosticCodesFromText(input.text);
+  const localBusiness = collectCoworkLocalBusinessResearchMetadata(input.toolRuns);
+  if (localBusiness.hasMetadata) {
+    if (localBusiness.blockedSourceKeys.size > 0) {
+      codes.add("source_access_blocked");
+    }
+    if (localBusiness.candidateKeys.size === 0) {
+      codes.add("candidate_discovery_incomplete");
+    }
+    if (
+      localBusiness.candidateKeys.size > 0 &&
+      localBusiness.verifiedCandidateKeys.size === 0 &&
+      (localBusiness.blockerKeys.size > 0 ||
+        localBusiness.blockedSourceKeys.size > 0 ||
+        localBusiness.unresolvedNextStepKeys.size > 0)
+    ) {
+      codes.add("research_evidence_incomplete");
+    }
+  }
+  return [...codes].map((code) => ({
+    signalId: `cowork-${code}-${input.runId}-${input.sourceId}`,
+    code,
+    severity: code === "source_access_blocked" ? "warning" : "critical",
+    title: COWORK_RESEARCH_DIAGNOSTIC_TITLES[code],
+    summary: buildCoworkResearchDiagnosticSummary(code, input.sourceLabel, localBusiness),
+    evidenceRef: input.sourceId,
+    createdAt: input.now,
+  }));
+}
+
+function buildCoworkResearchDiagnosticSummary(
+  code: CoworkResearchDiagnosticCode,
+  sourceLabel: string,
+  metadata: CoworkLocalBusinessResearchMetadata,
+): string {
+  if (code === "source_access_blocked") {
+    return `${sourceLabel} recorded blocked source access while gathering Cowork research evidence.`;
+  }
+  if (code === "candidate_discovery_incomplete") {
+    return `${sourceLabel} did not produce source-backed research candidates; continue with a narrower source path or operator-approved provider.`;
+  }
+  const detail =
+    metadata.candidateKeys.size > 0
+      ? `${metadata.candidateKeys.size} candidate(s), ${metadata.verifiedCandidateKeys.size} verified candidate(s), ${metadata.blockerKeys.size} blocker(s), and ${metadata.unresolvedNextStepKeys.size} unresolved next step(s).`
+      : "The handoff reported incomplete research evidence.";
+  return `${sourceLabel} has incomplete source-backed evidence: ${detail}`;
+}
+
+function inferCoworkResearchDiagnosticCodesFromText(text: string): Set<CoworkResearchDiagnosticCode> {
+  const normalized = text.toLowerCase();
+  const codes = new Set<CoworkResearchDiagnosticCode>();
+  if (normalized.includes("research_evidence_incomplete") || /\bsynthesis incomplete\b/.test(normalized)) {
+    codes.add("research_evidence_incomplete");
+  }
+  if (
+    normalized.includes("candidate_discovery_incomplete") ||
+    /\b(?:no|zero)\s+(?:source-backed\s+)?candidates?\b/.test(normalized)
+  ) {
+    codes.add("candidate_discovery_incomplete");
+  }
+  if (
+    normalized.includes("source_access_blocked") ||
+    /\b(?:source|host|site)\s+(?:access\s+)?blocked\b/.test(normalized) ||
+    /\b(?:blocked automated|not allowlisted|captcha|403)\b/.test(normalized)
+  ) {
+    codes.add("source_access_blocked");
+  }
+  return codes;
+}
+
+function collectCoworkLocalBusinessResearchMetadata(
+  toolRuns: ChatToolRunRecord[],
+): CoworkLocalBusinessResearchMetadata {
+  const metadata = createEmptyLocalBusinessResearchMetadata();
+  for (const run of toolRuns) {
+    collectLocalBusinessResearchMetadataFromValue(metadata, run.result, 0);
+    if (run.status === "blocked" || run.status === "failed") {
+      const failureText = joinDiagnosticText(run.error, run.failureGuidance);
+      if (/\b(?:blocked|captcha|403|not allowlisted|access denied)\b/i.test(failureText)) {
+        metadata.blockerKeys.add(`tool:${run.toolRunId}:${normalizeDiagnosticKey(failureText)}`);
+        metadata.blockedSourceKeys.add(`tool:${run.toolRunId}:${normalizeDiagnosticKey(failureText)}`);
+      }
+    }
+  }
+  return metadata;
+}
+
+function createEmptyLocalBusinessResearchMetadata(): CoworkLocalBusinessResearchMetadata {
+  return {
+    hasMetadata: false,
+    candidateKeys: new Set<string>(),
+    verifiedCandidateKeys: new Set<string>(),
+    sourceUrls: new Set<string>(),
+    blockerKeys: new Set<string>(),
+    blockedSourceKeys: new Set<string>(),
+    unresolvedNextStepKeys: new Set<string>(),
+  };
+}
+
+function collectLocalBusinessResearchMetadataFromValue(
+  metadata: CoworkLocalBusinessResearchMetadata,
+  value: unknown,
+  depth: number,
+): void {
+  if (depth > 6 || !value) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLocalBusinessResearchMetadataFromValue(metadata, item, depth + 1);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (isLocalBusinessResearchRecord(value)) {
+    collectLocalBusinessResearchRecord(metadata, value);
+  }
+  for (const nested of Object.values(value)) {
+    collectLocalBusinessResearchMetadataFromValue(metadata, nested, depth + 1);
+  }
+}
+
+function isLocalBusinessResearchRecord(value: Record<string, unknown>): boolean {
+  return value.kind === "local_business_contact_research" || value.workflow === "local_business.research";
+}
+
+function collectLocalBusinessResearchRecord(
+  metadata: CoworkLocalBusinessResearchMetadata,
+  record: Record<string, unknown>,
+): void {
+  metadata.hasMetadata = true;
+  for (const candidate of readRecordArray(record.candidates)) {
+    const key = readString(candidate.storeName) ?? readString(candidate.name) ?? readString(candidate.website);
+    const urls = readStringArray(candidate.sourceUrls);
+    const candidateKey = key ?? urls[0] ?? JSON.stringify(candidate).slice(0, 120);
+    metadata.candidateKeys.add(normalizeDiagnosticKey(candidateKey));
+    for (const url of urls) {
+      metadata.sourceUrls.add(url);
+    }
+    addOptionalUrl(metadata.sourceUrls, candidate.website);
+    if (readString(candidate.verificationStatus)?.toLowerCase() === "verified") {
+      metadata.verifiedCandidateKeys.add(normalizeDiagnosticKey(candidateKey));
+    }
+    for (const blocker of readStringArray(candidate.blockers)) {
+      addLocalBusinessBlocker(metadata, blocker);
+    }
+    for (const evidence of readRecordArray(candidate.evidence)) {
+      addOptionalUrl(metadata.sourceUrls, evidence.url);
+      if (readString(evidence.evidenceKind) === "blocked") {
+        addLocalBusinessBlockedSource(metadata, readString(evidence.url) ?? readString(evidence.title) ?? "blocked");
+      }
+    }
+  }
+  for (const excluded of readRecordArray(record.excluded)) {
+    addOptionalUrl(metadata.sourceUrls, excluded.sourceUrl);
+    const reason = readString(excluded.reason);
+    if (reason) {
+      addLocalBusinessBlocker(metadata, reason);
+      if (/\bblocked|secondary_listing|403|captcha\b/i.test(reason)) {
+        addLocalBusinessBlockedSource(metadata, readString(excluded.sourceUrl) ?? reason);
+      }
+    }
+  }
+  for (const stage of readRecordArray(record.stages)) {
+    for (const url of readStringArray(stage.sourceUrls)) {
+      metadata.sourceUrls.add(url);
+    }
+    for (const blocker of readStringArray(stage.blockers)) {
+      addLocalBusinessBlocker(metadata, blocker);
+    }
+    if (readString(stage.status) === "blocked") {
+      addLocalBusinessBlockedSource(metadata, readString(stage.summary) ?? readString(stage.name) ?? "stage_blocked");
+    }
+  }
+  for (const blocker of readStringArray(record.blockers)) {
+    addLocalBusinessBlocker(metadata, blocker);
+  }
+  for (const nextStep of readUnresolvedNextSteps(record)) {
+    metadata.unresolvedNextStepKeys.add(normalizeDiagnosticKey(nextStep));
+  }
+}
+
+function readUnresolvedNextSteps(record: Record<string, unknown>): string[] {
+  return [
+    ...readStringArray(record.unresolvedNextSteps),
+    ...readStringArray(record.unresolved_next_steps),
+    ...readStringArray(record.requiredNextSteps),
+    ...readStringArray(record.required_next_steps),
+    ...readStringArray(record.nextSteps),
+    ...readStringArray(record.next_steps),
+    ...readStringArray(record.unresolved),
+  ];
+}
+
+function addLocalBusinessBlocker(metadata: CoworkLocalBusinessResearchMetadata, blocker: string): void {
+  metadata.blockerKeys.add(normalizeDiagnosticKey(blocker));
+  if (/\b(?:blocked|403|captcha|not allowlisted|access denied)\b/i.test(blocker)) {
+    addLocalBusinessBlockedSource(metadata, blocker);
+  }
+}
+
+function addLocalBusinessBlockedSource(metadata: CoworkLocalBusinessResearchMetadata, value: string): void {
+  metadata.blockedSourceKeys.add(normalizeDiagnosticKey(value));
+}
+
+function addOptionalUrl(urls: Set<string>, value: unknown): void {
+  if (typeof value === "string" && /^https?:\/\//i.test(value)) {
+    urls.add(value);
+  }
+}
+
+function collectProjectedLocalBusinessResearch(toolRuns: ChatToolRunRecord[]): Record<string, unknown>[] {
+  const annotations: Record<string, unknown>[] = [];
+  for (const run of toolRuns) {
+    collectProjectedLocalBusinessResearchFromValue(annotations, run.result, 0);
+  }
+  return annotations.slice(0, 8);
+}
+
+function collectProjectedLocalBusinessResearchForStep(
+  run: ChatDelegationRunRecord,
+  step: ChatDelegationStepRecord,
+  toolRuns: ChatToolRunRecord[],
+): Record<string, unknown>[] {
+  const annotations = collectProjectedLocalBusinessResearch(toolRuns);
+  const handoffText = joinDiagnosticText(step.output, step.summary);
+  if (
+    !handoffText ||
+    step.status === "pending" ||
+    step.status === "running" ||
+    !shouldDeriveResearchDiagnosticsForStep(step)
+  ) {
+    return annotations;
+  }
+  const handoffAnnotation = buildLocalBusinessResearchAnnotationFromEvidence({
+    userContent: run.objective,
+    finalAnswer: handoffText,
+    citations: step.citations ?? [],
+  });
+  if (handoffAnnotation) {
+    const compacted = compactProjectedLocalBusinessResearchRecord(
+      handoffAnnotation as unknown as Record<string, unknown>,
+    );
+    if (hasSubstantiveProjectedLocalBusinessResearch(compacted)) {
+      annotations.push(compacted);
+    }
+  }
+  return dedupeProjectedLocalBusinessResearch(annotations).slice(0, 8);
+}
+
+function collectProjectedLocalBusinessResearchFromValue(
+  annotations: Record<string, unknown>[],
+  value: unknown,
+  depth: number,
+): void {
+  if (depth > 6 || !value || annotations.length >= 8) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectProjectedLocalBusinessResearchFromValue(annotations, item, depth + 1);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (isLocalBusinessResearchRecord(value)) {
+    annotations.push(compactProjectedLocalBusinessResearchRecord(value));
+    return;
+  }
+  for (const nested of Object.values(value)) {
+    collectProjectedLocalBusinessResearchFromValue(annotations, nested, depth + 1);
+  }
+}
+
+function compactProjectedLocalBusinessResearchRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return compactRecord({
+    kind: record.kind,
+    workflow: record.workflow,
+    plan: isRecord(record.plan) ? record.plan : undefined,
+    stages: readRecordArray(record.stages).slice(0, 8),
+    candidates: readRecordArray(record.candidates).slice(0, 20),
+    excluded: readRecordArray(record.excluded).slice(0, 20),
+    blockers: readStringArray(record.blockers).slice(0, 20),
+    verificationNote: readString(record.verificationNote),
+  });
+}
+
+function hasSubstantiveProjectedLocalBusinessResearch(record: Record<string, unknown>): boolean {
+  return (
+    readRecordArray(record.candidates).length > 0 ||
+    readRecordArray(record.excluded).length > 0 ||
+    readRecordArray(record.stages).length > 0 ||
+    readStringArray(record.blockers).length > 0
+  );
+}
+
+function dedupeProjectedLocalBusinessResearch(annotations: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const deduped: Record<string, unknown>[] = [];
+  for (const annotation of annotations) {
+    const plan = isRecord(annotation.plan) ? annotation.plan : {};
+    const key = [
+      readString(plan.location) ?? "",
+      readString(plan.primaryQuery) ?? "",
+      readRecordArray(annotation.candidates)
+        .map((candidate) => readString(candidate.storeName) ?? readString(candidate.website) ?? "")
+        .join("|"),
+      readStringArray(annotation.blockers).join("|"),
+    ]
+      .join("::")
+      .toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(annotation);
+  }
+  return deduped;
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function joinDiagnosticText(...values: Array<string | undefined>): string {
+  return values
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeDiagnosticKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 180);
+}
+
+function dedupeDiagnostics(diagnostics: AgenticDiagnosticSignal[]): AgenticDiagnosticSignal[] {
+  const seen = new Set<string>();
+  const deduped: AgenticDiagnosticSignal[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = `${diagnostic.signalId}:${diagnostic.code}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(diagnostic);
+  }
+  return deduped;
 }
 
 function mapDurableStatusToStepStatus(status: DurableRunStatus): ChatDelegationStepRecord["status"] {
@@ -473,8 +1116,25 @@ function isTerminalDurableStatus(status: DurableRunStatus): boolean {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
 }
 
+function isDurableRunStatus(status: string | undefined): status is DurableRunStatus {
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "paused" ||
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "dead_lettered"
+  );
+}
+
 function isTerminalTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function isWaitingTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
+  return status === "waiting_for_approval" || status === "waiting_for_user_input" || status === "waiting_for_tool";
 }
 
 function readDurableRun(
@@ -485,6 +1145,59 @@ function readDurableRun(
     return undefined;
   }
   return readOptional(() => storage.durableRuns.getRun(runId));
+}
+
+function resolveLinkedDurableWorkspaceId(
+  durableRun: DurableRunRecord | undefined,
+  expected: { sessionId?: string; turnId?: string; taskId?: string },
+): string | undefined {
+  if (!durableRun || !durablePayloadHasExpectedLink(durableRun.payload, expected)) {
+    return undefined;
+  }
+  return (
+    readPayloadWorkspaceId(durableRun.payload) ??
+    normalizeOptionalWorkspaceId(readLinkedPayloadString(durableRun.payload, "workspaceId"))
+  );
+}
+
+function durablePayloadHasExpectedLink(
+  payload: Record<string, unknown>,
+  expected: { sessionId?: string; turnId?: string; taskId?: string },
+): boolean {
+  const expectedSessionId = normalizeOptionalWorkspaceId(expected.sessionId);
+  const expectedTurnId = normalizeOptionalWorkspaceId(expected.turnId);
+  const expectedTaskId = normalizeOptionalWorkspaceId(expected.taskId);
+  return (
+    Boolean(expectedSessionId && readLinkedPayloadString(payload, "sessionId") === expectedSessionId) ||
+    Boolean(expectedTurnId && readLinkedPayloadString(payload, "turnId") === expectedTurnId) ||
+    Boolean(expectedTaskId && readLinkedPayloadString(payload, "taskId") === expectedTaskId)
+  );
+}
+
+function readPayloadWorkspaceId(payload: Record<string, unknown>): string | undefined {
+  return (
+    normalizeOptionalWorkspaceId(readRecordString(payload, "workspaceId")) ??
+    normalizeOptionalWorkspaceId(readNestedRecordString(payload, "request", "workspaceId")) ??
+    normalizeOptionalWorkspaceId(readNestedRecordString(payload, "payload", "workspaceId"))
+  );
+}
+
+function readLinkedPayloadString(payload: Record<string, unknown>, key: string): string | undefined {
+  return (
+    normalizeOptionalWorkspaceId(readRecordString(payload, key)) ??
+    normalizeOptionalWorkspaceId(readNestedRecordString(payload, "request", key)) ??
+    normalizeOptionalWorkspaceId(readNestedRecordString(payload, "payload", key))
+  );
+}
+
+function readNestedRecordString(payload: Record<string, unknown>, nestedKey: string, key: string): string | undefined {
+  const nested = payload[nestedKey];
+  return isRecord(nested) ? readRecordString(nested, key) : undefined;
+}
+
+function readRecordString(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function readOptional<T>(read: () => T | undefined): T | undefined {
@@ -538,10 +1251,11 @@ function buildProjectionDriftDiagnostic(input: {
   };
 }
 
-function buildProjectedControls(_status: AgenticRunStatus, durableRunId?: string): AgenticControlDescriptor[] {
+function buildProjectedControls(status: AgenticRunStatus, durableRunId?: string): AgenticControlDescriptor[] {
   const reason = durableRunId
     ? "Projected Cowork runs are view-only until projected durable-run controls are wired through TaskLifecycleService."
     : "Projected Cowork runs are view-only until they have a task-backed control path.";
+  const canCancelOperatorGate = Boolean(durableRunId) && (status === "approval_required" || status === "paused");
   return [
     {
       action: "pause",
@@ -553,14 +1267,21 @@ function buildProjectedControls(_status: AgenticRunStatus, durableRunId?: string
     {
       action: "cancel",
       label: durableRunId ? "Cancel durable run" : "Record cancel intent",
-      enabled: false,
+      enabled: canCancelOperatorGate,
       runtimeEffect: "state_only",
-      reason,
+      reason: canCancelOperatorGate
+        ? "Projected durable run is waiting at an operator gate; cancel records a visible operator intent."
+        : reason,
     },
     {
       action: "retry",
       label: "Continue from gathered evidence",
-      enabled: false,
+      enabled:
+        status === "failed" ||
+        status === "blocked" ||
+        status === "cancelled" ||
+        status === "checkpointing" ||
+        status === "stopped_by_limit",
       runtimeEffect: "state_only",
       reason,
     },
@@ -576,6 +1297,14 @@ function buildProjectedControls(_status: AgenticRunStatus, durableRunId?: string
 
 function normalizeWorkspaceId(value: string | undefined): string {
   return value?.trim() || DEFAULT_WORKSPACE_ID;
+}
+
+function normalizeOptionalWorkspaceId(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {

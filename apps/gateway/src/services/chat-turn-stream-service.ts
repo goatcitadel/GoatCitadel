@@ -75,6 +75,12 @@ type ChatTurnStreamStorage = Pick<
   | "chatTurnTraces"
 >;
 
+const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";
+const LOCAL_BUSINESS_CONTACT_TASK_PATTERN =
+  /\b(?:board\s*game|boardgame|tabletop|game store|hobby store|local business|businesses|stores?|shops?|contact|email|address(?:es)?|who I should address)\b/i;
+const LOCAL_BUSINESS_LOCATION_PATTERN =
+  /\b(?:within\s+\d+\s*-?\s*miles?|radius|zip|zipcode|postal|9\d{4}|city|near|around)\b/i;
+
 export interface ChatTurnStreamHost
   extends
     ChatTurnActiveExecutionControl,
@@ -871,10 +877,26 @@ export async function executeDelegatedPlanStep(
     .map((message) => `${message.role.toUpperCase()}: ${truncateSummaryLine(message.content, 320)}`)
     .join("\n");
   const priorStepContext = buildDelegatedPriorStepContext(input.priorSteps, input.step.role);
-  const suggestedTools = filterDelegatedSuggestedToolsForPromptLab(input.step.suggestedTools ?? [], {
+  const suggestedTools = enrichDelegatedSuggestedToolsForObjective(
+    filterDelegatedSuggestedToolsForPromptLab(input.step.suggestedTools ?? [], {
+      mode: input.task.mode,
+      normalizationProfile: prepared.normalized.normalizationProfile,
+    }),
+    {
+      mode: input.task.mode,
+      objective: input.task.objective,
+      stepObjective: input.step.objective,
+      expectedOutput: input.step.expectedOutput,
+    },
+  );
+  const localBusinessResearchHint = shouldPreferLocalBusinessResearchTool({
     mode: input.task.mode,
-    normalizationProfile: prepared.normalized.normalizationProfile,
-  });
+    objective: input.task.objective,
+    stepObjective: input.step.objective,
+    expectedOutput: input.step.expectedOutput,
+  })
+    ? "Local-business contact research: call local_business.research before broad browser browsing, then continue only for unresolved candidates, missing required contact fields, or source blockers."
+    : undefined;
   const content = [
     `Delegated role: ${delegatedRole}`,
     `Parent objective: ${input.task.objective}`,
@@ -883,6 +905,7 @@ export async function executeDelegatedPlanStep(
     input.step.successCriteria ? `Success criteria: ${input.step.successCriteria}` : undefined,
     input.step.expectedOutput ? `Expected output: ${input.step.expectedOutput}` : undefined,
     suggestedTools.length ? `Suggested tools: ${suggestedTools.join(", ")}` : undefined,
+    localBusinessResearchHint,
     input.step.dependsOnStepIds?.length ? `Depends on: ${input.step.dependsOnStepIds.join(", ")}` : undefined,
     conversationContext ? `Conversation context:\n${conversationContext}` : undefined,
     priorStepContext ? `Prior handoffs:\n${priorStepContext}` : undefined,
@@ -932,6 +955,14 @@ export async function executeDelegatedPlanStep(
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
     delegatedDispatchStarted = true;
+    patchActiveDelegationStep(host, {
+      stepId: `${input.runId}:${input.step.stepId}`,
+      childSessionId: childSession.sessionId,
+      role: delegatedRole,
+      label: input.step.label,
+      providerId: input.step.providerId ?? prepared.prefs.providerId,
+      model: input.step.model ?? prepared.prefs.model,
+    });
     const response = await host.agentSendChatMessage(
       childSession.sessionId,
       buildDelegatedChatSendRequest({
@@ -1085,6 +1116,34 @@ export async function executeDelegatedPlanStep(
   }
 }
 
+function patchActiveDelegationStep(
+  host: ChatTurnStreamHost,
+  input: {
+    stepId: string;
+    childSessionId: string;
+    role: string;
+    label?: string;
+    providerId?: string;
+    model?: string;
+  },
+): void {
+  try {
+    host.storage.chatDelegationSteps.patch(input.stepId, {
+      status: "running",
+      providerId: input.providerId,
+      model: input.model,
+      label: input.label ?? input.role,
+      summary: `${toTitleCase(input.role)} is running delegated work.`,
+      childSessionId: input.childSessionId,
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function createAsyncProgressQueue<T>(maxBufferedValues = 256) {
   const values: T[] = [];
   const waiters: Array<(value: T | undefined) => void> = [];
@@ -1178,6 +1237,35 @@ function filterDelegatedSuggestedToolsForPromptLab(
     return suggestedTools;
   }
   return suggestedTools.filter((toolName) => !PROMPT_LAB_LOCAL_FILE_TOOL_NAMES.has(toolName));
+}
+
+function enrichDelegatedSuggestedToolsForObjective(
+  suggestedTools: string[],
+  input: {
+    mode: ChatMode;
+    objective?: string;
+    stepObjective?: string;
+    expectedOutput?: string;
+  },
+): string[] {
+  if (!shouldPreferLocalBusinessResearchTool(input)) {
+    return suggestedTools;
+  }
+  const withoutDuplicate = suggestedTools.filter((toolName) => toolName !== LOCAL_BUSINESS_RESEARCH_TOOL_NAME);
+  return [LOCAL_BUSINESS_RESEARCH_TOOL_NAME, ...withoutDuplicate];
+}
+
+function shouldPreferLocalBusinessResearchTool(input: {
+  mode: ChatMode;
+  objective?: string;
+  stepObjective?: string;
+  expectedOutput?: string;
+}): boolean {
+  if (input.mode !== "cowork") {
+    return false;
+  }
+  const text = [input.objective, input.stepObjective, input.expectedOutput].filter(Boolean).join(" ");
+  return LOCAL_BUSINESS_CONTACT_TASK_PATTERN.test(text) && LOCAL_BUSINESS_LOCATION_PATTERN.test(text);
 }
 
 export async function* streamPreparedAgentChatTurn(
