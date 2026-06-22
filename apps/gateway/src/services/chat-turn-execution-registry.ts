@@ -98,6 +98,15 @@ export class ChatTurnExecutionRegistry {
     return this.activeExecutions.get(turnId);
   }
 
+  /**
+   * Whether any chat turn is currently mid-execution across all sessions. Used
+   * as a workspace-wide idle signal so background janitors (e.g. the S3 curator
+   * idle sweep) never run while a turn is in flight.
+   */
+  public hasAnyActiveChatTurnExecution(): boolean {
+    return this.activeExecutions.size > 0;
+  }
+
   public isCancellationRequested(turnId: string): boolean {
     return this.activeExecutions.get(turnId)?.controller.signal.aborted ?? false;
   }

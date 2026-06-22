@@ -1483,6 +1483,15 @@ export class GatewayService {
       publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
       cycleDays: 7,
       storage: this.storage,
+      // S3 — idle janitor: gated on workspace idle + master autonomy. Archive is
+      // reversible — we snapshot the prior skill-state row before the disable so
+      // the global "revert autonomous changes" can re-apply it. Archive only ever
+      // disables (never hard-deletes); prune/file-removal stays operator-gated.
+      idleSweep: {
+        isWorkspaceIdle: () => !this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
+        isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+        snapshotSkill: (skillId) => this.captureCuratorIdleSkillSnapshot(skillId),
+      },
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -2483,6 +2492,14 @@ export class GatewayService {
       { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
       { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
+      {
+        label: "skill curator idle janitor",
+        run: () =>
+          this.curatorService
+            .maybeRunIdleCurator()
+            .then(() => undefined)
+            .catch((error) => this.logMaintenanceTaskFailure("curator_idle_sweep_failed", error)),
+      },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
       {
         label: "commitment sweep",
@@ -6810,6 +6827,59 @@ export class GatewayService {
       updated.push(this.setSkillState(skillId, state, note));
     }
     return updated;
+  }
+
+  /**
+   * Capture a reversible snapshot of a skill's prior runtime-state row before the
+   * S3 idle janitor archives (disables) it. Persisted into `system_settings` so
+   * the global "revert autonomous changes" path can restore the exact prior
+   * state/note via {@link restoreCuratorIdleSkillSnapshot}. Best-effort: a
+   * snapshot failure must not abort the sweep (which is itself failure-isolated),
+   * so this swallows errors. The archive is reversible regardless — a
+   * curator-archived skill is a `disabled` row re-enableable from the snapshot.
+   */
+  private captureCuratorIdleSkillSnapshot(skillId: string): void {
+    try {
+      const prior = this.readSkillStates().get(skillId);
+      this.storage.systemSettings.set(this.curatorIdleSnapshotKey(skillId), {
+        skillId,
+        priorState: prior?.state ?? "enabled",
+        priorNote: prior?.note,
+        priorPinned: prior?.pinned ?? false,
+        capturedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "cron",
+        event: "curator_idle_snapshot_failed",
+        message: "failed to snapshot skill state before idle archive",
+        context: { skillId, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  /**
+   * Restore a skill archived by the S3 idle janitor to its captured prior state.
+   * Returns false when no snapshot exists for the skill. Used by the global
+   * autonomous-rollback path.
+   */
+  public restoreCuratorIdleSkillSnapshot(skillId: string): boolean {
+    const snapshot = this.storage.systemSettings.get<{
+      skillId: string;
+      priorState: SkillRuntimeState;
+      priorNote?: string;
+      priorPinned?: boolean;
+    }>(this.curatorIdleSnapshotKey(skillId))?.value;
+    if (!snapshot || snapshot.skillId !== skillId) {
+      return false;
+    }
+    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote);
+    return true;
+  }
+
+  private curatorIdleSnapshotKey(skillId: string): string {
+    return `curator_idle_skill_snapshot_v1:${skillId}`;
   }
 
   public resolveSkillActivation(input: SkillResolveInput) {

@@ -594,6 +594,163 @@ describe("CuratorService cron scheduler", () => {
   });
 });
 
+describe("CuratorService.maybeRunIdleCurator (S3 idle janitor)", () => {
+  type IdleSweepOverrides = {
+    isWorkspaceIdle?: () => boolean;
+    isAutonomyEnabled?: () => boolean;
+    snapshotSkill?: (skillId: string) => void;
+  };
+
+  function makeIdleService(
+    skills: SkillListItem[],
+    archived: Array<{ skillId: string; reason: string }>,
+    overrides: IdleSweepOverrides = {},
+    storage?: unknown,
+  ): CuratorService {
+    return new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId, reason) => {
+        archived.push({ skillId, reason });
+        const skill = skills.find((s) => s.skillId === skillId);
+        return { ...(skill ?? makeSkill()), state: "disabled" } as SkillListItem;
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-06-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storage as never,
+      idleSweep: {
+        isWorkspaceIdle: overrides.isWorkspaceIdle ?? (() => true),
+        isAutonomyEnabled: overrides.isAutonomyEnabled ?? (() => true),
+        snapshotSkill: overrides.snapshotSkill ?? (() => undefined),
+      },
+    });
+  }
+
+  function selfGenerated(overrides: Partial<SkillListItem> = {}): SkillListItem {
+    const base = makeSkill(overrides);
+    return {
+      ...base,
+      capabilityCategory: "self_generated",
+      lifecycle: {
+        skillId: base.skillId,
+        category: "self_generated",
+        lifecycleState: "approved",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    } as SkillListItem;
+  }
+
+  it("no-op when idle-sweep collaborators are not configured", async () => {
+    const service = new CuratorService({
+      listSkills: () => [selfGenerated({ name: "ghost", usageCount: 0 })],
+      archiveSkill: () => {
+        throw new Error("archive should not be called");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-06-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await expect(service.maybeRunIdleCurator()).resolves.toBeUndefined();
+  });
+
+  it("does NOT sweep while the workspace is not idle (a turn is active)", async () => {
+    const archived: Array<{ skillId: string; reason: string }> = [];
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
+      isWorkspaceIdle: () => false,
+    });
+    const result = await service.maybeRunIdleCurator();
+    expect(result).toBeUndefined();
+    expect(archived).toEqual([]);
+  });
+
+  it("auto-applies stale archives under full autonomy when idle (snapshots first)", async () => {
+    const archived: Array<{ skillId: string; reason: string }> = [];
+    const snapshots: string[] = [];
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
+      snapshotSkill: (skillId) => snapshots.push(skillId),
+    });
+    const result = await service.maybeRunIdleCurator();
+    expect(result?.autoApplied).toBe(true);
+    expect(snapshots).toEqual(["skill-ghost"]);
+    expect(archived).toEqual([{ skillId: "skill-ghost", reason: "curator:archived idle_self_generated_stale" }]);
+  });
+
+  it("proposal-only when autonomy is off (no archive callback fires)", async () => {
+    const archived: Array<{ skillId: string; reason: string }> = [];
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
+      isAutonomyEnabled: () => false,
+    });
+    const result = await service.maybeRunIdleCurator();
+    expect(result?.autoApplied).toBe(false);
+    expect(archived).toEqual([]);
+    expect(result?.archives[0]).toMatchObject({ skillId: "skill-ghost", applied: false });
+  });
+
+  it("swallows errors and never throws out of the tick", async () => {
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], [], {
+      snapshotSkill: () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(service.maybeRunIdleCurator()).resolves.toBeUndefined();
+  });
+
+  it("honors the cadence gate via system_settings (skips when run recently)", async () => {
+    const settings = new Map<string, unknown>();
+    const storage = {
+      systemSettings: {
+        get: <T>(key: string) => {
+          const v = settings.get(key);
+          return v === undefined ? undefined : { value: v as T };
+        },
+        set: <T>(key: string, value: T) => {
+          settings.set(key, value);
+        },
+      },
+    };
+    const archived: Array<{ skillId: string; reason: string }> = [];
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {}, storage);
+
+    // First run: cadence cursor is empty ⇒ runs, archives, records cursor.
+    const first = await service.maybeRunIdleCurator();
+    expect(first?.autoApplied).toBe(true);
+    expect(archived).toHaveLength(1);
+    expect(settings.get("curator_idle_sweep_last_run_ms_v1")).toBeDefined();
+
+    // Second run within the cadence window ⇒ skipped.
+    const second = await service.maybeRunIdleCurator();
+    expect(second).toBeUndefined();
+    expect(archived).toHaveLength(1);
+  });
+
+  it("force=true bypasses the idle and cadence gates", async () => {
+    const settings = new Map<string, unknown>([["curator_idle_sweep_last_run_ms_v1", Date.parse("2026-06-15T11:59:00Z")]]);
+    const storage = {
+      systemSettings: {
+        get: <T>(key: string) => {
+          const v = settings.get(key);
+          return v === undefined ? undefined : { value: v as T };
+        },
+        set: <T>(key: string, value: T) => {
+          settings.set(key, value);
+        },
+      },
+    };
+    const archived: Array<{ skillId: string; reason: string }> = [];
+    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
+      isWorkspaceIdle: () => false,
+    }, storage);
+    const result = await service.maybeRunIdleCurator({ force: true });
+    expect(result?.autoApplied).toBe(true);
+    expect(archived).toHaveLength(1);
+  });
+});
+
 describe("CuratorService.executeDurableCuratorTickRun", () => {
   function makeRun(payload: Record<string, unknown>): DurableRunRecord {
     return {
