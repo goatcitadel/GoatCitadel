@@ -820,6 +820,67 @@ export class ToolPolicyEngine {
       requiresApproval = false;
     }
 
+    const { reasonCodes, policyReason } = this.buildAccessReason({
+      policy,
+      localOperatorOverrideAuditId,
+      codeModeRunPreapproved,
+      wardRequiresApproval,
+      riskLevel,
+      hasAllowGrant,
+      requiresApproval,
+      shellRisk,
+      argumentRisk,
+      outsideRootsReadRequiresApproval,
+    });
+    const effectiveAllowGrant =
+      grantDecision?.decision === "allow"
+        ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
+        : undefined;
+
+    return {
+      allowed: true,
+      reasonCodes,
+      requiresApproval,
+      matchedGrantId: effectiveAllowGrant?.grantId,
+      matchedGrantAllowedHosts: effectiveAllowGrant ? getAllowedGrantHosts(effectiveAllowGrant.constraints) : undefined,
+      riskLevel,
+      policyReason,
+      grantToConsume: effectiveAllowGrant?.grantId,
+      permissionProfileId: policy.permissionProfileId,
+      localOperatorOverrideId: localOperatorOverrideAuditId,
+      approvalMode: policy.approvalMode,
+    };
+  }
+
+  /**
+   * Assemble the approval-escalation reason codes + human narrative from the already-computed
+   * decision state. Pure projection (no decision logic) extracted from evaluateAccessInternal so
+   * the "why" of the escalation axis is a named, auditable unit. Behavior-preserving.
+   */
+  private buildAccessReason(input: {
+    policy: { permissionProfileId?: string; approvalMode: string };
+    localOperatorOverrideAuditId: string | undefined;
+    codeModeRunPreapproved: boolean;
+    wardRequiresApproval: boolean;
+    riskLevel: AccessEvaluation["riskLevel"];
+    hasAllowGrant: boolean;
+    requiresApproval: boolean;
+    shellRisk: { risky: true; matchedPattern: string } | undefined;
+    argumentRisk: { risky: true; matchedPattern: string } | undefined;
+    outsideRootsReadRequiresApproval: boolean;
+  }): { reasonCodes: string[]; policyReason: string } {
+    const {
+      policy,
+      localOperatorOverrideAuditId,
+      codeModeRunPreapproved,
+      wardRequiresApproval,
+      riskLevel,
+      hasAllowGrant,
+      requiresApproval,
+      shellRisk,
+      argumentRisk,
+      outsideRootsReadRequiresApproval,
+    } = input;
     const reasonCodes = ["allowed"];
     if (policy.permissionProfileId) {
       reasonCodes.push("permission_profile");
@@ -867,24 +928,7 @@ export class ToolPolicyEngine {
       reasonCodes.push("outside_roots_read_requires_approval");
       policyReason = "file access outside trusted roots requires approval";
     }
-    const effectiveAllowGrant =
-      grantDecision?.decision === "allow"
-        ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
-        : undefined;
-
-    return {
-      allowed: true,
-      reasonCodes,
-      requiresApproval,
-      matchedGrantId: effectiveAllowGrant?.grantId,
-      matchedGrantAllowedHosts: effectiveAllowGrant ? getAllowedGrantHosts(effectiveAllowGrant.constraints) : undefined,
-      riskLevel,
-      policyReason,
-      grantToConsume: effectiveAllowGrant?.grantId,
-      permissionProfileId: policy.permissionProfileId,
-      localOperatorOverrideId: localOperatorOverrideAuditId,
-      approvalMode: policy.approvalMode,
-    };
+    return { reasonCodes, policyReason };
   }
 
   private evaluateShellRisk(request: ToolAccessEvaluateRequest): { risky: true; matchedPattern: string } | undefined {
