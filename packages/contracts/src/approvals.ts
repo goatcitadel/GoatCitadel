@@ -1,3 +1,5 @@
+import type { McpElicitationRequest } from "./mcp.js";
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "edited";
 export type ApprovalExplanationStatus = "not_requested" | "pending" | "completed" | "failed";
 
@@ -90,6 +92,12 @@ export interface ApprovalRequest {
   explanationError?: string;
   followUp?: ApprovalFollowUpState;
   shellExplanations?: readonly ShellCommandExplanation[];
+  /**
+   * MCP server-initiated elicitation (clarifying question) surfaced through the
+   * approval inbox, so an operator/agent can answer it in-band with other approvals
+   * (MCP v2 elicitation). Absent for ordinary tool/action approvals.
+   */
+  mcpElicitation?: McpElicitationRequest;
 }
 
 export interface ApprovalListResponse {
