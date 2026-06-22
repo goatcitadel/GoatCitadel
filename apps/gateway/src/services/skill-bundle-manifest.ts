@@ -128,15 +128,74 @@ export async function validateSkillBundleManifestDirectory(skillDir: string): Pr
     }
   }
 
+  const declaredMetadata = validateSkillBundleDeclaredMetadata(manifest, warnings, errors);
+
   return {
     status: errors.length > 0 ? "invalid" : "valid",
     manifestPath: SKILL_BUNDLE_MANIFEST_FILENAME,
     assetsVerified,
     assetPaths,
     scriptDisposition: manifest.scriptDisposition,
+    declaredMetadata,
     warnings,
     errors,
   };
+}
+
+/**
+ * Validate a skill's declared governance metadata (env/state/deps). Graduated trust:
+ * hard-block only on unsafe state-dir paths (traversal); surface medium-risk
+ * declarations (writeable dirs, secret env, elevated capabilities) as warnings so an
+ * operator reviews them rather than silently trusting or hard-blocking.
+ */
+function validateSkillBundleDeclaredMetadata(
+  manifest: SkillBundleManifest,
+  warnings: string[],
+  errors: string[],
+): SkillBundleManifestValidation["declaredMetadata"] {
+  const requiredEnv = Array.isArray(manifest.requiredEnv) ? manifest.requiredEnv : [];
+  const stateDirs = Array.isArray(manifest.stateDirs) ? manifest.stateDirs : [];
+  const dependencies = manifest.declaredDependencies ?? {};
+  if (requiredEnv.length === 0 && stateDirs.length === 0 && !manifest.declaredDependencies) {
+    return undefined;
+  }
+
+  for (const dir of stateDirs) {
+    if (!dir || typeof dir.path !== "string" || dir.path.trim().length === 0) {
+      errors.push("stateDirs entries must declare a non-empty path");
+      continue;
+    }
+    // Home-rooted (~) state dirs are allowed; relative dirs must not traverse.
+    if (!dir.path.startsWith("~")) {
+      try {
+        normalizeSkillBundleAssetPath(dir.path);
+      } catch (error) {
+        errors.push(`stateDir ${dir.path}: ${(error as Error).message}`);
+      }
+    }
+    if (dir.writeable) {
+      warnings.push(`Skill declares a writeable state directory: ${dir.path} (review before trusting).`);
+    }
+  }
+
+  for (const env of requiredEnv) {
+    if (!env || typeof env.name !== "string" || env.name.trim().length === 0) {
+      errors.push("requiredEnv entries must declare a name");
+      continue;
+    }
+    if (env.secret) {
+      warnings.push(`Skill requires a secret env var: ${env.name} (needs an operator-provided secret).`);
+    }
+  }
+
+  const riskyCapabilities = (dependencies.capabilities ?? []).filter((cap) =>
+    /network|fs\.write|shell|exec/i.test(cap),
+  );
+  if (riskyCapabilities.length > 0) {
+    warnings.push(`Skill declares elevated capabilities: ${riskyCapabilities.join(", ")} (medium-risk; surfaced).`);
+  }
+
+  return { requiredEnv, stateDirs, dependencies };
 }
 
 function validateManifestShape(value: unknown): string[] {
@@ -164,6 +223,18 @@ function validateManifestShape(value: unknown): string[] {
   }
   if (manifest.allowedDirectories && !Array.isArray(manifest.allowedDirectories)) {
     errors.push("allowedDirectories must be an array when provided");
+  }
+  if (manifest.requiredEnv !== undefined && !Array.isArray(manifest.requiredEnv)) {
+    errors.push("requiredEnv must be an array when provided");
+  }
+  if (manifest.stateDirs !== undefined && !Array.isArray(manifest.stateDirs)) {
+    errors.push("stateDirs must be an array when provided");
+  }
+  if (
+    manifest.declaredDependencies !== undefined &&
+    (typeof manifest.declaredDependencies !== "object" || Array.isArray(manifest.declaredDependencies))
+  ) {
+    errors.push("declaredDependencies must be an object when provided");
   }
   return errors;
 }

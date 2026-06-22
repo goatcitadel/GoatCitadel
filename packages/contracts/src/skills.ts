@@ -156,12 +156,40 @@ export interface SkillBundleManifestAsset {
   callable?: false;
 }
 
+/** An environment variable a skill declares it needs to operate. */
+export interface SkillRequiredEnvVar {
+  name: string;
+  description?: string;
+  required?: boolean;
+  secret?: boolean;
+}
+
+/** A state directory a skill declares it reads/writes. */
+export interface SkillStateDir {
+  path: string;
+  description?: string;
+  writeable?: boolean;
+}
+
+/** Dependencies a skill declares (governance metadata; surfaced, not auto-installed). */
+export interface SkillDeclaredDependencies {
+  tools?: string[];
+  skillIds?: string[];
+  capabilities?: string[];
+}
+
 export interface SkillBundleManifest {
   manifestVersion: "goatcitadel.skill-bundle.v1";
   skillId?: string;
   name?: string;
   generatedAt?: string;
   allowedDirectories?: string[];
+  /** Declared env vars the skill needs (governance: surfaced at import for operator review). */
+  requiredEnv?: SkillRequiredEnvVar[];
+  /** Declared state directories the skill reads/writes. */
+  stateDirs?: SkillStateDir[];
+  /** Declared tool/skill/capability dependencies. */
+  declaredDependencies?: SkillDeclaredDependencies;
   scriptDisposition: "review_only_non_callable";
   assets: SkillBundleManifestAsset[];
 }
@@ -172,6 +200,12 @@ export interface SkillBundleManifestValidation {
   assetsVerified: number;
   assetPaths: string[];
   scriptDisposition?: SkillBundleManifest["scriptDisposition"];
+  /** Validated declared-governance metadata (env/state/deps), when the manifest declares any. */
+  declaredMetadata?: {
+    requiredEnv: SkillRequiredEnvVar[];
+    stateDirs: SkillStateDir[];
+    dependencies: SkillDeclaredDependencies;
+  };
   warnings: string[];
   errors: string[];
 }
