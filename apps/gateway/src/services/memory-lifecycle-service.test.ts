@@ -910,7 +910,7 @@ describe("MemoryLifecycleService", () => {
     );
   });
 
-  it("owns structured entities, relations, decisions, retrospectives, history, and write-gate denial", () => {
+  it("owns structured entities, relations, decisions, retrospectives, history, and write-gate denial", async () => {
     const gatewaySql = createStructuredMemorySqlHarness();
     const publishRealtime = vi.fn();
     const gateDecision = {
@@ -945,7 +945,7 @@ describe("MemoryLifecycleService", () => {
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
 
-    const project = service.createMemoryEntity(
+    const project = await service.createMemoryEntity(
       {
         workspaceId: "workspace-1",
         title: "Project Alpha",
@@ -955,7 +955,7 @@ describe("MemoryLifecycleService", () => {
       },
       "operator-1",
     );
-    const capability = service.createMemoryEntity(
+    const capability = await service.createMemoryEntity(
       {
         workspaceId: "workspace-1",
         title: "Automation Designer",
@@ -963,7 +963,7 @@ describe("MemoryLifecycleService", () => {
       },
       "operator-1",
     );
-    const relation = service.createMemoryRelation(
+    const relation = await service.createMemoryRelation(
       {
         workspaceId: "workspace-1",
         title: "Project Alpha uses Automation Designer",
@@ -973,7 +973,7 @@ describe("MemoryLifecycleService", () => {
       },
       "operator-1",
     );
-    const decision = service.createMemoryDecision(
+    const decision = await service.createMemoryDecision(
       {
         workspaceId: "workspace-1",
         title: "Keep automation advisory",
@@ -1052,7 +1052,7 @@ describe("MemoryLifecycleService", () => {
       redactionStatus: "blocked_secret",
       createdAt: "2026-05-22T01:00:00.000Z",
     });
-    expect(() =>
+    await expect(
       service.createMemoryDecision(
         {
           title: "Unsafe agent memory",
@@ -1062,7 +1062,7 @@ describe("MemoryLifecycleService", () => {
         },
         "agent-1",
       ),
-    ).toThrow(/Structured memory write requires review/);
+    ).rejects.toThrow(/Structured memory write requires review/);
     expect(createEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({
         eventKind: "memory_write",
@@ -1072,6 +1072,51 @@ describe("MemoryLifecycleService", () => {
         }),
       }),
     );
+  });
+
+  it("persists a content embedding into structured-memory metadata on write (W1)", async () => {
+    const gatewaySql = createStructuredMemorySqlHarness();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {} as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: gatewaySql as never,
+        tryParseJson: vi.fn((raw, fallback) => {
+          try {
+            return raw ? JSON.parse(String(raw)) : fallback;
+          } catch {
+            return fallback;
+          }
+        }),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      writeGate: { evaluate: vi.fn(() => ({ decision: "allowed" })) } as never,
+      evidence: { createEnvelope: vi.fn() } as never,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    const entity = await service.createMemoryEntity(
+      {
+        workspaceId: "workspace-1",
+        title: "Browser governance",
+        summary: "Browser sessions require scoped grants before tool access.",
+      },
+      "operator-1",
+    );
+
+    // The persisted metadata carries an embedding in the shape extractMemoryEmbedding reads.
+    const embedding = entity.metadata.embedding as number[] | undefined;
+    expect(Array.isArray(embedding)).toBe(true);
+    expect((embedding ?? []).length).toBeGreaterThan(0);
+    expect((embedding ?? []).every((value) => Number.isFinite(value))).toBe(true);
+    expect(entity.metadata.embeddingMetadata).toMatchObject({ provider: "pseudo" });
+
+    // And the same shape is round-tripped through the stored row.
+    const reread = service.listMemoryEntities({ workspaceId: "workspace-1" })[0];
+    expect((reread?.metadata.embedding as number[] | undefined)?.length).toBe((embedding ?? []).length);
   });
 
   it("records learning provenance, proposals, supersedes, and file-backed staleness", async () => {

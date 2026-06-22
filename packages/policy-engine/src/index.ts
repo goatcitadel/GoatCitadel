@@ -9,6 +9,7 @@ export { describeBrowserSessionState } from "./browser-tools.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";
+export * from "./local-embeddings.js";
 export * from "./ingestion-source-type.js";
 export * from "./sandbox/path-jail.js";
 export * from "./sandbox/network-guard.js";
