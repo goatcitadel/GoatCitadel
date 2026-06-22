@@ -30,7 +30,13 @@ import type {
   ToolInvokeResult,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { getChatTurnRecoveryAction, NotFoundError, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import {
+  getChatTurnRecoveryAction,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  NotFoundError,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatTurnRecoveryAction,
+} from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -3197,8 +3203,19 @@ export class ChatAgentOrchestrator {
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
+    const restrictedAutonomousProfile =
+      input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+      input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
     for (const tool of catalog) {
       if (suppressPromptLabCodeArtifactTools && PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(tool.toolName)) {
+        continue;
+      }
+      // Anti-recursion: never auto-offer `schedule.manage` to a restricted
+      // autonomous (scheduled/heartbeat) turn, so a scheduled turn can't see —
+      // let alone silently use — the self-scheduling tool. Interactive surfaces
+      // still get it via its `recommendedContexts`. (Defense in depth: the
+      // restricted profile would also force it to require approval.)
+      if (tool.toolName === "schedule.manage" && restrictedAutonomousProfile) {
         continue;
       }
       if (

@@ -7,6 +7,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
 import { createExecuteToolCallForTest, createMockStorage } from "./chat-agent-orchestrator-test-fixtures.js";
 
@@ -223,6 +224,47 @@ describe("ChatAgentOrchestrator loop 28 coverage", () => {
     expect(schema.canonicalToModel.has("browser.search")).toBe(false);
   });
 
+  it("offers schedule.manage to interactive turns but never to a scheduled-restricted turn (P1-F2)", async () => {
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [
+        tool("time.now", { category: "session", recommendedContexts: ["chat", "cowork", "code"] }),
+        tool("schedule.manage", {
+          category: "ops",
+          riskLevel: "danger",
+          requiresApproval: true,
+          pack: "core",
+          recommendedContexts: ["chat", "cowork"],
+          preferredForIntents: ["schedule_work", "recurring_task", "remind_me"],
+        }),
+      ],
+      // No policy engine wired → access prefilter passes everything; the only
+      // gate on schedule.manage here is the explicit restricted-profile guard.
+      createChatCompletion: vi.fn<() => Promise<ChatCompletionResponse>>(),
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>(),
+    });
+
+    const interactiveSchema = await buildToolSchema(orchestrator, {
+      sessionId: "sess-schedule-interactive",
+      mode: "chat",
+      webMode: "off",
+      content: "Please schedule a recurring reminder for me every weekday morning.",
+      historyMessages: [],
+    });
+    expect(toolNames(interactiveSchema)).toContain("schedule_manage");
+
+    const scheduledSchema = await buildToolSchema(orchestrator, {
+      sessionId: "sess-schedule-restricted",
+      mode: "chat",
+      webMode: "off",
+      content: "Please schedule a recurring reminder for me every weekday morning.",
+      historyMessages: [],
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    });
+    expect(toolNames(scheduledSchema)).not.toContain("schedule_manage");
+    expect(scheduledSchema.canonicalToModel.has("schedule.manage")).toBe(false);
+  });
+
   it("persists no-result browser search fallback chains after alternate engines fail", async () => {
     const invokeTool = vi
       .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
@@ -342,6 +384,7 @@ async function buildToolSchema(
     content: string;
     historyMessages: ChatAgentTurnInput["historyMessages"];
     normalizationProfile?: ChatAgentTurnInput["normalizationProfile"];
+    permissionProfileId?: string;
   },
 ) {
   return (

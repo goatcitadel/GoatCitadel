@@ -61,6 +61,7 @@ export function normalizeAgentTurnCronActionConfig(
       : undefined;
   const deliverMode = rawAgentTurn.deliverMode === "on_notify" ? "on_notify" : "always";
   const inertInboxFallback = rawAgentTurn.inertInboxFallback === true;
+  const createdBy = normalizeAgentTurnCreatedBy(rawAgentTurn.createdBy);
   return {
     agentTurn: {
       prompt: rawAgentTurn.prompt.trim(),
@@ -68,7 +69,45 @@ export function normalizeAgentTurnCronActionConfig(
       ...(deliveryChannel ? { deliveryChannel } : {}),
       deliverMode,
       ...(inertInboxFallback ? { inertInboxFallback: true } : {}),
+      ...(createdBy ? { createdBy } : {}),
     },
+  };
+}
+
+/**
+ * Normalize the creator-provenance block stamped by `schedule.manage` (P1-F2).
+ * Preserves only string actor/profile/job ids and a clamped non-negative depth,
+ * so the scheduled turn can be fired bounded to ≤ the creator's privileges and
+ * the depth-1 anti-recursion cap can be enforced. Returns undefined when the
+ * block carries nothing useful. Immutable: builds a fresh object.
+ */
+function normalizeAgentTurnCreatedBy(
+  value: unknown,
+): NonNullable<CronAgentTurnConfig["createdBy"]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const operatorId = typeof raw.operatorId === "string" && raw.operatorId.trim() ? raw.operatorId.trim() : undefined;
+  const authActorId =
+    typeof raw.authActorId === "string" && raw.authActorId.trim() ? raw.authActorId.trim() : undefined;
+  const permissionProfileId =
+    typeof raw.permissionProfileId === "string" && raw.permissionProfileId.trim()
+      ? raw.permissionProfileId.trim()
+      : undefined;
+  const createdByJobId =
+    typeof raw.createdByJobId === "string" && raw.createdByJobId.trim() ? raw.createdByJobId.trim() : undefined;
+  const depth =
+    typeof raw.depth === "number" && Number.isFinite(raw.depth) ? Math.max(0, Math.floor(raw.depth)) : undefined;
+  if (!operatorId && !authActorId && !permissionProfileId && !createdByJobId && depth === undefined) {
+    return undefined;
+  }
+  return {
+    ...(operatorId ? { operatorId } : {}),
+    ...(authActorId ? { authActorId } : {}),
+    ...(permissionProfileId ? { permissionProfileId } : {}),
+    ...(createdByJobId ? { createdByJobId } : {}),
+    ...(depth !== undefined ? { depth } : {}),
   };
 }
 

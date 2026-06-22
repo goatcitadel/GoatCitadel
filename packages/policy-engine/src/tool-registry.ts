@@ -676,6 +676,65 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "schedule.manage",
+    category: "ops",
+    riskLevel: "danger",
+    requiresApproval: true,
+    description:
+      "Create, list, or cancel the agent's own scheduled work (an agent_turn cron job that wakes the agent on a recurring schedule). Creating or cancelling a schedule requires approval.",
+    argSchema: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create", "list", "cancel"] },
+        jobId: { type: "string", description: "Target job id for the cancel op (or the explicit id for create)." },
+        name: { type: "string", description: "Human-readable name for a created schedule." },
+        schedule: {
+          type: "string",
+          description: "Cron-style schedule, e.g. '0 9 * * 1' (every Monday 09:00). Must not be finer than 15 minutes.",
+        },
+        prompt: {
+          type: "string",
+          description: "The instruction the scheduled turn wakes the agent with.",
+        },
+        deliveryChannel: {
+          type: "object",
+          properties: {
+            channelKey: { type: "string" },
+            target: { type: "string" },
+          },
+        },
+        endAt: { type: "string", description: "Optional ISO date/time after which the schedule stops firing." },
+      },
+      required: ["op"],
+    },
+    examples: [
+      {
+        title: "List the agent's own scheduled jobs",
+        args: { op: "list" },
+      },
+      {
+        title: "Schedule a recurring morning briefing",
+        args: {
+          op: "create",
+          name: "Morning briefing",
+          schedule: "0 9 * * 1-5",
+          prompt: "Summarize overnight updates and surface anything that needs my attention.",
+        },
+      },
+      {
+        title: "Cancel a scheduled job",
+        args: { op: "cancel", jobId: "morning-briefing" },
+      },
+    ],
+    pack: "core",
+    recommendedContexts: ["chat", "cowork"],
+    preferredForIntents: ["schedule_work", "recurring_task", "remind_me", "self_schedule"],
+    usageHints: [
+      "Use to set up, review, or cancel the agent's own recurring scheduled turns.",
+      "Creating or cancelling a schedule is a governed action and requires operator approval.",
+    ],
+  },
+  {
     name: "citations.build",
     category: "research",
     riskLevel: "safe",

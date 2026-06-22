@@ -74,4 +74,22 @@ describe("tool registry", () => {
       required: ["path", "title"],
     });
   });
+
+  it("registers schedule.manage as a danger, approval-gated tool (P1-F2)", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    const tool = catalog.find((item) => item.toolName === "schedule.manage");
+
+    expect(tool).toMatchObject({
+      category: "ops",
+      riskLevel: "danger",
+      requiresApproval: true,
+      pack: "core",
+    });
+    // op is the only required arg; create/list/cancel are the allowed values.
+    expect(tool?.argSchema).toMatchObject({ required: ["op"] });
+    const opSchema = (tool?.argSchema as { properties?: { op?: { enum?: string[] } } } | undefined)?.properties?.op;
+    expect(opSchema?.enum).toEqual(["create", "list", "cancel"]);
+    // Offered to interactive surfaces only (never auto-offered to scheduled turns).
+    expect(tool?.recommendedContexts).toEqual(["chat", "cowork"]);
+  });
 });

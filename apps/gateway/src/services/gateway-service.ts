@@ -434,6 +434,14 @@ import {
   buildAutonomousTurnContext,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
+import {
+  buildScheduleCreateActionConfig,
+  isScheduledTurnContext,
+  parseScheduleManageArgs,
+  resolveScheduleCreatorKey,
+  summarizeScheduleJob,
+  validateScheduleCreate,
+} from "./gateway/schedule-tool-support.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -906,6 +914,11 @@ export class GatewayService {
       // scope as a compatibility Citadel fallback. New gateway call sites pass
       // the parent citadelId directly when it is known.
       citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
+      // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
+      // the pure policy-engine executor delegates it back here. The approval gate
+      // and deny-wins still fire first in `engine.invoke`; this hook only runs
+      // after the engine has authorized execution.
+      scheduleManage: (args, policyContext) => this.scheduleManage(args, policyContext),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -4926,6 +4939,138 @@ export class GatewayService {
     );
     this.requestDurableRunProcessing(run.runId);
     return { runId: run.runId, turnId: prepared.turnId };
+  }
+
+  /**
+   * Runtime-hook impl for the model-callable `schedule.manage` tool (P1-F2).
+   *
+   * Routed here by the policy-engine executor (`scheduleManage` hook) *after* the
+   * engine has authorized the call — `schedule.manage` is `danger` +
+   * `requiresApproval`, so the normal approval gate fires first for interactive
+   * operators, and the restricted `scheduled-restricted` profile makes a
+   * scheduled turn's call require approval too (anti-recursion). This method:
+   *  - maps `op` to the existing `cronAutomationService` create/list/delete,
+   *  - forces `action:"agent_turn"` for created jobs,
+   *  - stamps the creator actor + permission profile from `policyContext` onto the
+   *    job so F1 fires it bounded to <= the creator's privileges, and
+   *  - enforces the per-creator cap, the >=15min interval floor, and the depth-1
+   *    chain cap (all in the pure `schedule-tool-support` validator).
+   *
+   * The master autonomy kill switch (`autonomyV1Disabled`) hard-disables the
+   * whole tool so no schedule can be created/listed/cancelled while autonomy is
+   * halted.
+   */
+  private async scheduleManage(
+    args: Record<string, unknown>,
+    policyContext: ToolPolicyActorContext | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (this.isFeatureEnabled("autonomyV1Disabled")) {
+      throw new Error("schedule.manage is disabled while the autonomy kill switch is engaged (autonomyV1Disabled).");
+    }
+    const parsed = parseScheduleManageArgs(args);
+    if (parsed.op === "list") {
+      const creatorKey = resolveScheduleCreatorKey(policyContext);
+      const jobs = this.cronAutomationService
+        .listCronJobs()
+        .filter((job) => job.action === "agent_turn")
+        .filter((job) => {
+          if (!creatorKey) {
+            return false;
+          }
+          const createdBy = job.actionConfig?.agentTurn?.createdBy;
+          return createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey;
+        })
+        .map((job) => summarizeScheduleJob(job));
+      return { op: "list", count: jobs.length, jobs };
+    }
+    if (parsed.op === "cancel") {
+      const jobId = parsed.jobId?.trim();
+      if (!jobId) {
+        throw new Error('schedule.manage cancel requires a "jobId".');
+      }
+      const creatorKey = resolveScheduleCreatorKey(policyContext);
+      const existing = this.cronAutomationService.getCronJob(jobId);
+      if (existing.action !== "agent_turn") {
+        throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
+      }
+      const createdBy = existing.actionConfig?.agentTurn?.createdBy;
+      const owned =
+        !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
+      if (!owned) {
+        throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
+      }
+      const result = this.cronAutomationService.deleteCronJob(jobId);
+      return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
+    }
+    // op === "create"
+    const createdByJobId = this.resolveSchedulingTurnJobId(policyContext);
+    const validated = validateScheduleCreate({
+      args: parsed,
+      policyContext,
+      existingJobs: this.cronAutomationService.listCronJobs(),
+      ...(createdByJobId ? { createdByJobId } : {}),
+    });
+    const jobId = this.generateScheduleJobId(validated.name);
+    const created = this.cronAutomationService.createCronJob({
+      jobId,
+      name: validated.name,
+      action: "agent_turn",
+      schedule: validated.schedule,
+      ...(validated.endAt ? { endAt: validated.endAt } : {}),
+      actionConfig: buildScheduleCreateActionConfig(validated),
+    });
+    return {
+      op: "create",
+      jobId: created.jobId,
+      name: created.name,
+      schedule: created.schedule,
+      enabled: created.enabled,
+      ...(created.nextRunAt ? { nextRunAt: created.nextRunAt } : {}),
+      requiresApprovalToRun: false,
+      createdBy: validated.createdBy,
+    };
+  }
+
+  /**
+   * Best-effort: when the calling turn is itself a scheduled (restricted) turn,
+   * find the cron `agent_turn` job that owns the caller's session so the new job
+   * records its parent for the anti-recursion chain. Returns undefined for
+   * interactive callers (depth 0).
+   */
+  private resolveSchedulingTurnJobId(policyContext: ToolPolicyActorContext | undefined): string | undefined {
+    if (!isScheduledTurnContext(policyContext) || !policyContext?.sessionId) {
+      return undefined;
+    }
+    const sessionId = policyContext.sessionId;
+    const match = this.cronAutomationService
+      .listCronJobs()
+      .find((job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId);
+    return match?.jobId;
+  }
+
+  /**
+   * Generate a unique cron job id from a human name plus a short random suffix.
+   * Conforms to the cron id rules (`^[a-z0-9][a-z0-9_-]{2,63}$`) and retries on
+   * the (vanishingly rare) collision so a model-created schedule never clobbers
+   * an existing job.
+   */
+  private generateScheduleJobId(name: string): string {
+    const base = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+    const slug = base.length >= 3 ? base : "scheduled-turn";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+      const candidate = `${slug}-${suffix}`.slice(0, 64);
+      try {
+        this.cronAutomationService.getCronJob(candidate);
+      } catch {
+        return candidate;
+      }
+    }
+    throw new Error("schedule.manage create: could not allocate a unique job id; please retry.");
   }
 
   public beginDurableChatRun(

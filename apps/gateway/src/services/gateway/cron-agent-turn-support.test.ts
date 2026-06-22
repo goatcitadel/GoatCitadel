@@ -68,6 +68,35 @@ describe("normalizeAgentTurnCronActionConfig", () => {
       },
     });
   });
+
+  it("preserves schedule.manage creator provenance (P1-F2)", () => {
+    const config = normalizeAgentTurnCronActionConfig({
+      agentTurn: {
+        prompt: "Scheduled work",
+        createdBy: {
+          operatorId: "  op-1  ",
+          authActorId: "  op-1  ",
+          permissionProfileId: "  trusted_local_power  ",
+          createdByJobId: "  parent-job  ",
+          depth: 1,
+        },
+      },
+    });
+    expect(config?.agentTurn?.createdBy).toEqual({
+      operatorId: "op-1",
+      authActorId: "op-1",
+      permissionProfileId: "trusted_local_power",
+      createdByJobId: "parent-job",
+      depth: 1,
+    });
+  });
+
+  it("drops a creator block with no usable fields", () => {
+    const config = normalizeAgentTurnCronActionConfig({
+      agentTurn: { prompt: "Scheduled work", createdBy: { operatorId: "   " } },
+    });
+    expect(config?.agentTurn?.createdBy).toBeUndefined();
+  });
 });
 
 describe("runAgentTurnCronJob", () => {

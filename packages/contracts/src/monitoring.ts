@@ -136,6 +136,28 @@ export interface CronAgentTurnConfig {
    * model.
    */
   inertInboxFallback?: boolean;
+  /**
+   * Creator provenance, stamped when a job is created via the model-callable
+   * `schedule.manage` tool (P1-F2). Carries the creating operator/actor and their
+   * permission profile so the scheduled turn fires bounded to ≤ the creator's
+   * privileges — a job can never run with broader authority than whoever created
+   * it. Absent for system/operator-seeded cron jobs.
+   */
+  createdBy?: {
+    /** Operator id of the creator (or system actor for autonomous creators). */
+    operatorId?: string;
+    /** Auth actor id of the creator, for the audit trail. */
+    authActorId?: string;
+    /** Permission profile the creator held; the fired turn is bounded by this. */
+    permissionProfileId?: string;
+    /**
+     * Job id of the turn that created this job, when created from inside another
+     * scheduled turn. Used to enforce the depth-1 anti-recursion chain cap.
+     */
+    createdByJobId?: string;
+    /** Chain depth (0 = created interactively; 1 = created by a scheduled turn). */
+    depth?: number;
+  };
 }
 
 export interface CronJobActionConfig {

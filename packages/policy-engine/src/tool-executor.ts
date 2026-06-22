@@ -14,6 +14,7 @@ import type {
   ToolExecutionTrustLevel,
   ToolGrantRecord,
   ToolInvokeRequest,
+  ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
@@ -107,6 +108,20 @@ const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
 
 export interface ToolExecutorRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /**
+   * Impure `schedule.manage` fulfillment. The cron mutation (create/list/cancel
+   * an `agent_turn` job) lives in the gateway, not this pure package, so the
+   * executor delegates back through this hook — mirroring how browser session
+   * access is delegated via {@link assertBrowserSessionAccess}. The gateway
+   * implementation forces `action:"agent_turn"`, persists the creator actor from
+   * `policyContext` onto the job, and enforces the anti-recursion bounds
+   * (per-creator cap, ≥15min interval floor, depth-1 chain cap). When the hook is
+   * absent the tool is unfulfillable and `schedule.manage` raises a clear error.
+   */
+  scheduleManage?: (
+    args: Record<string, unknown>,
+    policyContext: ToolPolicyActorContext | undefined,
+  ) => Promise<Record<string, unknown>>;
 }
 
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
@@ -269,6 +284,8 @@ export async function executeTool(
       return finalizeToolResult(await memorySearch(request.args, storage));
     case "citations.build":
       return finalizeToolResult(citationsBuild(request.args));
+    case "schedule.manage":
+      return finalizeToolResult(await scheduleManage(request, runtimeHooks));
     case "docs.ingest":
       return finalizeToolResult(await docsIngest(request, config, storage));
     case "docs.search":
@@ -1165,6 +1182,22 @@ function resolveMostRestrictiveSourceTrustLevel(
     }
   }
   return effectiveTrust;
+}
+
+/**
+ * Delegate `schedule.manage` back to the gateway runtime hook. The cron mutation
+ * is impure (it touches the gateway's cron store + durable runtime), so this pure
+ * package never performs it directly — it only routes the call. Fails closed when
+ * the hook is not wired so the tool can never silently no-op.
+ */
+async function scheduleManage(
+  request: ToolInvokeRequest,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+): Promise<Record<string, unknown>> {
+  if (!runtimeHooks.scheduleManage) {
+    throw new Error("schedule.manage is not available in this runtime (no scheduleManage hook configured).");
+  }
+  return runtimeHooks.scheduleManage(request.args, request.policyContext);
 }
 
 function citationsBuild(args: Record<string, unknown>) {
