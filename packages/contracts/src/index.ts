@@ -82,6 +82,7 @@ export * from "./ops-quality.js";
 export * from "./proactive.js";
 export * from "./commitments.js";
 export * from "./operator-profile.js";
+export * from "./autonomy-audit.js";
 export * from "./learned-memory.js";
 export * from "./improvement.js";
 export * from "./workspaces.js";

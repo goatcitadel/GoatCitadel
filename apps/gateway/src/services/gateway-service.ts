@@ -357,6 +357,7 @@ import type {
   GuidanceDocType,
   GuidanceDocumentRecord,
   ImprovementRef,
+  OperatorProfileRecord,
   MemoryItemRecord,
   ConnectorDiagnosticReport,
   OrchestrationPlanWorkflowPayload,
@@ -510,6 +511,7 @@ import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import { OperatorProfileService } from "./operator-profile-service.js";
+import { AutonomyControlService } from "./autonomy-control-service.js";
 import {
   ChatTurnExecutionRegistry,
   type ActiveChatTurnExecution,
@@ -829,6 +831,7 @@ export class GatewayService {
   private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly operatorProfileService: OperatorProfileService;
+  private readonly autonomyControlService: AutonomyControlService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
@@ -1116,8 +1119,21 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      recordOperatorProfileFacts: (workspaceId, facts) =>
-        this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts }),
+      recordOperatorProfileFacts: (workspaceId, facts) => {
+        const result = this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts });
+        // Unified audit: only an applied write (full autonomy) yields a
+        // priorSnapshot — that snapshot is value-carrying (storage keeps only the
+        // current revision) so it doubles as the restoreRef. Proposed/blocked
+        // writes persist nothing, so there is nothing to audit. Best-effort.
+        if (result.outcome === "applied" && result.priorSnapshot) {
+          this.autonomyControlService.recordAutonomousMutation({
+            kind: "memory",
+            targetKey: result.record.operatorProfileId,
+            restoreRef: { kind: "memory", priorSnapshot: result.priorSnapshot },
+          });
+        }
+        return result;
+      },
       draftSkillMutation: (input) => this.skillMutationService.draftSkillMutation(input),
     });
     this.addonSlotService = new AddonSlotService();
@@ -1468,6 +1484,16 @@ export class GatewayService {
       readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(this.storage.systemSettings),
       readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(this.storage.systemSettings),
       readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(this.storage.systemSettings),
+      // Cross-cutting audit: record applied auto-tunes in the unified ledger. The
+      // tune row holds its own rollback snapshot, so the restoreRef is just the
+      // tuneId. The closure resolves `autonomyControlService` lazily (it is
+      // constructed just after this service), so the deferred call is safe.
+      onAutoTuneApplied: (tuneId, settingKey) =>
+        this.autonomyControlService.recordAutonomousMutation({
+          kind: "tune",
+          targetKey: settingKey,
+          restoreRef: { kind: "tune", tuneId },
+        }),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
       retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
@@ -1502,6 +1528,30 @@ export class GatewayService {
         isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
         snapshotSkill: (skillId) => this.captureCuratorIdleSkillSnapshot(skillId),
       },
+    });
+    // Cross-cutting kill-switch & rollback. Ties every subsystem's existing
+    // snapshot/restore into one operator-facing "revert autonomous changes since
+    // T". Restore callbacks delegate to each subsystem's own (already-landed)
+    // restore path; the kill switch toggles `autonomyV1Disabled` via the
+    // feature-flag update path. Constructed after improvement/curator/operator-
+    // profile so all collaborators already exist.
+    this.autonomyControlService = new AutonomyControlService({
+      storage: this.storage,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      setKillSwitch: (disabled) => {
+        this.updateFeatureFlags({ autonomyV1Disabled: disabled });
+      },
+      restoreHandlers: {
+        restoreSkillRevision: (snapshotRef) =>
+          this.restoreSkillRevisionSnapshot(snapshotRef as ImprovementRef),
+        restoreOperatorProfile: (priorSnapshot) =>
+          this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord),
+        restoreCuratorArchive: (skillId) => this.restoreCuratorIdleSkillSnapshot(skillId),
+        revertTune: (tuneId) => {
+          this.improvementService.revertDecisionAutoTune(tuneId);
+        },
+      },
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1665,6 +1715,7 @@ export class GatewayService {
       evidenceEnvelopeService: this.evidenceEnvelopeService,
       guidanceService: this.guidanceService,
       improvementService: this.improvementService,
+      autonomyControlService: this.autonomyControlService,
       mediaVoiceService: this.mediaVoiceService,
       obsidianVaultService: this.obsidianVaultService,
       onboardingStateHost: this.buildOnboardingStateHost(),
@@ -4170,7 +4221,7 @@ export class GatewayService {
   private captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
     const { skillId, skillMarkdown } = this.readSkillRevisionRef(targetKey, revisionRef);
     const snapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
-    return {
+    const ref: ImprovementRef = {
       refType: "skill_revision_snapshot",
       refId: snapshot.skillId,
       hash: createHash("sha1").update(JSON.stringify(snapshot)).digest("hex"),
@@ -4180,6 +4231,15 @@ export class GatewayService {
         snapshot: snapshot as unknown as Record<string, unknown>,
       },
     };
+    // Unified audit: this snapshot ref is value-carrying (the prior SKILL.md bytes
+    // travel inline) and is exactly what restoreSkillRevisionSnapshot consumes, so
+    // it doubles as the restoreRef. Best-effort; never blocks the activation.
+    this.autonomyControlService.recordAutonomousMutation({
+      kind: "skill_revision",
+      targetKey: snapshot.skillId,
+      restoreRef: { kind: "skill_revision", snapshotRef: ref },
+    });
+    return ref;
   }
 
   private applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
@@ -6868,6 +6928,13 @@ export class GatewayService {
         priorPinned: prior?.pinned ?? false,
         capturedAt: new Date().toISOString(),
       });
+      // Unified audit: the snapshot self-persists in system_settings under the
+      // deterministic key, so the restoreRef only needs the skillId (best-effort).
+      this.autonomyControlService.recordAutonomousMutation({
+        kind: "curator_archive",
+        targetKey: skillId,
+        restoreRef: { kind: "curator_archive", skillId },
+      });
     } catch (error) {
       this.recordDevDiagnostic({
         level: "warn",
@@ -7894,6 +7961,13 @@ export class GatewayService {
       codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
       improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
       improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
+      // These two optional flags must be carried through: `updateFeatureFlags`
+      // does a FULL `set(... next)` (not a merge), so omitting them would silently
+      // wipe a previously-stored value. The autonomy kill switch is toggled this
+      // way, so its persistence depends on this line.
+      coworkRuntimeQualityV1Disabled:
+        patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
+      autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };

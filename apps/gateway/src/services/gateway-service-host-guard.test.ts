@@ -107,6 +107,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "evidenceEnvelopeService",
   "guidanceService",
   "improvementService",
+  "autonomyControlService",
   "mediaVoiceService",
   "obsidianVaultService",
   "onboardingStateHost",
@@ -345,7 +346,7 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\[\s*key\s*:\s*string\s*\]/);
     const portBlock = portSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const portMemberCount = portBlock.match(/^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm)?.length ?? 0;
-    expect(portMemberCount).toBeLessThanOrEqual(158);
+    expect(portMemberCount).toBeLessThanOrEqual(159);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),
@@ -431,6 +432,7 @@ describe("gateway service host guard", () => {
       "evidenceEnvelopeService",
       "guidanceService",
       "improvementService",
+      "autonomyControlService",
       "mediaVoiceService",
       "obsidianVaultService",
       "promptPackService",

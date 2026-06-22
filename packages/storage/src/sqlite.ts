@@ -1509,7 +1509,37 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     // Postgres backfill is required for fresh installs.
     up: createOperatorProfileSchema,
   },
+  {
+    version: 127,
+    name: "autonomy_audit_schema",
+    // Cross-cutting kill-switch & rollback. A unified, append-only ledger of every
+    // autonomous mutation so an operator can "revert all autonomous changes since T".
+    // Each row points at the subsystem's own snapshot/ref via restore_ref_json (no
+    // duplicate snapshots). Like v126, this is the only definition (fresh DBs replay
+    // it); the Postgres canonical schema auto-derives it from the SQLite blueprint.
+    up: createAutonomyAuditSchema,
+  },
 ];
+
+function createAutonomyAuditSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS autonomy_audit (
+      audit_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      target_key TEXT NOT NULL DEFAULT '',
+      occurred_at TEXT NOT NULL,
+      restore_ref_json TEXT NOT NULL DEFAULT '{}',
+      reverted INTEGER NOT NULL DEFAULT 0,
+      reverted_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_autonomy_audit_since
+      ON autonomy_audit(occurred_at);
+
+    CREATE INDEX IF NOT EXISTS idx_autonomy_audit_unreverted
+      ON autonomy_audit(reverted, occurred_at);
+  `);
+}
 
 function createOperatorProfileSchema(db: DatabaseSync): void {
   db.exec(`

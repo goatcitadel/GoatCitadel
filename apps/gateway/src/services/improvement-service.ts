@@ -365,6 +365,11 @@ export interface ImprovementServiceCallbacks {
   readEffectiveBlockerTemplateStrictness(): number;
   readEffectiveRetryRepairThreshold(): number;
   readEffectiveLiveIntentThreshold(): number;
+  // Cross-cutting kill-switch & rollback. Fired after an auto-tune is applied so
+  // the gateway can append a unified autonomy-audit entry. The tune row already
+  // holds its own rollback snapshot, so the restoreRef is just the tuneId; revert
+  // calls revertDecisionAutoTune(tuneId). Optional + best-effort.
+  onAutoTuneApplied?(tuneId: string, settingKey: string): void;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   retryChatTurn(
     sessionId: string,
@@ -4574,6 +4579,14 @@ export class ImprovementService {
       mode,
       ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
     });
+    // Cross-cutting audit (best-effort): notify the gateway so the applied tune is
+    // captured in the unified autonomy-audit ledger. The tune row carries its own
+    // rollback snapshot, so the audit restoreRef only needs the tuneId.
+    try {
+      this.callbacks.onAutoTuneApplied?.(tuneId, settingKey);
+    } catch {
+      // Audit append must never break the tune apply.
+    }
     return this.readDecisionAutoTune(tuneId);
   }
 

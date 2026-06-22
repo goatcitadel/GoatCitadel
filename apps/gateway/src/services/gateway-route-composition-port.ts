@@ -33,6 +33,7 @@ import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { GuidanceService } from "./guidance-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ImprovementService } from "./improvement-service.js";
+import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import type { LlmService } from "./llm-service.js";
 import type { MediaVoiceService } from "./media-voice-service.js";
@@ -80,6 +81,7 @@ export interface GatewayRouteCompositionPort {
   readonly guidanceService: GuidanceService;
   readonly hooksService: HooksService;
   readonly improvementService: ImprovementService;
+  readonly autonomyControlService: AutonomyControlService;
   readonly llamaCppRuntime: LlamaCppRuntimeService;
   readonly llmService: LlmService;
   readonly mediaVoiceService: MediaVoiceService;
@@ -242,6 +244,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "evidenceEnvelopeService"
   | "guidanceService"
   | "improvementService"
+  | "autonomyControlService"
   | "mediaVoiceService"
   | "obsidianVaultService"
   | "onboardingStateHost"
@@ -279,6 +282,7 @@ export function createGatewayRouteCompositionPort(
     evidenceEnvelopeService: privateDependencies.evidenceEnvelopeService,
     guidanceService: privateDependencies.guidanceService,
     improvementService: privateDependencies.improvementService,
+    autonomyControlService: privateDependencies.autonomyControlService,
     mediaVoiceService: privateDependencies.mediaVoiceService,
     obsidianVaultService: privateDependencies.obsidianVaultService,
     onboardingStateHost: privateDependencies.onboardingStateHost,
