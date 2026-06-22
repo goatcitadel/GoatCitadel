@@ -2505,28 +2505,24 @@ export class GatewayService {
       {
         label: "skill curator idle janitor",
         run: () =>
-          this.curatorService
-            .maybeRunIdleCurator()
-            .then(() => undefined)
-            .catch((error) => this.logMaintenanceTaskFailure("curator_idle_sweep_failed", error)),
+          this.runBestEffortMaintenance("curator_idle_sweep_failed", () => this.curatorService.maybeRunIdleCurator()),
       },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
       {
         label: "commitment sweep",
-        run: () =>
-          this.runCommitmentSweep().catch((error) =>
-            this.logMaintenanceTaskFailure("commitment_sweep_failed", error),
-          ),
+        run: () => this.runBestEffortMaintenance("commitment_sweep_failed", () => this.runCommitmentSweep()),
       },
       {
         label: "heartbeat",
-        run: () =>
-          this.runHeartbeatSweep().catch((error) => this.logMaintenanceTaskFailure("heartbeat_failed", error)),
+        run: () => this.runBestEffortMaintenance("heartbeat_failed", () => this.runHeartbeatSweep()),
       },
       { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
       { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
     ];
-    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    // Wrap each task in an async IIFE so a synchronous throw (e.g. a missing
+    // collaborator method) becomes a rejected promise captured by allSettled,
+    // rather than escaping the map and crashing the whole tick.
+    const results = await Promise.allSettled(tasks.map((task) => (async () => task.run())()));
     const failedLabels: string[] = [];
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
@@ -5267,6 +5263,20 @@ export class GatewayService {
       message: event.replace(/_/g, " "),
       context: { error: error instanceof Error ? error.message : String(error) },
     });
+  }
+
+  /**
+   * Runs an optional/best-effort autonomous maintenance task so it can never
+   * crash the maintenance tick (which aggregates and rethrows core task
+   * failures). Catches BOTH synchronous throws (e.g. a missing collaborator
+   * method) and async rejections, logging a dev diagnostic instead.
+   */
+  private async runBestEffortMaintenance(event: string, run: () => Promise<unknown> | unknown): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      this.logMaintenanceTaskFailure(event, error);
+    }
   }
 
   /**
