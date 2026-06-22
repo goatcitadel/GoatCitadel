@@ -1355,32 +1355,7 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       ).run({ now });
 
       if (tableExists(db, "citadel_charters")) {
-        db.exec(`
-          INSERT INTO citadel_records (
-            citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
-            default_workspace_id, created_at, updated_at
-          )
-          SELECT
-            charter.citadel_id,
-            COALESCE(NULLIF(TRIM(workspace.name), ''), charter.citadel_id),
-            'Legacy workspace Citadel preserved during parent-scope migration.',
-            LOWER(REPLACE(charter.citadel_id, ' ', '-')),
-            charter.kind,
-            'active',
-            NULL,
-            workspace.workspace_id,
-            charter.created_at,
-            charter.updated_at
-          FROM citadel_charters AS charter
-          LEFT JOIN workspaces AS workspace
-            ON workspace.workspace_id = charter.citadel_id
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM citadel_records AS existing
-            WHERE existing.citadel_id = charter.citadel_id
-          )
-          ON CONFLICT(citadel_id) DO NOTHING;
-        `);
+        migrateLegacyCitadelCharters(db);
       }
 
       if (tableExists(db, "workspaces")) {
@@ -6583,4 +6558,110 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
     | { name: string }
     | undefined;
   return Boolean(row);
+}
+
+interface LegacyCitadelCharterMigrationRow {
+  citadel_id: string;
+  name: string | null;
+  kind: string;
+  workspace_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function migrateLegacyCitadelCharters(db: DatabaseSync): void {
+  const existingRows = db.prepare("SELECT citadel_id, slug FROM citadel_records").all() as Array<{
+    citadel_id: string;
+    slug: string;
+  }>;
+  const existingCitadelIds = new Set(existingRows.map((row) => row.citadel_id));
+  const usedSlugs = new Set(existingRows.map((row) => row.slug));
+  const hasWorkspacesTable = tableExists(db, "workspaces");
+  const rows = db
+    .prepare(
+      hasWorkspacesTable
+        ? `
+        SELECT
+          charter.citadel_id,
+          COALESCE(NULLIF(TRIM(workspace.name), ''), charter.citadel_id) AS name,
+          charter.kind,
+          workspace.workspace_id,
+          charter.created_at,
+          charter.updated_at
+        FROM citadel_charters AS charter
+        LEFT JOIN workspaces AS workspace
+          ON workspace.workspace_id = charter.citadel_id
+        ORDER BY charter.citadel_id ASC
+      `
+        : `
+        SELECT
+          charter.citadel_id,
+          charter.citadel_id AS name,
+          charter.kind,
+          NULL AS workspace_id,
+          charter.created_at,
+          charter.updated_at
+        FROM citadel_charters AS charter
+        ORDER BY charter.citadel_id ASC
+      `,
+    )
+    .all() as unknown as LegacyCitadelCharterMigrationRow[];
+  const insert = db.prepare(`
+    INSERT INTO citadel_records (
+      citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+      default_workspace_id, created_at, updated_at
+    ) VALUES (
+      @citadelId, @name, @description, @slug, @kind, 'active', NULL,
+      @defaultWorkspaceId, @createdAt, @updatedAt
+    )
+    ON CONFLICT(citadel_id) DO NOTHING
+  `);
+  for (const row of rows) {
+    if (existingCitadelIds.has(row.citadel_id)) {
+      continue;
+    }
+    const slug = reserveUniqueCitadelSlugForMigration(normalizeCitadelSlugForMigration(row.citadel_id), usedSlugs);
+    existingCitadelIds.add(row.citadel_id);
+    insert.run({
+      citadelId: row.citadel_id,
+      name: row.name ?? row.citadel_id,
+      description: "Legacy workspace Citadel preserved during parent-scope migration.",
+      slug,
+      kind: row.kind,
+      defaultWorkspaceId: row.workspace_id ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+}
+
+function normalizeCitadelSlugForMigration(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const slug = normalized || "citadel";
+  if (slug.length > 64) {
+    return slug.slice(0, 64).replace(/-+$/g, "") || "citadel";
+  }
+  return slug;
+}
+
+function reserveUniqueCitadelSlugForMigration(baseSlug: string, usedSlugs: Set<string>): string {
+  if (!usedSlugs.has(baseSlug)) {
+    usedSlugs.add(baseSlug);
+    return baseSlug;
+  }
+  let suffix = 2;
+  while (true) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${baseSlug.slice(0, Math.max(1, 64 - suffixText.length)).replace(/-+$/g, "")}${suffixText}`;
+    if (!usedSlugs.has(candidate)) {
+      usedSlugs.add(candidate);
+      return candidate;
+    }
+    suffix += 1;
+  }
 }

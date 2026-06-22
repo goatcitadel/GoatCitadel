@@ -39,6 +39,12 @@ function createService(input: {
       capabilityCatalogSnapshots: {
         create: vi.fn((snapshot) => snapshot),
       },
+      candidateSkillVersions: {
+        list: vi.fn(() => []),
+      },
+      capabilityProposals: {
+        list: vi.fn(() => []),
+      },
     } as never);
   const createApproval = input.createApproval ?? vi.fn();
 
@@ -79,7 +85,7 @@ function createService(input: {
 }
 
 describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
-  it("backfills skill lifecycle metadata and keeps disabled imported skills non-callable", async () => {
+  it("backfills imported skill lifecycle metadata as inspectable but not callable without activation", async () => {
     const rootDir = await createRoot();
     const extraSkillDir = path.join(rootDir, "extra-skill");
     await fs.mkdir(extraSkillDir, { recursive: true });
@@ -90,6 +96,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         description: "Built in",
         dir: path.join(rootDir, "bundled"),
         body: "\n\nBundled instructions\nSecond line",
+        instructionBody: "\n\nBundled instructions\nSecond line",
         source: "bundled",
       } as LoadedSkill,
       {
@@ -98,6 +105,7 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
         description: "Imported",
         dir: extraSkillDir,
         body: "",
+        instructionBody: "",
         source: "extra",
       } as LoadedSkill,
     ];
@@ -130,18 +138,83 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       expect.objectContaining({
         skillId: "skill-extra",
         capabilityCategory: "community_imported",
-        lifecycleState: "approved",
+        lifecycleState: "candidate",
         callable: false,
         note: "operator disabled",
         pinned: true,
-        reviewWarning: "Missing provenance manifest; review before trusting.",
+        reviewWarning: "Missing provenance manifest; imported skill remains non-callable until governed activation.",
       }),
     ]);
     expect(harness.skillLifecycle.get("skill-extra")).toMatchObject({
       category: "community_imported",
-      lifecycleState: "approved",
+      lifecycleState: "candidate",
       provenance: { source: "extra" },
     });
+    expect(harness.service.listCatalog("inspectable")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ capabilityId: "skill:skill-extra", callable: false })]),
+    );
+    expect(harness.service.listCatalog("callable")).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ capabilityId: "skill:skill-extra" })]),
+    );
+  });
+
+  it("keeps imported skills callable only after governed activation evidence is recorded", async () => {
+    const rootDir = await createRoot();
+    const extraSkillDir = path.join(rootDir, "activated-extra-skill");
+    await fs.mkdir(extraSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(extraSkillDir, "source.json"),
+      JSON.stringify({
+        candidate: {
+          sourceRef: "https://example.test/skills/activated-extra-skill",
+          sourceProvider: "community-review",
+        },
+        activationEvidence: {
+          status: "approved",
+          approvedAt: "2026-05-15T00:00:00.000Z",
+          approvedBy: "operator",
+          approvalId: "approval-skill-1",
+        },
+      }),
+    );
+    const skills: LoadedSkill[] = [
+      {
+        skillId: "skill-activated-extra",
+        name: "Activated Extra Skill",
+        description: "Imported and activated",
+        dir: extraSkillDir,
+        body: "Activated instructions",
+        instructionBody: "Activated instructions",
+        source: "extra",
+      } as LoadedSkill,
+    ];
+    const harness = createService({ rootDir, skills });
+
+    const listed = harness.service.listSkills();
+
+    expect(listed).toEqual([
+      expect.objectContaining({
+        skillId: "skill-activated-extra",
+        capabilityCategory: "community_imported",
+        lifecycleState: "approved",
+        callable: true,
+        reviewWarning: undefined,
+      }),
+    ]);
+    expect(harness.skillLifecycle.get("skill-activated-extra")).toMatchObject({
+      category: "community_imported",
+      lifecycleState: "approved",
+      provenance: {
+        source: "extra",
+        sourceRef: "https://example.test/skills/activated-extra-skill",
+        sourceProvider: "community-review",
+      },
+    });
+    expect(harness.service.listCatalog("callable")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ capabilityId: "skill:skill-activated-extra", callable: true }),
+      ]),
+    );
   });
 
   it("fails closed before creating Code Mode approvals when the feature flag is disabled", async () => {

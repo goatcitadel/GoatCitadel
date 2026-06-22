@@ -318,10 +318,12 @@ describe("Loop 8 gateway service coverage", () => {
         expect.objectContaining({
           skillId: "skill-extra",
           capabilityCategory: "community_imported",
-          lifecycleState: "approved",
-          callable: true,
+          lifecycleState: "candidate",
+          callable: false,
           trustLabel: "Imported/community",
+          reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
           lifecycle: expect.objectContaining({
+            lifecycleState: "candidate",
             provenance: {
               source: "extra",
               sourceRef: "https://github.com/example/loop8-skill",
@@ -341,7 +343,8 @@ describe("Loop 8 gateway service coverage", () => {
     );
     expect(storage.skillLifecycle.find("skill-extra")).toMatchObject({
       category: "community_imported",
-      lifecycleState: "approved",
+      lifecycleState: "candidate",
+      reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
       provenance: expect.objectContaining({
         sourceRef: "https://github.com/example/loop8-skill",
       }),
@@ -362,7 +365,7 @@ describe("Loop 8 gateway service coverage", () => {
           capabilityId: "skill:skill-extra",
           sourceRef: "https://github.com/example/loop8-skill",
           sourceProvider: "github",
-          callable: true,
+          callable: false,
         }),
         expect.objectContaining({
           capabilityId: `proposal:${proposal.proposalId}`,
@@ -371,7 +374,7 @@ describe("Loop 8 gateway service coverage", () => {
         }),
       ]),
     );
-    expect(callable.map((entry) => entry.capabilityId)).toContain("skill:skill-extra");
+    expect(callable.map((entry) => entry.capabilityId)).not.toContain("skill:skill-extra");
     expect(callable.map((entry) => entry.capabilityId)).not.toContain("skill:skill-disabled");
     await expect(
       service.createCodeModeRun({

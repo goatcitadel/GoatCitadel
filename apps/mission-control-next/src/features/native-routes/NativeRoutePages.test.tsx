@@ -925,7 +925,7 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain(
       "Score all completed defensive security runs before treating this gate as release evidence.",
     );
-    expect(text).toContain("Visible red-team tests");
+    expect(text).toContain("Red-team packs are visible as governed definitions");
     expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
     expect(text).toContain("Import and open defensive security pack");
     expect(text).toContain("Review security pack scoring");

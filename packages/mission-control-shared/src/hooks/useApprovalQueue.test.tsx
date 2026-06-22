@@ -610,7 +610,7 @@ describe("useApprovalQueue", () => {
     expect(hook.result.summary).toBeNull();
   });
 
-  it("loads durable status, trace previews, and resumes paused checkpoints", async () => {
+  it("loads durable status, trace previews, and resumes paused checkpoints through durable execution", async () => {
     apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
       canonical: { runId: "run-1" },
       approval: { approvalId: "pending-1" },
@@ -671,6 +671,11 @@ describe("useApprovalQueue", () => {
       await hook.result.resumeFromCheckpoint("pending-1");
     });
     expect(apiMocks.resumeDurableRun).toHaveBeenCalledWith("run-1", "operator");
+    expect(apiMocks.fetchDurableRun).toHaveBeenNthCalledWith(1, "run-1");
+    expect(apiMocks.fetchDurableRun).toHaveBeenNthCalledWith(2, "run-1");
+    expect(apiMocks.resumeDurableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      apiMocks.fetchDurableRun.mock.invocationCallOrder[1],
+    );
     expect(hook.result.durableByApprovalId["pending-1"]).toMatchObject({
       runId: "run-1",
       status: "completed",

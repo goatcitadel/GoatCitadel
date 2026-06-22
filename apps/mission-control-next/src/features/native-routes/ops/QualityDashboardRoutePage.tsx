@@ -278,23 +278,20 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       icon={BarChart3}
       kicker={routeKicker(route)}
       title="Quality Dashboard"
+      className="mc-next-quality-dashboard-page"
       description={`Evaluation proof, prompt-pack gates, and export posture for ${activeWorkspaceName}.`}
       loading={loading}
       error={error}
       metrics={[
-        { label: "Visible prompt packs", value: String(packs.length) },
-        { label: "Visible pack tests", value: String(totalTests) },
-        { label: "Visible red-team tests", value: String(securityEvalTests) },
-        { label: "Visible eval runs", value: String(evalRuns.length) },
-        { label: "Visible Pareto models", value: String(paretoModels.length) },
+        { label: "Prompt packs", value: String(packs.length) },
+        { label: "Pack tests", value: String(totalTests) },
+        { label: "Red team tests", value: String(securityEvalTests) },
+        { label: "Eval runs", value: String(evalRuns.length) },
+        { label: "Pareto", value: String(paretoModels.length) },
       ]}
       actions={
         <>
-          <NativeButton
-            variant="secondary"
-            onClick={() => void copyEvalProofExport()}
-            disabled={exporting}
-          >
+          <NativeButton variant="secondary" onClick={() => void copyEvalProofExport()} disabled={exporting}>
             <ClipboardCopy className="h-4 w-4" />
             {exporting ? "Exporting..." : "Copy eval proof export"}
           </NativeButton>
@@ -420,10 +417,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   <ClipboardCopy className="h-4 w-4" />
                   Copy prompt-pack export path
                 </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => openPromptPackWorkbench(selectedPack?.packId)}
-                >
+                <NativeButton variant="secondary" onClick={() => openPromptPackWorkbench(selectedPack?.packId)}>
                   Open selected pack
                 </NativeButton>
               </div>
@@ -443,9 +437,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             { label: "Tests", value: String(securityEvalTests) },
           ]}
         >
-          {data?.securityEvalWarnings?.[0] ? (
-            <NoticeBanner tone="info" message={data.securityEvalWarnings[0]} />
-          ) : null}
+          {data?.securityEvalWarnings?.[0] ? <NoticeBanner tone="info" message={data.securityEvalWarnings[0]} /> : null}
           <NativeList
             density="compact"
             items={securityEvalPacks.map((pack) => ({
@@ -511,9 +503,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             },
           ]}
         >
-          {data?.securityGateWarnings?.[0] ? (
-            <NoticeBanner tone="info" message={data.securityGateWarnings[0]} />
-          ) : null}
+          {data?.securityGateWarnings?.[0] ? <NoticeBanner tone="info" message={data.securityGateWarnings[0]} /> : null}
           <NativeList
             density="compact"
             items={securityGates.map((gate) => ({
@@ -748,11 +738,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             emptyLabel="No export surfaces are registered."
           />
           <div className="mc-next-approvals-inline-actions">
-            <NativeButton
-              variant="secondary"
-              onClick={() => void copyOtelQualityExport()}
-              disabled={otelExporting}
-            >
+            <NativeButton variant="secondary" onClick={() => void copyOtelQualityExport()} disabled={otelExporting}>
               <ClipboardCopy className="h-4 w-4" />
               {otelExporting ? "Exporting..." : "Copy OTel evidence"}
             </NativeButton>

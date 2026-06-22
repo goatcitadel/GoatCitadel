@@ -4,7 +4,7 @@
  */
 
 import type { CronJobRecord, CronReviewItem, CronRunDiff } from "@goatcitadel/contracts";
-import type { CronAutomationService } from "./gateway/cron-automation-service.js";
+import type { CronAutomationService, CronRunSnapshot } from "./gateway/cron-automation-service.js";
 
 export interface CronSchedulerHost {
   readonly cronAutomationService: CronAutomationService;
@@ -73,18 +73,7 @@ export async function runCronJobNow(
   return host.cronAutomationService.runCronJobNow(jobId);
 }
 
-export function findCronRunById(
-  host: CronSchedulerHost,
-  runId: string,
-):
-  | {
-      runId: string;
-      jobId: string;
-      status: "ok";
-      finishedAt?: string;
-      output?: string;
-    }
-  | undefined {
+export function findCronRunById(host: CronSchedulerHost, runId: string): CronRunSnapshot | undefined {
   return host.cronAutomationService.findCronRunById(runId);
 }
 

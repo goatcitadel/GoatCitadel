@@ -507,6 +507,48 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(evaluation.reasonCodes).toContain("citadel_ward_requires_approval");
   });
 
+  it("keeps Citadel Ward approval requirements stronger than Code Mode preapproval", () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "company"
+            ? [
+                {
+                  wardId: "ward-session-review",
+                  citadelId: "company",
+                  name: "Review session status",
+                  actionPattern: "session.*",
+                  effect: "require_approval",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "approve_all" } },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "session.status",
+      args: {},
+      agentId: "code-mode:run-1",
+      sessionId: "session",
+      citadelId: "company",
+      policyContext: {
+        approvedCodeModeRunId: "run-1",
+      },
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("approved_code_mode_run");
+    expect(evaluation.reasonCodes).toContain("citadel_ward_requires_approval");
+  });
+
   it("does not consult Citadel Wards when the request carries no citadelId", () => {
     const storage = createStorageStub();
     const listWards = vi.fn(() => []);

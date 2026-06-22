@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { randomUUID } from "node:crypto";
 import type {
   CronJobRecord,
@@ -44,12 +45,15 @@ interface CronReviewRow {
   resolved_at: string | null;
 }
 
-interface CronRunSnapshot {
+export interface CronRunSnapshot {
   runId: string;
   jobId: string;
-  status: "ok";
+  status: "ok" | "failed" | "unknown";
   finishedAt?: string;
   output?: string;
+  failure?: CronJobRecord["lastFailure"];
+  failureCount?: number;
+  backoffUntil?: string;
 }
 
 interface CronRunDiffRow {
@@ -531,9 +535,12 @@ export class CronAutomationService {
     return {
       runId: normalized,
       jobId: match.jobId,
-      status: "ok",
+      status: match.lastRunStatus ?? "unknown",
       finishedAt: match.lastRunAt,
       output: match.lastRunOutput,
+      failure: match.lastFailure,
+      failureCount: match.failureCount,
+      backoffUntil: match.backoffUntil,
     };
   }
 

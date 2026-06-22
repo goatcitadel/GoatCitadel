@@ -44,6 +44,10 @@ describe("CitadelRepository", () => {
     assert.equal(created.slug, "client-alpha");
     assert.equal(created.lifecycleStatus, "active");
     assert.equal(created.defaultWorkspaceId, "engineering");
+    assert.equal(
+      repo.listRecords("active").find((record) => record.citadelId === created.citadelId)?.hasCharter,
+      false,
+    );
     assert.deepEqual(
       repo
         .listRecords("active")
@@ -87,6 +91,8 @@ describe("CitadelRepository", () => {
 
   it("upserts and reads a charter with defaults applied", () => {
     const repo = createRepo();
+    repo.createRecord({ citadelId: "ws-1", name: "Workspace One", slug: "ws-1", kind: "company" });
+    assert.equal(repo.listRecords("active").find((record) => record.citadelId === "ws-1")?.hasCharter, false);
     const charter = repo.upsertCharter({
       citadelId: "ws-1",
       purpose: "Run the company",
@@ -101,6 +107,7 @@ describe("CitadelRepository", () => {
     assert.equal(charter.modelPolicyDefault, "hybrid_guarded");
 
     assert.deepEqual(repo.getCharter("ws-1"), charter);
+    assert.equal(repo.listRecords("active").find((record) => record.citadelId === "ws-1")?.hasCharter, true);
   });
 
   it("updates an existing charter on upsert", () => {

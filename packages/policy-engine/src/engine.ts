@@ -789,7 +789,13 @@ export class ToolPolicyEngine {
       requiresApproval = true;
     }
     const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
-    if (codeModeRunPreapproved && riskLevel !== "nuclear" && !shellRisk?.risky && !outsideRootsReadRequiresApproval) {
+    if (
+      codeModeRunPreapproved &&
+      !wardRequiresApproval &&
+      riskLevel !== "nuclear" &&
+      !shellRisk?.risky &&
+      !outsideRootsReadRequiresApproval
+    ) {
       requiresApproval = false;
     }
     // A remote A2A peer (lowest-trust inbound actor) must not ride the local

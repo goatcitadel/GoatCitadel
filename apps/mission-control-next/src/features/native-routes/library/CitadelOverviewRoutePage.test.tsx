@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   getCitadel: vi.fn(),
   getCitadelGatehouse: vi.fn(),
   isApiRequestError: vi.fn(),
+  listCitadels: vi.fn(),
   listCitadelTemplates: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   getCitadel: apiMocks.getCitadel,
   getCitadelGatehouse: apiMocks.getCitadelGatehouse,
   isApiRequestError: apiMocks.isApiRequestError,
+  listCitadels: apiMocks.listCitadels,
   listCitadelTemplates: apiMocks.listCitadelTemplates,
 }));
 
@@ -135,6 +137,9 @@ describe("CitadelOverviewRoutePage", () => {
       (error: unknown) => typeof error === "object" && error !== null && "status" in error,
     );
     apiMocks.listCitadelTemplates.mockResolvedValue(TEMPLATES);
+    apiMocks.listCitadels.mockResolvedValue({
+      items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: true }],
+    });
     apiMocks.createCitadelFromTemplate.mockResolvedValue(PERSONAL_CITADEL);
   });
 
@@ -157,6 +162,22 @@ describe("CitadelOverviewRoutePage", () => {
     expect(tree).toContain("Finance");
     expect(tree).toContain("sealed");
     expect(tree).toContain("approval_required");
+  });
+
+  it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {
+    apiMocks.listCitadels.mockResolvedValueOnce({
+      items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: false }],
+    });
+    apiMocks.getCitadel.mockRejectedValue(new Error("detail should not load"));
+    apiMocks.getCitadelGatehouse.mockRejectedValue(new Error("gatehouse should not load"));
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelOverviewRoutePage {...makeProps()} />);
+    });
+    const tree = treeString(renderer!);
+    expect(apiMocks.getCitadel).not.toHaveBeenCalled();
+    expect(apiMocks.getCitadelGatehouse).not.toHaveBeenCalled();
+    expect(tree).toContain("needs a Charter");
   });
 
   it("routes to the Mason when the workspace is not a Citadel yet (404)", async () => {

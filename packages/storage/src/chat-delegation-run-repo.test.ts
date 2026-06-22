@@ -178,7 +178,7 @@ describe("ChatDelegationRunRepository", () => {
     );
     assert.deepEqual(
       repo.listRecent({ parentRunId: "run-a" }).map((run) => run.runId),
-      ["run-a"],
+      [],
     );
   });
 

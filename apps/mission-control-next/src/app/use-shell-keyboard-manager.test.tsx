@@ -19,7 +19,15 @@ type Listeners = {
   onToggleShortcuts: Mock<() => void>;
 };
 
-function Driver({ isPaletteOpen, listeners }: { isPaletteOpen: boolean; listeners: Listeners }) {
+function Driver({
+  isPaletteOpen,
+  listeners,
+  shellShortcutsSuspended = false,
+}: {
+  isPaletteOpen: boolean;
+  listeners: Listeners;
+  shellShortcutsSuspended?: boolean;
+}) {
   useShellKeyboardManager({
     onOpenPalette: listeners.onOpenPalette,
     onClosePalette: listeners.onClosePalette,
@@ -27,6 +35,7 @@ function Driver({ isPaletteOpen, listeners }: { isPaletteOpen: boolean; listener
     onDismissTopmost: listeners.onDismissTopmost,
     onJumpToArea: listeners.onJumpToArea,
     onToggleShortcuts: listeners.onToggleShortcuts,
+    shellShortcutsSuspended,
   });
   return null;
 }
@@ -63,6 +72,12 @@ describe("useShellKeyboardManager", () => {
   function mount(isPaletteOpen: boolean) {
     act(() => {
       renderer = create(createElement(Driver, { isPaletteOpen, listeners }));
+    });
+  }
+
+  function mountSuspended(isPaletteOpen: boolean) {
+    act(() => {
+      renderer = create(createElement(Driver, { isPaletteOpen, listeners, shellShortcutsSuspended: true }));
     });
   }
 
@@ -153,6 +168,22 @@ describe("useShellKeyboardManager", () => {
     mount(false);
     emitKey({ key: "?", shiftKey: true });
     expect(listeners.onToggleShortcuts).toHaveBeenCalledTimes(1);
+  });
+
+  it("suspends shell shortcuts while a modal owns focus but still delegates Escape", () => {
+    listeners.onDismissTopmost.mockReturnValue(true);
+    mountSuspended(false);
+
+    emitKey({ key: "k", metaKey: true });
+    emitKey({ key: "?" });
+    emitKey({ key: "g" });
+    emitKey({ key: "c" });
+    emitKey({ key: "Escape" });
+
+    expect(listeners.onOpenPalette).not.toHaveBeenCalled();
+    expect(listeners.onToggleShortcuts).not.toHaveBeenCalled();
+    expect(listeners.onJumpToArea).not.toHaveBeenCalled();
+    expect(listeners.onDismissTopmost).toHaveBeenCalledTimes(1);
   });
 
   it("does not toggle shortcuts when focus is in an input", () => {

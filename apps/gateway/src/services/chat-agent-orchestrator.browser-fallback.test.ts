@@ -24,6 +24,367 @@ import {
 } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator browser fallback behavior", () => {
+  it("continues Cowork from checkpoint-window evidence when maxToolLoops is exhausted", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(toolCallCompletion("cowork checkpoint evidence 1"))
+      .mockResolvedValueOnce(toolCallCompletion("cowork checkpoint evidence 2"))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Finished from checkpoint evidence.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-checkpoint-1",
+        result: {
+          results: [
+            {
+              title: "Checkpoint evidence 1",
+              url: "https://example.com/cowork/checkpoint-1",
+              snippet: "First evidence item",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-checkpoint-2",
+        result: {
+          results: [
+            {
+              title: "Checkpoint evidence 2",
+              url: "https://example.com/cowork/checkpoint-2",
+              snippet: "Second evidence item",
+            },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-checkpoint",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-checkpoint",
+      content: "Cowork: use web lookup to gather evidence, then synthesize a brief operator handoff.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Cowork: use web lookup to gather evidence, then synthesize a brief operator handoff.",
+        },
+      ],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.assistantContent).toContain("Finished from checkpoint evidence.");
+    expect(result.turnTrace.routing.fallbackReason).toContain("Cowork loop checkpoint 1");
+    expect(result.turnTrace.failure).toBeUndefined();
+  });
+
+  it("stops Cowork after two checkpoint windows without new progress", async () => {
+    const prompt =
+      "Cowork: locate boardgame/tabletop game stores within a 10-mile radius of 91303 and find email addresses plus who I should address in them, but stop visibly if the tool loop makes no progress.";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "cowork empty checkpoint 1" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "cowork empty checkpoint 2" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "cowork empty checkpoint 3" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "cowork empty checkpoint 4" }));
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-empty-checkpoint",
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-repeated-loop",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-repeated-loop",
+      content: prompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    expect(invokeTool).toHaveBeenCalledTimes(4);
+    expect(result.turnTrace.failure).toEqual(
+      expect.objectContaining({
+        failureClass: "tool_loop_guard",
+        message: expect.stringContaining("repeated_tool_loop"),
+        recommendedAction: "retry_narrower",
+      }),
+    );
+    expect(result.turnTrace.failure?.message).toContain("candidate_discovery_incomplete");
+    expect(result.turnTrace.routing.fallbackReason).toContain("repeated_tool_loop");
+  });
+
+  it("treats structured local-business blockers as Cowork checkpoint progress before blocking repeated loops", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "board game stores 91303 email" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "tabletop stores 91303 contacts" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "board game stores 91303 email" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "tabletop stores 91303 contacts" }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "Checkpointed partial handoff: listing sources blocked access, and email/name verification remains open.",
+            },
+          },
+        ],
+      });
+    const blockedLocalBusinessResult = (attempt: number): ToolInvokeResult => ({
+      outcome: "blocked",
+      policyReason: `local-business provider unavailable attempt ${attempt}`,
+      auditEventId: `audit-local-business-blocked-${attempt}`,
+      result: {
+        localBusinessResearch: {
+          kind: "local_business_contact_research",
+          workflow: "local_business.research",
+          candidates: [],
+          blockers: ["Yelp returned 403"],
+          unresolvedNextSteps: ["Use an official source or configured local-business provider."],
+        },
+      },
+    });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce(blockedLocalBusinessResult(1))
+      .mockResolvedValueOnce(blockedLocalBusinessResult(2))
+      .mockResolvedValueOnce(blockedLocalBusinessResult(3))
+      .mockResolvedValueOnce(blockedLocalBusinessResult(4));
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const prompt =
+      "Cowork: locate boardgame/tabletop game stores within a 10-mile radius of 91303 and find email addresses plus who I should address in them.";
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-local-business-blockers",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-local-business-blockers",
+      content: prompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(5);
+    expect(invokeTool).toHaveBeenCalledTimes(4);
+    expect(result.assistantContent).toContain("Checkpointed partial handoff");
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.turnTrace.routing.fallbackReason).toContain("Cowork loop checkpoint 2");
+    expect(result.turnTrace.routing.fallbackReason).not.toContain("repeated_tool_loop");
+  });
+
+  it("retains local-business research evidence when final citations come from navigation instead of search annotation", async () => {
+    const prompt =
+      "Can you locate all the boardgame/tabletop game stores within a 10-mile radius of 91303 and find the email addresses and who I should address in them?";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://cashcardsunlimited.example/contact",
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "Partial verified handoff:\n- Cash Cards Unlimited - info@cashcardsunlimited.com; no named contact verified.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cash-cards-contact",
+      result: {
+        finalUrl: "https://cashcardsunlimited.example/contact",
+        title: "Cash Cards Unlimited - Contact",
+        textSnippet:
+          "Cash Cards Unlimited is a card and tabletop game store near Canoga Park, CA 91303. Contact: info@cashcardsunlimited.com.",
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.navigate", "local_business.research"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-local-business-final-evidence",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-local-business-final-evidence",
+      content: prompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    const retainedResearchRun = result.turnTrace.toolRuns.find(
+      (toolRun) => toolRun.toolName === "local_business.research",
+    );
+    expect(retainedResearchRun).toMatchObject({
+      status: "executed",
+      result: expect.objectContaining({
+        kind: "local_business_contact_research",
+        workflow: "local_business.research",
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            storeName: "Cash Cards Unlimited",
+            email: "info@cashcardsunlimited.com",
+            verificationStatus: "partial",
+          }),
+        ]),
+      }),
+    });
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(result.turnTrace.toolRuns.filter((toolRun) => toolRun.toolName === "browser.search")).toHaveLength(0);
+  });
+
+  it("merges final cited local-business evidence even after earlier search progress exists", async () => {
+    const prompt =
+      "Can you locate all the boardgame/tabletop game stores within a 10-mile radius of 91303 and find the email addresses and who I should address in them?";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", { query: "board game store 91303 contact email" }),
+      )
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "Partial verified handoff:\n- Cash Cards Unlimited - info@cashcardsunlimited.com; no named contact verified.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cash-cards-search",
+      result: {
+        results: [
+          {
+            title: "Cash Cards Unlimited - Contact",
+            url: "https://cashcardsunlimited.example/contact",
+            snippet:
+              "Cash Cards Unlimited is a card and tabletop game store near Canoga Park, CA 91303. Contact: info@cashcardsunlimited.com.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "local_business.research"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-local-business-search-final-evidence",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-local-business-search-final-evidence",
+      content: prompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.turnTrace.toolRuns.filter((toolRun) => toolRun.toolName === "browser.search")).toHaveLength(1);
+    const retainedResearchRun = result.turnTrace.toolRuns.find(
+      (toolRun) => toolRun.toolName === "local_business.research",
+    );
+    expect(retainedResearchRun).toMatchObject({
+      status: "executed",
+      result: expect.objectContaining({
+        kind: "local_business_contact_research",
+        workflow: "local_business.research",
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            storeName: "Cash Cards Unlimited",
+            email: "info@cashcardsunlimited.com",
+          }),
+        ]),
+      }),
+    });
+  });
+
   it("grounds browser.navigate from the most recent browser.search results", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -230,9 +591,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     )[0]?.[0];
     const query = String(firstInvokeCall?.args.query ?? "");
     expect(firstInvokeCall?.toolName).toBe("browser.search");
-    expect(query).toBe(
-      "board game and tabletop game store 91303 Canoga Park Woodland Hills Winnetka 10 miles official contact email",
-    );
+    expect(query).toBe("Canoga Park 91303 TCG contact game store official email 10 mile radius");
     expect(query).not.toMatch(/Delegated role|Execute the main workstream|Yelp|"/i);
     expect(storage.chatToolRuns.listByTurn(turnId)[0]?.result).toMatchObject({
       localBusinessResearch: {

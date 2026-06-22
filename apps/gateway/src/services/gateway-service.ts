@@ -632,6 +632,7 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "http.get",
   // P2-S4a: read-only tier-2 recall over this conversation's own message history.
   "session.search",
+  "local_business.research",
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
@@ -6101,7 +6102,7 @@ export class GatewayService {
     const workspaceId = this.normalizeWorkspaceId(
       input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
     );
-    const citadelId = input.citadelId ?? this.storage.workspaces.find(workspaceId)?.citadelId;
+    const citadelId = input.citadelId ?? this.storage.workspaces?.find(workspaceId)?.citadelId;
     return this.policyEngine.evaluateAccess(
       this.enrichToolPolicyContext(
         this.applyRuntimeBrowserBackendDefaults(

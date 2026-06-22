@@ -256,6 +256,43 @@ describe("TaskLifecycleService agentic runtime", () => {
     );
   });
 
+  it("does not resolve orphaned projected Cowork runs through caller workspace fallback", () => {
+    const { service, storage } = createService();
+    storage.durableRuns.createRun({
+      runId: "durable-orphan-child",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    storage.chatDelegationRuns.create({
+      runId: "orch-orphan",
+      sessionId: "missing-parent-session",
+      taskId: "chat-orchestration:missing-parent-turn",
+      objective: "Should not inherit caller workspace",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+    storage.chatDelegationSteps.create({
+      stepId: "orch-orphan:researcher",
+      runId: "orch-orphan",
+      role: "Researcher",
+      index: 0,
+      status: "running",
+      durableRunId: "durable-orphan-child",
+      startedAt: "2026-06-22T00:01:00.000Z",
+    });
+
+    expect(() => service.getAgenticRunTree("orch-orphan", { workspaceId: "workspace-a" })).toThrow(
+      /Agentic run not found/,
+    );
+    expect(() => service.getAgenticRunTree("orch-orphan")).toThrow(/Agentic run not found/);
+    expect(storage.chatDelegationSteps.get("orch-orphan:researcher").status).toBe("running");
+    expect(storage.chatDelegationRuns.get("orch-orphan").status).toBe("running");
+  });
+
   it("rejects unsafe terminal-state controls with a visible diagnostic", () => {
     const { service, storage } = createService();
     const task = service.createTask({
@@ -685,6 +722,57 @@ describe("TaskLifecycleService agentic runtime", () => {
     const secondPage = service.listAgenticRuns({ surface: "cowork", limit: 2, cursor: firstPage.nextCursor });
     expect(secondPage.items.map((item) => item.runId)).toEqual(["run-oldest"]);
     expect(secondPage.nextCursor).toBeUndefined();
+  });
+
+  it("merges fresh projected Cowork runs before task-backed rows on the first page", () => {
+    const { service, storage } = createService();
+    storage.chatSessionMeta.ensure("projected-session", "2026-05-05T12:05:00.000Z", "default");
+    storage.chatDelegationRuns.create({
+      runId: "projected-newest",
+      sessionId: "projected-session",
+      taskId: "chat-orchestration:turn-projected",
+      objective: "Fresh projected orchestration",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-05-05T12:05:00.000Z",
+    });
+    storage.tasks.create(
+      {
+        title: "Task backed run",
+        status: "in_progress",
+        priority: "normal",
+        agenticContext: {
+          runId: "task-backed",
+          surface: "cowork",
+          status: "running",
+          parentSessionId: "sess-task",
+        },
+      },
+      "2026-05-05T12:04:00.000Z",
+    );
+    storage.tasks.create(
+      {
+        title: "Older task backed run",
+        status: "in_progress",
+        priority: "normal",
+        agenticContext: {
+          runId: "task-older",
+          surface: "cowork",
+          status: "running",
+          parentSessionId: "sess-task",
+        },
+      },
+      "2026-05-05T12:03:00.000Z",
+    );
+
+    const firstPage = service.listAgenticRuns({ surface: "cowork", limit: 2 });
+
+    expect(firstPage.items.map((item) => item.runId)).toEqual(["projected-newest", "task-backed"]);
+    expect(firstPage.nextCursor).toBe(`${firstPage.items[1]!.updatedAt}|${firstPage.items[1]!.taskId}`);
+    expect(service.listAgenticRuns({ surface: "cowork", limit: 2, cursor: firstPage.nextCursor }).items).toEqual([
+      expect.objectContaining({ runId: "task-older" }),
+    ]);
   });
 
   it("defaults agentic run listings to the default workspace", () => {

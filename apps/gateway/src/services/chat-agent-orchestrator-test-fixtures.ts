@@ -412,6 +412,40 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         preferredForIntents: ["fetch_url", "web_lookup"],
       };
     }
+    if (toolName === "local_business.research") {
+      return {
+        toolName: "local_business.research",
+        category: "research",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Build structured local-business contact research state",
+        argSchema: {
+          type: "object",
+          properties: {
+            objective: { type: "string" },
+            citations: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  url: { type: "string" },
+                  snippet: { type: "string" },
+                },
+                required: ["url"],
+              },
+            },
+          },
+          required: ["objective"],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["cowork"],
+        preferredForIntents: ["local_business_research", "contact_research", "research"],
+        readOnly: true,
+        deterministic: true,
+      };
+    }
     if (toolName === "time.now") {
       return {
         toolName: "time.now",

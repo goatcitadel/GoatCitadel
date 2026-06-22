@@ -1364,4 +1364,40 @@ describe("findCronRunById", () => {
     expect(lookup?.status).toBe("ok");
     expect(lookup?.output).toBe("alert");
   });
+
+  it("returns failed run status and failure metadata when the last run failed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "failed-job",
+      name: "Failed",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "exit", args: ["2"] } },
+    });
+
+    try {
+      await expect(service.runCronJobNow("failed-job")).rejects.toThrow("no_agent cron job failed: failed-job");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const job = service.getCronJob("failed-job");
+    expect(job.lastRunId).toBeDefined();
+    const lookup = service.findCronRunById(job.lastRunId ?? "");
+    expect(lookup).toMatchObject({
+      jobId: "failed-job",
+      runId: job.lastRunId,
+      status: "failed",
+      failure: {
+        message: expect.stringContaining("no_agent cron job failed: failed-job"),
+      },
+      failureCount: 1,
+      backoffUntil: "2026-05-15T12:04:00.000Z",
+    });
+  });
 });

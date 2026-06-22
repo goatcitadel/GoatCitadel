@@ -84,6 +84,16 @@ function buildCoworkPanel(onAgenticControl = vi.fn()): Extract<MissionThreadedWo
         roleItems: { items: [], overflow: 0 },
         timelineItems: { items: [], overflow: 0 },
         outputItems: { items: [], overflow: 0 },
+        continuationAvailability: {
+          available: true,
+          label: "Continue",
+          value: "available",
+          summary: "Continue.",
+          recommendedAction: "Continue.",
+          reasonCodes: [],
+        },
+        childProgressItems: { items: [], overflow: 0 },
+        researchDiagnostics: { items: [], overflow: 0 },
         continuationGate: {
           decision: "continue",
           reasonCodes: [],
@@ -2239,9 +2249,9 @@ describe("ThreadedWorkflowPanel", () => {
     });
 
     expect(JSON.stringify(renderer!.toJSON())).toContain("failed-but-usable upstream handoff");
-    expect(
-      renderer!.root.findAll((node) => node.type === "li" && node.props["data-tone"] === "warning"),
-    ).toHaveLength(1);
+    expect(renderer!.root.findAll((node) => node.type === "li" && node.props["data-tone"] === "warning")).toHaveLength(
+      1,
+    );
   });
 
   it("invokes cowork next-action variants and stop callbacks without runtime visibility", async () => {

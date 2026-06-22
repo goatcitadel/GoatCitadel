@@ -169,6 +169,7 @@ import {
 } from "./chat-agent-prompt-lab-contract.js";
 import {
   annotateLocalBusinessBrowserResult,
+  buildLocalBusinessResearchAnnotationFromEvidence,
   buildLocalBusinessResearchPlan,
   resolveLocalBusinessSearchQuery,
 } from "./local-business-research-service.js";
@@ -361,6 +362,7 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "memory.upsert": ["namespace", "title", "content"],
   "embeddings.query": ["query"],
 };
+const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";
 const log = logger.child("chat-agent-orchestrator");
 const MAX_EXPOSED_TOOLS_PER_TURN = {
   chat: 8,
@@ -374,6 +376,21 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
 } as const satisfies Record<ChatMode, number>;
 
 type ChatCompletionMessage = ChatCompletionRequest["messages"][number];
+type PromptLabRunContract = ReturnType<typeof parsePromptLabRunContract>;
+
+interface CoworkContinuationProgressSnapshot {
+  readonly toolResultCount: number;
+  readonly sourceUrls: ReadonlySet<string>;
+  readonly childCompletionCount: number;
+  readonly missingRequiredEvidenceCount: number;
+  readonly localBusinessResearchExpected: boolean;
+  readonly localBusinessCandidateKeys: ReadonlySet<string>;
+  readonly localBusinessVerifiedCandidateKeys: ReadonlySet<string>;
+  readonly localBusinessSourceUrls: ReadonlySet<string>;
+  readonly localBusinessBlockerKeys: ReadonlySet<string>;
+  readonly localBusinessBlockedSourceKeys: ReadonlySet<string>;
+  readonly localBusinessUnresolvedNextStepKeys: ReadonlySet<string>;
+}
 
 export interface ChatAgentTurnInput {
   sessionId: string;
@@ -480,6 +497,48 @@ export class ChatAgentOrchestrator {
     return readBlockerTemplateStrictness(this.deps.storage.systemSettings);
   }
 
+  private recordLocalBusinessResearchEvidenceRun(input: {
+    turnInput: ChatAgentTurnInput;
+    assistantContent: string;
+    citations: ChatCitationRecord[];
+    toolRuns: ChatToolRunRecord[];
+  }): void {
+    if (input.turnInput.mode !== "cowork" || !buildLocalBusinessResearchPlan(input.turnInput.content)) {
+      return;
+    }
+    const annotation = buildLocalBusinessResearchAnnotationFromEvidence({
+      userContent: input.turnInput.content,
+      finalAnswer: input.assistantContent,
+      citations: [...input.citations, ...readLocalBusinessEvidenceCitationsFromToolRuns(input.toolRuns)],
+    });
+    if (!annotation || !hasSubstantiveLocalBusinessAnnotation(annotation)) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const record = this.deps.storage.chatToolRuns.create({
+      toolRunId: randomUUID(),
+      turnId: input.turnInput.turnId,
+      sessionId: input.turnInput.sessionId,
+      toolName: LOCAL_BUSINESS_RESEARCH_TOOL_NAME,
+      status: "executed",
+      args: {
+        objective: input.turnInput.content,
+        location: annotation.plan.location,
+        radiusMiles: annotation.plan.radiusMiles,
+        categories: annotation.plan.categories,
+        requiredContactFields: [
+          annotation.plan.requireEmail ? "email" : undefined,
+          annotation.plan.requireContactName ? "contact_name" : undefined,
+        ].filter(Boolean),
+        evidenceSource: "final_synthesis_and_citations",
+      },
+      result: annotation as unknown as Record<string, unknown>,
+      startedAt: now,
+      finishedAt: now,
+    });
+    input.toolRuns.push(record);
+  }
+
   public async run(input: ChatAgentTurnInput): Promise<ChatAgentTurnResult> {
     const events: ChatStreamChunkDraft[] = [];
     for await (const chunk of this.runStream(input)) {
@@ -516,6 +575,7 @@ export class ChatAgentOrchestrator {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
     const promptLabHarnessTurnForIntent =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
     const suppressPromptLabCodeArtifactTools =
@@ -757,10 +817,16 @@ export class ChatAgentOrchestrator {
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
-    const boundedByTurnBudget = executionBudget.boundedByTurnBudget !== false;
-    let turnBudgetDeadline = boundedByTurnBudget
-      ? createTurnBudgetDeadline(effectiveTurnBudgetMs)
-      : Number.POSITIVE_INFINITY;
+    let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+    const coworkCheckpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
+    let coworkContinuationWindowIndex = 0;
+    let coworkNoProgressWindowCount = 0;
+    let coworkContinuationProgressSnapshot = captureCoworkContinuationProgress({
+      citations,
+      localBusinessResearchExpected,
+      promptLabContract,
+      toolRuns,
+    });
     const markCompletionRepair = (
       kind: ChatTurnRepairKind,
       source: ChatTurnRepairSource,
@@ -2389,9 +2455,17 @@ export class ChatAgentOrchestrator {
 
           let shortCircuitedOnBudget = false;
           let retryPromptLabSynthesisOnly = false;
+          let coworkToolRunBudgetCheckpoint = false;
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
             if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+              if (coworkCheckpointContinuation) {
+                coworkToolRunBudgetCheckpoint = true;
+                flushSkippedToolCallResults(
+                  `Cowork checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
+                );
+                break;
+              }
               if (
                 !promptLabSynthesisOnly &&
                 shouldSynthesizePromptLabFromGatheredEvidence({
@@ -2695,6 +2769,81 @@ export class ChatAgentOrchestrator {
             );
             noteDegradedOutcome(circuitBreakerFailureClass ?? "tool_circuit_breaker");
             break;
+          }
+
+          if (
+            coworkCheckpointContinuation &&
+            (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)
+          ) {
+            const nextSnapshot = captureCoworkContinuationProgress({
+              citations,
+              localBusinessResearchExpected,
+              promptLabContract,
+              toolRuns,
+            });
+            const windowHadProgress = hasCoworkContinuationProgress(coworkContinuationProgressSnapshot, nextSnapshot);
+            coworkNoProgressWindowCount = windowHadProgress ? 0 : coworkNoProgressWindowCount + 1;
+            const checkpointLimitLabel = coworkToolRunBudgetCheckpoint
+              ? `${executionBudget.maxToolRunsPerTurn} tool-call`
+              : `${executionBudget.maxToolLoops} loop`;
+            const checkpointReason = buildCoworkLoopCheckpointReason({
+              checkpointLimitLabel,
+              maxToolLoops: executionBudget.maxToolLoops,
+              noProgressWindowCount: coworkNoProgressWindowCount,
+              windowHadProgress,
+              windowIndex: coworkContinuationWindowIndex + 1,
+            });
+            routingState = {
+              ...routingState,
+              fallbackReason: checkpointReason,
+            };
+            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              status: "running",
+              routing: routingState,
+              loopGuard: createLoopGuardTrace(loopGuardState),
+            });
+            yield {
+              type: "trace_update",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              trace: {
+                ...trace,
+                routing: routingState,
+                loopGuard: createLoopGuardTrace(loopGuardState),
+                toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                citations: [...citations],
+              },
+            };
+            if (coworkNoProgressWindowCount >= 2) {
+              const repeatedLoopReason = buildCoworkRepeatedLoopDiagnostic(
+                checkpointLimitLabel,
+                coworkNoProgressWindowCount,
+                nextSnapshot,
+              );
+              routingState = {
+                ...routingState,
+                fallbackReason: repeatedLoopReason,
+              };
+              assistantContent = buildToolFailureFallbackMessage(input.content, toolRuns, repeatedLoopReason);
+              finalStatus = "completed";
+              finalFailure = buildChatTurnFailureRecord("tool_loop_guard", repeatedLoopReason);
+              break;
+            }
+            conversationMessages.push({
+              role: "system",
+              content: buildCoworkLoopContinuationInstruction({
+                checkpointLimitLabel,
+                maxToolLoops: executionBudget.maxToolLoops,
+                noProgressWindowCount: coworkNoProgressWindowCount,
+                windowHadProgress,
+                windowIndex: coworkContinuationWindowIndex + 1,
+              }),
+            } as ChatCompletionMessage);
+            coworkContinuationWindowIndex += 1;
+            coworkContinuationProgressSnapshot = nextSnapshot;
+            toolRunCount = 0;
+            loop = -1;
+            continue;
           }
         }
       } catch (error) {
@@ -3001,6 +3150,14 @@ export class ChatAgentOrchestrator {
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
     }
+    // origin/main: record local-business research evidence on the pre-footer
+    // answer (must run before the P0-B footer mutates assistantContent).
+    this.recordLocalBusinessResearchEvidenceRun({
+      turnInput: input,
+      assistantContent,
+      citations,
+      toolRuns,
+    });
     // P0-B honest-degradation surface. Eval-integrity turns are skipped entirely
     // (noteDegradedOutcome is already inert there, so degradedOutcome is
     // undefined). The failed-file-mutation disclosure is surfaced even when the
@@ -3556,6 +3713,45 @@ export class ChatAgentOrchestrator {
           reusedResult: true,
           reuseReason: "matching_recent_browser_result",
         },
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        record: updated,
+        chunk: {
+          type: "tool_result",
+          sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          toolRun: updated,
+        },
+      };
+    }
+
+    if (preflight.toolName === LOCAL_BUSINESS_RESEARCH_TOOL_NAME) {
+      const annotation = buildLocalBusinessResearchAnnotationFromEvidence({
+        userContent:
+          readStringArg(preflight.args.objective) ??
+          readStringArg(preflight.args.originalObjective) ??
+          readStringArg(preflight.args.prompt) ??
+          input.input.content,
+        finalAnswer: readStringArg(preflight.args.finalAnswer),
+        citations: readLocalBusinessEvidenceCitations(preflight.args.citations),
+      });
+      const annotationResult = annotation ?? {
+        kind: "local_business_contact_research",
+        workflow: LOCAL_BUSINESS_RESEARCH_TOOL_NAME,
+        candidates: [],
+        excluded: [],
+        blockers: ["local_business_objective_not_recognized"],
+        verificationNote:
+          "local_business.research could not derive a grounded local-business contact plan from the provided objective.",
+      };
+      const result = {
+        ...annotationResult,
+        localBusinessResearch: annotationResult,
+      };
+      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+        status: "executed",
+        result: result as Record<string, unknown>,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -6851,6 +7047,442 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
     }
   }
   return items;
+}
+
+function captureCoworkContinuationProgress(input: {
+  citations: ChatCitationRecord[];
+  localBusinessResearchExpected: boolean;
+  promptLabContract: PromptLabRunContract;
+  toolRuns: ChatToolRunRecord[];
+}): CoworkContinuationProgressSnapshot {
+  const localBusinessProgress = collectCoworkLocalBusinessProgress(input.toolRuns);
+  return {
+    toolResultCount: input.toolRuns.filter(hasConcreteToolResult).length,
+    sourceUrls: collectCoworkContinuationSourceUrls(input.toolRuns, input.citations),
+    childCompletionCount: countCoworkChildCompletions(input.toolRuns),
+    missingRequiredEvidenceCount: listMissingPromptLabRequiredToolEvidence(input.promptLabContract, input.toolRuns)
+      .length,
+    localBusinessResearchExpected: input.localBusinessResearchExpected,
+    localBusinessCandidateKeys: localBusinessProgress.candidateKeys,
+    localBusinessVerifiedCandidateKeys: localBusinessProgress.verifiedCandidateKeys,
+    localBusinessSourceUrls: localBusinessProgress.sourceUrls,
+    localBusinessBlockerKeys: localBusinessProgress.blockerKeys,
+    localBusinessBlockedSourceKeys: localBusinessProgress.blockedSourceKeys,
+    localBusinessUnresolvedNextStepKeys: localBusinessProgress.unresolvedNextStepKeys,
+  };
+}
+
+function hasCoworkContinuationProgress(
+  before: CoworkContinuationProgressSnapshot,
+  after: CoworkContinuationProgressSnapshot,
+): boolean {
+  return (
+    after.toolResultCount > before.toolResultCount ||
+    after.sourceUrls.size > before.sourceUrls.size ||
+    after.childCompletionCount > before.childCompletionCount ||
+    after.missingRequiredEvidenceCount < before.missingRequiredEvidenceCount ||
+    after.localBusinessCandidateKeys.size > before.localBusinessCandidateKeys.size ||
+    after.localBusinessVerifiedCandidateKeys.size > before.localBusinessVerifiedCandidateKeys.size ||
+    after.localBusinessSourceUrls.size > before.localBusinessSourceUrls.size ||
+    after.localBusinessBlockerKeys.size > before.localBusinessBlockerKeys.size ||
+    after.localBusinessBlockedSourceKeys.size > before.localBusinessBlockedSourceKeys.size ||
+    after.localBusinessUnresolvedNextStepKeys.size > before.localBusinessUnresolvedNextStepKeys.size
+  );
+}
+
+function hasConcreteToolResult(run: ChatToolRunRecord): boolean {
+  return run.status === "executed" && Boolean(run.result) && Object.keys(run.result ?? {}).length > 0;
+}
+
+interface CoworkLocalBusinessProgress {
+  candidateKeys: Set<string>;
+  verifiedCandidateKeys: Set<string>;
+  sourceUrls: Set<string>;
+  blockerKeys: Set<string>;
+  blockedSourceKeys: Set<string>;
+  unresolvedNextStepKeys: Set<string>;
+}
+
+function collectCoworkLocalBusinessProgress(toolRuns: ChatToolRunRecord[]): CoworkLocalBusinessProgress {
+  const progress: CoworkLocalBusinessProgress = {
+    candidateKeys: new Set<string>(),
+    verifiedCandidateKeys: new Set<string>(),
+    sourceUrls: new Set<string>(),
+    blockerKeys: new Set<string>(),
+    blockedSourceKeys: new Set<string>(),
+    unresolvedNextStepKeys: new Set<string>(),
+  };
+  for (const run of toolRuns) {
+    collectCoworkLocalBusinessProgressFromValue(progress, run.result, 0);
+    if (run.status === "blocked" || run.status === "failed") {
+      const failureText = [run.error, run.failureGuidance]
+        .map((value) => value?.trim())
+        .filter(Boolean)
+        .join("\n");
+      if (/\b(?:blocked|403|captcha|not allowlisted|access denied)\b/i.test(failureText)) {
+        const key = normalizeCoworkProgressKey(failureText);
+        progress.blockerKeys.add(key);
+        progress.blockedSourceKeys.add(key);
+      }
+    }
+  }
+  return progress;
+}
+
+function hasSubstantiveLocalBusinessAnnotation(annotation: unknown): boolean {
+  if (!isCoworkRecord(annotation)) {
+    return false;
+  }
+  return (
+    readCoworkRecordArray(annotation.candidates).length > 0 ||
+    readCoworkRecordArray(annotation.excluded).length > 0 ||
+    readCoworkStringArray(annotation.blockers).length > 0 ||
+    readCoworkRecordArray(annotation.stages).length > 0
+  );
+}
+
+function readLocalBusinessEvidenceCitations(value: unknown): Array<{ title?: string; url: string; snippet?: string }> {
+  const citations: Array<{ title?: string; url: string; snippet?: string }> = [];
+  for (const record of readCoworkRecordArray(value)) {
+    const url = readCoworkString(record.url);
+    if (!url) {
+      continue;
+    }
+    citations.push({
+      title: readCoworkString(record.title),
+      url,
+      snippet: readCoworkString(record.snippet),
+    });
+  }
+  return citations;
+}
+
+function readLocalBusinessEvidenceCitationsFromToolRuns(
+  toolRuns: ChatToolRunRecord[],
+): Array<{ title?: string; url: string; snippet?: string }> {
+  const citations: Array<{ title?: string; url: string; snippet?: string }> = [];
+  for (const toolRun of toolRuns) {
+    collectLocalBusinessEvidenceCitationsFromValue(toolRun.result, citations, 0);
+  }
+  const seen = new Set<string>();
+  return citations
+    .filter((citation) => {
+      const key = citation.url.trim();
+      if (!/^https?:\/\//i.test(key) || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 80);
+}
+
+function collectLocalBusinessEvidenceCitationsFromValue(
+  value: unknown,
+  citations: Array<{ title?: string; url: string; snippet?: string }>,
+  depth: number,
+): void {
+  if (!value || depth > 4 || citations.length >= 120) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLocalBusinessEvidenceCitationsFromValue(item, citations, depth + 1);
+    }
+    return;
+  }
+  if (!isCoworkRecord(value)) {
+    return;
+  }
+  const url = readCoworkString(value.finalUrl) ?? readCoworkString(value.url);
+  if (url) {
+    citations.push({
+      title: readCoworkString(value.title),
+      url,
+      snippet: readCoworkString(value.textSnippet) ?? readCoworkString(value.snippet),
+    });
+  }
+  collectLocalBusinessEvidenceCitationsFromValue(value.results, citations, depth + 1);
+}
+
+function readStringArg(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function collectCoworkLocalBusinessProgressFromValue(
+  progress: CoworkLocalBusinessProgress,
+  value: unknown,
+  depth: number,
+): void {
+  if (depth > 6 || !value) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectCoworkLocalBusinessProgressFromValue(progress, item, depth + 1);
+    }
+    return;
+  }
+  if (!isCoworkRecord(value)) {
+    return;
+  }
+  if (value.kind === "local_business_contact_research" || value.workflow === "local_business.research") {
+    collectCoworkLocalBusinessResearchProgress(progress, value);
+  }
+  for (const nested of Object.values(value)) {
+    collectCoworkLocalBusinessProgressFromValue(progress, nested, depth + 1);
+  }
+}
+
+function collectCoworkLocalBusinessResearchProgress(
+  progress: CoworkLocalBusinessProgress,
+  record: Record<string, unknown>,
+): void {
+  for (const candidate of readCoworkRecordArray(record.candidates)) {
+    const urls = readCoworkStringArray(candidate.sourceUrls);
+    const candidateKey =
+      readCoworkString(candidate.storeName) ??
+      readCoworkString(candidate.name) ??
+      readCoworkString(candidate.website) ??
+      urls[0] ??
+      JSON.stringify(candidate).slice(0, 120);
+    progress.candidateKeys.add(normalizeCoworkProgressKey(candidateKey));
+    for (const url of urls) {
+      progress.sourceUrls.add(url);
+    }
+    addCoworkProgressUrl(progress.sourceUrls, candidate.website);
+    if (readCoworkString(candidate.verificationStatus)?.toLowerCase() === "verified") {
+      progress.verifiedCandidateKeys.add(normalizeCoworkProgressKey(candidateKey));
+    }
+    for (const blocker of readCoworkStringArray(candidate.blockers)) {
+      addCoworkProgressBlocker(progress, blocker);
+    }
+    for (const evidence of readCoworkRecordArray(candidate.evidence)) {
+      addCoworkProgressUrl(progress.sourceUrls, evidence.url);
+      if (readCoworkString(evidence.evidenceKind) === "blocked") {
+        addCoworkProgressBlockedSource(progress, readCoworkString(evidence.url) ?? "blocked_evidence");
+      }
+    }
+  }
+  for (const excluded of readCoworkRecordArray(record.excluded)) {
+    addCoworkProgressUrl(progress.sourceUrls, excluded.sourceUrl);
+    const reason = readCoworkString(excluded.reason);
+    if (reason) {
+      addCoworkProgressBlocker(progress, reason);
+      if (/\b(?:blocked|secondary_listing|403|captcha)\b/i.test(reason)) {
+        addCoworkProgressBlockedSource(progress, readCoworkString(excluded.sourceUrl) ?? reason);
+      }
+    }
+  }
+  for (const stage of readCoworkRecordArray(record.stages)) {
+    for (const url of readCoworkStringArray(stage.sourceUrls)) {
+      progress.sourceUrls.add(url);
+    }
+    for (const blocker of readCoworkStringArray(stage.blockers)) {
+      addCoworkProgressBlocker(progress, blocker);
+    }
+    if (readCoworkString(stage.status) === "blocked") {
+      addCoworkProgressBlockedSource(progress, readCoworkString(stage.summary) ?? "blocked_stage");
+    }
+  }
+  for (const blocker of readCoworkStringArray(record.blockers)) {
+    addCoworkProgressBlocker(progress, blocker);
+  }
+  for (const nextStep of [
+    ...readCoworkStringArray(record.unresolvedNextSteps),
+    ...readCoworkStringArray(record.unresolved_next_steps),
+    ...readCoworkStringArray(record.requiredNextSteps),
+    ...readCoworkStringArray(record.required_next_steps),
+    ...readCoworkStringArray(record.nextSteps),
+    ...readCoworkStringArray(record.next_steps),
+    ...readCoworkStringArray(record.unresolved),
+  ]) {
+    progress.unresolvedNextStepKeys.add(normalizeCoworkProgressKey(nextStep));
+  }
+}
+
+function addCoworkProgressBlocker(progress: CoworkLocalBusinessProgress, blocker: string): void {
+  progress.blockerKeys.add(normalizeCoworkProgressKey(blocker));
+  if (/\b(?:blocked|403|captcha|not allowlisted|access denied)\b/i.test(blocker)) {
+    addCoworkProgressBlockedSource(progress, blocker);
+  }
+}
+
+function addCoworkProgressBlockedSource(progress: CoworkLocalBusinessProgress, value: string): void {
+  progress.blockedSourceKeys.add(normalizeCoworkProgressKey(value));
+}
+
+function addCoworkProgressUrl(urls: Set<string>, value: unknown): void {
+  if (typeof value === "string" && /^https?:\/\//i.test(value)) {
+    urls.add(value);
+  }
+}
+
+function readCoworkRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isCoworkRecord) : [];
+}
+
+function readCoworkStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function readCoworkString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeCoworkProgressKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 180);
+}
+
+function isCoworkRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function collectCoworkContinuationSourceUrls(
+  toolRuns: ChatToolRunRecord[],
+  citations: ChatCitationRecord[],
+): ReadonlySet<string> {
+  const urls = new Set<string>();
+  for (const citation of citations) {
+    addCoworkContinuationUrl(urls, citation.url);
+  }
+  for (const run of toolRuns) {
+    for (const citation of inferCitationsFromToolResult(run)) {
+      addCoworkContinuationUrl(urls, citation.url);
+    }
+    addCoworkContinuationUrl(urls, run.args?.url);
+    collectCoworkContinuationUrlsFromValue(urls, run.result, 0);
+  }
+  return urls;
+}
+
+function addCoworkContinuationUrl(urls: Set<string>, value: unknown): void {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) {
+    return;
+  }
+  urls.add(value);
+}
+
+function collectCoworkContinuationUrlsFromValue(urls: Set<string>, value: unknown, depth: number): void {
+  if (depth > 2 || !value) {
+    return;
+  }
+  if (typeof value === "string") {
+    addCoworkContinuationUrl(urls, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectCoworkContinuationUrlsFromValue(urls, item, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  for (const item of Object.values(value as Record<string, unknown>)) {
+    collectCoworkContinuationUrlsFromValue(urls, item, depth + 1);
+  }
+}
+
+function countCoworkChildCompletions(toolRuns: ChatToolRunRecord[]): number {
+  return toolRuns
+    .filter((run) => run.status === "executed" && Boolean(run.result))
+    .reduce((count, run) => count + countCoworkChildCompletionSignals(run.result, 0), 0);
+}
+
+function countCoworkChildCompletionSignals(value: unknown, depth: number): number {
+  if (depth > 3 || !value) {
+    return 0;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((count, item) => count + countCoworkChildCompletionSignals(item, depth + 1), 0);
+  }
+  if (typeof value !== "object") {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  const status = typeof record.status === "string" ? record.status.toLowerCase() : "";
+  const hasOutput =
+    typeof record.output === "string" ||
+    typeof record.content === "string" ||
+    typeof record.assistantContent === "string" ||
+    typeof record.summary === "string" ||
+    Boolean(record.result);
+  let count = /^(completed|complete|succeeded|done)$/.test(status) && hasOutput ? 1 : 0;
+  for (const key of ["children", "childRuns", "childCompletions", "completions", "delegations", "steps"]) {
+    count += countCoworkChildCompletionSignals(record[key], depth + 1);
+  }
+  return count;
+}
+
+function buildCoworkLoopCheckpointReason(input: {
+  checkpointLimitLabel?: string;
+  maxToolLoops: number;
+  noProgressWindowCount: number;
+  windowHadProgress: boolean;
+  windowIndex: number;
+}): string {
+  const progressLabel = input.windowHadProgress
+    ? "progress observed"
+    : `no new progress (${input.noProgressWindowCount} consecutive window)`;
+  const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops} loop`;
+  return `Cowork loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
+}
+
+function buildCoworkLoopContinuationInstruction(input: {
+  checkpointLimitLabel?: string;
+  maxToolLoops: number;
+  noProgressWindowCount: number;
+  windowHadProgress: boolean;
+  windowIndex: number;
+}): string {
+  const progressGuidance = input.windowHadProgress
+    ? "The last window produced new evidence. Continue from those results; synthesize now if the answer is sufficiently grounded."
+    : `The last window produced no new tool results, source URLs, child completions, required-field progress, or structured local-business research progress (${input.noProgressWindowCount} consecutive no-progress window). Change approach once or synthesize the partial truth.`;
+  const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops}-loop`;
+  return [
+    `Cowork continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
+    progressGuidance,
+    "Do not restart the task or repeat identical tool calls. Use narrower arguments when another tool call is needed.",
+    "Prefer a clear checkpoint or final synthesis over open-ended tool work.",
+  ].join("\n");
+}
+
+function buildCoworkRepeatedLoopDiagnostic(
+  checkpointLimitLabel: string,
+  noProgressWindowCount: number,
+  snapshot: CoworkContinuationProgressSnapshot,
+): string {
+  const researchDiagnostics = buildCoworkResearchDiagnosticCodes(snapshot);
+  const diagnosticsSuffix =
+    researchDiagnostics.length > 0 ? ` Research diagnostics: ${researchDiagnostics.join(", ")}.` : "";
+  return `repeated_tool_loop: Cowork continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
+}
+
+function buildCoworkResearchDiagnosticCodes(snapshot: CoworkContinuationProgressSnapshot): string[] {
+  if (!snapshot.localBusinessResearchExpected) {
+    return [];
+  }
+  const codes: string[] = [];
+  if (snapshot.localBusinessBlockedSourceKeys.size > 0) {
+    codes.push("source_access_blocked");
+  }
+  if (snapshot.localBusinessCandidateKeys.size === 0) {
+    codes.push("candidate_discovery_incomplete");
+  }
+  if (
+    snapshot.localBusinessCandidateKeys.size > 0 &&
+    snapshot.localBusinessVerifiedCandidateKeys.size === 0 &&
+    (snapshot.localBusinessBlockerKeys.size > 0 ||
+      snapshot.localBusinessBlockedSourceKeys.size > 0 ||
+      snapshot.localBusinessUnresolvedNextStepKeys.size > 0)
+  ) {
+    codes.push("research_evidence_incomplete");
+  }
+  return codes;
 }
 
 function isRetryableToolFailure(errorText: string | undefined): boolean {

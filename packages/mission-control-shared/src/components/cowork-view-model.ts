@@ -1,7 +1,9 @@
+/* eslint-disable max-lines */
 import type {
   ChatExecutionPlanRecord,
   ChatOrchestrationSummary,
   ChatSessionWorkbenchRecord,
+  ChatTurnTraceRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
   ContinuationGateDecision,
@@ -37,6 +39,9 @@ const MAX_VISIBLE_PLAN_STEPS = 3;
 const MAX_VISIBLE_ROLE_ITEMS = 3;
 const MAX_VISIBLE_TIMELINE_ITEMS = 3;
 const MAX_VISIBLE_OUTPUT_ITEMS = 3;
+const MAX_VISIBLE_CONTACT_ITEMS = 4;
+const MAX_VISIBLE_RESEARCH_DIAGNOSTICS = 4;
+const MAX_VISIBLE_CHILD_PROGRESS_ITEMS = 4;
 
 export type CoworkPrimaryActionKind =
   | "focus_composer"
@@ -61,6 +66,37 @@ export interface CoworkRunMapNode {
   meta?: string;
 }
 
+export type CoworkContactEvidenceStatus = "verified" | "partial" | "missing";
+
+export interface CoworkContactEvidenceItem extends CoworkViewItem {
+  evidenceStatus: CoworkContactEvidenceStatus;
+  storeName: string;
+  email?: string;
+  contactName?: string;
+  website?: string;
+  sourceUrls: string[];
+  missingFields: string[];
+}
+
+export interface CoworkContactEvidenceSummary {
+  label: string;
+  detail: string;
+  verified: {
+    items: CoworkContactEvidenceItem[];
+    overflow: number;
+  };
+  partial: {
+    items: CoworkContactEvidenceItem[];
+    overflow: number;
+  };
+  missing: {
+    items: CoworkContactEvidenceItem[];
+    overflow: number;
+  };
+  sourceCount: number;
+  blockerCount: number;
+}
+
 export interface CoworkAgenticControlItem extends CoworkViewItem {
   action: AgenticControlAction;
   enabled: boolean;
@@ -76,6 +112,15 @@ export interface CoworkAgenticRuntimeSummary {
   diagnostics: CoworkViewItem[];
   controls: CoworkAgenticControlItem[];
   treeNodes: CoworkRunMapNode[];
+}
+
+export interface CoworkContinuationAvailability {
+  value: "available" | "checkpoint" | "paused" | "throttled" | "stopped";
+  available: boolean;
+  label: string;
+  summary: string;
+  recommendedAction: string;
+  reasonCodes: string[];
 }
 
 export interface CoworkRunViewModel {
@@ -106,6 +151,8 @@ export interface CoworkRunViewModel {
     title: string;
     summary: string;
     raw?: string;
+    sourceLabel?: string;
+    sourceUrls?: string[];
   }>;
   operatorActionItems: {
     items: CoworkViewItem[];
@@ -128,6 +175,16 @@ export interface CoworkRunViewModel {
     overflow: number;
   };
   continuationGate: ContinuationGateDecision;
+  continuationAvailability: CoworkContinuationAvailability;
+  childProgressItems: {
+    items: CoworkViewItem[];
+    overflow: number;
+  };
+  researchDiagnostics: {
+    items: CoworkViewItem[];
+    overflow: number;
+  };
+  contactEvidence?: CoworkContactEvidenceSummary;
   runMap: {
     objective: string;
     currentState: string;
@@ -160,11 +217,98 @@ export interface CoworkRunViewModel {
 
 type CoworkBlocker = CoworkRunViewModel["blockers"][number];
 
+type LocalBusinessVerificationStatus = "verified" | "partial" | "unverified";
+
+interface LocalBusinessEvidenceRefView {
+  url?: string;
+  evidenceKind?: string;
+  confidence?: string;
+  title?: string;
+}
+
+interface LocalBusinessCandidateView {
+  storeName: string;
+  address?: string;
+  website?: string;
+  email?: string;
+  contactName?: string;
+  contactRole?: string;
+  sourceUrls: string[];
+  verificationStatus: LocalBusinessVerificationStatus;
+  blockers: string[];
+  evidence: LocalBusinessEvidenceRefView[];
+}
+
+interface LocalBusinessResearchView {
+  id: string;
+  plan: {
+    location?: string;
+    radiusMiles?: number;
+    categories: string[];
+    requireEmail: boolean;
+    requireContactName: boolean;
+  };
+  candidates: LocalBusinessCandidateView[];
+  excluded: Array<{ reason?: string; sourceUrl?: string; title?: string }>;
+  blockers: string[];
+  verificationNote?: string;
+}
+
 function humanizeStatus(value?: string | null): string {
   if (!value) {
     return "unknown";
   }
   return value.replaceAll("_", " ");
+}
+
+function humanizeEvidenceReason(value?: string | null): string {
+  return humanizeStatus(value).replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    .map((item) => item.trim());
+}
+
+function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readRecordArray(record: Record<string, unknown> | undefined, key: string): Record<string, unknown>[] {
+  const value = record?.[key];
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())))];
+}
+
+function formatSourceCount(count: number): string {
+  return `${count} source${count === 1 ? "" : "s"}`;
+}
+
+function formatSourcePreview(urls: string[]): string | undefined {
+  if (urls.length === 0) {
+    return undefined;
+  }
+  const visible = urls.slice(0, 2).join(", ");
+  const overflow = urls.length > 2 ? ` (+${urls.length - 2} more)` : "";
+  return `${visible}${overflow}`;
 }
 
 function formatExecutionState(value?: string | null): string {
@@ -237,6 +381,423 @@ function describeSelectionState(input: {
   return "Selected historical turn details are open in the dock while the board stays pinned to the active run.";
 }
 
+function normalizeLocalBusinessVerificationStatus(value?: string): LocalBusinessVerificationStatus {
+  return value === "verified" || value === "partial" || value === "unverified" ? value : "unverified";
+}
+
+function readLocalBusinessCandidate(value: Record<string, unknown>): LocalBusinessCandidateView | undefined {
+  const storeName = readString(value, "storeName") ?? readString(value, "name") ?? readString(value, "title");
+  if (!storeName) {
+    return undefined;
+  }
+  const evidence = readRecordArray(value, "evidence").map((record) => ({
+    url: readString(record, "url"),
+    evidenceKind: readString(record, "evidenceKind"),
+    confidence: readString(record, "confidence"),
+    title: readString(record, "title"),
+  }));
+  const sourceUrls = uniqueStrings([
+    ...readStringArray(value, "sourceUrls"),
+    readString(value, "website"),
+    ...evidence.map((item) => item.url),
+  ]);
+  return {
+    storeName,
+    address: readString(value, "address"),
+    website: readString(value, "website"),
+    email: readString(value, "email"),
+    contactName: readString(value, "contactName"),
+    contactRole: readString(value, "contactRole"),
+    sourceUrls,
+    verificationStatus: normalizeLocalBusinessVerificationStatus(readString(value, "verificationStatus")),
+    blockers: readStringArray(value, "blockers"),
+    evidence,
+  };
+}
+
+function readLocalBusinessResearchAnnotation(value: unknown, id: string): LocalBusinessResearchView | undefined {
+  if (!isRecord(value) || value.kind !== "local_business_contact_research") {
+    return undefined;
+  }
+  const plan = isRecord(value.plan) ? value.plan : {};
+  const candidates = readRecordArray(value, "candidates")
+    .map(readLocalBusinessCandidate)
+    .filter((candidate): candidate is LocalBusinessCandidateView => Boolean(candidate));
+  return {
+    id,
+    plan: {
+      location: readString(plan, "location"),
+      radiusMiles: readNumber(plan, "radiusMiles"),
+      categories: readStringArray(plan, "categories"),
+      requireEmail: plan.requireEmail === true,
+      requireContactName: plan.requireContactName === true,
+    },
+    candidates,
+    excluded: readRecordArray(value, "excluded").map((record) => ({
+      reason: readString(record, "reason"),
+      sourceUrl: readString(record, "sourceUrl"),
+      title: readString(record, "title"),
+    })),
+    blockers: readStringArray(value, "blockers"),
+    verificationNote: readString(value, "verificationNote"),
+  };
+}
+
+function collectLocalBusinessResearchAnnotations(input: {
+  trace?: ChatTurnTraceRecord | null;
+  agenticRunTree?: AgenticRunTreeResponse | null;
+}): LocalBusinessResearchView[] {
+  const traceAnnotations =
+    input.trace?.toolRuns
+      .map((run, index) =>
+        readLocalBusinessResearchAnnotation(run.result?.localBusinessResearch, `${run.toolRunId || "tool"}-${index}`),
+      )
+      .filter((annotation): annotation is LocalBusinessResearchView => Boolean(annotation)) ?? [];
+  const treeAnnotations: LocalBusinessResearchView[] = [];
+  collectLocalBusinessResearchAnnotationsFromValue(input.agenticRunTree, treeAnnotations);
+  const seen = new Set<string>();
+  return [...treeAnnotations, ...traceAnnotations].filter((annotation) => {
+    const key = [
+      annotation.plan.location ?? "",
+      annotation.plan.radiusMiles ?? "",
+      annotation.candidates.map((candidate) => candidate.storeName).join("|"),
+      annotation.blockers.join("|"),
+    ].join("\u0000");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function collectLocalBusinessResearchAnnotationsFromValue(
+  value: unknown,
+  out: LocalBusinessResearchView[],
+  seen = new Set<unknown>(),
+): void {
+  if (!value || typeof value !== "object" || seen.has(value) || out.length >= 12) {
+    return;
+  }
+  seen.add(value);
+  const annotation = readLocalBusinessResearchAnnotation(value, `tree-${out.length}`);
+  if (annotation) {
+    out.push(annotation);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLocalBusinessResearchAnnotationsFromValue(item, out, seen);
+    }
+    return;
+  }
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    collectLocalBusinessResearchAnnotationsFromValue(child, out, seen);
+  }
+}
+
+function candidateHasEvidenceKind(candidate: LocalBusinessCandidateView, evidenceKind: string): boolean {
+  return candidate.evidence.some((item) => item.evidenceKind === evidenceKind);
+}
+
+function resolveMissingContactFields(
+  candidate: LocalBusinessCandidateView,
+  plan: LocalBusinessResearchView["plan"],
+): string[] {
+  const fields: string[] = [];
+  if (!candidate.address && !candidateHasEvidenceKind(candidate, "address")) {
+    fields.push("address");
+  }
+  if (plan.requireEmail && !candidate.email) {
+    fields.push("email");
+  }
+  if (plan.requireContactName && !candidate.contactName) {
+    fields.push("contact name");
+  }
+  if (!candidate.website && !candidateHasEvidenceKind(candidate, "website")) {
+    fields.push("official website");
+  }
+  return fields;
+}
+
+function resolveContactEvidenceStatus(
+  candidate: LocalBusinessCandidateView,
+  missingFields: string[],
+): CoworkContactEvidenceStatus {
+  if (candidate.verificationStatus === "verified" && missingFields.length === 0) {
+    return "verified";
+  }
+  if (candidate.verificationStatus === "partial") {
+    return "partial";
+  }
+  return "missing";
+}
+
+function buildContactEvidenceItem(input: {
+  candidate: LocalBusinessCandidateView;
+  evidenceStatus: CoworkContactEvidenceStatus;
+  missingFields: string[];
+  id: string;
+}): CoworkContactEvidenceItem {
+  const sourcePreview = formatSourcePreview(input.candidate.sourceUrls);
+  const sourceText = formatSourceCount(input.candidate.sourceUrls.length);
+  const contactParts = [
+    input.candidate.email ? "email" : undefined,
+    input.candidate.contactName ? "contact name" : undefined,
+    input.candidate.website ? "website" : undefined,
+  ];
+  return {
+    id: input.id,
+    title: input.candidate.storeName,
+    status: input.evidenceStatus,
+    meta: [sourceText, ...contactParts].filter((value): value is string => Boolean(value)).join(" · "),
+    note:
+      input.missingFields.length > 0
+        ? `Missing ${input.missingFields.join(", ")} from source-backed contact evidence.${sourcePreview ? ` Sources: ${sourcePreview}.` : ""}`
+        : sourcePreview
+          ? `Verified from ${sourcePreview}.`
+          : undefined,
+    evidenceStatus: input.evidenceStatus,
+    storeName: input.candidate.storeName,
+    email: input.candidate.email,
+    contactName: input.candidate.contactName,
+    website: input.candidate.website,
+    sourceUrls: input.candidate.sourceUrls,
+    missingFields: input.missingFields,
+  };
+}
+
+function buildMissingContactFieldItem(input: {
+  candidate: LocalBusinessCandidateView;
+  field: string;
+  id: string;
+}): CoworkContactEvidenceItem {
+  const sourcePreview = formatSourcePreview(input.candidate.sourceUrls);
+  return {
+    id: input.id,
+    title: `${input.candidate.storeName}: ${input.field} missing`,
+    status: "missing",
+    meta: formatSourceCount(input.candidate.sourceUrls.length),
+    note: `No verified ${input.field} was present in the attached contact evidence.${sourcePreview ? ` Sources checked: ${sourcePreview}.` : ""}`,
+    evidenceStatus: "missing",
+    storeName: input.candidate.storeName,
+    sourceUrls: input.candidate.sourceUrls,
+    missingFields: [input.field],
+  };
+}
+
+function buildContactEvidenceSummary(
+  annotations: LocalBusinessResearchView[],
+): CoworkContactEvidenceSummary | undefined {
+  if (annotations.length === 0) {
+    return undefined;
+  }
+  const verified: CoworkContactEvidenceItem[] = [];
+  const partial: CoworkContactEvidenceItem[] = [];
+  const missing: CoworkContactEvidenceItem[] = [];
+  const sourceUrls = new Set<string>();
+  const candidateKeys = new Set<string>();
+  let blockerCount = 0;
+
+  for (const annotation of annotations) {
+    blockerCount += annotation.blockers.length + annotation.excluded.length;
+    annotation.candidates.forEach((candidate, index) => {
+      const candidateKey = normalizeContactEvidenceCandidateKey(candidate);
+      if (candidateKey && candidateKeys.has(candidateKey)) {
+        return;
+      }
+      if (candidateKey) {
+        candidateKeys.add(candidateKey);
+      }
+      candidate.sourceUrls.forEach((url) => sourceUrls.add(url));
+      blockerCount += candidate.blockers.length;
+      const missingFields = resolveMissingContactFields(candidate, annotation.plan);
+      const evidenceStatus = resolveContactEvidenceStatus(candidate, missingFields);
+      const item = buildContactEvidenceItem({
+        candidate,
+        evidenceStatus,
+        missingFields,
+        id: `contact-${annotation.id}-${index}`,
+      });
+      if (evidenceStatus === "verified") {
+        verified.push(item);
+      } else if (evidenceStatus === "partial") {
+        partial.push(item);
+      } else {
+        missing.push(item);
+      }
+      missingFields.forEach((field, fieldIndex) => {
+        missing.push(
+          buildMissingContactFieldItem({
+            candidate,
+            field,
+            id: `contact-missing-${annotation.id}-${index}-${fieldIndex}`,
+          }),
+        );
+      });
+    });
+  }
+
+  return {
+    label: "Local contact evidence",
+    detail: [
+      `${verified.length} verified`,
+      `${partial.length} partial`,
+      `${missing.length} missing`,
+      formatSourceCount(sourceUrls.size),
+    ].join(" · "),
+    verified: limitItems(verified, MAX_VISIBLE_CONTACT_ITEMS),
+    partial: limitItems(partial, MAX_VISIBLE_CONTACT_ITEMS),
+    missing: limitItems(missing, MAX_VISIBLE_CONTACT_ITEMS),
+    sourceCount: sourceUrls.size,
+    blockerCount,
+  };
+}
+
+function normalizeContactEvidenceCandidateKey(candidate: LocalBusinessCandidateView): string {
+  return (
+    normalizeContactEvidenceKey(candidate.storeName) ||
+    normalizeContactEvidenceKey(candidate.website) ||
+    normalizeContactEvidenceKey(candidate.sourceUrls[0]) ||
+    ""
+  );
+}
+
+function normalizeContactEvidenceKey(value: string | undefined): string {
+  return (
+    value
+      ?.toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/\/$/, "")
+      .replace(/\s+/g, " ")
+      .trim() ?? ""
+  );
+}
+
+function buildResearchDiagnosticItems(annotations: LocalBusinessResearchView[]): CoworkViewItem[] {
+  return annotations.flatMap((annotation, annotationIndex) => {
+    const planMeta = [
+      annotation.plan.location ? `Location ${annotation.plan.location}` : undefined,
+      annotation.plan.radiusMiles ? `${annotation.plan.radiusMiles} miles` : undefined,
+      annotation.plan.categories[0],
+      annotation.plan.requireEmail ? "email required" : undefined,
+      annotation.plan.requireContactName ? "contact required" : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" · ");
+    const excluded = annotation.excluded.filter((item) => item.reason || item.sourceUrl);
+    return [
+      {
+        id: `research-plan-${annotation.id}-${annotationIndex}`,
+        title: "Local-business research plan",
+        status: "source-backed",
+        meta: planMeta || undefined,
+        note: annotation.verificationNote,
+      },
+      {
+        id: `research-evidence-${annotation.id}-${annotationIndex}`,
+        title: "Search evidence diagnostics",
+        status: annotation.candidates.length > 0 ? "leads found" : "missing leads",
+        meta: `${annotation.candidates.length} contact lead${annotation.candidates.length === 1 ? "" : "s"} · ${excluded.length} excluded source${excluded.length === 1 ? "" : "s"}`,
+        note: annotation.blockers.length > 0 ? annotation.blockers.join(" ") : undefined,
+      },
+      ...excluded.map((item, index) => ({
+        id: `research-excluded-${annotation.id}-${index}`,
+        title: item.title ? `Excluded source: ${item.title}` : "Excluded source",
+        status: "blocked",
+        meta: item.sourceUrl,
+        note: item.reason ? humanizeEvidenceReason(item.reason) : undefined,
+      })),
+    ];
+  });
+}
+
+function buildContactEvidenceOutputItem(contactEvidence?: CoworkContactEvidenceSummary): CoworkViewItem[] {
+  if (!contactEvidence) {
+    return [];
+  }
+  const firstMissing = contactEvidence.missing.items[0];
+  const firstPartial = contactEvidence.partial.items[0];
+  const noContactEvidence =
+    contactEvidence.sourceCount === 0 &&
+    contactEvidence.verified.items.length === 0 &&
+    contactEvidence.partial.items.length === 0 &&
+    contactEvidence.missing.items.length === 0;
+  return [
+    {
+      id: "local-contact-evidence",
+      title: contactEvidence.label,
+      status: noContactEvidence
+        ? "missing"
+        : contactEvidence.missing.items.length > 0
+          ? "missing fields"
+          : contactEvidence.partial.items.length > 0
+            ? "partial"
+            : "verified",
+      meta: contactEvidence.detail,
+      note:
+        firstMissing?.note ??
+        firstPartial?.note ??
+        "Verified local-business contact evidence is available in the run details.",
+    },
+  ];
+}
+
+function buildResearchDiagnosticsOutputItem(researchDiagnostics: CoworkViewItem[]): CoworkViewItem[] {
+  if (researchDiagnostics.length === 0) {
+    return [];
+  }
+  const blockedCount = researchDiagnostics.filter((item) => item.status === "blocked").length;
+  return [
+    {
+      id: "research-diagnostics",
+      title: "Research diagnostics",
+      status: blockedCount > 0 ? "blocked sources" : "source-backed",
+      meta: `${researchDiagnostics.length} diagnostic${researchDiagnostics.length === 1 ? "" : "s"}`,
+      note: researchDiagnostics[0]?.note ?? researchDiagnostics[0]?.meta,
+    },
+  ];
+}
+
+function buildLocalBusinessBlockers(annotations: LocalBusinessResearchView[]): CoworkBlocker[] {
+  return annotations.flatMap((annotation) => [
+    ...annotation.blockers.map((blocker, index) => ({
+      id: `research-source-blocker-${annotation.id}-${index}`,
+      title: "Research source blocked",
+      summary: `${blocker} Source: browser fallback chain.`,
+      sourceLabel: "Browser fallback chain",
+    })),
+    ...annotation.excluded
+      .filter((item) => item.reason || item.sourceUrl)
+      .map((item, index) => ({
+        id: `research-excluded-source-${annotation.id}-${index}`,
+        title: "Listing source excluded",
+        summary: [
+          item.title ?? "A listing source",
+          item.reason ? `was excluded as ${humanizeStatus(item.reason)}` : "was excluded",
+          "and is not treated as verified contact evidence.",
+          item.sourceUrl ? `Source: ${item.sourceUrl}.` : undefined,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(" "),
+        sourceLabel: "Local-business source filter",
+        sourceUrls: item.sourceUrl ? [item.sourceUrl] : undefined,
+      })),
+    ...annotation.candidates.flatMap((candidate, candidateIndex) =>
+      candidate.blockers.map((blocker, blockerIndex) => {
+        const sourcePreview = formatSourcePreview(candidate.sourceUrls);
+        return {
+          id: `contact-evidence-blocker-${annotation.id}-${candidateIndex}-${blockerIndex}`,
+          title: "Contact evidence incomplete",
+          summary: `${candidate.storeName}: ${humanizeStatus(blocker)}. Source-backed verification still needs the missing field before this contact is treated as complete.${sourcePreview ? ` Source: ${sourcePreview}.` : ""}`,
+          sourceLabel: "Local-business contact evidence",
+          sourceUrls: candidate.sourceUrls,
+        };
+      }),
+    ),
+  ]);
+}
+
 export const formatCoworkFriendlyError = describeChatUiError;
 
 function buildCheckpointMeta(checkpoint: OrchestrationCheckpointRecord): string | undefined {
@@ -244,6 +805,120 @@ function buildCheckpointMeta(checkpoint: OrchestrationCheckpointRecord): string 
     (value): value is string => Boolean(value),
   );
   return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  return isRecord(metadata) ? readString(metadata, key) : undefined;
+}
+
+function buildAgenticChildProgressItems(agenticRunTree?: AgenticRunTreeResponse | null): CoworkViewItem[] {
+  if (!agenticRunTree) {
+    return [];
+  }
+  return agenticRunTree.nodes
+    .filter((node) => node.kind === "subagent" || (node.kind === "task" && Boolean(node.parentId)))
+    .map((node) => {
+      const metadata = isRecord(node.metadata) ? node.metadata : undefined;
+      const meta = [
+        readMetadataString(metadata, "role"),
+        readMetadataString(metadata, "childTraceStatus")
+          ? `trace ${humanizeStatus(readMetadataString(metadata, "childTraceStatus"))}`
+          : undefined,
+        readMetadataString(metadata, "childSessionId")
+          ? `session ${readMetadataString(metadata, "childSessionId")}`
+          : undefined,
+        readMetadataString(metadata, "durableRunId")
+          ? `durable ${readMetadataString(metadata, "durableRunId")}`
+          : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" · ");
+      return {
+        id: `agentic-child-${node.id}`,
+        title: node.label,
+        status: humanizeStatus(node.status),
+        meta: meta || undefined,
+        note: normalizeSummary(node.summary, 120),
+      };
+    });
+}
+
+function buildFallbackChildProgressItems(input: {
+  activePlanSteps: ChatExecutionPlanRecord["steps"];
+  delegationSteps: ActiveChatDelegationRun["steps"];
+}): CoworkViewItem[] {
+  const fromDelegation = input.delegationSteps.map((step) => ({
+    id: `child-delegation-${step.stepId}`,
+    title: step.label ?? step.role,
+    status: humanizeStatus(step.status),
+    meta: [
+      step.childSessionId ? `session ${step.childSessionId}` : undefined,
+      step.durableRunId ? `durable ${step.durableRunId}` : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" · "),
+    note: normalizeSummary(step.summary ?? step.output ?? step.error ?? step.failureGuidance, 120),
+  }));
+  if (fromDelegation.length > 0) {
+    return fromDelegation;
+  }
+  return input.activePlanSteps
+    .filter((step) => step.childRunId || step.childSessionId || step.durableRunId)
+    .map((step) => ({
+      id: `child-plan-${step.stepId}`,
+      title: step.objective,
+      status: humanizeStatus(step.status),
+      meta: [
+        step.delegatedRole,
+        step.childSessionId ? `session ${step.childSessionId}` : undefined,
+        step.childRunId ? `run ${step.childRunId}` : undefined,
+        step.durableRunId ? `durable ${step.durableRunId}` : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" · "),
+      note: normalizeSummary(step.summary ?? step.error, 120),
+    }));
+}
+
+function buildChildProgressItems(input: {
+  agenticRunTree?: AgenticRunTreeResponse | null;
+  activePlanSteps: ChatExecutionPlanRecord["steps"];
+  delegationSteps: ActiveChatDelegationRun["steps"];
+}): CoworkViewItem[] {
+  const fromAgenticTree = buildAgenticChildProgressItems(input.agenticRunTree);
+  return fromAgenticTree.length > 0 ? fromAgenticTree : buildFallbackChildProgressItems(input);
+}
+
+function buildAgenticRunMapNodes(agenticRunTree?: AgenticRunTreeResponse | null): CoworkRunMapNode[] {
+  if (!agenticRunTree) {
+    return [];
+  }
+  return agenticRunTree.nodes
+    .filter((node) => node.kind === "subagent" || (node.kind === "task" && Boolean(node.parentId)))
+    .map((node) => {
+      const metadata = isRecord(node.metadata) ? node.metadata : undefined;
+      return {
+        id: `agentic-${node.id}`,
+        label: node.label,
+        status: humanizeStatus(node.status),
+        meta: readMetadataString(metadata, "role") ?? node.kind,
+      };
+    });
+}
+
+function buildAgenticDiagnosticBlockers(agenticRunTree?: AgenticRunTreeResponse | null): CoworkBlocker[] {
+  if (!agenticRunTree) {
+    return [];
+  }
+  return agenticRunTree.diagnostics
+    .filter((diagnostic) => diagnostic.evidenceRef && diagnostic.severity !== "info")
+    .slice(0, 3)
+    .map((diagnostic) => ({
+      id: `agentic-diagnostic-blocker-${diagnostic.signalId}`,
+      title: diagnostic.title,
+      summary: `${normalizeSummary(diagnostic.summary, 160) ?? "Agentic runtime diagnostic needs review."} Evidence: ${diagnostic.evidenceRef}.`,
+      sourceLabel: "Agentic runtime diagnostic",
+    }));
 }
 
 function buildAgenticRuntimeSummary(
@@ -261,8 +936,16 @@ function buildAgenticRuntimeSummary(
       id: diagnostic.signalId,
       title: diagnostic.title,
       status: diagnostic.severity,
-      meta: diagnostic.code.replaceAll("_", " "),
-      note: normalizeSummary(diagnostic.summary, 120),
+      meta: [
+        diagnostic.code.replaceAll("_", " "),
+        diagnostic.evidenceRef ? `evidence ${diagnostic.evidenceRef}` : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" · "),
+      note: mergeNotes(
+        normalizeSummary(diagnostic.summary, 100),
+        diagnostic.evidenceRef ? `Evidence: ${diagnostic.evidenceRef}.` : undefined,
+      ),
     })),
     controls: agenticRunTree.controls.slice(0, 4).map((control) => ({
       id: control.action,
@@ -481,6 +1164,49 @@ function buildDerivedContinuationGate(input: {
   };
 }
 
+function buildContinuationAvailability(input: {
+  continuationGate: ContinuationGateDecision;
+  agenticRuntime?: CoworkAgenticRuntimeSummary;
+}): CoworkContinuationAvailability {
+  const enabledContinuationControl = input.agenticRuntime?.controls.find(
+    (control) => control.enabled && ["approve", "retry", "steer", "open_child"].includes(control.action),
+  );
+  const value =
+    input.continuationGate.decision === "stop"
+      ? "stopped"
+      : input.continuationGate.decision === "throttle"
+        ? "throttled"
+        : input.continuationGate.decision === "pause"
+          ? "paused"
+          : input.continuationGate.decision === "checkpoint"
+            ? "checkpoint"
+            : "available";
+  const available =
+    value === "available" ||
+    value === "checkpoint" ||
+    Boolean(enabledContinuationControl && value !== "stopped" && value !== "paused" && value !== "throttled");
+  return {
+    value,
+    available,
+    label:
+      value === "available"
+        ? "Continuation available"
+        : value === "checkpoint"
+          ? "Continuation checkpoint"
+          : value === "throttled"
+            ? "Continuation throttled"
+            : value === "stopped"
+              ? "Continuation stopped"
+              : "Continuation paused",
+    summary: input.continuationGate.summary,
+    recommendedAction:
+      enabledContinuationControl && value !== "available"
+        ? `${input.continuationGate.recommendedAction} Available control: ${enabledContinuationControl.title}.`
+        : input.continuationGate.recommendedAction,
+    reasonCodes: input.continuationGate.reasonCodes,
+  };
+}
+
 function countStepsSinceCheckpoint(checkpoints: OrchestrationCheckpointRecord[]): number {
   const reversed = [...checkpoints].reverse();
   const checkpointIndex = reversed.findIndex((checkpoint) =>
@@ -490,11 +1216,16 @@ function countStepsSinceCheckpoint(checkpoints: OrchestrationCheckpointRecord[])
 }
 
 function buildPlanNodes(input: {
+  agenticRunTree?: AgenticRunTreeResponse | null;
   activePlanSteps: ChatExecutionPlanRecord["steps"];
   roleSteps: NonNullable<ChatOrchestrationSummary>["steps"];
   delegationSteps: ActiveChatDelegationRun["steps"];
   planState: string;
 }): CoworkRunMapNode[] {
+  const fromAgenticTree = buildAgenticRunMapNodes(input.agenticRunTree);
+  if (fromAgenticTree.length > 0) {
+    return fromAgenticTree.slice(0, 8);
+  }
   const fromPlan = input.activePlanSteps.map((step) => ({
     id: step.stepId,
     label: step.objective,
@@ -572,6 +1303,9 @@ export function deriveCoworkRunViewModel(input: {
   const roleSteps = orchestration?.steps ?? [];
   const delegationSteps = delegationRun?.steps ?? [];
   const currentTrace = activeTurn?.trace;
+  const localBusinessResearch = collectLocalBusinessResearchAnnotations({ trace: currentTrace, agenticRunTree });
+  const contactEvidence = buildContactEvidenceSummary(localBusinessResearch);
+  const researchDiagnosticItems = buildResearchDiagnosticItems(localBusinessResearch);
   const worktreeState = orchestrationRun?.worktreeStatus ?? workbenchState?.worktreeStatus ?? "off";
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
   const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
@@ -611,6 +1345,7 @@ export function deriveCoworkRunViewModel(input: {
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
   const durableRecoveryState = currentTrace?.durable?.recoveryState;
   const durableRecoverySummary = currentTrace?.durable?.recoverySummary;
+  const agenticDiagnosticBlockers = buildAgenticDiagnosticBlockers(agenticRunTree);
 
   const blockers = [
     waitingForUserInput
@@ -662,6 +1397,8 @@ export function deriveCoworkRunViewModel(input: {
           raw: delegationFailure?.failureGuidance ?? delegationFailureSummary.raw,
         }
       : null,
+    ...buildLocalBusinessBlockers(localBusinessResearch),
+    ...agenticDiagnosticBlockers,
   ].filter((value): value is CoworkBlocker => Boolean(value));
 
   const empty =
@@ -818,49 +1555,57 @@ export function deriveCoworkRunViewModel(input: {
   const degradedSourceStepIds = new Set(
     [...roleSteps, ...delegationSteps].flatMap((step) => step.degradedHandoffStepIds ?? []),
   );
+  const childProgressRawItems = buildChildProgressItems({
+    agenticRunTree,
+    activePlanSteps,
+    delegationSteps,
+  });
+  const agenticChildProgressItems = buildAgenticChildProgressItems(agenticRunTree);
   const roleItems = limitItems(
-    [
-      ...roleSteps.map((step) => {
-        const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
-        const usedByDownstream = degradedSourceStepIds.has(step.stepId);
-        return {
-          id: `role-${step.stepId}`,
-          title: step.label ?? step.role,
-          status: humanizeStatus(step.status),
-          meta: [step.providerId ?? "provider auto", step.model]
-            .filter((value): value is string => Boolean(value))
-            .join(" · "),
-          note: mergeNotes(
-            normalizeSummary(step.summary ?? step.error, 120),
-            degradedHandoffCount > 0
-              ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
-              : usedByDownstream
-                ? "Used by downstream synthesis despite failed status."
-                : undefined,
-          ),
-          tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
-        };
-      }),
-      ...delegationSteps.map((step) => {
-        const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
-        const usedByDownstream = degradedSourceStepIds.has(step.stepId);
-        return {
-          id: `delegation-${step.stepId}`,
-          title: `${step.label ?? step.role} delegation`,
-          status: humanizeStatus(step.status),
-          meta: step.output ? "Output ready in run details" : undefined,
-          note: mergeNotes(
-            normalizeSummary(step.summary ?? step.output ?? step.error, 120),
-            degradedHandoffCount > 0
-              ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
-              : usedByDownstream
-                ? "Used by downstream synthesis despite failed status."
-                : undefined,
-          ),
-          tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
-        };
-      }),
-    ],
+    agenticChildProgressItems.length > 0
+      ? agenticChildProgressItems
+      : [
+          ...roleSteps.map((step) => {
+            const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
+            const usedByDownstream = degradedSourceStepIds.has(step.stepId);
+            return {
+              id: `role-${step.stepId}`,
+              title: step.label ?? step.role,
+              status: humanizeStatus(step.status),
+              meta: [step.providerId ?? "provider auto", step.model]
+                .filter((value): value is string => Boolean(value))
+                .join(" · "),
+              note: mergeNotes(
+                normalizeSummary(step.summary ?? step.error, 120),
+                degradedHandoffCount > 0
+                  ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
+                  : usedByDownstream
+                    ? "Used by downstream synthesis despite failed status."
+                    : undefined,
+              ),
+              tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
+            };
+          }),
+          ...delegationSteps.map((step) => {
+            const degradedHandoffCount = step.degradedHandoffStepIds?.length ?? 0;
+            const usedByDownstream = degradedSourceStepIds.has(step.stepId);
+            return {
+              id: `delegation-${step.stepId}`,
+              title: `${step.label ?? step.role} delegation`,
+              status: humanizeStatus(step.status),
+              meta: step.output ? "Output ready in run details" : undefined,
+              note: mergeNotes(
+                normalizeSummary(step.summary ?? step.output ?? step.error, 120),
+                degradedHandoffCount > 0
+                  ? describeDegradedHandoffNote(step.role, degradedHandoffCount)
+                  : usedByDownstream
+                    ? "Used by downstream synthesis despite failed status."
+                    : undefined,
+              ),
+              tone: degradedHandoffCount > 0 || usedByDownstream ? ("warning" as const) : undefined,
+            };
+          }),
+        ],
     MAX_VISIBLE_ROLE_ITEMS,
   );
 
@@ -884,6 +1629,8 @@ export function deriveCoworkRunViewModel(input: {
 
   const outputItems = limitItems(
     [
+      ...buildContactEvidenceOutputItem(contactEvidence),
+      ...buildResearchDiagnosticsOutputItem(researchDiagnosticItems),
       ...(delegationRun?.stitchedOutput
         ? [
             {
@@ -911,6 +1658,9 @@ export function deriveCoworkRunViewModel(input: {
     waitingForApproval ? "Approval unresolved" : null,
     waitingForUserInput ? "Operator answer required" : null,
     delegationContinuationNeeded ? "Delegation continuation needed" : null,
+    contactEvidence && (contactEvidence.missing.items.length > 0 || contactEvidence.sourceCount === 0)
+      ? "Local contact evidence incomplete"
+      : null,
     durableRecoveryState && durableRecoveryState !== "none"
       ? `Durable worker recovery: ${humanizeStatus(durableRecoveryState)}`
       : null,
@@ -919,7 +1669,12 @@ export function deriveCoworkRunViewModel(input: {
       : null,
   ].filter((value): value is string => Boolean(value));
   const evidenceGapCount = stateGaps.filter((gap) =>
-    ["Run state refresh needs attention", "Canonical run not loaded", "Manual UI proof not attached"].includes(gap),
+    [
+      "Run state refresh needs attention",
+      "Canonical run not loaded",
+      "Manual UI proof not attached",
+      "Local contact evidence incomplete",
+    ].includes(gap),
   ).length;
   const continuationGate =
     readContinuationGateFromCheckpoint(orchestrationCheckpoints) ??
@@ -944,6 +1699,7 @@ export function deriveCoworkRunViewModel(input: {
       note: buildCheckpointMeta(checkpoint),
     }));
   const planNodes = buildPlanNodes({
+    agenticRunTree,
     activePlanSteps,
     roleSteps,
     delegationSteps,
@@ -962,6 +1718,9 @@ export function deriveCoworkRunViewModel(input: {
     evidenceGapCount,
   };
   const agenticRuntime = buildAgenticRuntimeSummary(agenticRunTree);
+  const continuationAvailability = buildContinuationAvailability({ continuationGate, agenticRuntime });
+  const childProgressItems = limitItems(childProgressRawItems, MAX_VISIBLE_CHILD_PROGRESS_ITEMS);
+  const researchDiagnostics = limitItems(researchDiagnosticItems, MAX_VISIBLE_RESEARCH_DIAGNOSTICS);
 
   return {
     empty,
@@ -979,6 +1738,7 @@ export function deriveCoworkRunViewModel(input: {
       { label: "Execution", value: executionState },
       { label: "Approval", value: waitingForUserInput ? "answer required" : waitingForApproval ? "blocked" : "clear" },
       { label: "Worktree", value: humanizeStatus(worktreeState) },
+      { label: "Continuation", value: continuationAvailability.value },
       { label: "Tools", value: String(toolRuns) },
     ],
     now: {
@@ -995,6 +1755,10 @@ export function deriveCoworkRunViewModel(input: {
     timelineItems,
     outputItems,
     continuationGate,
+    continuationAvailability,
+    childProgressItems,
+    researchDiagnostics,
+    contactEvidence,
     runMap: {
       objective:
         normalizeSummary(executionPlan?.objective, 120) ??
