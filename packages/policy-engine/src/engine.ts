@@ -41,6 +41,7 @@ import {
   redactUrlForError,
 } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
+import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
 import { executeTool, resolveFixedOutboundHostsForTool } from "./tool-executor.js";
 import {
   buildInternalToolCall,
@@ -672,6 +673,7 @@ export class ToolPolicyEngine {
     const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
+    const argumentRisk = this.evaluateArgumentRisk(request);
     const policy = resolveEffectivePolicy(
       this.config,
       request.agentId,
@@ -784,6 +786,9 @@ export class ToolPolicyEngine {
     if (shellRisk?.risky) {
       requiresApproval = true;
     }
+    if (argumentRisk?.risky) {
+      requiresApproval = true;
+    }
     if (outsideRootsReadRequiresApproval) {
       requiresApproval = true;
     }
@@ -791,7 +796,13 @@ export class ToolPolicyEngine {
       requiresApproval = true;
     }
     const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
-    if (codeModeRunPreapproved && riskLevel !== "nuclear" && !shellRisk?.risky && !outsideRootsReadRequiresApproval) {
+    if (
+      codeModeRunPreapproved &&
+      riskLevel !== "nuclear" &&
+      !shellRisk?.risky &&
+      !argumentRisk?.risky &&
+      !outsideRootsReadRequiresApproval
+    ) {
       requiresApproval = false;
     }
     // A remote A2A peer (lowest-trust inbound actor) must not ride the local
@@ -804,6 +815,7 @@ export class ToolPolicyEngine {
       !isRemoteA2APeer &&
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
+      !argumentRisk?.risky &&
       !outsideRootsReadRequiresApproval
     ) {
       requiresApproval = false;
@@ -848,6 +860,10 @@ export class ToolPolicyEngine {
       reasonCodes.push("shell_risky_requires_approval");
       policyReason = `risky shell command matched policy pattern "${shellRisk.matchedPattern}"`;
     }
+    if (argumentRisk?.risky) {
+      reasonCodes.push("argument_risky_requires_approval");
+      policyReason = `risky tool argument matched policy pattern "${argumentRisk.matchedPattern}"`;
+    }
     if (outsideRootsReadRequiresApproval) {
       reasonCodes.push("outside_roots_read_requires_approval");
       policyReason = "file access outside trusted roots requires approval";
@@ -887,6 +903,24 @@ export class ToolPolicyEngine {
     return {
       risky: true,
       matchedPattern: risk.matchedPattern ?? "unknown",
+    };
+  }
+
+  private evaluateArgumentRisk(
+    request: ToolAccessEvaluateRequest,
+  ): { risky: true; matchedPattern: string; toolNamePattern?: string } | undefined {
+    const patterns = this.config.sandbox.riskyArgumentPatterns;
+    if (!patterns || patterns.length === 0) {
+      return undefined;
+    }
+    const risk = classifyArgumentRisk(request.toolName, request.args, patterns);
+    if (!risk.risky) {
+      return undefined;
+    }
+    return {
+      risky: true,
+      matchedPattern: risk.matchedPattern ?? "unknown",
+      toolNamePattern: risk.toolNamePattern,
     };
   }
 

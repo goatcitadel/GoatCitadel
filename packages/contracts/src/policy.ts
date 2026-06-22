@@ -147,6 +147,21 @@ export interface ToolLoopDetectionConfig {
   detectors: Record<ToolLoopDetectorKind, boolean>;
 }
 
+/**
+ * Intent-based destructive-argument gate. Generalizes the shell-risk pattern to
+ * arbitrary tools: a tool is permitted in general but its specific high-risk
+ * argument values (e.g. `terraform destroy`) require approval even under a bypass
+ * approval mode. Empty/absent config leaves the gate inert (no behavior change).
+ */
+export interface ToolRiskyArgumentPattern {
+  /** Glob over tool names (exact, or trailing `*`, or `*`). e.g. "shell.exec", "terraform.*", "*". */
+  toolNamePattern: string;
+  /** Dot path into the tool args to test (e.g. "command", "input.operation"). Omit to test the whole args JSON. */
+  argumentPath?: string;
+  /** Glob patterns matched (case-insensitive, word-bounded) against the resolved argument value. */
+  valuePatterns: string[];
+}
+
 export interface ToolPolicyConfig {
   profiles?: Record<string, string[]>;
   tools: {
@@ -164,6 +179,8 @@ export interface ToolPolicyConfig {
     networkAllowlist: string[];
     riskyShellPatterns: string[];
     requireApprovalForRiskyShell: boolean;
+    /** Intent-based destructive-argument patterns (generalizes riskyShellPatterns to any tool). */
+    riskyArgumentPatterns?: ToolRiskyArgumentPattern[];
   };
 }
 
@@ -217,4 +234,29 @@ export interface EffectiveToolPolicy {
   denySet: Set<string>;
   effectiveTools: Set<string>;
   readAccessMode?: FilesystemReadAccessMode;
+}
+
+/**
+ * Two orthogonal policy axes (the Codex PermissionProfile × AskForApproval shape):
+ * sandbox access ("what the agent can touch") is independent of approval escalation
+ * ("when to interrupt the human"). The engine already evaluates these independently;
+ * these types make the composition explicit and auditable for operator-facing config.
+ */
+export interface SandboxAccessPolicy {
+  filesystemReadMode: FilesystemReadAccessMode;
+  networkAllowlist: string[];
+  writeJailRoots: string[];
+  readOnlyRoots: string[];
+  riskyShellPatterns: string[];
+  riskyArgumentPatterns: ToolRiskyArgumentPattern[];
+}
+
+export interface ApprovalEscalationPolicy {
+  approvalMode: ToolApprovalMode;
+  requireApprovalForRiskyShell: boolean;
+}
+
+export interface ToolPolicyAxes {
+  sandbox: SandboxAccessPolicy;
+  approval: ApprovalEscalationPolicy;
 }

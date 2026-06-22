@@ -114,6 +114,15 @@ export const ToolPolicyConfigSchema = z
         networkAllowlist: z.array(z.string()).default([]),
         riskyShellPatterns: z.array(z.string()).default([]),
         requireApprovalForRiskyShell: z.boolean().default(true),
+        riskyArgumentPatterns: z
+          .array(
+            z.object({
+              toolNamePattern: z.string(),
+              argumentPath: z.string().optional(),
+              valuePatterns: z.array(z.string()),
+            }),
+          )
+          .optional(),
       })
       .passthrough(),
   })

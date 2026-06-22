@@ -1079,6 +1079,30 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     expect(globEvaluation.requiresApproval).toBe(true);
     expect(globEvaluation.reasonCodes).toContain("shell_risky_requires_approval");
 
+    // Generalized destructive-argument gate: a matching argument forces approval even
+    // under a bypass approval mode (mirrors the shell-risk gate for arbitrary tools).
+    const argEngine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: {
+          ...policyConfig.sandbox,
+          riskyArgumentPatterns: [
+            { toolNamePattern: "*", argumentPath: "command", valuePatterns: ["terraform destroy"] },
+          ],
+        },
+      },
+      createStorageStub(),
+    );
+    const argEvaluation = argEngine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "terraform destroy --auto-approve" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(argEvaluation.requiresApproval).toBe(true);
+    expect(argEvaluation.reasonCodes).toContain("argument_risky_requires_approval");
+
     expect(
       shellEngine.evaluateAccess({
         toolName: "shell.exec",

@@ -70,6 +70,15 @@
       "localhost"
     ],
     "riskyShellPatterns": ["rm", "rmdir", "del", "format", "shutdown", "reboot", "git push", "git reset --hard"],
-    "requireApprovalForRiskyShell": true
+    "requireApprovalForRiskyShell": true,
+    "riskyArgumentPatterns": [
+      {
+        "toolNamePattern": "*",
+        "argumentPath": "command",
+        "valuePatterns": ["terraform destroy", "pulumi destroy", "cdk destroy"]
+      },
+      { "toolNamePattern": "terraform.*", "argumentPath": "action", "valuePatterns": ["destroy"] },
+      { "toolNamePattern": "pulumi.*", "argumentPath": "action", "valuePatterns": ["destroy"] }
+    ]
   }
 }
