@@ -13,7 +13,17 @@ import {
 export function composeSystemRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
-  "a2a" | "addons" | "assembly" | "costs" | "media" | "personalOps" | "settings" | "tasks" | "voice" | "workspaces"
+  | "a2a"
+  | "addons"
+  | "assembly"
+  | "autonomyControl"
+  | "costs"
+  | "media"
+  | "personalOps"
+  | "settings"
+  | "tasks"
+  | "voice"
+  | "workspaces"
 > {
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
 
@@ -38,6 +48,12 @@ export function composeSystemRouteDependencies(
       getAssemblyRunDetail: (runId) => gateway.assemblyService.getRunDetail(runId),
       listAssemblyReputations: (limit) => gateway.assemblyService.listReputations(limit),
       listAssemblyRuns: (limit) => gateway.assemblyService.listRuns(limit),
+    },
+    autonomyControl: {
+      getStatus: (recentLimit) => gateway.autonomyControlService.getStatus(recentLimit),
+      revertAutonomousChangesSince: (sinceIso, opts) =>
+        gateway.autonomyControlService.revertAutonomousChangesSince(sinceIso, opts),
+      setKillSwitch: (disabled) => gateway.autonomyControlService.setKillSwitch(disabled),
     },
     costs: createCostsRoutePort({
       storage: gateway.storage,

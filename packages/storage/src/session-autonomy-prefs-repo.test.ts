@@ -41,6 +41,50 @@ describe("SessionAutonomyPrefsRepository", () => {
     assert.equal(prefs.reflectionMode, "off");
   });
 
+  it("defaults heartbeat to ON with a 1h interval and 08–22 active hours (P1-F4)", () => {
+    const repo = createRepo();
+    const prefs = repo.ensure("sess-hb");
+    assert.equal(prefs.heartbeatEnabled, true);
+    assert.equal(prefs.heartbeatIntervalSeconds, 3600);
+    assert.deepEqual(prefs.activeHours, { start: 8, end: 22 });
+
+    // Persisted round-trip (a fresh read sees the same defaults).
+    const reloaded = repo.get("sess-hb");
+    assert.equal(reloaded?.heartbeatEnabled, true);
+    assert.equal(reloaded?.heartbeatIntervalSeconds, 3600);
+    assert.deepEqual(reloaded?.activeHours, { start: 8, end: 22 });
+  });
+
+  it("round-trips heartbeat prefs and clamps the interval to the 15m floor", () => {
+    const repo = createRepo();
+    const patched = repo.patch("sess-hb", {
+      heartbeatEnabled: false,
+      heartbeatIntervalSeconds: 60, // below the 15-minute floor
+      activeHours: { tz: "America/New_York", start: 9, end: 17 },
+    });
+    assert.equal(patched.heartbeatEnabled, false);
+    assert.equal(patched.heartbeatIntervalSeconds, 15 * 60);
+    assert.deepEqual(patched.activeHours, { tz: "America/New_York", start: 9, end: 17 });
+
+    const reloaded = repo.get("sess-hb");
+    assert.equal(reloaded?.heartbeatEnabled, false);
+    assert.equal(reloaded?.heartbeatIntervalSeconds, 15 * 60);
+    assert.equal(reloaded?.activeHours.tz, "America/New_York");
+    assert.equal(reloaded?.activeHours.start, 9);
+    assert.equal(reloaded?.activeHours.end, 17);
+  });
+
+  it("re-enables heartbeat and re-clamps a too-large interval to the 24h ceiling", () => {
+    const repo = createRepo();
+    repo.patch("sess-hb", { heartbeatEnabled: false });
+    const patched = repo.patch("sess-hb", {
+      heartbeatEnabled: true,
+      heartbeatIntervalSeconds: 999_999,
+    });
+    assert.equal(patched.heartbeatEnabled, true);
+    assert.equal(patched.heartbeatIntervalSeconds, 24 * 60 * 60);
+  });
+
   it("lists existing rows by session id in one map", () => {
     const repo = createRepo();
     repo.ensure("sess-1");

@@ -33,7 +33,12 @@ function createPrefs(
   } as ChatSessionPrefsRecord;
 }
 
-function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partial<ChatSessionPrefsRecord> = {}) {
+function createHost(
+  mode: ChatSessionPrefsRecord["mode"],
+  prefsOverrides: Partial<ChatSessionPrefsRecord> = {},
+  disabledFlags: string[] = [],
+  operatorProfileDigest: string | undefined = undefined,
+) {
   let guidanceSystemInstruction = "";
   const prefs = createPrefs(mode, prefsOverrides);
   const host = {
@@ -59,6 +64,9 @@ function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partia
       },
       chatSpecialistCandidates: {
         listAutoRoutable: vi.fn(() => []),
+      },
+      workspaces: {
+        find: vi.fn(() => undefined),
       },
     },
     llmService: {
@@ -110,6 +118,8 @@ function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partia
       return [];
     }),
     createChatCompletion: vi.fn(async () => ({ id: "completion-1", message: { role: "assistant", content: "" } })),
+    isFeatureEnabled: vi.fn((flag: string) => disabledFlags.includes(flag)),
+    composeFrozenOperatorProfileDigest: vi.fn(() => operatorProfileDigest),
   } as unknown as ChatTurnPrepHost;
   return {
     host,
@@ -118,19 +128,57 @@ function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partia
 }
 
 describe("prepareAgentChatTurn personality overlay", () => {
-  it("adds the global personality overlay only for Chat mode", async () => {
-    const chat = createHost("chat");
+  it("applies the base agent prompt and personality overlay to every mode by default", async () => {
+    for (const mode of ["chat", "cowork", "code"] as const) {
+      const harness = createHost(mode);
+      await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+      // The base system prompt (identity/doctrine/runtime grounding) now reaches
+      // cowork/code, not just chat — this is the core cowork-quality fix.
+      expect(harness.readGuidance()).toContain("You are GoatCitadel");
+      expect(harness.readGuidance()).toContain(`Mode: ${mode}`);
+      // Personality overlay is no longer gated to chat-only.
+      expect(harness.readGuidance()).toContain("changes voice and framing only");
+      expect(harness.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
+    }
+  });
+
+  it("kill switch (coworkRuntimeQualityV1Disabled) restores legacy chat-only behavior", async () => {
+    const cowork = createHost("cowork", {}, ["coworkRuntimeQualityV1Disabled"]);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+    expect(cowork.readGuidance()).not.toContain("You are GoatCitadel");
+    expect(cowork.host.buildDefaultChatPersonalityOverlay).not.toHaveBeenCalled();
+
+    const chat = createHost("chat", {}, ["coworkRuntimeQualityV1Disabled"]);
     await prepareAgentChatTurn(chat.host, "session-1", { content: "hello" });
-
-    expect(chat.readGuidance()).toContain("Chat personality overlay:");
-    expect(chat.readGuidance()).toContain("Use crisp language.");
+    expect(chat.readGuidance()).not.toContain("You are GoatCitadel");
+    // Legacy behavior: chat still received the personality overlay.
     expect(chat.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
+  });
 
-    const cowork = createHost("cowork");
+  it("injects the frozen operator-profile digest into the base prompt as the Memory section (P2-S4b)", async () => {
+    const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
+    const cowork = createHost("cowork", {}, [], digest);
     await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
 
-    expect(cowork.readGuidance()).not.toContain("Chat personality overlay:");
-    expect(cowork.host.buildDefaultChatPersonalityOverlay).not.toHaveBeenCalled();
+    expect(cowork.host.composeFrozenOperatorProfileDigest).toHaveBeenCalledWith("default");
+    // The base prompt surfaces the digest under its `## Memory` section.
+    expect(cowork.readGuidance()).toContain("## Memory");
+    expect(cowork.readGuidance()).toContain("Prefers metric units.");
+  });
+
+  it("omits the Memory section when there is no operator-profile digest", async () => {
+    const cowork = createHost("cowork", {}, [], undefined);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+    expect(cowork.readGuidance()).toContain("You are GoatCitadel");
+    expect(cowork.readGuidance()).not.toContain("## Memory");
+  });
+
+  it("does not consult the operator profile when the base prompt is disabled", async () => {
+    const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
+    const cowork = createHost("cowork", {}, ["coworkRuntimeQualityV1Disabled"], digest);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+    expect(cowork.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
   });
 
   it("ingests attachment references, applies autonomy overrides, and keeps unbound Code mode manual", async () => {

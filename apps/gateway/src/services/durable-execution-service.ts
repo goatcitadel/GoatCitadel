@@ -49,11 +49,52 @@ import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   type IdempotentExternalSideEffectRunInput,
+  type ExternalSideEffectReplayWorkerResult,
   runReplaySafeExternalSideEffectWorker,
 } from "./external-side-effect-runner-service.js";
 
 type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
   Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns">;
+
+/** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
+export interface AutonomousTurnDeliveryChannel {
+  channelKey: string;
+  target?: string;
+}
+
+/**
+ * The `metadata.autonomous` block written by the gateway when it enqueues an
+ * autonomous (cron/heartbeat/proactive) `chat.turn.execute` run. Drives the
+ * post-turn channel delivery.
+ */
+export interface AutonomousTurnMetadata {
+  kind: string;
+  systemActorId?: string;
+  reason?: string;
+  deliverMode?: "always" | "on_notify";
+  deliveryChannel?: AutonomousTurnDeliveryChannel;
+}
+
+/** Request passed to the gateway-backed autonomous channel delivery enqueue. */
+export interface AutonomousChannelDeliveryRequest {
+  runId: string;
+  sessionId: string;
+  turnId?: string;
+  assistantText: string;
+  deliveryChannel: AutonomousTurnDeliveryChannel;
+  systemActorId?: string;
+  reason?: string;
+}
+
+/** Request passed to the gateway-backed silent-heartbeat transcript cleanup. */
+export interface SilentHeartbeatCleanupRequest {
+  sessionId: string;
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  /** Active leaf to revert to (the leaf before the heartbeat seed turn). */
+  parentTurnId?: string;
+}
 
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
@@ -89,6 +130,21 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     },
   ): Promise<PreparedAgentChatTurn>;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
+  /**
+   * Enqueue a `connector.delivery` durable run that routes an autonomous turn's
+   * assistant reply to a channel. Implemented by the gateway (which can resolve
+   * a connector from a channel key and call `createDurableRun`). Returns the
+   * delivery run id, or undefined when no connector/channel could be resolved.
+   */
+  enqueueAutonomousChannelDelivery?(input: AutonomousChannelDeliveryRequest): string | undefined;
+  /**
+   * Remove a silent heartbeat turn (seed user message + `{notify:false}`
+   * assistant message + its trace) from the human transcript, reverting the
+   * active branch leaf. Implemented by the gateway (which owns branch-state +
+   * transactional storage). Called only when a `kind:"heartbeat"` turn does not
+   * notify, so heartbeats stay invisible unless they surface to the user.
+   */
+  cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): void;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -146,7 +202,12 @@ type DurableMemoryMaintenanceWorkflowHost = DurableWorkflowCompletionHost &
 export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispatchHost &
   Pick<
     DurableExecutionHost,
-    "storage" | "prepareAgentChatTurn" | "registerActiveChatTurnStream" | "persistChatStreamChunk"
+    | "storage"
+    | "prepareAgentChatTurn"
+    | "registerActiveChatTurnStream"
+    | "persistChatStreamChunk"
+    | "enqueueAutonomousChannelDelivery"
+    | "cleanupSilentHeartbeatTurn"
   >;
 
 type DurableProactiveTickWorkflowHost = Pick<
@@ -752,60 +813,160 @@ export async function executeDurableExternalSideEffectReplayRun(
     throw new Error("Durable external side-effect replay payload is invalid or incomplete.");
   }
   const checkedAt = new Date().toISOString();
-  const candidateRuns = collectExternalSideEffectReplayRuns(host, payload);
+  const replayCollection = collectExternalSideEffectReplayRuns(host, payload);
   const results = await runReplaySafeExternalSideEffectWorker<Record<string, unknown>>({
-    runs: candidateRuns,
+    runs: replayCollection.runs,
     checkedAt,
     limit: payload.limit,
     staleClaimedNotSentAfterMs: payload.staleClaimedNotSentAfterMs,
     buildJob: (candidate) => host.buildExternalSideEffectReplayJob?.(candidate, payload),
   });
+  const replayAuditResults = [...replayCollection.auditResults, ...results.map(mapExternalSideEffectReplayResult)];
   const checkpointState = {
     workflow: "external_side_effect.replay",
     version: payload.version,
     workspaceId: payload.workspaceId,
     requestedBy: payload.requestedBy,
     checkedAt,
-    candidates: candidateRuns.length,
-    executed: results.filter((item) => item.status === "executed").length,
-    blocked: results.filter((item) => item.status === "blocked").length,
-    failed: results.filter((item) => item.status === "failed").length,
-    skipped: results.filter((item) => item.status === "skipped").length,
-    results: results.map((item) => ({
-      runId: item.run.runId,
-      status: item.status,
-      ...(item.status === "skipped" ? { reason: item.reason, message: item.message } : {}),
-      ...(item.status !== "skipped"
-        ? {
-            replayOutcome: item.result.claim.replayOutcome,
-            replayAttempt: item.result.claim.replayAttempt,
-            resumeState: item.result.claim.resumeState,
-          }
-        : {}),
-    })),
+    requestedRunIds: replayCollection.requestedRunIds,
+    candidates: replayCollection.runs.length,
+    found: replayCollection.runs.length,
+    missing: replayCollection.missingRunIds.length,
+    missingRunIds: replayCollection.missingRunIds,
+    skippedRunIds: replayCollection.skippedRunIds,
+    executed: replayAuditResults.filter((item) => item.status === "executed").length,
+    replayed: replayAuditResults.filter((item) => item.status === "executed").length,
+    blocked: replayAuditResults.filter((item) => item.status === "blocked").length,
+    failed: replayAuditResults.filter((item) => item.status === "failed").length,
+    skipped: replayAuditResults.filter((item) => item.status === "skipped").length,
+    replayAuditResults,
+    results: replayAuditResults,
   };
   completeDurableWorkflowRun(host, run.runId, checkpointState);
 }
 
+type ExternalSideEffectReplayAuditResult = {
+  runId: string;
+  status: "not_found" | "skipped" | "blocked" | "failed" | "executed";
+  reason?: string;
+  message?: string;
+  replayOutcome?: string;
+  replayAttempt?: string;
+  resumeState?: string;
+};
+
+type ExternalSideEffectReplayRunCollection = {
+  requestedRunIds: string[];
+  runs: ExternalSideEffectRunRecord[];
+  missingRunIds: string[];
+  skippedRunIds: string[];
+  auditResults: ExternalSideEffectReplayAuditResult[];
+};
+
 function collectExternalSideEffectReplayRuns(
   host: DurableExternalSideEffectReplayWorkflowHost,
   payload: ExternalSideEffectReplayWorkflowPayload,
-): ExternalSideEffectRunRecord[] {
+): ExternalSideEffectReplayRunCollection {
   const limit = clampExternalSideEffectReplayLimit(payload.limit);
-  const runs = payload.runIds?.length
-    ? payload.runIds
-        .map((runId) => readExternalSideEffectRunMaybe(host, runId))
-        .filter((item): item is ExternalSideEffectRunRecord => Boolean(item))
-    : payload.connectionId
-      ? host.storage.externalSideEffectRuns.listByConnection(payload.connectionId, {
-          workspaceId: payload.workspaceId,
-          limit,
-        })
-      : host.storage.externalSideEffectRuns.listByWorkspace(payload.workspaceId, limit);
-  return runs
-    .filter((item) => item.workspaceId === payload.workspaceId)
-    .filter((item) => !payload.connectionId || item.connectionId === payload.connectionId)
-    .slice(0, limit);
+  const requestedRunIds = [...(payload.runIds ?? [])];
+  const auditResults: ExternalSideEffectReplayAuditResult[] = [];
+  const missingRunIds: string[] = [];
+  const skippedRunIds: string[] = [];
+  if (requestedRunIds.length > 0) {
+    const uniqueRequestedRunIds: string[] = [];
+    const seenRequestedRunIds = new Set<string>();
+    for (const runId of requestedRunIds) {
+      if (seenRequestedRunIds.has(runId)) {
+        skippedRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "skipped",
+          reason: "duplicate_requested_run",
+          message: "Requested external side-effect run was already included in this replay workflow.",
+        });
+        continue;
+      }
+      seenRequestedRunIds.add(runId);
+      uniqueRequestedRunIds.push(runId);
+    }
+    const scopedRuns: ExternalSideEffectRunRecord[] = [];
+    for (const runId of uniqueRequestedRunIds) {
+      const run = readExternalSideEffectRunMaybe(host, runId);
+      if (!run) {
+        missingRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "not_found",
+          reason: "requested_run_missing",
+          message: "Requested external side-effect run was not found.",
+        });
+        continue;
+      }
+      if (
+        run.workspaceId !== payload.workspaceId ||
+        (payload.connectionId && run.connectionId !== payload.connectionId)
+      ) {
+        skippedRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "skipped",
+          reason: "out_of_scope",
+          message: "Requested external side-effect run did not match replay scope.",
+        });
+        continue;
+      }
+      scopedRuns.push(run);
+    }
+    const runs = scopedRuns.slice(0, limit);
+    for (const skipped of scopedRuns.slice(limit)) {
+      skippedRunIds.push(skipped.runId);
+      auditResults.push({
+        runId: skipped.runId,
+        status: "skipped",
+        reason: "limit_exceeded",
+        message: "Requested external side-effect run was beyond the replay limit.",
+      });
+    }
+    return { requestedRunIds, runs, missingRunIds, skippedRunIds, auditResults };
+  }
+  const runs = payload.connectionId
+    ? host.storage.externalSideEffectRuns.listByConnection(payload.connectionId, {
+        workspaceId: payload.workspaceId,
+        limit,
+      })
+    : host.storage.externalSideEffectRuns.listByWorkspace(payload.workspaceId, limit);
+  return {
+    requestedRunIds,
+    runs: runs
+      .filter((item) => item.workspaceId === payload.workspaceId)
+      .filter((item) => !payload.connectionId || item.connectionId === payload.connectionId)
+      .slice(0, limit),
+    missingRunIds,
+    skippedRunIds,
+    auditResults,
+  };
+}
+
+function mapExternalSideEffectReplayResult(
+  item: ExternalSideEffectReplayWorkerResult<Record<string, unknown>>,
+): ExternalSideEffectReplayAuditResult {
+  if (item.status === "skipped") {
+    return {
+      runId: item.run.runId,
+      status: "skipped",
+      reason: item.reason,
+      message: item.message,
+    };
+  }
+  return {
+    runId: item.run.runId,
+    status: item.status,
+    replayOutcome: item.result.claim.replayOutcome,
+    replayAttempt: item.result.claim.replayAttempt,
+    resumeState: item.result.claim.resumeState,
+    ...(item.status === "blocked" ? { reason: item.result.blockedReason, message: item.result.message } : {}),
+    ...(item.status === "failed" ? { message: item.result.error.message } : {}),
+  };
 }
 
 function readExternalSideEffectRunMaybe(
@@ -1029,6 +1190,132 @@ export async function executeDurableChatTurnRun(
       ...(context?.signal ? { abortSignal: context.signal } : {}),
     },
   );
+  maybeEnqueueAutonomousDelivery(host, run, payload);
+  maybeCleanupSilentHeartbeatTurn(host, run, payload);
+}
+
+/** Read the persisted assistant text for a completed durable chat turn, if any. */
+function readDurableChatTurnAssistantText(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  let trace: ChatTurnTraceRecord | undefined;
+  try {
+    trace = host.storage.chatTurnTraces.get(payload.turnId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  const assistantMessageId = trace?.assistantMessageId ?? payload.assistantMessageId;
+  if (!assistantMessageId) {
+    return undefined;
+  }
+  const content = host.storage.chatMessages.get(assistantMessageId)?.content?.trim();
+  return content ? content : undefined;
+}
+
+/**
+ * Detect a structured `{ notify: boolean }` signal in an autonomous turn's
+ * assistant output. Used by `deliverMode:"on_notify"` (cron) and — per the
+ * shared convention — the heartbeat path: a turn is "silent" unless it opts in
+ * by emitting `notify: true`. Absent/unparseable ⇒ no notify.
+ *
+ * Parsing is deliberately strict to avoid false-positive delivery from the word
+ * "notify" appearing in prose or tool-call arguments:
+ *  1. Parse the (trimmed) assistant text as JSON; honor only a top-level
+ *     `notify === true` on an object.
+ *  2. If that fails (the model wrapped the JSON in prose), fall back to a strict
+ *     *quoted-key* match `"notify": true` — the JSON object shape, not bare
+ *     `notify: true` / `notify=true` in prose.
+ * The previous broad `\bnotify\s*[:=]\s*true` prose fallback is intentionally
+ * dropped: it matched arbitrary prose and tool args and could mis-trigger
+ * delivery of a silent turn.
+ */
+export function parseAutonomousNotifySignal(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return (parsed as Record<string, unknown>).notify === true;
+    }
+  } catch {
+    // Not pure JSON — fall through to the strict quoted-key fallback below.
+  }
+  return /"notify"\s*:\s*true\b/.test(trimmed);
+}
+
+/**
+ * After an autonomous (`metadata.autonomous`) chat turn completes, route its
+ * assistant reply to the configured channel via a durable `connector.delivery`
+ * run. Honors `deliverMode:"on_notify"` (deliver only when the output signals
+ * `notify`). No-op for non-autonomous turns, missing channels, or empty output.
+ */
+export function maybeEnqueueAutonomousDelivery(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (!autonomous || typeof autonomous !== "object") {
+    return undefined;
+  }
+  const deliveryChannel = autonomous.deliveryChannel;
+  if (!deliveryChannel?.channelKey || typeof host.enqueueAutonomousChannelDelivery !== "function") {
+    return undefined;
+  }
+  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  if (!assistantText) {
+    return undefined;
+  }
+  if (autonomous.deliverMode === "on_notify" && !parseAutonomousNotifySignal(assistantText)) {
+    return undefined;
+  }
+  return host.enqueueAutonomousChannelDelivery({
+    runId: run.runId,
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    assistantText,
+    deliveryChannel,
+    systemActorId: autonomous.systemActorId,
+    reason: autonomous.reason,
+  });
+}
+
+/**
+ * After a heartbeat (`metadata.autonomous.kind:"heartbeat"`) chat turn completes,
+ * keep it invisible in the user's transcript unless it notified. A heartbeat
+ * runs inside the human session and persists a seed user message plus a
+ * `{notify:false}` assistant message every interval; without cleanup the user
+ * would see that noise on every tick. When the turn did NOT signal `notify`, the
+ * gateway prunes both messages + the trace and reverts the branch leaf. No-op
+ * for non-heartbeat turns, notifying heartbeats, or when no cleanup hook exists.
+ */
+export function maybeCleanupSilentHeartbeatTurn(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): void {
+  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (autonomous?.kind !== "heartbeat" || typeof host.cleanupSilentHeartbeatTurn !== "function") {
+    return;
+  }
+  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  // Notifying heartbeats stay visible (the user is meant to see them). Only a
+  // silent (no-notify / empty) heartbeat is pruned.
+  if (assistantText && parseAutonomousNotifySignal(assistantText)) {
+    return;
+  }
+  host.cleanupSilentHeartbeatTurn({
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    userMessageId: payload.userMessageId,
+    assistantMessageId: payload.assistantMessageId,
+    ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
+  });
 }
 
 function isDurableChatTurnRecoverable(

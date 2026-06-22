@@ -86,6 +86,7 @@ import { assertWritePathInJail, scanBrowserContentGuard } from "@goatcitadel/pol
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
+import { withMemoryEmbeddingMetadata } from "./memory-embedding-metadata.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -304,21 +305,28 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapMemoryEntityRow(this.deps.admin, row));
   }
 
-  public createMemoryEntity(input: MemoryEntityInput, actorId = "operator"): MemoryEntityRecord {
+  public async createMemoryEntity(input: MemoryEntityInput, actorId = "operator"): Promise<MemoryEntityRecord> {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const now = new Date().toISOString();
+    const title = requireTrimmedText(input.title, "title");
+    const summary = optionalTrimmedText(input.summary);
+    const aliases = normalizeStringArray(input.aliases);
+    const metadata = await withMemoryEmbeddingMetadata(
+      input.metadata ?? {},
+      buildStructuredMemoryEmbeddingText([title, summary, ...aliases]),
+    );
     const entity: MemoryEntityRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       scope: normalizeStructuredScope(input.scope),
-      title: requireTrimmedText(input.title, "title"),
+      title,
       entityType: input.entityType?.trim() || "concept",
-      aliases: normalizeStringArray(input.aliases),
-      summary: optionalTrimmedText(input.summary),
+      aliases,
+      summary,
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata: input.metadata ?? {},
+      metadata,
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
@@ -435,7 +443,7 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapMemoryRelationRow(this.deps.admin, row));
   }
 
-  public createMemoryRelation(input: MemoryRelationInput, actorId = "operator"): MemoryRelationRecord {
+  public async createMemoryRelation(input: MemoryRelationInput, actorId = "operator"): Promise<MemoryRelationRecord> {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const from = this.requireMemoryEntity(input.fromEntityId);
     const to = this.requireMemoryEntity(input.toEntityId);
@@ -447,18 +455,20 @@ export class MemoryLifecycleService {
     }
     const now = new Date().toISOString();
     const relationType = input.relationType.trim() || "related_to";
+    const title = input.title?.trim() || `${from.title} ${relationType} ${to.title}`;
+    const metadata = await withMemoryEmbeddingMetadata(input.metadata ?? {}, buildStructuredMemoryEmbeddingText([title]));
     const relation: MemoryRelationRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId ?? from.workspaceId),
       scope: normalizeStructuredScope(input.scope),
-      title: input.title?.trim() || `${from.title} ${relationType} ${to.title}`,
+      title,
       fromEntityId: from.id,
       toEntityId: to.id,
       relationType,
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata: input.metadata ?? {},
+      metadata,
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
@@ -537,18 +547,24 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapMemoryDecisionRow(this.deps.admin, row));
   }
 
-  public createMemoryDecision(input: MemoryDecisionInput, actorId = "operator"): MemoryDecisionRecord {
+  public async createMemoryDecision(input: MemoryDecisionInput, actorId = "operator"): Promise<MemoryDecisionRecord> {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const now = new Date().toISOString();
     const decisionText = requireTrimmedText(input.decision, "decision");
+    const rationale = requireTrimmedText(input.rationale, "rationale");
+    const title = input.title?.trim() || decisionText.slice(0, 120);
+    const metadata = await withMemoryEmbeddingMetadata(
+      input.metadata ?? {},
+      buildStructuredMemoryEmbeddingText([title, decisionText, rationale]),
+    );
     const decision: MemoryDecisionRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       scope: normalizeStructuredScope(input.scope),
-      title: input.title?.trim() || decisionText.slice(0, 120),
+      title,
       decision: decisionText,
       alternatives: normalizeStringArray(input.alternatives),
-      rationale: requireTrimmedText(input.rationale, "rationale"),
+      rationale,
       expectedOutcome: optionalTrimmedText(input.expectedOutcome),
       reviewAt: optionalTrimmedText(input.reviewAt),
       linkedEntityIds: normalizeStringArray(input.linkedEntityIds),
@@ -558,7 +574,7 @@ export class MemoryLifecycleService {
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata: input.metadata ?? {},
+      metadata,
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
@@ -1743,6 +1759,10 @@ export class MemoryLifecycleService {
     });
     this.assertTraceCandidateContentAllowed(contentForGuard);
     const now = new Date().toISOString();
+    const metadata = await withMemoryEmbeddingMetadata(
+      input.metadata ?? {},
+      buildStructuredMemoryEmbeddingText([proposedInsight, sourceText]),
+    );
     const candidate: TraceMemoryCandidateRecord = {
       candidateId: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
@@ -1752,7 +1772,7 @@ export class MemoryLifecycleService {
       proposedInsight,
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeTraceCandidateSourceRefs(input, actorId),
-      metadata: input.metadata ?? {},
+      metadata,
       authority: "agent_proposed",
       actorId: optionalTrimmedText(actorId),
       createdAt: now,
@@ -3159,6 +3179,14 @@ function normalizeConfidence(value: number | undefined): number {
 
 function normalizeStringArray(value: string[] | undefined): string[] {
   return Array.from(new Set((value ?? []).map((item) => item.trim()).filter(Boolean)));
+}
+
+/**
+ * Join the salient text fields of a structured-memory record into a single
+ * string for embedding generation, dropping empties.
+ */
+function buildStructuredMemoryEmbeddingText(parts: Array<string | undefined>): string {
+  return parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part)).join("\n");
 }
 
 function calculateLexicalOverlap(prompt: string, contextText: string): number {

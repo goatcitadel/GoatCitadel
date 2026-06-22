@@ -1,7 +1,6 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import fs from "node:fs";
 import type {
-  BrowserSessionAccessCheck,
   FilesystemReadAccessMode,
   ApprovalLinkage,
   EffectiveToolPolicy,
@@ -42,7 +41,7 @@ import {
 } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
-import { executeTool, resolveFixedOutboundHostsForTool } from "./tool-executor.js";
+import { executeTool, resolveFixedOutboundHostsForTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
 import {
   buildInternalToolCall,
   buildInternalToolResult,
@@ -186,8 +185,7 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
   listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
 };
 
-export interface ToolPolicyEngineRuntimeHooks {
-  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /**
    * Compatibility switch for legacy callers that do not pass citadelId yet. When
    * it returns true, the request workspace is used as a compatibility Citadel
@@ -798,6 +796,7 @@ export class ToolPolicyEngine {
     const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
     if (
       codeModeRunPreapproved &&
+      !wardRequiresApproval &&
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
       !argumentRisk?.risky &&

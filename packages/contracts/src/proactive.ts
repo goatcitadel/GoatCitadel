@@ -1,6 +1,6 @@
 export type ProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
 export type ProactiveExecutionClass = "prompted_notification" | "autonomous_durable";
-export type ProactiveTriggerSource = "scheduler" | "manual" | "chat" | "approval_resume";
+export type ProactiveTriggerSource = "scheduler" | "manual" | "chat" | "approval_resume" | "de_novo";
 export type ProactiveOriginSurface = "chat" | "cowork" | "code";
 export type ProactiveStopReason =
   | "completed"

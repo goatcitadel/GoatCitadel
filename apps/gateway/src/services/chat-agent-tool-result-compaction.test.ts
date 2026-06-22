@@ -154,6 +154,92 @@ describe("chat-agent-tool-result-compaction", () => {
     });
   });
 
+  it("preserves compact local-business research evidence during structured compaction", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        results: Array.from({ length: 700 }, (_, index) => ({
+          title: `Result ${index}`,
+          url: `https://example.test/${index}`,
+        })),
+        localBusinessResearch: {
+          kind: "local_business_contact_research",
+          workflow: "local_business.research",
+          plan: {
+            location: "91303",
+            radiusMiles: 10,
+            categories: ["board game and tabletop game store"],
+            requireEmail: true,
+            requireContactName: true,
+          },
+          stages: [
+            {
+              name: "candidate_discovery",
+              status: "complete",
+              summary: "Read search results.",
+              resultCount: 700,
+              sourceUrls: ["https://bgetabletop.com/"],
+            },
+          ],
+          candidates: [
+            {
+              storeName: "BGE's Tabletop",
+              website: "https://bgetabletop.com/",
+              email: "games@boardgamingwitheducation.com",
+              sourceUrls: ["https://bgetabletop.com/"],
+              verificationStatus: "partial",
+              evidence: [
+                {
+                  url: "https://bgetabletop.com/",
+                  evidenceKind: "email",
+                  confidence: "high",
+                },
+              ],
+            },
+          ],
+          excluded: [{ reason: "blocked_or_secondary_listing_source", sourceUrl: "https://www.yelp.com/search" }],
+          blockers: ["contact_name_not_verified_from_search_result"],
+          verificationNote: "Source-backed public contact evidence only.",
+        },
+      },
+      artifact({ compactMode: "structured", snippet: "artifact preview", contentType: "application/json" }),
+    );
+
+    expect(compacted.localBusinessResearch).toMatchObject({
+      kind: "local_business_contact_research",
+      workflow: "local_business.research",
+      plan: {
+        location: "91303",
+        radiusMiles: 10,
+        requireEmail: true,
+        requireContactName: true,
+      },
+      stages: [
+        expect.objectContaining({
+          name: "candidate_discovery",
+          resultCount: 700,
+          sourceUrls: ["https://bgetabletop.com/"],
+        }),
+      ],
+      candidates: [
+        expect.objectContaining({
+          storeName: "BGE's Tabletop",
+          email: "games@boardgamingwitheducation.com",
+          sourceUrls: ["https://bgetabletop.com/"],
+          evidence: [expect.objectContaining({ evidenceKind: "email" })],
+        }),
+      ],
+      excluded: [
+        {
+          reason: "blocked_or_secondary_listing_source",
+          sourceUrl: "https://www.yelp.com/search",
+        },
+      ],
+      blockers: ["contact_name_not_verified_from_search_result"],
+    });
+    expect(compacted.resultCount).toBe(700);
+    expect(compacted.results).toBeUndefined();
+  });
+
   it("removes text from structured compaction when artifact snippets fall back to result text", () => {
     const compacted = compactToolResultForTurn(
       {

@@ -1914,29 +1914,77 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       )
       ON CONFLICT (citadel_id) DO NOTHING;
 
+      WITH legacy_citadels AS (
+        SELECT
+          charter.citadel_id,
+          COALESCE(NULLIF(BTRIM(workspace.name), ''), charter.citadel_id) AS name,
+          COALESCE(
+            NULLIF(
+              REGEXP_REPLACE(
+                LEFT(
+                  REGEXP_REPLACE(
+                    REGEXP_REPLACE(LOWER(BTRIM(charter.citadel_id)), '[^a-z0-9]+', '-', 'g'),
+                    '(^-+|-+$)',
+                    '',
+                    'g'
+                  ),
+                  64
+                ),
+                '-+$',
+                '',
+                'g'
+              ),
+              ''
+            ),
+            'citadel'
+          ) AS base_slug,
+          charter.kind,
+          workspace.workspace_id,
+          charter.created_at,
+          charter.updated_at
+        FROM citadel_charters AS charter
+        LEFT JOIN workspaces AS workspace
+          ON workspace.workspace_id = charter.citadel_id
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM citadel_records AS existing
+          WHERE existing.citadel_id = charter.citadel_id
+        )
+      ),
+      ranked_legacy_citadels AS (
+        SELECT
+          *,
+          COUNT(*) OVER (PARTITION BY base_slug) AS base_slug_count,
+          ROW_NUMBER() OVER (PARTITION BY base_slug ORDER BY citadel_id ASC) AS base_slug_rank
+        FROM legacy_citadels
+      )
       INSERT INTO citadel_records (
         citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
         default_workspace_id, created_at, updated_at
       )
       SELECT
-        charter.citadel_id,
-        COALESCE(NULLIF(BTRIM(workspace.name), ''), charter.citadel_id),
+        ranked.citadel_id,
+        ranked.name,
         'Legacy workspace Citadel preserved during parent-scope migration.',
-        LOWER(REPLACE(charter.citadel_id, ' ', '-')),
-        charter.kind,
+        CASE
+          WHEN ranked.base_slug_count > 1
+            OR EXISTS (SELECT 1 FROM citadel_records existing_slug WHERE existing_slug.slug = ranked.base_slug)
+          THEN
+            REGEXP_REPLACE(
+              LEFT(ranked.base_slug, GREATEST(1, 64 - LENGTH('-' || ranked.base_slug_rank::TEXT))),
+              '-+$',
+              '',
+              'g'
+            ) || '-' || ranked.base_slug_rank::TEXT
+          ELSE ranked.base_slug
+        END,
+        ranked.kind,
         'active',
         NULL,
-        workspace.workspace_id,
-        charter.created_at,
-        charter.updated_at
-      FROM citadel_charters AS charter
-      LEFT JOIN workspaces AS workspace
-        ON workspace.workspace_id = charter.citadel_id
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM citadel_records AS existing
-        WHERE existing.citadel_id = charter.citadel_id
-      )
+        ranked.workspace_id,
+        ranked.created_at,
+        ranked.updated_at
+      FROM ranked_legacy_citadels AS ranked
       ON CONFLICT (citadel_id) DO NOTHING;
 
       UPDATE workspaces

@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Storage } from "@goatcitadel/storage";
 import type { ImprovementRef } from "@goatcitadel/contracts";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -64,6 +69,79 @@ describe("ImprovementService runtime coverage", () => {
     expect(() => harness.service.approveDecisionAutoTune("tune-medium-risk")).toThrow(/manual code review/);
     expect(() => harness.service.approveDecisionAutoTune("tune-failed")).toThrow(/cannot be approved/);
     expect(() => harness.service.revertDecisionAutoTune("tune-medium-risk")).toThrow(/cannot be reverted/);
+  });
+
+  it("closes the loop: applying a wired tune records the runtime-effective value and revert restores the prior value (P2-W3)", () => {
+    const harness = createHarness();
+    insertDecisionReplayRun(harness, "run-autotune");
+    // The live-intent tune the weekly tuner produces: raise from 0.6 -> 0.65.
+    insertDecisionAutoTune(harness, {
+      tuneId: "tune-live-intent",
+      riskLevel: "low",
+      status: "queued",
+      patch: { settingKey: "improvement_tune_live_intent_threshold_v1", nextValue: 0.65 },
+      snapshot: { settingKey: "improvement_tune_live_intent_threshold_v1", previousValue: 0.6 },
+    });
+
+    const applied = harness.service.approveDecisionAutoTune("tune-live-intent");
+    expect(applied.status).toBe("applied");
+    // The raw setting was written...
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.65);
+    // ...and the applied tune's audit records the value the runtime decision
+    // point will now READ — proving the written key is read (loop closed).
+    expect(applied.result).toMatchObject({
+      settingKey: "improvement_tune_live_intent_threshold_v1",
+      nextValue: 0.65,
+      effectiveRuntimeValue: 0.65,
+    });
+    expect(
+      harness.published.some(
+        (event) =>
+          event.eventType === "improvement_autotune_applied" && event.payload.effectiveRuntimeValue === 0.65,
+      ),
+    ).toBe(true);
+
+    // Revert restores the prior value through the snapshot rail.
+    const reverted = harness.service.revertDecisionAutoTune("tune-live-intent");
+    expect(reverted.status).toBe("reverted");
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.6);
+  });
+
+  it("revert clears a wired tune key that had no prior value back to unset (P2-W3)", () => {
+    const harness = createHarness();
+    insertDecisionReplayRun(harness, "run-autotune");
+    // Retry-threshold tune with NO previousValue snapshot field => unset before.
+    insertDecisionAutoTune(harness, {
+      tuneId: "tune-retry",
+      riskLevel: "low",
+      status: "queued",
+      patch: { settingKey: "improvement_tune_retry_threshold_v1", nextValue: 0 },
+      snapshot: { settingKey: "improvement_tune_retry_threshold_v1" },
+    });
+
+    harness.service.approveDecisionAutoTune("tune-retry");
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value).toBe(0);
+    // Effective value falls back to the safe default (1) once reverted to unset.
+    const reverted = harness.service.revertDecisionAutoTune("tune-retry");
+    expect(reverted.status).toBe("reverted");
+    // previousValue was undefined => the key is set to null (unset).
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value ?? null).toBe(null);
+  });
+
+  it("never auto-applies medium/high-risk tunes (safety invariant)", () => {
+    const harness = createHarness();
+    insertDecisionReplayRun(harness, "run-autotune");
+    insertDecisionAutoTune(harness, {
+      tuneId: "tune-high-blocker",
+      riskLevel: "high",
+      status: "queued",
+      patch: { settingKey: "improvement_tune_blocker_template_v1", nextValue: 8 },
+      snapshot: { settingKey: "improvement_tune_blocker_template_v1", previousValue: 1 },
+    });
+    // Operator approval is refused for non-low risk...
+    expect(() => harness.service.approveDecisionAutoTune("tune-high-blocker")).toThrow(/manual code review/);
+    // ...and the underlying setting was never written.
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_blocker_template_v1")).toBeUndefined();
   });
 
   it("creates replay override drafts and exposes completed diff summaries against the storage schema", () => {
@@ -495,6 +573,9 @@ function createHarness(): Harness {
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     })),
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: vi.fn(async () => []),
     retryChatTurn: vi.fn(),
     backgroundTasks: new Set<Promise<void>>(),

@@ -6,6 +6,11 @@ import type { ApprovalCreateInput, ApprovalRequest, LoadedSkill, ToolCatalogEntr
 import { Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import { LlmService } from "./llm-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
@@ -313,10 +318,12 @@ describe("Loop 8 gateway service coverage", () => {
         expect.objectContaining({
           skillId: "skill-extra",
           capabilityCategory: "community_imported",
-          lifecycleState: "approved",
-          callable: true,
+          lifecycleState: "candidate",
+          callable: false,
           trustLabel: "Imported/community",
+          reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
           lifecycle: expect.objectContaining({
+            lifecycleState: "candidate",
             provenance: {
               source: "extra",
               sourceRef: "https://github.com/example/loop8-skill",
@@ -336,7 +343,8 @@ describe("Loop 8 gateway service coverage", () => {
     );
     expect(storage.skillLifecycle.find("skill-extra")).toMatchObject({
       category: "community_imported",
-      lifecycleState: "approved",
+      lifecycleState: "candidate",
+      reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
       provenance: expect.objectContaining({
         sourceRef: "https://github.com/example/loop8-skill",
       }),
@@ -357,7 +365,7 @@ describe("Loop 8 gateway service coverage", () => {
           capabilityId: "skill:skill-extra",
           sourceRef: "https://github.com/example/loop8-skill",
           sourceProvider: "github",
-          callable: true,
+          callable: false,
         }),
         expect.objectContaining({
           capabilityId: `proposal:${proposal.proposalId}`,
@@ -366,7 +374,7 @@ describe("Loop 8 gateway service coverage", () => {
         }),
       ]),
     );
-    expect(callable.map((entry) => entry.capabilityId)).toContain("skill:skill-extra");
+    expect(callable.map((entry) => entry.capabilityId)).not.toContain("skill:skill-extra");
     expect(callable.map((entry) => entry.capabilityId)).not.toContain("skill:skill-disabled");
     await expect(
       service.createCodeModeRun({
@@ -1184,6 +1192,9 @@ function createImprovementHarness(input: { ledgerEnabled: boolean }) {
     restoreRoutingPolicySnapshot: () => undefined,
     createChatCompletion: async () => ({ id: "mock", choices: [] }) as never,
     getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-4.1-mini" }),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: async () => [],
     retryChatTurn: async () => ({ sessionId: "session-loop8", turnId: "turn-loop8" }) as never,
     backgroundTasks: new Set<Promise<void>>(),

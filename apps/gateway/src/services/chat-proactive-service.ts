@@ -6,15 +6,19 @@ const log = logger.child("chat-proactive-service");
 import {
   DEFAULT_SESSION_AUTONOMY_PREFS,
   type Storage,
+  type SessionActiveHoursWindow,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
 import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
   ChatProactiveMode,
   ChatReflectionMode,
   ChatRetrievalMode,
   DurableRunCreateRequest,
   DurableRunRecord,
+  LlmApiStyle,
   ProactivePolicy,
   ProactiveActionRecord,
   ProactiveExecutionClass,
@@ -32,11 +36,33 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { isWithinActiveHours } from "./gateway/commitment-sweep-service.js";
+import {
+  type DeNovoPlanContext,
+  type DeNovoPlannerModelDeps,
+  hasDeNovoContext,
+  planDeNovoActions,
+} from "./chat-proactive-denovo-planner.js";
+
+/** Origination mode for proactive planning (P1-F5). */
+export type ProactiveOriginationMode = "reactive" | "de_novo";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
 const PROACTIVE_SCHEDULER_CONCURRENCY = 8;
 const PROACTIVE_MIN_IDLE_SECONDS = 90;
+/**
+ * De-novo cadence floor (P1-F5): minimum seconds between *unprompted* (de-novo)
+ * ticks for an idle session. De-novo can fire without new user activity, so this
+ * floor — together with the per-session cooldown + active-hours — bounds it so it
+ * never busy-loops on an idle session. Defaults to 1 hour (matches the heartbeat
+ * interval default; both are self-wake cadences keyed off `lastProactiveAt`).
+ */
+const PROACTIVE_DE_NOVO_CADENCE_SECONDS = 3_600;
+/** Recent assistant turns fed to the de-novo planner for situational grounding. */
+const PROACTIVE_DE_NOVO_RECENT_ASSISTANT_TURNS = 3;
+/** Max pending commitments pulled into the de-novo planning context. */
+const PROACTIVE_DE_NOVO_COMMITMENT_LIMIT = 20;
 const configuredProactiveReferenceRoot = process.env.GOATCITADEL_PROACTIVE_REFERENCE_ROOT?.trim();
 const PROACTIVE_REFERENCE_ROOTS: ProactiveReferenceRootRecord[] = configuredProactiveReferenceRoot
   ? [
@@ -77,6 +103,14 @@ interface ProactivePlannedAction {
   note?: string;
   objective?: string;
   roles?: string[];
+}
+
+/** One session selected for a scheduler tick, tagged with its trigger source. */
+interface ProactiveSchedulerCandidate {
+  sessionId: string;
+  prefs: SessionAutonomyPrefs;
+  source: ProactiveTriggerSource;
+  reason: string;
 }
 
 interface ProactiveTickWorkflowPayload {
@@ -136,6 +170,24 @@ export interface ChatProactiveServiceCallbacks {
 
   requestDurableRunProcessing(runId?: string): void;
 
+  /**
+   * Cheap, read-only model call used by de-novo origination (P1-F5) to plan
+   * self-initiated actions from open commitments/tasks. Optional: when absent
+   * (or the master autonomy switch is off), de-novo planning yields no actions
+   * and the reactive heuristic path is unaffected.
+   */
+  createChatCompletion?(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  /** Cheap-model defaults for the de-novo planner (mirrors the F3 classifier). */
+  resolveModelDefaults?(): { providerId?: string; model?: string };
+  /** Resolve api-style so the de-novo planner can gate `response_format`/`temperature`. */
+  resolveApiStyle?(providerId?: string, model?: string): LlmApiStyle;
+  /**
+   * Whether a session may originate de-novo turns: human, non-eval, non-scratch.
+   * Mirrors the heartbeat eligibility predicate (eval-integrity turns are never
+   * affected). When absent, de-novo treats all sessions as eligible (tests).
+   */
+  isProactiveDeNovoEligibleSession?(sessionId: string): boolean;
+
   readonly backgroundTasks: Set<Promise<void>>;
   closing: boolean;
 }
@@ -143,6 +195,7 @@ export interface ChatProactiveServiceCallbacks {
 export interface ChatProactiveServiceContext {
   readonly storage: Pick<
     Storage,
+    | "agentCommitments"
     | "approvals"
     | "chatMessages"
     | "chatSessionMeta"
@@ -328,38 +381,65 @@ export class ChatProactiveService {
     const prefsBySessionId = this.ctx.storage.sessionAutonomyPrefs.listBySessionIds(
       sessions.map((session) => session.sessionId),
     );
-    const eligible = sessions
-      .map((session) => ({
-        session,
-        sessionId: session.sessionId,
-        prefs: prefsBySessionId.get(session.sessionId) ?? {
+    const enriched = sessions.map((session) => ({
+      session,
+      sessionId: session.sessionId,
+      prefs:
+        prefsBySessionId.get(session.sessionId) ??
+        ({
           sessionId: session.sessionId,
           ...DEFAULT_SESSION_AUTONOMY_PREFS,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        },
-      }))
-      .filter((item) => item.prefs.proactiveMode !== "off")
-      .filter((item) => !this.shouldSkipSchedulerSession(item.session, item.prefs));
+        } as SessionAutonomyPrefs),
+    }));
 
-    if (eligible.length === 0) {
+    // Reactive candidates: sessions with new user activity since the last tick.
+    const reactiveCandidates: ProactiveSchedulerCandidate[] = enriched
+      .filter((item) => item.prefs.proactiveMode !== "off")
+      .filter((item) => !this.shouldSkipSchedulerSession(item.session, item.prefs))
+      .map((item) => ({
+        sessionId: item.sessionId,
+        prefs: item.prefs,
+        source: "scheduler",
+        reason: "Background proactive scheduler tick.",
+      }));
+
+    // De-novo candidates (P1-F5): sessions WITHOUT new user activity that still
+    // have open commitments/tasks to act on, gated by cooldown + active-hours +
+    // de-novo cadence so idle sessions never busy-loop. Reactive takes precedence
+    // (a session with new activity uses the reactive path this tick).
+    const reactiveIds = new Set(reactiveCandidates.map((candidate) => candidate.sessionId));
+    const now = new Date();
+    const deNovoCandidates: ProactiveSchedulerCandidate[] = enriched
+      .filter((item) => !reactiveIds.has(item.sessionId))
+      .filter((item) => this.isDeNovoCadenceEligible(item.sessionId, item.prefs, now))
+      .map((item) => ({
+        sessionId: item.sessionId,
+        prefs: item.prefs,
+        source: "de_novo",
+        reason: "De-novo origination scheduler tick.",
+      }));
+
+    const candidates = [...reactiveCandidates, ...deNovoCandidates];
+    if (candidates.length === 0) {
       return;
     }
 
-    const maxWorkers = Math.min(PROACTIVE_SCHEDULER_CONCURRENCY, eligible.length);
+    const maxWorkers = Math.min(PROACTIVE_SCHEDULER_CONCURRENCY, candidates.length);
     let cursor = 0;
     const workers = Array.from({ length: maxWorkers }, async () => {
-      while (cursor < eligible.length) {
+      while (cursor < candidates.length) {
         const index = cursor;
         cursor += 1;
-        const current = eligible[index];
+        const current = candidates[index];
         if (!current) {
           continue;
         }
         try {
           await this.triggerChatSessionProactive(current.sessionId, {
-            source: "scheduler",
-            reason: "Background proactive scheduler tick.",
+            source: current.source,
+            reason: current.reason,
             prefs: current.prefs,
           });
         } catch (error) {
@@ -376,6 +456,61 @@ export class ChatProactiveService {
       }
     });
     await Promise.all(workers);
+  }
+
+  /**
+   * Whether a session may fire an *unprompted* de-novo origination tick now
+   * (P1-F5). Every gate must pass (in cheap-first order):
+   *  1. master autonomy switch on (`autonomyV1Disabled` off),
+   *  2. proactive mode != off,
+   *  3. de-novo planner wired (cheap-model callbacks present),
+   *  4. session is de-novo eligible (human / non-eval / non-scratch),
+   *  5. no turn currently running,
+   *  6. within the session's active-hours window,
+   *  7. per-session proactive cooldown elapsed,
+   *  8. the de-novo cadence floor has elapsed since the last self-wake,
+   *  9. there are open commitments/tasks to originate from.
+   *
+   * Gates 1–8 are cheap, in-memory checks; only after all of them do we touch
+   * storage (gate 9) so an idle session with no work never pays the query cost.
+   */
+  private isDeNovoCadenceEligible(sessionId: string, prefs: SessionAutonomyPrefs, now: Date): boolean {
+    if (this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
+      return false;
+    }
+    if (prefs.proactiveMode === "off") {
+      return false;
+    }
+    if (!this.resolveDeNovoPlannerModelDeps()) {
+      return false;
+    }
+    if (this.callbacks.isProactiveDeNovoEligibleSession?.(sessionId) === false) {
+      return false;
+    }
+    if (this.callbacks.hasRunningTurn(sessionId)) {
+      return false;
+    }
+    if (!isWithinActiveHours(now, toActiveHoursWindow(prefs.activeHours))) {
+      return false;
+    }
+    if (this.getProactiveCooldownRemainingSeconds(prefs) > 0) {
+      return false;
+    }
+    if (getDeNovoCadenceRemainingSeconds(prefs, now) > 0) {
+      return false;
+    }
+    return this.hasOpenDeNovoWork(sessionId);
+  }
+
+  /** True when the session has at least one pending commitment or an open linked task. */
+  private hasOpenDeNovoWork(sessionId: string): boolean {
+    const hasPendingCommitment = this.ctx.storage.agentCommitments
+      .listBySession(sessionId, PROACTIVE_DE_NOVO_COMMITMENT_LIMIT)
+      .some((commitment) => commitment.status === "pending");
+    if (hasPendingCommitment) {
+      return true;
+    }
+    return this.findReusableTask(sessionId) !== undefined;
   }
 
   private shouldSkipSchedulerSession(
@@ -457,7 +592,11 @@ export class ChatProactiveService {
 
   // ── planning ─────────────────────────────────────────────────────
 
-  private async planProactiveActions(sessionId: string): Promise<{
+  private async planProactiveActions(
+    sessionId: string,
+    originationMode: ProactiveOriginationMode = "reactive",
+    signal?: AbortSignal,
+  ): Promise<{
     confidence: number;
     reasoningSummary: string;
     actions: ProactivePlannedAction[];
@@ -465,6 +604,11 @@ export class ChatProactiveService {
     const messages = await this.callbacks.listChatMessages(sessionId, 60);
     const latestUser = [...messages].reverse().find((message) => message.role === "user");
     if (!latestUser) {
+      // Reactive mode requires a human seed (exact legacy behavior). De-novo mode
+      // (P1-F5) instead originates from open commitments/tasks + time signals.
+      if (originationMode === "de_novo") {
+        return this.planDeNovoProactiveActions(sessionId, messages, signal);
+      }
       return {
         confidence: 0.1,
         reasoningSummary: "No recent user prompt found.",
@@ -473,6 +617,9 @@ export class ChatProactiveService {
     }
     const text = latestUser.content.trim();
     if (!text) {
+      if (originationMode === "de_novo") {
+        return this.planDeNovoProactiveActions(sessionId, messages, signal);
+      }
       return {
         confidence: 0.1,
         reasoningSummary: "Latest user prompt is empty.",
@@ -508,6 +655,87 @@ export class ChatProactiveService {
       confidence: actions.some((action) => action.kind !== "note") ? 0.78 : 0.42,
       reasoningSummary: "Generated actions from latest user intent and route hints.",
       actions,
+    };
+  }
+
+  /**
+   * De-novo origination (P1-F5): plan self-initiated actions from open
+   * commitments + an open linked task + recent assistant state + time signals via
+   * a cheap planner model, with NO last-user message. Returns no actions when the
+   * planner callbacks are unavailable (master autonomy off / not wired) or there
+   * is nothing to originate from — so flag-off / reactive behavior is unchanged.
+   *
+   * De-novo grants initiative, not authority: every proposed action still flows
+   * through `executeProactiveToolAction → invokeTool → engine.invoke` under the
+   * restricted profile and the same autonomy budgets.
+   */
+  private async planDeNovoProactiveActions(
+    sessionId: string,
+    messages: Array<{ role: string; content: string }>,
+    signal?: AbortSignal,
+  ): Promise<{ confidence: number; reasoningSummary: string; actions: ProactivePlannedAction[] }> {
+    const modelDeps = this.resolveDeNovoPlannerModelDeps(signal);
+    if (!modelDeps) {
+      return { confidence: 0.1, reasoningSummary: "De-novo planner is not available.", actions: [] };
+    }
+    const context = this.assembleDeNovoContext(sessionId, messages);
+    if (!hasDeNovoContext(context)) {
+      return {
+        confidence: 0.1,
+        reasoningSummary: "No open commitments or tasks to originate from.",
+        actions: [],
+      };
+    }
+    const plan = await planDeNovoActions(context, modelDeps);
+    return {
+      confidence: plan.confidence,
+      reasoningSummary: plan.reasoningSummary,
+      actions: plan.actions.map((action) =>
+        action.kind === "tool"
+          ? { kind: "tool", toolName: action.toolName, args: action.args }
+          : { kind: "note", note: action.note },
+      ),
+    };
+  }
+
+  /**
+   * Build the de-novo planner model deps from the optional service callbacks.
+   * Returns `undefined` (de-novo disabled) when the cheap-model callbacks are not
+   * wired — keeping the reactive path and flag-off behavior byte-identical.
+   */
+  private resolveDeNovoPlannerModelDeps(signal?: AbortSignal): DeNovoPlannerModelDeps | undefined {
+    const { createChatCompletion, resolveModelDefaults, resolveApiStyle } = this.callbacks;
+    if (!createChatCompletion || !resolveModelDefaults || !resolveApiStyle) {
+      return undefined;
+    }
+    return {
+      createChatCompletion: (request) => createChatCompletion(request),
+      resolveModelDefaults: () => resolveModelDefaults(),
+      resolveApiStyle: (providerId, model) => resolveApiStyle(providerId, model),
+      signal,
+    };
+  }
+
+  /** Assemble the de-novo planning context (pending commitments + open task + recent assistant state). */
+  private assembleDeNovoContext(
+    sessionId: string,
+    messages: Array<{ role: string; content: string }>,
+  ): DeNovoPlanContext {
+    const commitments = this.ctx.storage.agentCommitments
+      .listBySession(sessionId, PROACTIVE_DE_NOVO_COMMITMENT_LIMIT)
+      .filter((commitment) => commitment.status === "pending");
+    const openTask = this.findReusableTask(sessionId);
+    const recentAssistantText = [...messages]
+      .reverse()
+      .filter((message) => message.role === "assistant")
+      .slice(0, PROACTIVE_DE_NOVO_RECENT_ASSISTANT_TURNS)
+      .map((message) => message.content.trim())
+      .filter((content) => content.length > 0);
+    return {
+      commitments,
+      openTask: openTask ? { taskId: openTask.taskId, title: openTask.title, status: openTask.status } : undefined,
+      recentAssistantText,
+      nowIso: new Date().toISOString(),
     };
   }
 
@@ -1599,7 +1827,8 @@ export class ChatProactiveService {
     let actions = this.listProactiveRunActions(proactiveRunId);
     if (actions.length === 0) {
       throwIfProactiveDurableRunAborted(context?.signal);
-      const plan = await this.planProactiveActions(sessionId);
+      const originationMode: ProactiveOriginationMode = source === "de_novo" ? "de_novo" : "reactive";
+      const plan = await this.planProactiveActions(sessionId, originationMode, context?.signal);
       throwIfProactiveDurableRunAborted(context?.signal);
       if (plan.actions.length === 0) {
         const completed = this.finishProactiveDurableRun(
@@ -2303,6 +2532,33 @@ function dedupeReferenceRoots(items: ProactiveReferenceRootRecord[]): ProactiveR
     deduped.push(item);
   }
   return deduped;
+}
+
+/**
+ * Remaining seconds before an *unprompted* de-novo origination tick may fire for
+ * a session (P1-F5), based on `lastProactiveAt` (the shared self-wake timestamp
+ * also touched by reactive proactive + commitment + heartbeat turns) and the
+ * de-novo cadence floor. Returns 0 when no prior self-wake is recorded or the
+ * cadence has elapsed. This — together with the per-session cooldown and
+ * active-hours — bounds de-novo so it never busy-loops on an idle session.
+ */
+function getDeNovoCadenceRemainingSeconds(
+  prefs: Pick<SessionAutonomyPrefs, "lastProactiveAt">,
+  now: Date,
+): number {
+  if (!prefs.lastProactiveAt) {
+    return 0;
+  }
+  const elapsedSeconds = Math.floor((now.getTime() - Date.parse(prefs.lastProactiveAt)) / 1000);
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds >= PROACTIVE_DE_NOVO_CADENCE_SECONDS) {
+    return 0;
+  }
+  return Math.max(0, PROACTIVE_DE_NOVO_CADENCE_SECONDS - elapsedSeconds);
+}
+
+/** Adapt the persisted `{start,end}` active-hours window to the sweep's shape. */
+function toActiveHoursWindow(activeHours: SessionActiveHoursWindow): { startHour: number; endHour: number } {
+  return { startHour: activeHours.start, endHour: activeHours.end };
 }
 
 function throwIfProactiveDurableRunAborted(signal?: AbortSignal): void {

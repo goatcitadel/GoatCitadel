@@ -35,6 +35,7 @@ import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
+import { buildBaseAgentSystemPrompt, renderBaseAgentSystemPrompt } from "./base-agent-system-prompt.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -60,6 +61,7 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
+import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
 import { sanitizeMobileContextForAudit } from "./mobile-route-service.js";
 import {
   routeWithModelRouter,
@@ -98,6 +100,7 @@ type ChatTurnPrepStorage = Pick<
   | "chatSessionProjects"
   | "chatSideChats"
   | "chatSpecialistCandidates"
+  | "systemSettings"
   | "workspaces"
 > & {
   audit?: Pick<Storage["audit"], "append">;
@@ -145,6 +148,14 @@ export interface ChatTurnPrepHost {
   ): Promise<ChatCompletionRequest["messages"]>;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
+  isFeatureEnabled(flag: string): boolean;
+  /**
+   * Frozen cross-session operator-profile digest (P2-S4b), composed once per
+   * session and byte-stable per workspace+revision (cached). Fed to the base
+   * prompt as `memoryDigest`. Optional + best-effort: returns `undefined` when
+   * there is nothing to inject, and is only consulted when the base prompt is on.
+   */
+  composeFrozenOperatorProfileDigest?(workspaceId: string): string | undefined;
 }
 
 export interface PreparedAgentChatTurn {
@@ -312,7 +323,7 @@ export async function prepareAgentChatTurn(
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
-  const citadelId = host.storage.workspaces.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+  const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
   const content = (options?.existingUserMessage?.content ?? input.content).trim();
   if (!content) {
@@ -416,10 +427,58 @@ export async function prepareAgentChatTurn(
     retrievalMode: autonomy.retrievalMode,
     webMode: normalized.webMode ?? prefs.webMode,
     memoryMode: normalized.memoryMode ?? prefs.memoryMode,
+    // P2-W3: close the self-improvement loop — read the live-data intent
+    // sensitivity the weekly tuner writes so a raised threshold actually
+    // escalates web retrieval. Safe default (0.6) keeps current behaviour.
+    liveIntentThreshold: readLiveIntentThreshold(host.storage.systemSettings),
   });
-  const personalityOverlay = prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  // Previously the personality overlay (and any base instruction) was applied
+  // only in chat mode, so cowork/code turns reached the model with no agent
+  // identity, tool doctrine, output bar, or runtime grounding (not even the
+  // date) — the single biggest cause of thin cowork responses. With the base
+  // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
+  // we apply a real layered prompt, and the personality overlay, to every mode.
+  const baseSystemPromptEnabled = !host.isFeatureEnabled("coworkRuntimeQualityV1Disabled");
+  const personalityOverlay =
+    baseSystemPromptEnabled || prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  let baseAgentInstruction: string | undefined;
+  if (baseSystemPromptEnabled) {
+    const now = new Date();
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    // Frozen cross-session operator profile (P2-S4b). Cheap + cached
+    // (workspace+revision), so it stays byte-stable within a session and lands in
+    // the base prompt's volatile tail without busting the P0-A cache prefix.
+    // Best-effort: never let a profile read break turn preparation.
+    let memoryDigest: string | undefined;
+    try {
+      memoryDigest = host.composeFrozenOperatorProfileDigest?.(workspaceId);
+    } catch {
+      memoryDigest = undefined;
+    }
+    baseAgentInstruction = renderBaseAgentSystemPrompt(
+      buildBaseAgentSystemPrompt({
+        mode: prefs.mode,
+        runtimeInfo: {
+          date: now.toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+            timeZone: timezone,
+          }),
+          timezone,
+          model: input.model ?? prefs.model ?? "unknown",
+          providerId: input.providerId ?? prefs.providerId ?? "unknown",
+          channel: route.channel,
+          mode: prefs.mode,
+        },
+        toolset: { toolNames: [] },
+        ...(memoryDigest ? { memoryDigest } : {}),
+      }),
+    );
+  }
   const goalAdjustedBaseGuidance = applyGoalToGuidanceSystemInstruction({
-    baseInstruction: undefined,
+    baseInstruction: baseAgentInstruction,
     goal: sessionMeta.pinnedGoal ?? null,
   });
   const [rawResolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([

@@ -53,6 +53,7 @@ import { chatRoutes } from "./routes/chat.js";
 import { promptPackRoutes } from "./routes/prompt-packs.js";
 import { modelComparisonRoutes } from "./routes/model-comparisons.js";
 import { adminRoutes } from "./routes/admin.js";
+import { autonomyControlRoutes } from "./routes/autonomy-control.js";
 import { docsRoutes } from "./routes/docs.js";
 import { devDiagnosticsRoutes } from "./routes/dev-diagnostics.js";
 import { devVerificationRoutes } from "./routes/dev-verification.js";
@@ -381,6 +382,7 @@ export async function buildApp() {
   await app.register(evidenceRoutes);
   await app.register(evidenceReceiptsRoutes);
   await app.register(adminRoutes);
+  await app.register(autonomyControlRoutes);
   await app.register(docsRoutes);
   await app.register(devDiagnosticsRoutes);
   await app.register(devVerificationRoutes);

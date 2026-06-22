@@ -17,12 +17,51 @@ import {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
+import {
+  planCuratorIdleSweep,
+  type CuratorIdleSweepResult,
+  type CuratorIdleSweepDeps,
+} from "./curator-idle-sweep.js";
 import { getZonedDateParts, toWeekKeyForTimezone } from "./improvement-replay.js";
 
 const CURATOR_WEEKLY_JOB_ID = "curator_weekly";
 const CURATOR_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
 const CURATOR_WEEKLY_DEDUP_SETTING_KEY = "curator_weekly_last_week_key_v1";
 const CURATOR_WEEKLY_TIME_ZONE = "America/Los_Angeles";
+
+/** Dedup/cadence key for the S3 idle sweep (last successful sweep epoch ms). */
+const CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY = "curator_idle_sweep_last_run_ms_v1";
+/** Minimum interval between idle sweeps, ms (defaults to {@link CuratorServiceDeps.cycleDays}). */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Collaborators the S3 idle janitor needs beyond the proposal-only weekly run:
+ * an idle signal, the master autonomy switch, and a reversible snapshot hook.
+ * Optional — when absent, {@link CuratorService.maybeRunIdleCurator} is a no-op
+ * so existing constructions keep byte-identical behavior.
+ */
+export interface CuratorIdleSweepCollaborators {
+  /**
+   * True when the workspace is idle (no active turns). Mirrors the maintenance
+   * scheduler's idle posture (e.g. heartbeat's "no running turn") so the janitor
+   * never runs while the user is mid-turn.
+   */
+  isWorkspaceIdle: () => boolean;
+  /**
+   * Master autonomy switch (`!isFeatureEnabled("autonomyV1Disabled")`). When
+   * false the sweep is proposal-only: it computes archives/merges but applies
+   * nothing.
+   */
+  isAutonomyEnabled: () => boolean;
+  /**
+   * Capture a reversible snapshot of a skill BEFORE it is archived. Invoked only
+   * under full autonomy, immediately before the archive disable. Archive itself
+   * stays disable-only (never hard-delete); restore re-enables from the snapshot.
+   */
+  snapshotSkill: (skillId: string) => void;
+  /** Optional near-dup similarity override (defaults to name/title overlap). */
+  similarity?: CuratorIdleSweepDeps["similarity"];
+}
 
 export interface CuratorServiceDeps {
   listSkills: () => SkillListItem[];
@@ -33,6 +72,7 @@ export interface CuratorServiceDeps {
   publishRealtime: (topic: string, payload: Record<string, unknown>) => void;
   cycleDays: number;
   storage?: Pick<Storage, "cronJobs" | "systemSettings">; // NEW: optional, gates curator cron methods
+  idleSweep?: CuratorIdleSweepCollaborators; // NEW (S3): optional, gates the idle janitor
 }
 
 export class CuratorService {
@@ -275,6 +315,103 @@ export class CuratorService {
       },
       finishedAt,
     );
+  }
+
+  /**
+   * S3 — idle janitor entry point for the maintenance tick. Bounded by:
+   *  1. idle-sweep collaborators being wired (no-op otherwise),
+   *  2. the workspace being idle (no active turns) — never runs mid-turn,
+   *  3. the curator cadence (`cycleDays`) since the last successful sweep.
+   *
+   * When all gates pass it runs {@link runCuratorIdleSweep}. Best-effort: this
+   * method never throws — a failure is swallowed (and surfaced via realtime) so
+   * it can be dropped straight into the maintenance tick like the F3/F4 sweeps.
+   * The cadence cursor only advances after a clean run, so a transient failure
+   * is retried on the next eligible tick.
+   */
+  public async maybeRunIdleCurator(options: { force?: boolean } = {}): Promise<CuratorIdleSweepResult | undefined> {
+    const idle = this.deps.idleSweep;
+    if (!idle) {
+      return undefined;
+    }
+    try {
+      if (!options.force && !idle.isWorkspaceIdle()) {
+        return undefined;
+      }
+      if (!options.force && !this.isIdleSweepCadenceDue()) {
+        return undefined;
+      }
+      const result = this.runCuratorIdleSweep();
+      this.recordIdleSweepRun();
+      return result;
+    } catch (error) {
+      // Best-effort: a janitor failure must never crash the maintenance tick.
+      this.deps.publishRealtime("curator", {
+        type: "curator_idle_sweep_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Run a single idle sweep over `category:"self_generated"` skills NOW, ignoring
+   * the idle/cadence gates (those live in {@link maybeRunIdleCurator}). Applies
+   * the existing deterministic stale/archive transitions + near-duplicate merges,
+   * scoped to agent-created skills; `pinned` / built-in / bundled skills are
+   * exempt. Under full autonomy archives/merges auto-apply (snapshotted, archive
+   * = disable, never hard-delete); otherwise they are proposals only.
+   */
+  public runCuratorIdleSweep(): CuratorIdleSweepResult {
+    const idle = this.deps.idleSweep;
+    if (!idle) {
+      throw new Error("Curator: idle sweep collaborators are not configured");
+    }
+    const autoApply = idle.isAutonomyEnabled();
+    const result = planCuratorIdleSweep({
+      listSkills: () => this.deps.listSkills(),
+      now: () => this.deps.now(),
+      runId: `curator-idle-${randomUUID()}`,
+      autoApply,
+      snapshotSkill: (skillId) => idle.snapshotSkill(skillId),
+      archiveSkill: (skillId, reason) => {
+        this.deps.archiveSkill(skillId, reason);
+      },
+      similarity: idle.similarity,
+    });
+    this.deps.publishRealtime("curator", {
+      type: "curator_idle_sweep_completed",
+      runId: result.runId,
+      autoApplied: result.autoApplied,
+      scannedSelfGenerated: result.scannedSelfGenerated,
+      immuneCount: result.immuneCount,
+      archivedCount: result.archives.filter((entry) => entry.applied).length,
+      archiveProposalCount: result.archives.filter((entry) => !entry.applied).length,
+      mergeCount: result.merges.length,
+    });
+    return result;
+  }
+
+  /** Whether the idle sweep cadence (`cycleDays`) has elapsed since the last run. */
+  private isIdleSweepCadenceDue(): boolean {
+    if (!this.deps.storage) {
+      // No settings store ⇒ cannot dedup; allow the sweep (idle gate still applies).
+      return true;
+    }
+    const lastRunMs = this.deps.storage.systemSettings.get<number>(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY)?.value;
+    if (typeof lastRunMs !== "number" || !Number.isFinite(lastRunMs)) {
+      return true;
+    }
+    const intervalMs = Math.max(1, this.deps.cycleDays) * DAY_MS;
+    return this.deps.now().getTime() - lastRunMs >= intervalMs;
+  }
+
+  /** Advance the idle sweep cadence cursor after a clean run. */
+  private recordIdleSweepRun(): void {
+    if (!this.deps.storage) {
+      return;
+    }
+    this.deps.storage.systemSettings.set(CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY, this.deps.now().getTime());
   }
 
   public async executeDurableCuratorTickRun(run: DurableRunRecord, _context: unknown): Promise<void> {

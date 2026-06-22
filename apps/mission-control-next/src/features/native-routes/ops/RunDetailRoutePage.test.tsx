@@ -236,6 +236,56 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Lifecycle trace not retained.");
   });
 
+  it("surfaces external side-effect replay audit checkpoints outside raw JSON", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      version: "observe.run_trace.v1",
+      generatedAt: "2026-05-02T19:00:00.000Z",
+      runId: "run-replay-audit",
+      run: { runId: "run-replay-audit", status: "completed", workflowKey: "external_side_effect.replay" },
+      request: { summary: "Replay external side effects.", requestedAt: "2026-05-02T19:00:00.000Z" },
+      durable: {
+        checkpoints: {
+          state: "available",
+          items: [
+            {
+              checkpointKind: "run_completed",
+              state: {
+                workflow: "external_side_effect.replay",
+                replayAuditResults: [
+                  {
+                    runId: "extfx-missing",
+                    status: "not_found",
+                    reason: "requested_run_missing",
+                    message: "Requested external side-effect run was not found.",
+                  },
+                  {
+                    runId: "extfx-blocked",
+                    status: "blocked",
+                    reason: "idempotency_blocked",
+                    message: "Replay claim was blocked by idempotency policy.",
+                    replayOutcome: "already_claimed",
+                    replayAttempt: "blocked",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      artifacts: [],
+      errors: [],
+    });
+
+    const text = await renderText("run-replay-audit");
+
+    expect(text).toContain("Replay audit checkpoints");
+    expect(text).toContain("Missing run extfx-missing");
+    expect(text).toContain("requested_run_missing");
+    expect(text).toContain("Blocked replay extfx-blocked");
+    expect(text).toContain("idempotency_blocked");
+    expect(text).toContain("Replay claim was blocked by idempotency policy.");
+  });
+
   it("surfaces orchestration decision trace evidence outside raw JSON", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       runId: "orch-run-1",
@@ -519,7 +569,9 @@ describe("RunDetailRoutePage", () => {
     expect(appendChild).toHaveBeenCalledWith(anchor);
     expect(removeChild).toHaveBeenCalledWith(anchor);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:receipt");
-    expect(collectText(renderer!.root)).toContain("Downloaded signed evidence receipt evidence-receipt-run-receipt.json.");
+    expect(collectText(renderer!.root)).toContain(
+      "Downloaded signed evidence receipt evidence-receipt-run-receipt.json.",
+    );
 
     if (documentDescriptor) {
       Object.defineProperty(globalThis, "document", documentDescriptor);

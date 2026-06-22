@@ -12,8 +12,26 @@ interface SessionAutonomyPrefsRow {
   reflection_mode: ChatReflectionMode;
   last_proactive_at: string | null;
   last_proactive_run_id: string | null;
+  // P1-F4 heartbeat columns (added in migration 124, default-on posture).
+  heartbeat_enabled: number;
+  heartbeat_interval_seconds: number;
+  active_hours_json: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Active-hours window for autonomous self-wake (P1-F4). `start`/`end` are local
+ * hours; `tz` is an optional IANA timezone hint reserved for future per-session
+ * scheduling (the runtime currently evaluates against the host's local hour, so
+ * the field is persisted round-trip but not yet consulted).
+ */
+export interface SessionActiveHoursWindow {
+  tz?: string;
+  /** Inclusive local start hour [0, 24]. */
+  start: number;
+  /** Exclusive local end hour [0, 24]. `start === end` ⇒ always active. */
+  end: number;
 }
 
 export interface SessionAutonomyPrefsRecord {
@@ -26,6 +44,12 @@ export interface SessionAutonomyPrefsRecord {
   reflectionMode: ChatReflectionMode;
   lastProactiveAt?: string;
   lastProactiveRunId?: string;
+  /** P1-F4: whether silent self-wake heartbeats may fire for this session. */
+  heartbeatEnabled: boolean;
+  /** P1-F4: floor interval between heartbeats, seconds. */
+  heartbeatIntervalSeconds: number;
+  /** P1-F4: local active-hours window heartbeats are confined to. */
+  activeHours: SessionActiveHoursWindow;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,7 +61,16 @@ export interface SessionAutonomyPrefsPatchInput {
   cooldownSeconds?: number;
   retrievalMode?: ChatRetrievalMode;
   reflectionMode?: ChatReflectionMode;
+  heartbeatEnabled?: boolean;
+  heartbeatIntervalSeconds?: number;
+  activeHours?: SessionActiveHoursWindow;
 }
+
+/** Default active-hours window: 08:00–22:00 local (matches the F3 sweep default). */
+export const DEFAULT_SESSION_ACTIVE_HOURS: SessionActiveHoursWindow = { start: 8, end: 22 };
+
+/** Heartbeat interval floor / default, seconds (1 hour). */
+export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 3600;
 
 export const DEFAULT_SESSION_AUTONOMY_PREFS: Omit<
   SessionAutonomyPrefsRecord,
@@ -51,6 +84,11 @@ export const DEFAULT_SESSION_AUTONOMY_PREFS: Omit<
   reflectionMode: "off",
   lastProactiveAt: undefined,
   lastProactiveRunId: undefined,
+  // Heartbeat defaults to ON (the chosen on-by-default posture). Cost note: every
+  // eligible idle human session fires one read-only model call per interval.
+  heartbeatEnabled: true,
+  heartbeatIntervalSeconds: DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+  activeHours: DEFAULT_SESSION_ACTIVE_HOURS,
 };
 
 export class SessionAutonomyPrefsRepository {
@@ -67,10 +105,12 @@ export class SessionAutonomyPrefsRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO session_autonomy_prefs (
         session_id, proactive_mode, max_actions_per_hour, max_actions_per_turn, cooldown_seconds,
-        retrieval_mode, reflection_mode, last_proactive_at, last_proactive_run_id, created_at, updated_at
+        retrieval_mode, reflection_mode, last_proactive_at, last_proactive_run_id,
+        heartbeat_enabled, heartbeat_interval_seconds, active_hours_json, created_at, updated_at
       ) VALUES (
         @sessionId, @proactiveMode, @maxActionsPerHour, @maxActionsPerTurn, @cooldownSeconds,
-        @retrievalMode, @reflectionMode, @lastProactiveAt, @lastProactiveRunId, @createdAt, @updatedAt
+        @retrievalMode, @reflectionMode, @lastProactiveAt, @lastProactiveRunId,
+        @heartbeatEnabled, @heartbeatIntervalSeconds, @activeHoursJson, @createdAt, @updatedAt
       )
       ON CONFLICT(session_id) DO UPDATE SET
         proactive_mode = excluded.proactive_mode,
@@ -81,6 +121,9 @@ export class SessionAutonomyPrefsRepository {
         reflection_mode = excluded.reflection_mode,
         last_proactive_at = excluded.last_proactive_at,
         last_proactive_run_id = excluded.last_proactive_run_id,
+        heartbeat_enabled = excluded.heartbeat_enabled,
+        heartbeat_interval_seconds = excluded.heartbeat_interval_seconds,
+        active_hours_json = excluded.active_hours_json,
         updated_at = excluded.updated_at
     `);
     this.touchStmt = db.prepare(`
@@ -113,6 +156,9 @@ export class SessionAutonomyPrefsRepository {
       reflectionMode: DEFAULT_SESSION_AUTONOMY_PREFS.reflectionMode,
       lastProactiveAt: null,
       lastProactiveRunId: null,
+      heartbeatEnabled: DEFAULT_SESSION_AUTONOMY_PREFS.heartbeatEnabled ? 1 : 0,
+      heartbeatIntervalSeconds: DEFAULT_SESSION_AUTONOMY_PREFS.heartbeatIntervalSeconds,
+      activeHoursJson: serializeActiveHours(DEFAULT_SESSION_AUTONOMY_PREFS.activeHours),
       createdAt: now,
       updatedAt: now,
     });
@@ -137,6 +183,14 @@ export class SessionAutonomyPrefsRepository {
       cooldownSeconds: clampInt(input.cooldownSeconds, current.cooldownSeconds, 0, 3600),
       retrievalMode: input.retrievalMode ?? current.retrievalMode,
       reflectionMode: input.reflectionMode ?? current.reflectionMode,
+      heartbeatEnabled: input.heartbeatEnabled ?? current.heartbeatEnabled,
+      heartbeatIntervalSeconds: clampInt(
+        input.heartbeatIntervalSeconds,
+        current.heartbeatIntervalSeconds,
+        DEFAULT_HEARTBEAT_INTERVAL_SECONDS_FLOOR,
+        DEFAULT_HEARTBEAT_INTERVAL_SECONDS_CEILING,
+      ),
+      activeHours: input.activeHours ? normalizeActiveHours(input.activeHours) : current.activeHours,
       updatedAt: now,
     };
     this.upsertStmt.run({
@@ -149,6 +203,9 @@ export class SessionAutonomyPrefsRepository {
       reflectionMode: next.reflectionMode,
       lastProactiveAt: next.lastProactiveAt ?? null,
       lastProactiveRunId: next.lastProactiveRunId ?? null,
+      heartbeatEnabled: next.heartbeatEnabled ? 1 : 0,
+      heartbeatIntervalSeconds: next.heartbeatIntervalSeconds,
+      activeHoursJson: serializeActiveHours(next.activeHours),
       createdAt: current.createdAt,
       updatedAt: next.updatedAt,
     });
@@ -198,9 +255,58 @@ function mapRow(row: SessionAutonomyPrefsRow): SessionAutonomyPrefsRecord {
     reflectionMode: row.reflection_mode,
     lastProactiveAt: row.last_proactive_at ?? undefined,
     lastProactiveRunId: row.last_proactive_run_id ?? undefined,
+    heartbeatEnabled: row.heartbeat_enabled !== 0,
+    heartbeatIntervalSeconds: clampInt(
+      row.heartbeat_interval_seconds,
+      DEFAULT_SESSION_AUTONOMY_PREFS.heartbeatIntervalSeconds,
+      DEFAULT_HEARTBEAT_INTERVAL_SECONDS_FLOOR,
+      DEFAULT_HEARTBEAT_INTERVAL_SECONDS_CEILING,
+    ),
+    activeHours: parseActiveHours(row.active_hours_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Interval floor (15 min) — mirrors the schedule-tool interval floor. */
+const DEFAULT_HEARTBEAT_INTERVAL_SECONDS_FLOOR = 15 * 60;
+/** Interval ceiling (24 h). */
+const DEFAULT_HEARTBEAT_INTERVAL_SECONDS_CEILING = 24 * 60 * 60;
+
+/** Clamp an active-hours window into integer hours in [0, 24]. */
+function normalizeActiveHours(window: SessionActiveHoursWindow): SessionActiveHoursWindow {
+  const start = clampInt(window.start, DEFAULT_SESSION_ACTIVE_HOURS.start, 0, 24);
+  const end = clampInt(window.end, DEFAULT_SESSION_ACTIVE_HOURS.end, 0, 24);
+  const tz = typeof window.tz === "string" && window.tz.trim().length > 0 ? window.tz.trim() : undefined;
+  return tz ? { tz, start, end } : { start, end };
+}
+
+function serializeActiveHours(window: SessionActiveHoursWindow): string {
+  return JSON.stringify(normalizeActiveHours(window));
+}
+
+/** Parse a persisted active-hours JSON blob, falling back to the default window. */
+function parseActiveHours(raw: string | null): SessionActiveHoursWindow {
+  if (!raw) {
+    return DEFAULT_SESSION_ACTIVE_HOURS;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      isRecord(parsed) &&
+      typeof parsed.start === "number" &&
+      typeof parsed.end === "number"
+    ) {
+      return normalizeActiveHours({
+        start: parsed.start,
+        end: parsed.end,
+        ...(typeof parsed.tz === "string" ? { tz: parsed.tz } : {}),
+      });
+    }
+  } catch {
+    // fall through to default
+  }
+  return DEFAULT_SESSION_ACTIVE_HOURS;
 }
 
 function toSessionAutonomyPrefsRow(value: unknown): SessionAutonomyPrefsRow | undefined {
@@ -222,6 +328,9 @@ function isSessionAutonomyPrefsRow(value: unknown): value is SessionAutonomyPref
     && typeof value.reflection_mode === "string"
     && (typeof value.last_proactive_at === "string" || value.last_proactive_at === null)
     && (typeof value.last_proactive_run_id === "string" || value.last_proactive_run_id === null)
+    && typeof value.heartbeat_enabled === "number"
+    && typeof value.heartbeat_interval_seconds === "number"
+    && (typeof value.active_hours_json === "string" || value.active_hours_json === null)
     && typeof value.created_at === "string"
     && typeof value.updated_at === "string";
 }

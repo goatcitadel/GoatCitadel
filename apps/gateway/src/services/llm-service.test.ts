@@ -1337,8 +1337,15 @@ describe("LlmService", () => {
     expect(receivedHeaders?.get("x-api-key")).toBe("anthropic-secret");
     expect(receivedHeaders?.get("anthropic-version")).toBe("2023-06-01");
     expect(receivedHeaders?.get("authorization")).toBeNull();
-    expect(payloadBody?.system).toBe("Answer in one sentence.");
-    expect(payloadBody?.messages).toEqual([{ role: "user", content: "hello" }]);
+    // Always-on Anthropic caching converts the stable string system prompt to
+    // block form so it can carry an ephemeral cache breakpoint, and marks the
+    // (only, therefore most-recent) user message likewise.
+    expect(payloadBody?.system).toEqual([
+      { type: "text", text: "Answer in one sentence.", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(payloadBody?.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }] },
+    ]);
     expect(payloadBody?.thinking).toEqual({
       type: "enabled",
       budget_tokens: 1024,
@@ -1888,6 +1895,8 @@ describe("LlmService", () => {
       globalThis.fetch = originalFetch;
     }
 
+    // Anthropic prompt caching is always on: the last two non-system messages
+    // each carry an ephemeral cache_control breakpoint on their final block.
     expect(payloadBody?.messages).toEqual([
       { role: "user", content: "What is the weather in 91303?" },
       {
@@ -1898,6 +1907,7 @@ describe("LlmService", () => {
             id: "call_weather",
             name: "lookup_weather",
             input: { zip: "91303" },
+            cache_control: { type: "ephemeral" },
           },
         ],
       },
@@ -1908,6 +1918,7 @@ describe("LlmService", () => {
             type: "tool_result",
             tool_use_id: "call_weather",
             content: '{"temp":72}',
+            cache_control: { type: "ephemeral" },
           },
         ],
       },

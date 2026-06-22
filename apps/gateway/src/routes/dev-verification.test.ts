@@ -348,10 +348,18 @@ describe("dev verification routes", () => {
         namespace: "memory-truth",
         title: "Verification memory item",
         content: "This item is used by verification lanes.",
-        metadataJson: JSON.stringify({ lane: "memory-truth" }),
+        metadataJson: expect.any(String),
         pinned: 1,
       }),
     );
+    // W1: the seeded item carries an embedding (in the extractMemoryEmbedding shape)
+    // merged alongside the caller-supplied metadata.
+    const seededMetadata = JSON.parse(run.mock.calls[0][0].metadataJson as string);
+    expect(seededMetadata.lane).toBe("memory-truth");
+    expect(Array.isArray(seededMetadata.embedding)).toBe(true);
+    expect(seededMetadata.embedding.length).toBeGreaterThan(0);
+    expect(seededMetadata.embedding.every((value: number) => Number.isFinite(value))).toBe(true);
+    expect(seededMetadata.embeddingMetadata).toMatchObject({ provider: "pseudo" });
     expect(response.json()).toMatchObject({
       itemId: expect.stringMatching(/^mem_/),
       namespace: "memory-truth",

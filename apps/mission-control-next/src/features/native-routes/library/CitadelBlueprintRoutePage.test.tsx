@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   validateCitadelBlueprint: vi.fn(),
   importCitadelBlueprint: vi.fn(),
   isApiRequestError: vi.fn(),
+  listCitadels: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -17,6 +18,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   validateCitadelBlueprint: apiMocks.validateCitadelBlueprint,
   importCitadelBlueprint: apiMocks.importCitadelBlueprint,
   isApiRequestError: apiMocks.isApiRequestError,
+  listCitadels: apiMocks.listCitadels,
 }));
 
 function makeProps(): NativeRoutePagesProps {
@@ -55,6 +57,9 @@ describe("CitadelBlueprintRoutePage", () => {
     apiMocks.exportCitadelBlueprint.mockResolvedValue({ schemaVersion: "goatcitadel.blueprint.v1", name: "Acme" });
     apiMocks.validateCitadelBlueprint.mockResolvedValue({ ok: true, errors: [] });
     apiMocks.importCitadelBlueprint.mockResolvedValue({ citadelId: "default" });
+    apiMocks.listCitadels.mockResolvedValue({
+      items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: true }],
+    });
     apiMocks.isApiRequestError.mockImplementation(
       (error: unknown) => typeof error === "object" && error !== null && "status" in error,
     );
@@ -107,6 +112,19 @@ describe("CitadelBlueprintRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
     });
+    expect(treeString(renderer!)).toContain("needs a Charter before export");
+  });
+
+  it("reports a no-charter workspace as not staged without exporting", async () => {
+    apiMocks.listCitadels.mockResolvedValueOnce({
+      items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: false }],
+    });
+    apiMocks.exportCitadelBlueprint.mockRejectedValue(new Error("export should not load"));
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
+    });
+    expect(apiMocks.exportCitadelBlueprint).not.toHaveBeenCalled();
     expect(treeString(renderer!)).toContain("needs a Charter before export");
   });
 

@@ -88,7 +88,8 @@ export type CronJobAction =
   | "cost_report"
   | "update_review"
   | "watchdog"
-  | "no_agent";
+  | "no_agent"
+  | "agent_turn";
 
 export type CronWatchdogCheckId = "runtime_health" | "durable_dead_letters" | "channel_delivery_queue" | "mcp_posture";
 export type CronWatchdogStatus = "ok" | "warning" | "error";
@@ -111,9 +112,58 @@ export interface CronNoAgentConfig {
   deliveryChannel?: CronNoAgentDeliveryChannel;
 }
 
+/** How a scheduled `agent_turn` job delivers its assistant output to a channel. */
+export type CronAgentTurnDeliverMode = "always" | "on_notify";
+
+export interface CronAgentTurnConfig {
+  /**
+   * Optional stable session id to run the scheduled turn in. When omitted, a
+   * deterministic per-job cron session is created/reused.
+   */
+  sessionId?: string;
+  /** Prompt sent to the model as the scheduled user message. Required, non-empty. */
+  prompt: string;
+  /** Channel the assistant reply is routed to after the turn completes. */
+  deliveryChannel?: CronNoAgentDeliveryChannel;
+  /**
+   * `always` (default) delivers the assistant reply unconditionally; `on_notify`
+   * only delivers when the turn output signals `{ notify: true }`.
+   */
+  deliverMode?: CronAgentTurnDeliverMode;
+  /**
+   * When true (or when autonomy is disabled via the master kill switch), the job
+   * falls back to the legacy inert-inbox `task` behavior instead of waking the
+   * model.
+   */
+  inertInboxFallback?: boolean;
+  /**
+   * Creator provenance, stamped when a job is created via the model-callable
+   * `schedule.manage` tool (P1-F2). Carries the creating operator/actor and their
+   * permission profile so the scheduled turn fires bounded to ≤ the creator's
+   * privileges — a job can never run with broader authority than whoever created
+   * it. Absent for system/operator-seeded cron jobs.
+   */
+  createdBy?: {
+    /** Operator id of the creator (or system actor for autonomous creators). */
+    operatorId?: string;
+    /** Auth actor id of the creator, for the audit trail. */
+    authActorId?: string;
+    /** Permission profile the creator held; the fired turn is bounded by this. */
+    permissionProfileId?: string;
+    /**
+     * Job id of the turn that created this job, when created from inside another
+     * scheduled turn. Used to enforce the depth-1 anti-recursion chain cap.
+     */
+    createdByJobId?: string;
+    /** Chain depth (0 = created interactively; 1 = created by a scheduled turn). */
+    depth?: number;
+  };
+}
+
 export interface CronJobActionConfig {
   watchdog?: CronWatchdogConfig;
   noAgent?: CronNoAgentConfig;
+  agentTurn?: CronAgentTurnConfig;
 }
 
 export interface CronWatchdogRunResult {

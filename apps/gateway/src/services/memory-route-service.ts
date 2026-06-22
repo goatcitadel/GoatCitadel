@@ -216,6 +216,7 @@ export class MemoryRouteService {
     return this.memory.createMemoryEntity(input, actorId);
   }
 
+
   public forgetEntity(entityId: string, actorId: string) {
     return this.memory.forgetMemoryEntity(entityId, actorId);
   }

@@ -122,6 +122,71 @@ describe("GatewayService durable feature flags", () => {
     );
   });
 
+  describe("autonomy master kill switch (autonomyV1Disabled)", () => {
+    it("defaults to autonomy ON when neither config nor stored flags set the kill switch", () => {
+      // Neither createFeatureFlags() nor storedFeatures set autonomyV1Disabled.
+      const { gateway } = createGatewayHarness();
+
+      const flags = GatewayService.prototype.readFeatureFlags.call(gateway);
+      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+
+      expect(flags.autonomyV1Disabled).toBeFalsy();
+      expect(killSwitchEngaged).toBe(false);
+      // Callers gate autonomy on `!isFeatureEnabled("autonomyV1Disabled")`.
+      expect(!killSwitchEngaged).toBe(true);
+    });
+
+    it("halts autonomy when the kill switch is set true via config", () => {
+      const { gateway } = createGatewayHarness();
+      gateway.config.assistant.features = {
+        ...gateway.config.assistant.features,
+        autonomyV1Disabled: true,
+      } as never;
+
+      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+
+      expect(killSwitchEngaged).toBe(true);
+      expect(!killSwitchEngaged).toBe(false);
+    });
+
+    it("halts autonomy when the kill switch is set true via stored settings (overrides config-off)", () => {
+      const { gateway } = createGatewayHarness({
+        storedFeatures: { autonomyV1Disabled: true } as never,
+      });
+
+      const killSwitchEngaged = GatewayService.prototype.isFeatureEnabled.call(gateway, "autonomyV1Disabled");
+
+      expect(killSwitchEngaged).toBe(true);
+    });
+
+    it("persists the kill switch through updateFeatureFlags (engage then disengage)", () => {
+      const { gateway, systemSettings } = createGatewayHarness();
+
+      const engaged = GatewayService.prototype.updateFeatureFlags.call(gateway, { autonomyV1Disabled: true });
+      expect(engaged.autonomyV1Disabled).toBe(true);
+      expect(systemSettings.set).toHaveBeenLastCalledWith(
+        "feature_flags_v1",
+        expect.objectContaining({ autonomyV1Disabled: true }),
+      );
+
+      const disengaged = GatewayService.prototype.updateFeatureFlags.call(gateway, { autonomyV1Disabled: false });
+      expect(disengaged.autonomyV1Disabled).toBe(false);
+    });
+
+    it("does not wipe a stored kill switch when updateFeatureFlags touches unrelated flags", () => {
+      // Regression: updateFeatureFlags does a full set(... next), so an omitted
+      // optional flag (autonomyV1Disabled) would silently reset a stored value.
+      const { gateway } = createGatewayHarness({
+        storedFeatures: { autonomyV1Disabled: true } as never,
+      });
+
+      const next = GatewayService.prototype.updateFeatureFlags.call(gateway, { replayRegressionV1Enabled: true });
+
+      expect(next.autonomyV1Disabled).toBe(true);
+      expect(next.replayRegressionV1Enabled).toBe(true);
+    });
+  });
+
   it("drains expired unpinned memory across multiple flush batches", () => {
     const nowIso = "2026-04-24T00:00:00.000Z";
     const forgottenItems = Array.from({ length: 1200 }, (_, index) => ({

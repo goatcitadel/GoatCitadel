@@ -30,7 +30,13 @@ import type {
   ToolInvokeResult,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { getChatTurnRecoveryAction, NotFoundError, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import {
+  getChatTurnRecoveryAction,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  NotFoundError,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatTurnRecoveryAction,
+} from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -51,6 +57,14 @@ import {
   WEB_TOOL_NAMES,
 } from "./chat-tool-families.js";
 import {
+  buildAnswerRecoveryNudge,
+  buildDegradedAnswerFooter,
+  buildFailedFileMutationsFooter,
+  classifyAnswerGap,
+  collectFailedFileMutations,
+  type DegradedAnswerOutcome,
+} from "./chat-agent-answer-recovery.js";
+import {
   absorbCompletionStreamChunk,
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
@@ -60,6 +74,15 @@ import {
   type ToolCallProtocolIssue,
   toProviderToolFunctionName,
 } from "./chat-agent-completion-adapters.js";
+import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
+import {
+  IMPROVEMENT_TUNE_DEFAULTS,
+  readBlockerTemplateStrictness,
+  readRetryRepairThreshold,
+  resolveBlockerTemplateStrictness,
+  shouldAttemptIncompleteCompletionRepair,
+  shouldUseStrictBlockerTemplate,
+} from "./improvement-tune-reads.js";
 import {
   createLoopGuardTrace,
   detectToolLoopRisk,
@@ -146,6 +169,7 @@ import {
 } from "./chat-agent-prompt-lab-contract.js";
 import {
   annotateLocalBusinessBrowserResult,
+  buildLocalBusinessResearchAnnotationFromEvidence,
   buildLocalBusinessResearchPlan,
   resolveLocalBusinessSearchQuery,
 } from "./local-business-research-service.js";
@@ -224,6 +248,10 @@ export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js
 const FINAL_PASS_COMPLETION_TIMEOUT_MS = CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep;
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
+// P0-B: at most one tool-less re-ask when a terminal turn produced no
+// user-visible answer (empty or reasoning-only) but budget remains. Bounded so a
+// model that keeps emitting nothing cannot spin the loop.
+const MAX_ANSWER_RECOVERY_NUDGES = 1;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
@@ -334,6 +362,7 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "memory.upsert": ["namespace", "title", "content"],
   "embeddings.query": ["query"],
 };
+const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";
 const log = logger.child("chat-agent-orchestrator");
 const MAX_EXPOSED_TOOLS_PER_TURN = {
   chat: 8,
@@ -347,6 +376,21 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
 } as const satisfies Record<ChatMode, number>;
 
 type ChatCompletionMessage = ChatCompletionRequest["messages"][number];
+type PromptLabRunContract = ReturnType<typeof parsePromptLabRunContract>;
+
+interface CoworkContinuationProgressSnapshot {
+  readonly toolResultCount: number;
+  readonly sourceUrls: ReadonlySet<string>;
+  readonly childCompletionCount: number;
+  readonly missingRequiredEvidenceCount: number;
+  readonly localBusinessResearchExpected: boolean;
+  readonly localBusinessCandidateKeys: ReadonlySet<string>;
+  readonly localBusinessVerifiedCandidateKeys: ReadonlySet<string>;
+  readonly localBusinessSourceUrls: ReadonlySet<string>;
+  readonly localBusinessBlockerKeys: ReadonlySet<string>;
+  readonly localBusinessBlockedSourceKeys: ReadonlySet<string>;
+  readonly localBusinessUnresolvedNextStepKeys: ReadonlySet<string>;
+}
 
 export interface ChatAgentTurnInput {
   sessionId: string;
@@ -443,6 +487,58 @@ type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>
 export class ChatAgentOrchestrator {
   public constructor(private readonly deps: ChatAgentOrchestratorDeps) {}
 
+  /**
+   * P2-W3: blocker-template strictness for this turn, read from the
+   * self-improvement tuner's setting. Passed to `buildToolFailureGuidance` at
+   * the blocked-tool sites so a raised level produces more specific blocker
+   * explanations. Safe default (1) keeps the historical text.
+   */
+  private readBlockerStrictness(): number {
+    return readBlockerTemplateStrictness(this.deps.storage.systemSettings);
+  }
+
+  private recordLocalBusinessResearchEvidenceRun(input: {
+    turnInput: ChatAgentTurnInput;
+    assistantContent: string;
+    citations: ChatCitationRecord[];
+    toolRuns: ChatToolRunRecord[];
+  }): void {
+    if (input.turnInput.mode !== "cowork" || !buildLocalBusinessResearchPlan(input.turnInput.content)) {
+      return;
+    }
+    const annotation = buildLocalBusinessResearchAnnotationFromEvidence({
+      userContent: input.turnInput.content,
+      finalAnswer: input.assistantContent,
+      citations: [...input.citations, ...readLocalBusinessEvidenceCitationsFromToolRuns(input.toolRuns)],
+    });
+    if (!annotation || !hasSubstantiveLocalBusinessAnnotation(annotation)) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const record = this.deps.storage.chatToolRuns.create({
+      toolRunId: randomUUID(),
+      turnId: input.turnInput.turnId,
+      sessionId: input.turnInput.sessionId,
+      toolName: LOCAL_BUSINESS_RESEARCH_TOOL_NAME,
+      status: "executed",
+      args: {
+        objective: input.turnInput.content,
+        location: annotation.plan.location,
+        radiusMiles: annotation.plan.radiusMiles,
+        categories: annotation.plan.categories,
+        requiredContactFields: [
+          annotation.plan.requireEmail ? "email" : undefined,
+          annotation.plan.requireContactName ? "contact_name" : undefined,
+        ].filter(Boolean),
+        evidenceSource: "final_synthesis_and_citations",
+      },
+      result: annotation as unknown as Record<string, unknown>,
+      startedAt: now,
+      finishedAt: now,
+    });
+    input.toolRuns.push(record);
+  }
+
   public async run(input: ChatAgentTurnInput): Promise<ChatAgentTurnResult> {
     const events: ChatStreamChunkDraft[] = [];
     for await (const chunk of this.runStream(input)) {
@@ -479,6 +575,7 @@ export class ChatAgentOrchestrator {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
     const promptLabHarnessTurnForIntent =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
     const suppressPromptLabCodeArtifactTools =
@@ -685,6 +782,25 @@ export class ChatAgentOrchestrator {
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
+    // P0-B answer-recovery ladder state. `degradedOutcome` is set whenever a
+    // terminal turn fell back to a deterministic recovery path so the outcome can
+    // be marked honestly at finalize instead of silently riding `finalStatus`.
+    let answerRecoveryNudgeCount = 0;
+    let degradedOutcome: DegradedAnswerOutcome | undefined;
+    const noteDegradedOutcome = (reason: string): void => {
+      // Eval-integrity turns must persist the model's own outcome verbatim — the
+      // degraded footer/record machinery never engages for scored runs.
+      if (promptLabEvalIntegrityTurn) {
+        return;
+      }
+      // First reason wins: it is the closest cause to where recovery began.
+      degradedOutcome ??= { reason, recoveredByModel: false };
+    };
+    const markAnswerRecoveredByModel = (): void => {
+      if (degradedOutcome) {
+        degradedOutcome = { ...degradedOutcome, recoveredByModel: true };
+      }
+    };
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
     const executionBudget = resolveChatExecutionBudget({
       mode: input.mode,
@@ -701,10 +817,16 @@ export class ChatAgentOrchestrator {
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
-    const boundedByTurnBudget = executionBudget.boundedByTurnBudget !== false;
-    let turnBudgetDeadline = boundedByTurnBudget
-      ? createTurnBudgetDeadline(effectiveTurnBudgetMs)
-      : Number.POSITIVE_INFINITY;
+    let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+    const coworkCheckpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
+    let coworkContinuationWindowIndex = 0;
+    let coworkNoProgressWindowCount = 0;
+    let coworkContinuationProgressSnapshot = captureCoworkContinuationProgress({
+      citations,
+      localBusinessResearchExpected,
+      promptLabContract,
+      toolRuns,
+    });
     const markCompletionRepair = (
       kind: ChatTurnRepairKind,
       source: ChatTurnRepairSource,
@@ -2070,27 +2192,78 @@ export class ChatAgentOrchestrator {
           // The model's own tool calls are never silently filtered: on eval
           // turns every call must reach the policy layer so disallowed use is
           // denied visibly (and judged), not hidden from the trace.
-          const toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
+          let toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
           const toolCallProtocolIssues = inspectToolCallProtocolIssues(message, toolSchema.modelToCanonical);
+          // role:"tool" corrections queued by the P0-C repair pass for calls that
+          // could not be repaired; flushed right after the assistant tool-call
+          // message below so the API role-alternation contract holds.
+          let toolCallRepairFeedback: ToolCallRepairFeedback[] = [];
+          // True once a repair produced executable calls. The malformation that
+          // tripped classifyCompletionOutcome into "truncated" is then resolved,
+          // so the partial-tool-call abort below must NOT fire for this turn.
+          let toolCallsRepaired = false;
           if (toolCallProtocolIssues.length > 0) {
-            const repairableIncompleteToolCall =
-              completionOutcome.status !== "complete" &&
-              toolCallProtocolIssues.every((issue) => issue.kind === "malformed_arguments");
-            assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
-            completionState = {
-              ...completionState,
-              status: "interrupted",
-            };
-            finalFailure ??= buildChatTurnFailureRecord(
-              "unknown",
-              repairableIncompleteToolCall
-                ? "The provider stopped before tool calls were fully assembled, so the tool phase was not executed."
-                : assistantContent,
-              repairableIncompleteToolCall ? "continue_from_partial" : "retry_narrower",
-            );
-            break;
+            // P0-C tool-call repair. Local / open-weight models routinely emit
+            // near-miss calls (fuzzed names, fenced/array args, prose-encoded
+            // calls). Repair them deterministically instead of failing the turn —
+            // WITHOUT widening the tool surface (repair fails closed: every
+            // recovered name must resolve to an active-schema tool).
+            //
+            // Boundaries that deliberately skip repair:
+            //  - eval-integrity turns must score the model's RAW output, so a
+            //    malformed call there is the model's mistake to grade, not ours;
+            //  - a genuinely length-truncated stream (finish_reason === "length")
+            //    may have cut a tool call mid-write, so salvaging half-written
+            //    JSON could execute a call the model never finished — keep the
+            //    existing continue-from-partial path for that;
+            //  - a provider refusal / cancel (content_filter / cancelled ->
+            //    "interrupted") is not a formatting slip, so do not repair it.
+            // Crucially we DO repair when the outcome is "truncated" purely
+            // because the call itself is malformed (blank name, unparseable or
+            // fenced JSON): classifyCompletionOutcome flags those via
+            // hasIncompleteToolCalls even though the provider finished, and those
+            // formatting near-misses are exactly P0-C's target.
+            const canAttemptToolCallRepair =
+              !promptLabEvalIntegrityTurn &&
+              completionOutcome.finishReason !== "length" &&
+              completionOutcome.status !== "interrupted";
+            const repair = canAttemptToolCallRepair
+              ? repairToolCalls(message, toolCallProtocolIssues, {
+                  modelToCanonical: toolSchema.modelToCanonical,
+                  canonicalToModel: toolSchema.canonicalToModel,
+                })
+              : undefined;
+            if (repair && repair.repaired.length > 0) {
+              const preRepairContent = extractMessageContent(message);
+              toolCalls = repair.repaired;
+              toolCallRepairFeedback = repair.feedback;
+              toolCallsRepaired = true;
+              // Honest record of the repair without the degraded-answer footer:
+              // a turn that repairs its tool calls and then executes + answers
+              // normally is fully recovered, not degraded.
+              markCompletionRepair("tool_call_repair", "orchestrator", preRepairContent, preRepairContent);
+              // Fall through to the normal tool-execution branch using the
+              // repaired calls. Any unrepaired calls ride along as feedback.
+            } else {
+              const repairableIncompleteToolCall =
+                completionOutcome.status !== "complete" &&
+                toolCallProtocolIssues.every((issue) => issue.kind === "malformed_arguments");
+              assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
+              completionState = {
+                ...completionState,
+                status: "interrupted",
+              };
+              finalFailure ??= buildChatTurnFailureRecord(
+                "unknown",
+                repairableIncompleteToolCall
+                  ? "The provider stopped before tool calls were fully assembled, so the tool phase was not executed."
+                  : assistantContent,
+                repairableIncompleteToolCall ? "continue_from_partial" : "retry_narrower",
+              );
+              break;
+            }
           }
-          if (completionOutcome.status !== "complete" && toolCalls.length > 0) {
+          if (completionOutcome.status !== "complete" && !toolCallsRepaired && toolCalls.length > 0) {
             if (
               !promptLabSynthesisOnly &&
               shouldSynthesizePromptLabFromGatheredEvidence({
@@ -2149,6 +2322,48 @@ export class ChatAgentOrchestrator {
               break;
             }
             assistantContent = extractMessageContent(message);
+            // P0-B: a terminal turn with no user-visible text (empty or
+            // reasoning-only) gets ONE tool-less re-ask before we give up, as
+            // long as turn budget remains. Scoped to turns with NO tool runs:
+            // when tool evidence exists the existing post-loop synthesis passes
+            // already re-ask the model, and adding a nudge here would strand that
+            // recovery if the retry fails. Eval-integrity turns are never
+            // re-asked — the model's own empty/thin output is the score.
+            if (
+              assistantContent.trim().length === 0 &&
+              toolRuns.length === 0 &&
+              !promptLabEvalIntegrityTurn &&
+              answerRecoveryNudgeCount < MAX_ANSWER_RECOVERY_NUDGES &&
+              turnBudgetDeadline - Date.now() > executionBudget.minSynthesisReserveMs
+            ) {
+              const gap = classifyAnswerGap({
+                hasVisibleText: false,
+                hasReasoningText: messageHasReasoningContent(message),
+                toolCallCount: 0,
+              });
+              const nudge = buildAnswerRecoveryNudge(gap);
+              if (nudge) {
+                answerRecoveryNudgeCount += 1;
+                noteDegradedOutcome(gap === "reasoning_only" ? "reasoning_only_answer" : "empty_answer");
+                // Record the (empty) assistant turn so the history stays valid,
+                // then prod the model to produce the user-visible answer.
+                conversationMessages.push({
+                  role: "assistant",
+                  content: assistantContent,
+                });
+                conversationMessages.push({
+                  role: "system",
+                  content: nudge,
+                } as ChatCompletionMessage);
+                continue;
+              }
+            }
+            // A prior recovery nudge produced a real user-visible answer on this
+            // pass: the turn was degraded but the model cleanly recovered, so no
+            // apology footer is warranted.
+            if (assistantContent.trim().length > 0 && answerRecoveryNudgeCount > 0) {
+              markAnswerRecoveredByModel();
+            }
             if (completionOutcome.status !== "complete") {
               completionState = {
                 ...completionState,
@@ -2172,18 +2387,37 @@ export class ChatAgentOrchestrator {
             break;
           }
 
+          // Unrepaired near-miss calls ride along in the assistant message as the
+          // model's *attempted* calls, each answered by its repair feedback below.
+          // Embedding them keeps the API role-alternation valid (a role:"tool"
+          // message must answer a tool_call id present in the prior assistant
+          // turn) and lets the model see precisely what to correct next loop.
+          const repairFeedbackToolCalls = toolCallRepairFeedback.map((entry) => {
+            const issue = toolCallProtocolIssues.find((candidate) => candidate.id === entry.toolCallId);
+            return {
+              id: entry.toolCallId,
+              type: "function",
+              function: {
+                name: issue?.rawName ?? "unknown_tool",
+                arguments: "{}",
+              },
+            };
+          });
           conversationMessages.push(
             createAssistantToolCallMessage({
               content: extractMessageContent(message),
               providerNativeContent: extractProviderNativeContent(message),
-              toolCalls: toolCalls.map((toolCall) => ({
-                id: toolCall.id,
-                type: "function",
-                function: {
-                  name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
-                  arguments: toolCall.rawArguments,
-                },
-              })),
+              toolCalls: [
+                ...toolCalls.map((toolCall) => ({
+                  id: toolCall.id,
+                  type: "function",
+                  function: {
+                    name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
+                    arguments: toolCall.rawArguments,
+                  },
+                })),
+                ...repairFeedbackToolCalls,
+              ],
             }),
           );
           // Every tool_call id in the assistant message above must receive a role:"tool"
@@ -2191,6 +2425,20 @@ export class ChatAgentOrchestrator {
           // Branches that abandon the tool loop early flush synthetic "skipped" results
           // for the ids that never executed.
           const answeredToolCallIds = new Set<string>();
+          // Answer the unrepaired calls with their correction so the model can
+          // self-correct on the next loop (these ids are not in `toolCalls`, so
+          // the executor never touches them).
+          for (const entry of toolCallRepairFeedback) {
+            if (answeredToolCallIds.has(entry.toolCallId)) {
+              continue;
+            }
+            answeredToolCallIds.add(entry.toolCallId);
+            conversationMessages.push({
+              role: "tool",
+              tool_call_id: entry.toolCallId,
+              content: entry.content,
+            } as ChatCompletionMessage);
+          }
           const flushSkippedToolCallResults = (reason: string) => {
             for (const pendingToolCall of toolCalls) {
               if (answeredToolCallIds.has(pendingToolCall.id)) {
@@ -2207,9 +2455,17 @@ export class ChatAgentOrchestrator {
 
           let shortCircuitedOnBudget = false;
           let retryPromptLabSynthesisOnly = false;
+          let coworkToolRunBudgetCheckpoint = false;
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
             if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+              if (coworkCheckpointContinuation) {
+                coworkToolRunBudgetCheckpoint = true;
+                flushSkippedToolCallResults(
+                  `Cowork checkpoint window reached ${executionBudget.maxToolRunsPerTurn} tool calls; continue from gathered evidence.`,
+                );
+                break;
+              }
               if (
                 !promptLabSynthesisOnly &&
                 shouldSynthesizePromptLabFromGatheredEvidence({
@@ -2245,6 +2501,7 @@ export class ChatAgentOrchestrator {
                 },
               });
               finalStatus = "completed";
+              noteDegradedOutcome("tool_run_budget_exceeded");
               shortCircuitedOnBudget = true;
               break;
             }
@@ -2302,6 +2559,7 @@ export class ChatAgentOrchestrator {
                 buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
                 input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
               );
+              noteDegradedOutcome("turn_budget_exceeded");
               shortCircuitedOnBudget = true;
               break;
             }
@@ -2509,7 +2767,83 @@ export class ChatAgentOrchestrator {
                 }),
               circuitBreakerReason,
             );
+            noteDegradedOutcome(circuitBreakerFailureClass ?? "tool_circuit_breaker");
             break;
+          }
+
+          if (
+            coworkCheckpointContinuation &&
+            (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)
+          ) {
+            const nextSnapshot = captureCoworkContinuationProgress({
+              citations,
+              localBusinessResearchExpected,
+              promptLabContract,
+              toolRuns,
+            });
+            const windowHadProgress = hasCoworkContinuationProgress(coworkContinuationProgressSnapshot, nextSnapshot);
+            coworkNoProgressWindowCount = windowHadProgress ? 0 : coworkNoProgressWindowCount + 1;
+            const checkpointLimitLabel = coworkToolRunBudgetCheckpoint
+              ? `${executionBudget.maxToolRunsPerTurn} tool-call`
+              : `${executionBudget.maxToolLoops} loop`;
+            const checkpointReason = buildCoworkLoopCheckpointReason({
+              checkpointLimitLabel,
+              maxToolLoops: executionBudget.maxToolLoops,
+              noProgressWindowCount: coworkNoProgressWindowCount,
+              windowHadProgress,
+              windowIndex: coworkContinuationWindowIndex + 1,
+            });
+            routingState = {
+              ...routingState,
+              fallbackReason: checkpointReason,
+            };
+            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              status: "running",
+              routing: routingState,
+              loopGuard: createLoopGuardTrace(loopGuardState),
+            });
+            yield {
+              type: "trace_update",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              trace: {
+                ...trace,
+                routing: routingState,
+                loopGuard: createLoopGuardTrace(loopGuardState),
+                toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                citations: [...citations],
+              },
+            };
+            if (coworkNoProgressWindowCount >= 2) {
+              const repeatedLoopReason = buildCoworkRepeatedLoopDiagnostic(
+                checkpointLimitLabel,
+                coworkNoProgressWindowCount,
+                nextSnapshot,
+              );
+              routingState = {
+                ...routingState,
+                fallbackReason: repeatedLoopReason,
+              };
+              assistantContent = buildToolFailureFallbackMessage(input.content, toolRuns, repeatedLoopReason);
+              finalStatus = "completed";
+              finalFailure = buildChatTurnFailureRecord("tool_loop_guard", repeatedLoopReason);
+              break;
+            }
+            conversationMessages.push({
+              role: "system",
+              content: buildCoworkLoopContinuationInstruction({
+                checkpointLimitLabel,
+                maxToolLoops: executionBudget.maxToolLoops,
+                noProgressWindowCount: coworkNoProgressWindowCount,
+                windowHadProgress,
+                windowIndex: coworkContinuationWindowIndex + 1,
+              }),
+            } as ChatCompletionMessage);
+            coworkContinuationWindowIndex += 1;
+            coworkContinuationProgressSnapshot = nextSnapshot;
+            toolRunCount = 0;
+            loop = -1;
+            continue;
           }
         }
       } catch (error) {
@@ -2534,6 +2868,7 @@ export class ChatAgentOrchestrator {
             error.message,
             input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
           );
+          noteDegradedOutcome("turn_budget_exceeded");
         } else {
           finalStatus = "failed";
           const failureClass = classifyChatTurnFailure({
@@ -2698,6 +3033,8 @@ export class ChatAgentOrchestrator {
         const preRepairContent = assistantContent;
         assistantContent = repairedContent;
         markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+        // A model pass replaced the deterministic fallback with a real answer.
+        markAnswerRecoveredByModel();
         if (finalStatus === "failed") {
           finalStatus = "completed";
         }
@@ -2710,10 +3047,22 @@ export class ChatAgentOrchestrator {
       }
     }
 
+    // P2-W3: the self-improvement tuner lowers `improvement_tune_retry_threshold_v1`
+    // when too many turns fail without attempting a repair. At the default (1)
+    // this gate is byte-identical to the historical `status !== "complete"`
+    // check; at 0 it also lets a turn that *failed* despite a "complete"
+    // provider response get one repair pass ("attempt one repair more often").
+    // The live-viewer suppression guard is always respected (never overridden by
+    // a tune) so we cannot double-render after partial output.
+    const incompleteRepairThreshold = readRetryRepairThreshold(this.deps.storage.systemSettings);
     if (
       !approvalPayload &&
       finalStatus !== "cancelled" &&
-      completionState.status !== "complete" &&
+      shouldAttemptIncompleteCompletionRepair({
+        completionIsIncomplete: completionState.status !== "complete",
+        turnFailed: finalStatus === "failed",
+        retryThreshold: incompleteRepairThreshold,
+      }) &&
       !suppressIncompleteCompletionRepair
     ) {
       const repairedCompletion = await this.repairIncompleteAssistantCompletion({
@@ -2732,6 +3081,9 @@ export class ChatAgentOrchestrator {
         const preRepairContent = assistantContent;
         assistantContent = repairedCompletion.content.trim();
         markCompletionRepair("incomplete_truncated_completion", "orchestrator", preRepairContent, assistantContent);
+        if (!looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
+          markAnswerRecoveredByModel();
+        }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -2756,6 +3108,17 @@ export class ChatAgentOrchestrator {
           preRepairContent,
           assistantContent,
         );
+        // An empty terminal turn that needed synthesis at all is degraded. The
+        // pass only counts as a real recovery when the model actually produced
+        // text (not the deterministic template floor): a deterministic floor is
+        // an unrecovered "empty_answer", while a model-synthesized answer is an
+        // "empty_recovered" outcome so the audit reason distinguishes the two.
+        // noteDegradedOutcome is a no-op on eval-integrity turns, so this never
+        // touches scored runs.
+        noteDegradedOutcome(synthesizedFallback.deterministic ? "empty_answer" : "empty_recovered");
+        if (!synthesizedFallback.deterministic && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
+          markAnswerRecoveredByModel();
+        }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -2786,6 +3149,40 @@ export class ChatAgentOrchestrator {
     }
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
+    }
+    // origin/main: record local-business research evidence on the pre-footer
+    // answer (must run before the P0-B footer mutates assistantContent).
+    this.recordLocalBusinessResearchEvidenceRun({
+      turnInput: input,
+      assistantContent,
+      citations,
+      toolRuns,
+    });
+    // P0-B honest-degradation surface. Eval-integrity turns are skipped entirely
+    // (noteDegradedOutcome is already inert there, so degradedOutcome is
+    // undefined). The failed-file-mutation disclosure is surfaced even when the
+    // answer was recovered, because lost writes are independent of answer quality.
+    const failedFileMutations =
+      finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn ? collectFailedFileMutations(toolRuns) : [];
+    if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn && assistantContent.trim().length > 0) {
+      const footerParts: string[] = [];
+      if (degradedOutcome) {
+        const degradedFooter = buildDegradedAnswerFooter(degradedOutcome);
+        // Dedup against the footer's own distinctive clause rather than the
+        // generic "may be incomplete" tail — the latter collides with ordinary
+        // model prose ("this estimate may be incomplete") and would wrongly
+        // suppress the disclosure.
+        if (degradedFooter && !assistantContent.toLowerCase().includes("could not fully complete this turn")) {
+          footerParts.push(degradedFooter);
+        }
+      }
+      const mutationsFooter = buildFailedFileMutationsFooter(failedFileMutations);
+      if (mutationsFooter && !assistantContent.includes("did not complete:")) {
+        footerParts.push(mutationsFooter);
+      }
+      if (footerParts.length > 0) {
+        assistantContent = `${assistantContent.trim()}\n\n${footerParts.join("\n\n")}`;
+      }
     }
     if (
       finalFailure &&
@@ -2828,6 +3225,9 @@ export class ChatAgentOrchestrator {
         : {}),
       ...(completionLatencyObserved ? { latencyMs: completionLatencyMs } : {}),
       ...(providerCallCount > 0 ? { providerCallCount } : {}),
+      // P0-B sidecar: honest degraded/recovered marker plus lost file writes.
+      ...(degradedOutcome ? { degraded: degradedOutcome } : {}),
+      ...(failedFileMutations.length > 0 ? { failedFileMutations } : {}),
     };
     const updatedTrace = this.deps.storage.chatTurnTraces.patch(input.turnId, {
       status: finalStatus,
@@ -2882,6 +3282,9 @@ export class ChatAgentOrchestrator {
         content: assistantContent,
         repaired: Boolean(finalizedCompletionWithRuntime.repaired),
         repair: finalizedCompletionWithRuntime.repair,
+        ...(finalizedCompletionWithRuntime.degraded
+          ? { degraded: finalizedCompletionWithRuntime.degraded }
+          : {}),
       };
     }
 
@@ -2994,8 +3397,19 @@ export class ChatAgentOrchestrator {
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
+    const restrictedAutonomousProfile =
+      input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+      input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
     for (const tool of catalog) {
       if (suppressPromptLabCodeArtifactTools && PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(tool.toolName)) {
+        continue;
+      }
+      // Anti-recursion: never auto-offer `schedule.manage` to a restricted
+      // autonomous (scheduled/heartbeat) turn, so a scheduled turn can't see —
+      // let alone silently use — the self-scheduling tool. Interactive surfaces
+      // still get it via its `recommendedContexts`. (Defense in depth: the
+      // restricted profile would also force it to require approval.)
+      if (tool.toolName === "schedule.manage" && restrictedAutonomousProfile) {
         continue;
       }
       if (
@@ -3242,6 +3656,7 @@ export class ChatAgentOrchestrator {
           status: "blocked",
           args: preflight.args,
           error: preflight.blockedReason,
+          blockerStrictness: this.readBlockerStrictness(),
         }),
         finishedAt: new Date().toISOString(),
       });
@@ -3298,6 +3713,45 @@ export class ChatAgentOrchestrator {
           reusedResult: true,
           reuseReason: "matching_recent_browser_result",
         },
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        record: updated,
+        chunk: {
+          type: "tool_result",
+          sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          toolRun: updated,
+        },
+      };
+    }
+
+    if (preflight.toolName === LOCAL_BUSINESS_RESEARCH_TOOL_NAME) {
+      const annotation = buildLocalBusinessResearchAnnotationFromEvidence({
+        userContent:
+          readStringArg(preflight.args.objective) ??
+          readStringArg(preflight.args.originalObjective) ??
+          readStringArg(preflight.args.prompt) ??
+          input.input.content,
+        finalAnswer: readStringArg(preflight.args.finalAnswer),
+        citations: readLocalBusinessEvidenceCitations(preflight.args.citations),
+      });
+      const annotationResult = annotation ?? {
+        kind: "local_business_contact_research",
+        workflow: LOCAL_BUSINESS_RESEARCH_TOOL_NAME,
+        candidates: [],
+        excluded: [],
+        blockers: ["local_business_objective_not_recognized"],
+        verificationNote:
+          "local_business.research could not derive a grounded local-business contact plan from the provided objective.",
+      };
+      const result = {
+        ...annotationResult,
+        localBusinessResearch: annotationResult,
+      };
+      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+        status: "executed",
+        result: result as Record<string, unknown>,
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -3449,6 +3903,7 @@ export class ChatAgentOrchestrator {
               args: preflight.args,
               error: fallbackError,
               result: writeFallback.result.result,
+              blockerStrictness: this.readBlockerStrictness(),
             }),
             finishedAt: new Date().toISOString(),
           });
@@ -3482,6 +3937,7 @@ export class ChatAgentOrchestrator {
             args: preflight.args,
             error: result.policyReason,
             result: persistedToolResult,
+            blockerStrictness: this.readBlockerStrictness(),
           }),
           finishedAt: new Date().toISOString(),
         });
@@ -5233,11 +5689,74 @@ function buildToolFailureGuidance(input: {
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: string;
+  /**
+   * P2-W3: blocker-template strictness (1..10) read from the self-improvement
+   * tuner's `improvement_tune_blocker_template_v1`. The tuner raises it when
+   * blocked/denied explanations are too vague to act on. At the default (1) the
+   * guidance is byte-identical to before; at >=2 a more specific, structured
+   * blocker explanation is appended for blocked/denied actions so the model has
+   * a concrete unblock path. See improvement-tune-reads.ts.
+   */
+  blockerStrictness?: number;
 }): string | undefined {
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
     typeof input.result?.browserFailureClass === "string" ? input.result.browserFailureClass : undefined;
+  const baseGuidance = buildToolFailureGuidanceBase({ ...input, normalizedError, host, browserFailureClass });
+  return applyBlockerTemplateStrictness({
+    baseGuidance,
+    status: input.status,
+    toolName: input.toolName,
+    error: input.error,
+    host,
+    strictness: resolveBlockerTemplateStrictness(input.blockerStrictness ?? IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate),
+  });
+}
+
+/**
+ * P2-W3: when the blocker-template strictness level is above baseline, append a
+ * concrete, structured unblock path to a blocked/denied action's guidance.
+ * Returns the base guidance unchanged at the default level so behaviour is
+ * identical until the self-improvement loop actually raises the level.
+ */
+function applyBlockerTemplateStrictness(input: {
+  baseGuidance: string | undefined;
+  status: ChatToolRunRecord["status"];
+  toolName: string;
+  error?: string;
+  host?: string;
+  strictness: number;
+}): string | undefined {
+  if (input.status !== "blocked") {
+    return input.baseGuidance;
+  }
+  if (!shouldUseStrictBlockerTemplate(input.strictness)) {
+    return input.baseGuidance;
+  }
+  const reason = (input.error ?? "").trim();
+  const detail = [
+    `${formatToolLabel(input.toolName)} was blocked${reason ? `: ${reason}` : " by policy"}.`,
+    "State the exact blocker, the specific approval or capability needed to proceed, and a concrete alternative the operator can take now.",
+    input.host ? `If a host is involved (${input.host}), name it and request allowlist approval rather than retrying it.` : undefined,
+    "Do not silently retry the same blocked action or imply it succeeded.",
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  return input.baseGuidance ? `${input.baseGuidance} ${detail}` : detail;
+}
+
+function buildToolFailureGuidanceBase(input: {
+  toolName: string;
+  status: ChatToolRunRecord["status"];
+  args?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  normalizedError: string;
+  host?: string;
+  browserFailureClass?: string;
+}): string | undefined {
+  const { normalizedError, host, browserFailureClass } = input;
 
   if (input.toolName.startsWith("browser.") || input.toolName.startsWith("http.")) {
     if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlisted\b/.test(normalizedError)) {
@@ -5375,6 +5894,38 @@ function extractProviderNativeContent(message: Record<string, unknown> | undefin
         (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+}
+
+/**
+ * P0-B: detect whether a terminal assistant message carried reasoning/thinking
+ * content even though it produced no user-visible answer. Covers both the
+ * structured `provider_native_content` thinking blocks and the flat
+ * `reasoning` / `reasoning_content` fields some providers emit.
+ */
+function messageHasReasoningContent(message: Record<string, unknown> | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  const flatReasoning = message.reasoning ?? message.reasoning_content;
+  if (typeof flatReasoning === "string" && flatReasoning.trim().length > 0) {
+    return true;
+  }
+  for (const item of extractProviderNativeContent(message)) {
+    const type = typeof item.type === "string" ? item.type : "";
+    const reasoningLike = type === "thinking" || type === "redacted_thinking" || type === "reasoning";
+    if (!reasoningLike) {
+      continue;
+    }
+    const text = item.thinking ?? item.text ?? item.content ?? item.data;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return true;
+    }
+    // Redacted thinking carries no readable text but still proves the model reasoned.
+    if (type === "redacted_thinking") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -6496,6 +7047,442 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
     }
   }
   return items;
+}
+
+function captureCoworkContinuationProgress(input: {
+  citations: ChatCitationRecord[];
+  localBusinessResearchExpected: boolean;
+  promptLabContract: PromptLabRunContract;
+  toolRuns: ChatToolRunRecord[];
+}): CoworkContinuationProgressSnapshot {
+  const localBusinessProgress = collectCoworkLocalBusinessProgress(input.toolRuns);
+  return {
+    toolResultCount: input.toolRuns.filter(hasConcreteToolResult).length,
+    sourceUrls: collectCoworkContinuationSourceUrls(input.toolRuns, input.citations),
+    childCompletionCount: countCoworkChildCompletions(input.toolRuns),
+    missingRequiredEvidenceCount: listMissingPromptLabRequiredToolEvidence(input.promptLabContract, input.toolRuns)
+      .length,
+    localBusinessResearchExpected: input.localBusinessResearchExpected,
+    localBusinessCandidateKeys: localBusinessProgress.candidateKeys,
+    localBusinessVerifiedCandidateKeys: localBusinessProgress.verifiedCandidateKeys,
+    localBusinessSourceUrls: localBusinessProgress.sourceUrls,
+    localBusinessBlockerKeys: localBusinessProgress.blockerKeys,
+    localBusinessBlockedSourceKeys: localBusinessProgress.blockedSourceKeys,
+    localBusinessUnresolvedNextStepKeys: localBusinessProgress.unresolvedNextStepKeys,
+  };
+}
+
+function hasCoworkContinuationProgress(
+  before: CoworkContinuationProgressSnapshot,
+  after: CoworkContinuationProgressSnapshot,
+): boolean {
+  return (
+    after.toolResultCount > before.toolResultCount ||
+    after.sourceUrls.size > before.sourceUrls.size ||
+    after.childCompletionCount > before.childCompletionCount ||
+    after.missingRequiredEvidenceCount < before.missingRequiredEvidenceCount ||
+    after.localBusinessCandidateKeys.size > before.localBusinessCandidateKeys.size ||
+    after.localBusinessVerifiedCandidateKeys.size > before.localBusinessVerifiedCandidateKeys.size ||
+    after.localBusinessSourceUrls.size > before.localBusinessSourceUrls.size ||
+    after.localBusinessBlockerKeys.size > before.localBusinessBlockerKeys.size ||
+    after.localBusinessBlockedSourceKeys.size > before.localBusinessBlockedSourceKeys.size ||
+    after.localBusinessUnresolvedNextStepKeys.size > before.localBusinessUnresolvedNextStepKeys.size
+  );
+}
+
+function hasConcreteToolResult(run: ChatToolRunRecord): boolean {
+  return run.status === "executed" && Boolean(run.result) && Object.keys(run.result ?? {}).length > 0;
+}
+
+interface CoworkLocalBusinessProgress {
+  candidateKeys: Set<string>;
+  verifiedCandidateKeys: Set<string>;
+  sourceUrls: Set<string>;
+  blockerKeys: Set<string>;
+  blockedSourceKeys: Set<string>;
+  unresolvedNextStepKeys: Set<string>;
+}
+
+function collectCoworkLocalBusinessProgress(toolRuns: ChatToolRunRecord[]): CoworkLocalBusinessProgress {
+  const progress: CoworkLocalBusinessProgress = {
+    candidateKeys: new Set<string>(),
+    verifiedCandidateKeys: new Set<string>(),
+    sourceUrls: new Set<string>(),
+    blockerKeys: new Set<string>(),
+    blockedSourceKeys: new Set<string>(),
+    unresolvedNextStepKeys: new Set<string>(),
+  };
+  for (const run of toolRuns) {
+    collectCoworkLocalBusinessProgressFromValue(progress, run.result, 0);
+    if (run.status === "blocked" || run.status === "failed") {
+      const failureText = [run.error, run.failureGuidance]
+        .map((value) => value?.trim())
+        .filter(Boolean)
+        .join("\n");
+      if (/\b(?:blocked|403|captcha|not allowlisted|access denied)\b/i.test(failureText)) {
+        const key = normalizeCoworkProgressKey(failureText);
+        progress.blockerKeys.add(key);
+        progress.blockedSourceKeys.add(key);
+      }
+    }
+  }
+  return progress;
+}
+
+function hasSubstantiveLocalBusinessAnnotation(annotation: unknown): boolean {
+  if (!isCoworkRecord(annotation)) {
+    return false;
+  }
+  return (
+    readCoworkRecordArray(annotation.candidates).length > 0 ||
+    readCoworkRecordArray(annotation.excluded).length > 0 ||
+    readCoworkStringArray(annotation.blockers).length > 0 ||
+    readCoworkRecordArray(annotation.stages).length > 0
+  );
+}
+
+function readLocalBusinessEvidenceCitations(value: unknown): Array<{ title?: string; url: string; snippet?: string }> {
+  const citations: Array<{ title?: string; url: string; snippet?: string }> = [];
+  for (const record of readCoworkRecordArray(value)) {
+    const url = readCoworkString(record.url);
+    if (!url) {
+      continue;
+    }
+    citations.push({
+      title: readCoworkString(record.title),
+      url,
+      snippet: readCoworkString(record.snippet),
+    });
+  }
+  return citations;
+}
+
+function readLocalBusinessEvidenceCitationsFromToolRuns(
+  toolRuns: ChatToolRunRecord[],
+): Array<{ title?: string; url: string; snippet?: string }> {
+  const citations: Array<{ title?: string; url: string; snippet?: string }> = [];
+  for (const toolRun of toolRuns) {
+    collectLocalBusinessEvidenceCitationsFromValue(toolRun.result, citations, 0);
+  }
+  const seen = new Set<string>();
+  return citations
+    .filter((citation) => {
+      const key = citation.url.trim();
+      if (!/^https?:\/\//i.test(key) || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 80);
+}
+
+function collectLocalBusinessEvidenceCitationsFromValue(
+  value: unknown,
+  citations: Array<{ title?: string; url: string; snippet?: string }>,
+  depth: number,
+): void {
+  if (!value || depth > 4 || citations.length >= 120) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLocalBusinessEvidenceCitationsFromValue(item, citations, depth + 1);
+    }
+    return;
+  }
+  if (!isCoworkRecord(value)) {
+    return;
+  }
+  const url = readCoworkString(value.finalUrl) ?? readCoworkString(value.url);
+  if (url) {
+    citations.push({
+      title: readCoworkString(value.title),
+      url,
+      snippet: readCoworkString(value.textSnippet) ?? readCoworkString(value.snippet),
+    });
+  }
+  collectLocalBusinessEvidenceCitationsFromValue(value.results, citations, depth + 1);
+}
+
+function readStringArg(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function collectCoworkLocalBusinessProgressFromValue(
+  progress: CoworkLocalBusinessProgress,
+  value: unknown,
+  depth: number,
+): void {
+  if (depth > 6 || !value) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectCoworkLocalBusinessProgressFromValue(progress, item, depth + 1);
+    }
+    return;
+  }
+  if (!isCoworkRecord(value)) {
+    return;
+  }
+  if (value.kind === "local_business_contact_research" || value.workflow === "local_business.research") {
+    collectCoworkLocalBusinessResearchProgress(progress, value);
+  }
+  for (const nested of Object.values(value)) {
+    collectCoworkLocalBusinessProgressFromValue(progress, nested, depth + 1);
+  }
+}
+
+function collectCoworkLocalBusinessResearchProgress(
+  progress: CoworkLocalBusinessProgress,
+  record: Record<string, unknown>,
+): void {
+  for (const candidate of readCoworkRecordArray(record.candidates)) {
+    const urls = readCoworkStringArray(candidate.sourceUrls);
+    const candidateKey =
+      readCoworkString(candidate.storeName) ??
+      readCoworkString(candidate.name) ??
+      readCoworkString(candidate.website) ??
+      urls[0] ??
+      JSON.stringify(candidate).slice(0, 120);
+    progress.candidateKeys.add(normalizeCoworkProgressKey(candidateKey));
+    for (const url of urls) {
+      progress.sourceUrls.add(url);
+    }
+    addCoworkProgressUrl(progress.sourceUrls, candidate.website);
+    if (readCoworkString(candidate.verificationStatus)?.toLowerCase() === "verified") {
+      progress.verifiedCandidateKeys.add(normalizeCoworkProgressKey(candidateKey));
+    }
+    for (const blocker of readCoworkStringArray(candidate.blockers)) {
+      addCoworkProgressBlocker(progress, blocker);
+    }
+    for (const evidence of readCoworkRecordArray(candidate.evidence)) {
+      addCoworkProgressUrl(progress.sourceUrls, evidence.url);
+      if (readCoworkString(evidence.evidenceKind) === "blocked") {
+        addCoworkProgressBlockedSource(progress, readCoworkString(evidence.url) ?? "blocked_evidence");
+      }
+    }
+  }
+  for (const excluded of readCoworkRecordArray(record.excluded)) {
+    addCoworkProgressUrl(progress.sourceUrls, excluded.sourceUrl);
+    const reason = readCoworkString(excluded.reason);
+    if (reason) {
+      addCoworkProgressBlocker(progress, reason);
+      if (/\b(?:blocked|secondary_listing|403|captcha)\b/i.test(reason)) {
+        addCoworkProgressBlockedSource(progress, readCoworkString(excluded.sourceUrl) ?? reason);
+      }
+    }
+  }
+  for (const stage of readCoworkRecordArray(record.stages)) {
+    for (const url of readCoworkStringArray(stage.sourceUrls)) {
+      progress.sourceUrls.add(url);
+    }
+    for (const blocker of readCoworkStringArray(stage.blockers)) {
+      addCoworkProgressBlocker(progress, blocker);
+    }
+    if (readCoworkString(stage.status) === "blocked") {
+      addCoworkProgressBlockedSource(progress, readCoworkString(stage.summary) ?? "blocked_stage");
+    }
+  }
+  for (const blocker of readCoworkStringArray(record.blockers)) {
+    addCoworkProgressBlocker(progress, blocker);
+  }
+  for (const nextStep of [
+    ...readCoworkStringArray(record.unresolvedNextSteps),
+    ...readCoworkStringArray(record.unresolved_next_steps),
+    ...readCoworkStringArray(record.requiredNextSteps),
+    ...readCoworkStringArray(record.required_next_steps),
+    ...readCoworkStringArray(record.nextSteps),
+    ...readCoworkStringArray(record.next_steps),
+    ...readCoworkStringArray(record.unresolved),
+  ]) {
+    progress.unresolvedNextStepKeys.add(normalizeCoworkProgressKey(nextStep));
+  }
+}
+
+function addCoworkProgressBlocker(progress: CoworkLocalBusinessProgress, blocker: string): void {
+  progress.blockerKeys.add(normalizeCoworkProgressKey(blocker));
+  if (/\b(?:blocked|403|captcha|not allowlisted|access denied)\b/i.test(blocker)) {
+    addCoworkProgressBlockedSource(progress, blocker);
+  }
+}
+
+function addCoworkProgressBlockedSource(progress: CoworkLocalBusinessProgress, value: string): void {
+  progress.blockedSourceKeys.add(normalizeCoworkProgressKey(value));
+}
+
+function addCoworkProgressUrl(urls: Set<string>, value: unknown): void {
+  if (typeof value === "string" && /^https?:\/\//i.test(value)) {
+    urls.add(value);
+  }
+}
+
+function readCoworkRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isCoworkRecord) : [];
+}
+
+function readCoworkStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function readCoworkString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeCoworkProgressKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 180);
+}
+
+function isCoworkRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function collectCoworkContinuationSourceUrls(
+  toolRuns: ChatToolRunRecord[],
+  citations: ChatCitationRecord[],
+): ReadonlySet<string> {
+  const urls = new Set<string>();
+  for (const citation of citations) {
+    addCoworkContinuationUrl(urls, citation.url);
+  }
+  for (const run of toolRuns) {
+    for (const citation of inferCitationsFromToolResult(run)) {
+      addCoworkContinuationUrl(urls, citation.url);
+    }
+    addCoworkContinuationUrl(urls, run.args?.url);
+    collectCoworkContinuationUrlsFromValue(urls, run.result, 0);
+  }
+  return urls;
+}
+
+function addCoworkContinuationUrl(urls: Set<string>, value: unknown): void {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) {
+    return;
+  }
+  urls.add(value);
+}
+
+function collectCoworkContinuationUrlsFromValue(urls: Set<string>, value: unknown, depth: number): void {
+  if (depth > 2 || !value) {
+    return;
+  }
+  if (typeof value === "string") {
+    addCoworkContinuationUrl(urls, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectCoworkContinuationUrlsFromValue(urls, item, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  for (const item of Object.values(value as Record<string, unknown>)) {
+    collectCoworkContinuationUrlsFromValue(urls, item, depth + 1);
+  }
+}
+
+function countCoworkChildCompletions(toolRuns: ChatToolRunRecord[]): number {
+  return toolRuns
+    .filter((run) => run.status === "executed" && Boolean(run.result))
+    .reduce((count, run) => count + countCoworkChildCompletionSignals(run.result, 0), 0);
+}
+
+function countCoworkChildCompletionSignals(value: unknown, depth: number): number {
+  if (depth > 3 || !value) {
+    return 0;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((count, item) => count + countCoworkChildCompletionSignals(item, depth + 1), 0);
+  }
+  if (typeof value !== "object") {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  const status = typeof record.status === "string" ? record.status.toLowerCase() : "";
+  const hasOutput =
+    typeof record.output === "string" ||
+    typeof record.content === "string" ||
+    typeof record.assistantContent === "string" ||
+    typeof record.summary === "string" ||
+    Boolean(record.result);
+  let count = /^(completed|complete|succeeded|done)$/.test(status) && hasOutput ? 1 : 0;
+  for (const key of ["children", "childRuns", "childCompletions", "completions", "delegations", "steps"]) {
+    count += countCoworkChildCompletionSignals(record[key], depth + 1);
+  }
+  return count;
+}
+
+function buildCoworkLoopCheckpointReason(input: {
+  checkpointLimitLabel?: string;
+  maxToolLoops: number;
+  noProgressWindowCount: number;
+  windowHadProgress: boolean;
+  windowIndex: number;
+}): string {
+  const progressLabel = input.windowHadProgress
+    ? "progress observed"
+    : `no new progress (${input.noProgressWindowCount} consecutive window)`;
+  const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops} loop`;
+  return `Cowork loop checkpoint ${input.windowIndex}: exhausted ${checkpointLimitLabel} window; ${progressLabel}; continuing from gathered evidence.`;
+}
+
+function buildCoworkLoopContinuationInstruction(input: {
+  checkpointLimitLabel?: string;
+  maxToolLoops: number;
+  noProgressWindowCount: number;
+  windowHadProgress: boolean;
+  windowIndex: number;
+}): string {
+  const progressGuidance = input.windowHadProgress
+    ? "The last window produced new evidence. Continue from those results; synthesize now if the answer is sufficiently grounded."
+    : `The last window produced no new tool results, source URLs, child completions, required-field progress, or structured local-business research progress (${input.noProgressWindowCount} consecutive no-progress window). Change approach once or synthesize the partial truth.`;
+  const checkpointLimitLabel = input.checkpointLimitLabel ?? `${input.maxToolLoops}-loop`;
+  return [
+    `Cowork continuation checkpoint ${input.windowIndex}: the ${checkpointLimitLabel} checkpoint window is exhausted.`,
+    progressGuidance,
+    "Do not restart the task or repeat identical tool calls. Use narrower arguments when another tool call is needed.",
+    "Prefer a clear checkpoint or final synthesis over open-ended tool work.",
+  ].join("\n");
+}
+
+function buildCoworkRepeatedLoopDiagnostic(
+  checkpointLimitLabel: string,
+  noProgressWindowCount: number,
+  snapshot: CoworkContinuationProgressSnapshot,
+): string {
+  const researchDiagnostics = buildCoworkResearchDiagnosticCodes(snapshot);
+  const diagnosticsSuffix =
+    researchDiagnostics.length > 0 ? ` Research diagnostics: ${researchDiagnostics.join(", ")}.` : "";
+  return `repeated_tool_loop: Cowork continuation stopped after ${noProgressWindowCount} consecutive ${checkpointLimitLabel} checkpoint windows without new tool results, source URLs, child completions, required-field progress, or structured local-business research progress.${diagnosticsSuffix}`;
+}
+
+function buildCoworkResearchDiagnosticCodes(snapshot: CoworkContinuationProgressSnapshot): string[] {
+  if (!snapshot.localBusinessResearchExpected) {
+    return [];
+  }
+  const codes: string[] = [];
+  if (snapshot.localBusinessBlockedSourceKeys.size > 0) {
+    codes.push("source_access_blocked");
+  }
+  if (snapshot.localBusinessCandidateKeys.size === 0) {
+    codes.push("candidate_discovery_incomplete");
+  }
+  if (
+    snapshot.localBusinessCandidateKeys.size > 0 &&
+    snapshot.localBusinessVerifiedCandidateKeys.size === 0 &&
+    (snapshot.localBusinessBlockerKeys.size > 0 ||
+      snapshot.localBusinessBlockedSourceKeys.size > 0 ||
+      snapshot.localBusinessUnresolvedNextStepKeys.size > 0)
+  ) {
+    codes.push("research_evidence_incomplete");
+  }
+  return codes;
 }
 
 function isRetryableToolFailure(errorText: string | undefined): boolean {

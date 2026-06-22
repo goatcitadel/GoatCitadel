@@ -126,7 +126,150 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
   if (Array.isArray(result.fallbackChain) && result.fallbackChain.length > 0) {
     compacted.fallbackChain = result.fallbackChain;
   }
+  const localBusinessResearch = compactLocalBusinessResearchRecord(result.localBusinessResearch);
+  if (localBusinessResearch) {
+    compacted.localBusinessResearch = localBusinessResearch;
+  }
   return compacted;
+}
+
+function compactLocalBusinessResearchRecord(value: unknown): Record<string, unknown> | undefined {
+  const record = toPlainRecord(value);
+  if (!record || record.kind !== "local_business_contact_research") {
+    return undefined;
+  }
+  return {
+    kind: record.kind,
+    workflow: record.workflow === "local_business.research" ? record.workflow : undefined,
+    plan: compactLocalBusinessPlan(record.plan),
+    stages: compactLocalBusinessStages(record.stages),
+    candidates: compactLocalBusinessCandidates(record.candidates),
+    excluded: compactLocalBusinessExcluded(record.excluded),
+    blockers: readStringArray(record.blockers).slice(0, 20),
+    verificationNote:
+      typeof record.verificationNote === "string" && record.verificationNote.trim()
+        ? record.verificationNote.trim().slice(0, 800)
+        : undefined,
+  };
+}
+
+function compactLocalBusinessPlan(value: unknown): Record<string, unknown> | undefined {
+  const record = toPlainRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return compactDefinedRecord({
+    location: readString(record.location),
+    radiusMiles: readNumber(record.radiusMiles),
+    categories: readStringArray(record.categories).slice(0, 8),
+    requireEmail: typeof record.requireEmail === "boolean" ? record.requireEmail : undefined,
+    requireContactName: typeof record.requireContactName === "boolean" ? record.requireContactName : undefined,
+  });
+}
+
+function compactLocalBusinessStages(value: unknown): Record<string, unknown>[] {
+  return readRecordArray(value)
+    .slice(0, 8)
+    .map((stage) =>
+      compactDefinedRecord({
+        name: readString(stage.name),
+        status: readString(stage.status),
+        summary: readString(stage.summary)?.slice(0, 500),
+        resultCount: readNumber(stage.resultCount),
+        candidateCount: readNumber(stage.candidateCount),
+        excludedCount: readNumber(stage.excludedCount),
+        sourceUrls: readStringArray(stage.sourceUrls).filter(isHttpUrl).slice(0, 10),
+        blockers: readStringArray(stage.blockers).slice(0, 10),
+      }),
+    );
+}
+
+function compactLocalBusinessCandidates(value: unknown): Record<string, unknown>[] {
+  return readRecordArray(value)
+    .slice(0, 20)
+    .map((candidate) =>
+      compactDefinedRecord({
+        storeName: readString(candidate.storeName),
+        address: readString(candidate.address),
+        distanceMiles: readNumber(candidate.distanceMiles),
+        category: readString(candidate.category),
+        website: readString(candidate.website),
+        email: readString(candidate.email),
+        contactName: readString(candidate.contactName),
+        contactRole: readString(candidate.contactRole),
+        sourceUrls: readStringArray(candidate.sourceUrls).filter(isHttpUrl).slice(0, 12),
+        confidence: readString(candidate.confidence),
+        verificationStatus: readString(candidate.verificationStatus),
+        blockers: readStringArray(candidate.blockers).slice(0, 12),
+        evidence: compactLocalBusinessEvidence(candidate.evidence),
+      }),
+    );
+}
+
+function compactLocalBusinessEvidence(value: unknown): Record<string, unknown>[] {
+  return readRecordArray(value)
+    .slice(0, 16)
+    .map((evidence) =>
+      compactDefinedRecord({
+        url: readString(evidence.url),
+        title: readString(evidence.title)?.slice(0, 240),
+        snippet: readString(evidence.snippet)?.slice(0, 500),
+        evidenceKind: readString(evidence.evidenceKind),
+        confidence: readString(evidence.confidence),
+      }),
+    );
+}
+
+function compactLocalBusinessExcluded(value: unknown): Record<string, unknown>[] {
+  return readRecordArray(value)
+    .slice(0, 20)
+    .map((excluded) =>
+      compactDefinedRecord({
+        reason: readString(excluded.reason),
+        sourceUrl: readString(excluded.sourceUrl),
+        title: readString(excluded.title)?.slice(0, 240),
+      }),
+    );
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(toPlainRecord(item)))
+    : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .map((item) => item.trim())
+    : [];
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function compactDefinedRecord(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => {
+      if (value === undefined) {
+        return false;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      return true;
+    }),
+  );
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
 }
 
 function collectCompactSourceAttribution(result: Record<string, unknown>): ToolSourceAttribution[] {

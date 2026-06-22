@@ -5,6 +5,7 @@ import {
   exportCitadelBlueprint,
   importCitadelBlueprint,
   isApiRequestError,
+  listCitadels,
   validateCitadelBlueprint,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
@@ -64,10 +65,22 @@ export function CitadelBlueprintRoutePage({
   useEffect(() => {
     let cancelled = false;
     setExportState((current) => ({ ...current, loading: true, error: null }));
-    void exportCitadelBlueprint(activeCitadelId)
+    void listCitadels("active", 500)
+      .then(async ({ items }) => {
+        const listed = items.find((item) => item.citadelId === activeCitadelId || item.slug === activeCitadelId);
+        if (!listed || listed.hasCharter === false) {
+          return null;
+        }
+        return exportCitadelBlueprint(activeCitadelId);
+      })
       .then((blueprint) => {
         if (!cancelled) {
-          setExportState({ loading: false, error: null, staged: true, json: JSON.stringify(blueprint, null, 2) });
+          setExportState({
+            loading: false,
+            error: null,
+            staged: Boolean(blueprint),
+            json: blueprint ? JSON.stringify(blueprint, null, 2) : null,
+          });
         }
       })
       .catch((error: unknown) => {

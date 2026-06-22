@@ -66,6 +66,39 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "session.search",
+    category: "session",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Full-text search over past messages in this conversation's history (tier-2 recall). Use to pull older context that is no longer in the active window.",
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        scope: { type: "string", enum: ["session", "all"] },
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+        contextRadius: { type: "integer", minimum: 0, maximum: 10 },
+      },
+      required: ["query"],
+    },
+    examples: [
+      {
+        title: "Recall what was decided earlier about deployment",
+        args: { query: "deployment decision", limit: 5 },
+      },
+    ],
+    pack: "core",
+    readOnly: true,
+    deterministic: true,
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["recall_history", "memory_lookup"],
+    usageHints: [
+      "Use when the user references something from earlier in the conversation that you can no longer see.",
+      "Defaults to this session; pass scope:'all' only when you must search across other conversations.",
+    ],
+  },
+  {
     name: "memory.read",
     category: "memory",
     riskLevel: "safe",
@@ -586,6 +619,59 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     ],
   },
   {
+    name: "local_business.research",
+    category: "research",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Build a structured, source-backed local business contact research plan, evidence summary, verification status, and blockers.",
+    pack: "core",
+    readOnly: true,
+    deterministic: true,
+    recommendedContexts: ["cowork"],
+    preferredForIntents: ["local_business_research", "contact_research", "research"],
+    usageHints: [
+      "Use for local-business contact discovery tasks that need candidate, source, email, contact-name, and blocker state.",
+      "Treat public official/contact/about/profile sources as evidence and blocked listings as secondary leads only.",
+    ],
+    argSchema: {
+      type: "object",
+      properties: {
+        objective: { type: "string" },
+        location: { type: "string" },
+        radiusMiles: { type: "number", minimum: 1, maximum: 250 },
+        categories: { type: "array", items: { type: "string" } },
+        requiredContactFields: { type: "array", items: { type: "string", enum: ["email", "contact_name"] } },
+        citations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              snippet: { type: "string" },
+            },
+            required: ["url"],
+          },
+        },
+      },
+      required: ["objective"],
+    },
+    examples: [
+      {
+        title: "Research local tabletop game stores",
+        args: {
+          objective:
+            "Locate boardgame/tabletop game stores within 10 miles of 91303 and find public email/contact-name evidence.",
+          location: "91303",
+          radiusMiles: 10,
+          categories: ["board game and tabletop game store"],
+          requiredContactFields: ["email", "contact_name"],
+        },
+      },
+    ],
+  },
+  {
     name: "browser.screenshot",
     category: "research",
     riskLevel: "danger",
@@ -674,6 +760,65 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       required: ["serverId", "toolName"],
     },
     pack: "core",
+  },
+  {
+    name: "schedule.manage",
+    category: "ops",
+    riskLevel: "danger",
+    requiresApproval: true,
+    description:
+      "Create, list, or cancel the agent's own scheduled work (an agent_turn cron job that wakes the agent on a recurring schedule). Creating or cancelling a schedule requires approval.",
+    argSchema: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create", "list", "cancel"] },
+        jobId: { type: "string", description: "Target job id for the cancel op (or the explicit id for create)." },
+        name: { type: "string", description: "Human-readable name for a created schedule." },
+        schedule: {
+          type: "string",
+          description: "Cron-style schedule, e.g. '0 9 * * 1' (every Monday 09:00). Must not be finer than 15 minutes.",
+        },
+        prompt: {
+          type: "string",
+          description: "The instruction the scheduled turn wakes the agent with.",
+        },
+        deliveryChannel: {
+          type: "object",
+          properties: {
+            channelKey: { type: "string" },
+            target: { type: "string" },
+          },
+        },
+        endAt: { type: "string", description: "Optional ISO date/time after which the schedule stops firing." },
+      },
+      required: ["op"],
+    },
+    examples: [
+      {
+        title: "List the agent's own scheduled jobs",
+        args: { op: "list" },
+      },
+      {
+        title: "Schedule a recurring morning briefing",
+        args: {
+          op: "create",
+          name: "Morning briefing",
+          schedule: "0 9 * * 1-5",
+          prompt: "Summarize overnight updates and surface anything that needs my attention.",
+        },
+      },
+      {
+        title: "Cancel a scheduled job",
+        args: { op: "cancel", jobId: "morning-briefing" },
+      },
+    ],
+    pack: "core",
+    recommendedContexts: ["chat", "cowork"],
+    preferredForIntents: ["schedule_work", "recurring_task", "remind_me", "self_schedule"],
+    usageHints: [
+      "Use to set up, review, or cancel the agent's own recurring scheduled turns.",
+      "Creating or cancelling a schedule is a governed action and requires operator approval.",
+    ],
   },
   {
     name: "citations.build",

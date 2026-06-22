@@ -211,6 +211,67 @@ describe("chat turn planning helpers", () => {
     ).toMatchObject({ l1Used: false, l2Used: false });
   });
 
+  it("escalates web retrieval per the tuned live-data intent sensitivity (P2-W3)", () => {
+    // A non-keyword, memory-on turn: L1 base is 0.78 (>= 0.55), so at the 0.6
+    // baseline it must NOT escalate — identical to the historical behaviour.
+    const baseline = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "workspace",
+    });
+    expect(baseline.l2Used).toBe(false);
+    expect(baseline.escalationReason).toBeUndefined();
+
+    // Passing the baseline threshold explicitly is byte-identical to omitting it.
+    expect(
+      buildRetrievalTrace({
+        content: "summarize the attached document",
+        retrievalMode: "layered",
+        webMode: "auto",
+        memoryMode: "workspace",
+        liveIntentThreshold: 0.6,
+      }),
+    ).toEqual(baseline);
+
+    // Even at the MAX tuned sensitivity (0.95), an ordinary memory-on turn
+    // (L1 base 0.78) must NOT escalate: the escalation cutoff is capped just
+    // below 0.78, so tuning sharpens live-intent sensitivity WITHOUT forcing
+    // every memory-backed turn onto web/L2 ("always web" regression — finding 4).
+    const tuned = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "workspace",
+      liveIntentThreshold: 0.95,
+    });
+    expect(tuned.l2Used).toBe(false);
+    expect(tuned.escalationReason).toBeUndefined();
+
+    // The raised sensitivity still bites where intended: a memory-OFF turn has a
+    // weak L1 base (0.2) and escalates to L2 at the tuned threshold.
+    const tunedWeak = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "off",
+      liveIntentThreshold: 0.95,
+    });
+    expect(tunedWeak.l2Used).toBe(true);
+    expect(tunedWeak.escalationReason).toBe("low_retrieval_confidence");
+
+    // The escalation still respects webMode === "off" regardless of sensitivity.
+    expect(
+      buildRetrievalTrace({
+        content: "summarize the attached document",
+        retrievalMode: "layered",
+        webMode: "off",
+        memoryMode: "off",
+        liveIntentThreshold: 0.95,
+      }).l2Used,
+    ).toBe(false);
+  });
+
   it("allows planner drafts to refine production work while preserving synthesis and review control steps", () => {
     const templatePlan = createCoworkPlan();
     const draft = coercePlannerExecutionPlanDraft(

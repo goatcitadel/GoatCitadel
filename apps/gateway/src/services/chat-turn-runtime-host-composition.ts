@@ -59,6 +59,7 @@ function composeSessionPreparation(
   ChatTurnRuntimeHost,
   | "buildDefaultChatPersonalityOverlay"
   | "buildLlmMessagesFromBranchPath"
+  | "composeFrozenOperatorProfileDigest"
   | "ensureChatSessionModelDefaults"
   | "ensureChatSessionRuntimeGrants"
   | "getSession"
@@ -81,6 +82,9 @@ function composeSessionPreparation(
     buildDefaultChatPersonalityOverlay: () => source.buildDefaultChatPersonalityOverlay(),
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+    composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
+      ? (workspaceId) => source.composeFrozenOperatorProfileDigest?.(workspaceId)
+      : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),
     getSession: (sessionId) => source.getSession(sessionId),
@@ -148,10 +152,12 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
   return {
     extractAndPersistLearnedMemory: (sessionId, content, sourceRef) =>
       source.extractAndPersistLearnedMemory(sessionId, content, sourceRef),
+    recordTurnCommitments: (input) => source.recordTurnCommitments(input),
     recordCapabilityGapFromTrace: (input) => source.recordCapabilityGapFromTrace(input),
     scheduleChatMemoryContextPrewarm: (input) => source.scheduleChatMemoryContextPrewarm(input),
     scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
       source.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+    scheduleBackgroundReviewIfDue: (input) => source.scheduleBackgroundReviewIfDue(input),
   };
 }
 

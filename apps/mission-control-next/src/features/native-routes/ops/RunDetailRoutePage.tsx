@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- RunDetailRoutePage centralizes run evidence, replay checkpoints, exports, and trace panels until the Ops evidence surface is split. */
 import { useState } from "react";
 import { ClipboardCopy, FileText, GitBranch, RefreshCw, ShieldCheck } from "lucide-react";
 import {
@@ -54,6 +55,7 @@ interface RunDetailModel {
   replayAvailable: boolean;
   resumeAvailable: boolean;
   replayReason: string;
+  replayAuditItems: NativeListItem[];
   recoveryState?: string;
   raw: unknown;
 }
@@ -359,6 +361,13 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
             {detail.recoveryState ? <StatusChip tone="warning">{detail.recoveryState}</StatusChip> : null}
           </div>
           <p className="mc-next-approvals-summary">{detail.replayReason}</p>
+          <p className="mc-next-approvals-summary">Replay audit checkpoints</p>
+          <NativeList
+            density="compact"
+            items={detail.replayAuditItems}
+            emptyLabel="No replay audit checkpoint evidence is attached to this run."
+            maxHeight="min(32vh, 18rem)"
+          />
           {detail.sessionId && detail.turnId && isStableSurface(detail.sourceSurface) ? (
             <NativeButton
               variant="secondary"
@@ -526,6 +535,7 @@ function buildRunDetailModel(raw: unknown, fallbackRunId: string, orchestrationR
       readString(postureReplay?.note) ??
       readString(run?.recoverySummary) ??
       "No replay or resume claim is made without trace evidence.",
+    replayAuditItems: getReplayAuditItems(record),
     recoveryState: readString(run?.recoveryState),
     raw: orchestrationTrace ? { observeTrace: raw, orchestrationTrace } : raw,
   };
@@ -896,6 +906,58 @@ function getSideEffectItems(record: RunTracePayload): NativeListItem[] {
         .join(" · "),
     };
   });
+}
+
+function getReplayAuditItems(record: RunTracePayload): NativeListItem[] {
+  const checkpoints = readArray(readRecord(readRecord(record, "durable"), "checkpoints")?.items);
+  const items: NativeListItem[] = [];
+  for (const checkpoint of checkpoints) {
+    const checkpointRecord = asRecord(checkpoint) ?? {};
+    const state =
+      readRecord(checkpointRecord, "state") ?? readRecord(checkpointRecord, "checkpointState") ?? checkpointRecord;
+    if (readString(state.workflow) !== "external_side_effect.replay") {
+      continue;
+    }
+    const auditRows = readArray(state.replayAuditResults).length
+      ? readArray(state.replayAuditResults)
+      : readArray(state.results);
+    for (const [index, row] of auditRows.entries()) {
+      const audit = asRecord(row) ?? {};
+      const runId = readString(audit.runId) ?? `row ${index + 1}`;
+      const status = readString(audit.status) ?? "unknown";
+      items.push({
+        title: `${formatReplayAuditStatus(status)} ${runId}`,
+        meta: [
+          status,
+          readString(audit.reason),
+          readString(audit.replayOutcome),
+          readString(audit.replayAttempt),
+          readString(audit.resumeState),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        body: readString(audit.message) ?? "Replay audit checkpoint did not record a message.",
+      });
+    }
+  }
+  return items;
+}
+
+function formatReplayAuditStatus(status: string): string {
+  switch (status) {
+    case "not_found":
+      return "Missing run";
+    case "blocked":
+      return "Blocked replay";
+    case "failed":
+      return "Failed replay";
+    case "skipped":
+      return "Skipped replay";
+    case "executed":
+      return "Replayed";
+    default:
+      return "Replay audit";
+  }
 }
 
 function getExportLinkItems(runId: string): NativeListItem[] {

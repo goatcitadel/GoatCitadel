@@ -6,6 +6,7 @@ import {
   getCitadel,
   getCitadelGatehouse,
   isApiRequestError,
+  listCitadels,
   listCitadelTemplates,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
@@ -66,10 +67,31 @@ export function CitadelOverviewRoutePage({
   useEffect(() => {
     let cancelled = false;
     setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([getCitadel(activeCitadelId), getCitadelGatehouse(activeCitadelId)])
-      .then(([citadel, gatehouse]) => {
+    void listCitadels("active", 500)
+      .then(async ({ items }) => {
+        const listed = items.find((item) => item.citadelId === activeCitadelId || item.slug === activeCitadelId);
+        if (!listed || listed.hasCharter === false) {
+          return null;
+        }
+        const [citadel, gatehouse] = await Promise.all([
+          getCitadel(activeCitadelId),
+          getCitadelGatehouse(activeCitadelId),
+        ]);
+        return { citadel, gatehouse };
+      })
+      .then((loaded) => {
         if (!cancelled) {
-          setState({ loading: false, error: null, staged: true, citadel, gatehouse });
+          if (!loaded) {
+            setState({ loading: false, error: null, staged: false, citadel: null, gatehouse: null });
+          } else {
+            setState({
+              loading: false,
+              error: null,
+              staged: true,
+              citadel: loaded.citadel,
+              gatehouse: loaded.gatehouse,
+            });
+          }
         }
       })
       .catch((error: unknown) => {

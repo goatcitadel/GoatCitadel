@@ -8,6 +8,7 @@ import type {
   MemoryItemRecord,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { generateEmbedding } from "@goatcitadel/policy-engine";
 import { MemoryContextService } from "./memory-context-service.js";
 
 const tempRoots: string[] = [];
@@ -388,6 +389,164 @@ describe("MemoryContextService", () => {
         ]),
       }),
     );
+  });
+
+  it("generates a query embedding from the prompt and marks stored items as embedding-used (W1)", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const prompt = "Browser sessions require scoped grants before tool access.";
+    // The stored item carries an embedding generated from identical content, so the
+    // self-generated query embedding (same prompt) ranks it with embeddingStatus "used".
+    const storedEmbedding = (await generateEmbedding(prompt)).embedding;
+    const storage = createStorage({
+      memoryItems: [
+        {
+          itemId: "mem-embed",
+          namespace: "workspace/default",
+          title: "Browser governance",
+          content: prompt,
+          metadata: { embedding: storedEmbedding },
+          pinned: true,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-05-30T18:00:00.000Z",
+          updatedAt: "2026-05-30T18:05:00.000Z",
+        } as MemoryItemRecord,
+      ],
+    });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-embed",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Browser sessions need scoped grants.",
+                  facts: [{ text: "Browser sessions need scoped grants.", citationIds: ["m:mem-embed"] }],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-embed",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-embed",
+                      snippet: "Browser sessions require scoped grants",
+                      score: 0.9,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    // No queryEmbedding supplied by the caller — compose must generate one.
+    const pack = await service.compose({
+      scope: "chat",
+      prompt,
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    const memoryCitation = pack.citations.find((citation) => citation.candidateId === "m:mem-embed");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingStatus).toBe("used");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingDimensions).toEqual({
+      query: storedEmbedding.length,
+      candidate: storedEmbedding.length,
+    });
+    expect(memoryCitation?.provenance?.retrievalStrategy).toBe("hybrid_rank");
+  });
+
+  it("degrades gracefully to lexical signals when the stored embedding dimensions mismatch (W1)", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const prompt = "How should browser sessions be governed before tool access?";
+    const storage = createStorage({
+      memoryItems: [
+        {
+          itemId: "mem-mismatch",
+          namespace: "workspace/default",
+          title: "Browser governance",
+          content: "Browser sessions require scoped grants before tool access.",
+          // A short, wrong-dimension vector compared to the 64-dim generated query embedding.
+          metadata: { embedding: [0.1, 0.2, 0.3] },
+          pinned: true,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-05-30T18:00:00.000Z",
+          updatedAt: "2026-05-30T18:05:00.000Z",
+        } as MemoryItemRecord,
+      ],
+    });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-mismatch",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Browser sessions need scoped grants.",
+                  facts: [{ text: "Browser sessions need scoped grants.", citationIds: ["m:mem-mismatch"] }],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-mismatch",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-mismatch",
+                      snippet: "Browser sessions require scoped grants",
+                      score: 0.8,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    // The generated 64-dim query embedding cannot match the 3-dim candidate; compose must not throw.
+    const pack = await service.compose({
+      scope: "chat",
+      prompt,
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    const memoryCitation = pack.citations.find((citation) => citation.candidateId === "m:mem-mismatch");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingStatus).toBe("dimension_mismatch");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingScore).toBeUndefined();
+    // Lexical/recency signals still rank the candidate, so retrieval keeps working.
+    expect(memoryCitation?.provenance?.matchSignals?.totalScore).toBeGreaterThan(0);
   });
 
   it("records a no-candidates fallback when the workspace and transcript sources are empty", async () => {

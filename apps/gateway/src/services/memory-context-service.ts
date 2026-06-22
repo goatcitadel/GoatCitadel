@@ -29,7 +29,7 @@ import {
   type MemorySourceInput,
   type ParsedDistillation,
 } from "@goatcitadel/memory-core";
-import { assertWritePathInJail } from "@goatcitadel/policy-engine";
+import { assertWritePathInJail, generateEmbedding } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
@@ -51,7 +51,11 @@ export class MemoryContextService {
     const prompt = input.prompt.trim();
     const relationScope = resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
-    const queryHash = buildQueryHash(prompt, input.queryEmbedding);
+    // Generate a query embedding for the prompt when the caller did not supply one,
+    // so semantic-vector ranking can engage. Skipped on the short-circuit path
+    // (disabled/short prompt never ranks, so the legacy behavior is preserved).
+    const queryEmbedding = shouldShortCircuit ? input.queryEmbedding : await this.resolveQueryEmbedding(input, prompt);
+    const queryHash = buildQueryHash(prompt, queryEmbedding);
     if (shouldShortCircuit) {
       const fallback = composeFallbackContext([], maxContextTokens);
       const cacheKey = buildCacheKey({
@@ -64,7 +68,7 @@ export class MemoryContextService {
         relationScope,
         maxContextTokens,
         candidates: [],
-        queryEmbedding: input.queryEmbedding,
+        queryEmbedding,
       });
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
@@ -118,7 +122,7 @@ export class MemoryContextService {
         maxMemoryItems: qmd.maxMemoryFiles,
         maxCharsPerCandidate: 1400,
       }),
-      { maxCandidates: 40, queryEmbedding: input.queryEmbedding },
+      { maxCandidates: 40, queryEmbedding },
     );
 
     const sourcesHash = buildSourcesHash(candidates);
@@ -132,7 +136,7 @@ export class MemoryContextService {
       relationScope,
       maxContextTokens,
       candidates,
-      queryEmbedding: input.queryEmbedding,
+      queryEmbedding,
     });
 
     if (!input.forceRefresh) {
@@ -438,6 +442,32 @@ export class MemoryContextService {
         retrievalStrategies,
       },
     };
+  }
+
+  /**
+   * Resolve the query embedding used for semantic-vector ranking. Honors an
+   * explicit `input.queryEmbedding`; otherwise generates one from the prompt via
+   * the current embedding profile. Degrades to `undefined` on any generation
+   * failure so the ranker falls back to lexical/recency signals (the
+   * `dimension_mismatch`/`missing` paths already handle absent/incompatible
+   * vectors gracefully).
+   */
+  private async resolveQueryEmbedding(
+    input: MemoryContextComposeRequest,
+    prompt: string,
+  ): Promise<number[] | undefined> {
+    if (input.queryEmbedding && input.queryEmbedding.length > 0) {
+      return input.queryEmbedding;
+    }
+    if (!prompt) {
+      return undefined;
+    }
+    try {
+      const generated = await generateEmbedding(prompt);
+      return generated.embedding.length > 0 ? generated.embedding : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async collectSources(input: MemoryContextComposeRequest): Promise<MemorySourceInput[]> {

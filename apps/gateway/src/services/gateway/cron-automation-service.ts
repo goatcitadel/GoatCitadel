@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { randomUUID } from "node:crypto";
 import type {
   CronJobRecord,
@@ -7,6 +8,11 @@ import type {
   CronWatchdogRunResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import {
+  type AgentTurnCronRunHandler,
+  normalizeAgentTurnCronActionConfig,
+  runAgentTurnCronJob,
+} from "./cron-agent-turn-support.js";
 import {
   assertCronActionMutationAllowed,
   isCronActionEnabledForScheduledRun,
@@ -39,12 +45,15 @@ interface CronReviewRow {
   resolved_at: string | null;
 }
 
-interface CronRunSnapshot {
+export interface CronRunSnapshot {
   runId: string;
   jobId: string;
-  status: "ok";
+  status: "ok" | "failed" | "unknown";
   finishedAt?: string;
   output?: string;
+  failure?: CronJobRecord["lastFailure"];
+  failureCount?: number;
+  backoffUntil?: string;
 }
 
 interface CronRunDiffRow {
@@ -121,6 +130,7 @@ export interface CronAutomationServiceDeps {
       workdir?: string;
       timeoutMs?: number;
     }) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
+    agentTurn: AgentTurnCronRunHandler;
   };
 }
 
@@ -408,6 +418,19 @@ export class CronAutomationService {
           computeNextCronRunAt,
         });
         runSummary = { ...runSummary, force, reason: options.reason };
+      } else if (job.action === "agent_turn") {
+        runSummary = await runAgentTurnCronJob({
+          job,
+          normalizedJobId,
+          runId,
+          runHandler: this.deps.runHandlers.agentTurn,
+          upsertCronJob: (updatedJob: CronJobRecord, updatedAt: string) =>
+            this.deps.storage.cronJobs.upsert(updatedJob, updatedAt),
+          persistCronJobsConfig: this.deps.persistCronJobsConfig,
+          publishRealtime: this.deps.publishRealtime,
+          computeNextCronRunAt,
+        });
+        runSummary = { ...runSummary, force, reason: options.reason };
       } else {
         throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
       }
@@ -512,9 +535,12 @@ export class CronAutomationService {
     return {
       runId: normalized,
       jobId: match.jobId,
-      status: "ok",
+      status: match.lastRunStatus ?? "unknown",
       finishedAt: match.lastRunAt,
       output: match.lastRunOutput,
+      failure: match.lastFailure,
+      failureCount: match.failureCount,
+      backoffUntil: match.backoffUntil,
     };
   }
 
@@ -834,6 +860,9 @@ function normalizeCronJobActionConfig(
   if (action === "no_agent") {
     return normalizeNoAgentCronActionConfig(rawValue);
   }
+  if (action === "agent_turn") {
+    return normalizeAgentTurnCronActionConfig(rawValue);
+  }
   return undefined;
 }
 
@@ -850,7 +879,13 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
 }
 
 function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
-  return action === "task" || action === "watchdog" || action === "curator" || action === "no_agent";
+  return (
+    action === "task" ||
+    action === "watchdog" ||
+    action === "curator" ||
+    action === "no_agent" ||
+    action === "agent_turn"
+  );
 }
 
 function shouldRecordWatchdogReview(job: CronJobRecord, result: CronWatchdogRunResult): boolean {

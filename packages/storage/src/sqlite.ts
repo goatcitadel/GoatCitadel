@@ -1355,32 +1355,7 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       ).run({ now });
 
       if (tableExists(db, "citadel_charters")) {
-        db.exec(`
-          INSERT INTO citadel_records (
-            citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
-            default_workspace_id, created_at, updated_at
-          )
-          SELECT
-            charter.citadel_id,
-            COALESCE(NULLIF(TRIM(workspace.name), ''), charter.citadel_id),
-            'Legacy workspace Citadel preserved during parent-scope migration.',
-            LOWER(REPLACE(charter.citadel_id, ' ', '-')),
-            charter.kind,
-            'active',
-            NULL,
-            workspace.workspace_id,
-            charter.created_at,
-            charter.updated_at
-          FROM citadel_charters AS charter
-          LEFT JOIN workspaces AS workspace
-            ON workspace.workspace_id = charter.citadel_id
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM citadel_records AS existing
-            WHERE existing.citadel_id = charter.citadel_id
-          )
-          ON CONFLICT(citadel_id) DO NOTHING;
-        `);
+        migrateLegacyCitadelCharters(db);
       }
 
       if (tableExists(db, "workspaces")) {
@@ -1436,7 +1411,127 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 123,
+    name: "agent_commitments_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_commitments (
+          commitment_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT 'default',
+          kind TEXT NOT NULL,
+          due_at TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          dedupe_key TEXT NOT NULL,
+          suggested_text TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_by TEXT NOT NULL DEFAULT 'classifier',
+          created_at TEXT NOT NULL,
+          sent_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_commitments_session_dedupe
+          ON agent_commitments(session_id, dedupe_key);
+        CREATE INDEX IF NOT EXISTS idx_agent_commitments_status_due
+          ON agent_commitments(status, due_at);
+      `);
+    },
+  },
+  {
+    version: 124,
+    name: "session_autonomy_heartbeat_columns",
+    up: (db) => {
+      // P1-F4 heartbeat (silent self-wake). Additive columns on the existing
+      // table — defaults backfill existing rows without rewriting them. Heartbeat
+      // defaults ON (chosen on-by-default posture); the master autonomy switch
+      // still gates whether any tick fires.
+      addColumnIfMissingIfTableExists(
+        db,
+        "session_autonomy_prefs",
+        "heartbeat_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+      );
+      addColumnIfMissingIfTableExists(
+        db,
+        "session_autonomy_prefs",
+        "heartbeat_interval_seconds",
+        "INTEGER NOT NULL DEFAULT 3600",
+      );
+      addColumnIfMissingIfTableExists(db, "session_autonomy_prefs", "active_hours_json", "TEXT");
+    },
+  },
+  {
+    version: 125,
+    name: "chat_messages_fts_recall_schema",
+    up: (db) => {
+      // P2-S4a session.search: FTS5 recall index over persisted chat messages.
+      // The table + sync triggers are co-located with chat_messages for fresh DBs;
+      // this migration adds them to existing databases and backfills prior rows.
+      if (tableExists(db, "chat_messages")) {
+        createChatMessagesFtsSchema(db);
+        backfillChatMessagesFts(db);
+      }
+    },
+  },
+  {
+    version: 126,
+    name: "operator_profiles_schema",
+    // P2-S4b cross-session operator profile. A plain workspace-scoped table; this
+    // migration is the only definition (fresh DBs replay all migrations, so they
+    // gain it here, matching the agent_commitments v123 pattern). The Postgres
+    // canonical schema auto-derives it from the SQLite blueprint, so no targeted
+    // Postgres backfill is required for fresh installs.
+    up: createOperatorProfileSchema,
+  },
+  {
+    version: 127,
+    name: "autonomy_audit_schema",
+    // Cross-cutting kill-switch & rollback. A unified, append-only ledger of every
+    // autonomous mutation so an operator can "revert all autonomous changes since T".
+    // Each row points at the subsystem's own snapshot/ref via restore_ref_json (no
+    // duplicate snapshots). Like v126, this is the only definition (fresh DBs replay
+    // it); the Postgres canonical schema auto-derives it from the SQLite blueprint.
+    up: createAutonomyAuditSchema,
+  },
 ];
+
+function createAutonomyAuditSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS autonomy_audit (
+      audit_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      target_key TEXT NOT NULL DEFAULT '',
+      occurred_at TEXT NOT NULL,
+      restore_ref_json TEXT NOT NULL DEFAULT '{}',
+      reverted INTEGER NOT NULL DEFAULT 0,
+      reverted_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_autonomy_audit_since
+      ON autonomy_audit(occurred_at);
+
+    CREATE INDEX IF NOT EXISTS idx_autonomy_audit_unreverted
+      ON autonomy_audit(reverted, occurred_at);
+  `);
+}
+
+function createOperatorProfileSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS operator_profiles (
+      operator_profile_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      summary TEXT NOT NULL DEFAULT '',
+      facts_json TEXT NOT NULL DEFAULT '[]',
+      revision INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_profiles_workspace
+      ON operator_profiles(workspace_id);
+  `);
+}
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
   const db = new DatabaseSync(":memory:");
@@ -1462,13 +1557,52 @@ function createSqliteSchemaBlueprintFromDatabase(db: DatabaseSync): SqliteSchema
       )
       .all() as Array<{ name: string; sql: string }>;
 
-    const tables = tableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
+    // The Postgres runtime schema is auto-derived from this blueprint. FTS5 virtual
+    // tables and their auto-generated shadow tables (`<name>_data/_idx/_content/
+    // _config/_docsize`) are SQLite-only and non-portable, so they must never reach
+    // the Postgres mirror. Drop them here, at the single source the mirror reads.
+    const portableTableRows = excludeFtsVirtualTables(tableRows);
+
+    const tables = portableTableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
     return { tables };
   } finally {
     if (typeof db.close === "function") {
       db.close();
     }
   }
+}
+
+/**
+ * The five suffixes SQLite appends to an FTS5 virtual table to create its backing
+ * "shadow" tables. These are real `CREATE TABLE` rows in `sqlite_master`, so they
+ * would otherwise be reflected into the Postgres mirror.
+ */
+const FTS5_SHADOW_TABLE_SUFFIXES = ["_data", "_idx", "_content", "_config", "_docsize"] as const;
+
+/**
+ * Drop FTS5 virtual tables and their auto-generated shadow tables from a set of
+ * `sqlite_master` table rows. The virtual table is identified by its
+ * `CREATE VIRTUAL TABLE ... USING fts5` DDL; each shadow table is identified by
+ * matching a virtual table's name plus one of {@link FTS5_SHADOW_TABLE_SUFFIXES}.
+ * Matching shadow tables by their owning virtual table's name (rather than the
+ * suffix alone) avoids excluding any ordinary table that merely ends in `_config`.
+ */
+function excludeFtsVirtualTables(
+  tableRows: Array<{ name: string; sql: string }>,
+): Array<{ name: string; sql: string }> {
+  const virtualTableNames = new Set(
+    tableRows.filter((row) => /create\s+virtual\s+table/i.test(row.sql)).map((row) => row.name),
+  );
+  if (virtualTableNames.size === 0) {
+    return tableRows;
+  }
+  const shadowTableNames = new Set<string>();
+  for (const baseName of virtualTableNames) {
+    for (const suffix of FTS5_SHADOW_TABLE_SUFFIXES) {
+      shadowTableNames.add(`${baseName}${suffix}`);
+    }
+  }
+  return tableRows.filter((row) => !virtualTableNames.has(row.name) && !shadowTableNames.has(row.name));
 }
 
 function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): SqliteSchemaTableBlueprint {
@@ -3724,6 +3858,9 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
       reflection_mode TEXT NOT NULL DEFAULT 'off',
       last_proactive_at TEXT,
       last_proactive_run_id TEXT,
+      heartbeat_enabled INTEGER NOT NULL DEFAULT 1,
+      heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+      active_hours_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -4670,6 +4807,9 @@ export const __sqliteInternals = {
   getPromptPackBenchmarkDedupCompletenessRankForTest,
   getPromptPackBenchmarkDedupTimestampForTest,
   getPromptPackBenchmarkDedupOrdinalForTest,
+  createChatMessagesFtsSchema,
+  backfillChatMessagesFts,
+  excludeFtsVirtualTables,
 };
 
 function createLlmRuntimeMeasurementSchema(db: DatabaseSync): void {
@@ -5069,6 +5209,73 @@ function createOperationalHotPathSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_policy_blocks_session_time
       ON policy_blocks(session_id, timestamp DESC);
   `);
+  // P2-S4a: co-locate the chat-message FTS5 recall index with its source table so
+  // fresh databases (which replay every migration) build it alongside chat_messages.
+  // Existing databases pick it up via the sequential migration below, which also
+  // backfills already-persisted rows.
+  createChatMessagesFtsSchema(db);
+}
+
+/**
+ * P2-S4a (`session.search`): a contentless FTS5 index mirroring `chat_messages`,
+ * kept in sync by INSERT/UPDATE/DELETE triggers. Hermes' tier-2 recall — the agent
+ * searches older persisted turns on demand instead of relying only on the frozen
+ * snapshot.
+ *
+ * Uses the external-content pattern (`content='chat_messages'`, `content_rowid='seq'`)
+ * so the index stores only the inverted terms, not a second copy of every message.
+ * The triggers follow the canonical SQLite FTS5 "external content table" recipe
+ * (https://www.sqlite.org/fts5.html#external_content_tables): the delete/update
+ * triggers emit a special `'delete'` row into the FTS table to retract the old terms
+ * before the new ones are indexed.
+ *
+ * NOTE FOR THE POSTGRES MIRROR: FTS5 virtual tables (and their shadow tables) are
+ * non-portable. They are excluded from the SQLite schema blueprint at its source
+ * (`createSqliteSchemaBlueprintFromDatabase`) so `buildPostgresRuntimeSchemaSql`
+ * never tries to reflect them. Keep that guard in lockstep with this table's name.
+ */
+function createChatMessagesFtsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts USING fts5(
+      content,
+      session_id UNINDEXED,
+      role UNINDEXED,
+      message_id UNINDEXED,
+      content='chat_messages',
+      content_rowid='seq'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_ai AFTER INSERT ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(rowid, content, session_id, role, message_id)
+      VALUES (new.seq, new.content, new.session_id, new.role, new.message_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_ad AFTER DELETE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, session_id, role, message_id)
+      VALUES ('delete', old.seq, old.content, old.session_id, old.role, old.message_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_au AFTER UPDATE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, session_id, role, message_id)
+      VALUES ('delete', old.seq, old.content, old.session_id, old.role, old.message_id);
+      INSERT INTO chat_messages_fts(rowid, content, session_id, role, message_id)
+      VALUES (new.seq, new.content, new.session_id, new.role, new.message_id);
+    END;
+  `);
+}
+
+/**
+ * P2-S4a backfill: rebuild the FTS index from the existing `chat_messages` rows.
+ * Runs once when the sequential migration first adds the index to an existing
+ * database. Safe to re-run: the FTS5 `'rebuild'` command rebuilds from the linked
+ * content table, so it is idempotent. Skipped when there are no rows to index.
+ */
+function backfillChatMessagesFts(db: DatabaseSync): void {
+  const row = db.prepare("SELECT COUNT(1) AS count FROM chat_messages").get() as { count?: number } | undefined;
+  if (!row || Number(row.count ?? 0) === 0) {
+    return;
+  }
+  db.exec(`INSERT INTO chat_messages_fts(chat_messages_fts) VALUES ('rebuild');`);
 }
 
 function createAuthDeviceAccessSchema(db: DatabaseSync): void {
@@ -6351,4 +6558,110 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
     | { name: string }
     | undefined;
   return Boolean(row);
+}
+
+interface LegacyCitadelCharterMigrationRow {
+  citadel_id: string;
+  name: string | null;
+  kind: string;
+  workspace_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function migrateLegacyCitadelCharters(db: DatabaseSync): void {
+  const existingRows = db.prepare("SELECT citadel_id, slug FROM citadel_records").all() as Array<{
+    citadel_id: string;
+    slug: string;
+  }>;
+  const existingCitadelIds = new Set(existingRows.map((row) => row.citadel_id));
+  const usedSlugs = new Set(existingRows.map((row) => row.slug));
+  const hasWorkspacesTable = tableExists(db, "workspaces");
+  const rows = db
+    .prepare(
+      hasWorkspacesTable
+        ? `
+        SELECT
+          charter.citadel_id,
+          COALESCE(NULLIF(TRIM(workspace.name), ''), charter.citadel_id) AS name,
+          charter.kind,
+          workspace.workspace_id,
+          charter.created_at,
+          charter.updated_at
+        FROM citadel_charters AS charter
+        LEFT JOIN workspaces AS workspace
+          ON workspace.workspace_id = charter.citadel_id
+        ORDER BY charter.citadel_id ASC
+      `
+        : `
+        SELECT
+          charter.citadel_id,
+          charter.citadel_id AS name,
+          charter.kind,
+          NULL AS workspace_id,
+          charter.created_at,
+          charter.updated_at
+        FROM citadel_charters AS charter
+        ORDER BY charter.citadel_id ASC
+      `,
+    )
+    .all() as unknown as LegacyCitadelCharterMigrationRow[];
+  const insert = db.prepare(`
+    INSERT INTO citadel_records (
+      citadel_id, name, description, slug, kind, lifecycle_status, archived_at,
+      default_workspace_id, created_at, updated_at
+    ) VALUES (
+      @citadelId, @name, @description, @slug, @kind, 'active', NULL,
+      @defaultWorkspaceId, @createdAt, @updatedAt
+    )
+    ON CONFLICT(citadel_id) DO NOTHING
+  `);
+  for (const row of rows) {
+    if (existingCitadelIds.has(row.citadel_id)) {
+      continue;
+    }
+    const slug = reserveUniqueCitadelSlugForMigration(normalizeCitadelSlugForMigration(row.citadel_id), usedSlugs);
+    existingCitadelIds.add(row.citadel_id);
+    insert.run({
+      citadelId: row.citadel_id,
+      name: row.name ?? row.citadel_id,
+      description: "Legacy workspace Citadel preserved during parent-scope migration.",
+      slug,
+      kind: row.kind,
+      defaultWorkspaceId: row.workspace_id ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+}
+
+function normalizeCitadelSlugForMigration(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const slug = normalized || "citadel";
+  if (slug.length > 64) {
+    return slug.slice(0, 64).replace(/-+$/g, "") || "citadel";
+  }
+  return slug;
+}
+
+function reserveUniqueCitadelSlugForMigration(baseSlug: string, usedSlugs: Set<string>): string {
+  if (!usedSlugs.has(baseSlug)) {
+    usedSlugs.add(baseSlug);
+    return baseSlug;
+  }
+  let suffix = 2;
+  while (true) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${baseSlug.slice(0, Math.max(1, 64 - suffixText.length)).replace(/-+$/g, "")}${suffixText}`;
+    if (!usedSlugs.has(candidate)) {
+      usedSlugs.add(candidate);
+      return candidate;
+    }
+    suffix += 1;
+  }
 }

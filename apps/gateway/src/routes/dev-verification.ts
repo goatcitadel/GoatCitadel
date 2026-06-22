@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
+import { withMemoryEmbeddingMetadata } from "../services/memory-embedding-metadata.js";
 
 const listDiagnosticsQuerySchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
@@ -439,6 +440,10 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const storage = fastify.services.devVerification.storage;
     const itemId = `mem_${randomUUID().replace(/-/g, "")}`;
     const now = new Date().toISOString();
+    const metadataWithEmbedding = await withMemoryEmbeddingMetadata(
+      parsed.data.metadata ?? {},
+      `${parsed.data.title}\n${parsed.data.content}`,
+    );
     storage.db
       .prepare(
         `
@@ -476,7 +481,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         namespace: parsed.data.namespace,
         title: parsed.data.title,
         content: parsed.data.content,
-        metadataJson: JSON.stringify(parsed.data.metadata ?? {}),
+        metadataJson: JSON.stringify(metadataWithEmbedding),
         pinned: parsed.data.pinned ? 1 : 0,
         createdAt: now,
         updatedAt: now,

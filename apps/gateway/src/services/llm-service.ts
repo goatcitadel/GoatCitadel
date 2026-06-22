@@ -34,6 +34,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
 import { clampSummaryReserveTokens, type ClampSummaryReserveResult } from "./chat-compaction.js";
+import { sanitizeMessages } from "./chat-message-sanitize.js";
 import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import {
@@ -842,23 +843,29 @@ export class LlmService {
       throw new Error("chat/completions requires at least one message");
     }
 
-    const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
+    // Provider-agnostic correctness pass: guarantee tool calls and tool results
+    // are paired before any payload is built, so Anthropic / OpenAI-Responses
+    // never 400 on an orphan tool_result or a tool_use with no matching result.
+    // This is the single chokepoint every provider style funnels through.
+    const sanitizedRequest = withSanitizedMessages(request);
+
+    const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = this.resolveRequestModel(resolved.provider, request.model);
+    const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
     const providerAdapter = this.providerAdapters.get(apiStyle);
     if (providerAdapter) {
-      return providerAdapter.chatCompletions(request, resolved, model, this.providerAdapterHost);
+      return providerAdapter.chatCompletions(sanitizedRequest, resolved, model, this.providerAdapterHost);
     }
 
     switch (apiStyle) {
       case "openai-codex-responses":
       case "openai-responses":
-        return this.executeOpenAiResponses(request, resolved, model);
+        return this.executeOpenAiResponses(sanitizedRequest, resolved, model);
       case "bedrock-messages":
         throw new Error("AWS Bedrock messages API style is not yet supported in this version");
       default:
-        return this.executeChatCompletions(request, resolved, model);
+        return this.executeChatCompletions(sanitizedRequest, resolved, model);
     }
   }
 
@@ -867,25 +874,29 @@ export class LlmService {
       throw new Error("chat/completions requires at least one message");
     }
 
-    const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
+    // See chatCompletions: pair tool calls/results once at the shared chokepoint
+    // so every provider style sends an API-valid message list.
+    const sanitizedRequest = withSanitizedMessages(request);
+
+    const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = this.resolveRequestModel(resolved.provider, request.model);
+    const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
     const providerAdapter = this.providerAdapters.get(apiStyle);
     if (providerAdapter) {
-      yield* providerAdapter.chatCompletionsStream(request, resolved, model, this.providerAdapterHost);
+      yield* providerAdapter.chatCompletionsStream(sanitizedRequest, resolved, model, this.providerAdapterHost);
       return;
     }
 
     switch (apiStyle) {
       case "openai-codex-responses":
       case "openai-responses":
-        yield* this.executeOpenAiResponsesStream(request, resolved, model);
+        yield* this.executeOpenAiResponsesStream(sanitizedRequest, resolved, model);
         return;
       case "bedrock-messages":
         throw new Error("AWS Bedrock messages API style is not yet supported in this version");
       default:
-        yield* this.executeChatCompletionsStream(request, resolved, model);
+        yield* this.executeChatCompletionsStream(sanitizedRequest, resolved, model);
         return;
     }
   }
@@ -2638,6 +2649,19 @@ async function* streamJsonSseResponse(
       // ignore
     }
   }
+}
+
+/**
+ * Returns a request whose messages are pairing-sanitized. The original request
+ * is never mutated; when sanitizing changes nothing the same array is reused so
+ * callers and tests can rely on referential stability for unchanged history.
+ */
+function withSanitizedMessages(request: ChatCompletionRequest): ChatCompletionRequest {
+  const sanitized = sanitizeMessages(request.messages);
+  if (sanitized.length === request.messages.length && sanitized.every((m, i) => m === request.messages[i])) {
+    return request;
+  }
+  return { ...request, messages: sanitized };
 }
 
 function buildOpenAiResponsesPayload(

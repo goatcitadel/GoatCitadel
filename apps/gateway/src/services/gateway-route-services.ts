@@ -168,6 +168,11 @@ import {
   type SettingsRoutePort,
   type SettingsRouteService,
 } from "./settings-route-service.js";
+import {
+  createAutonomyControlRouteService,
+  type AutonomyControlRoutePort,
+  type AutonomyControlRouteService,
+} from "./autonomy-control-route-service.js";
 import { SkillsRouteService, type SkillsRoutePort } from "./skills-route-service.js";
 import { TasksRouteService, type TasksRoutePort } from "./tasks-route-service.js";
 import {
@@ -189,6 +194,7 @@ export interface GatewayRouteServices {
   agents: AgentsRouteService;
   assembly: AssemblyRouteService;
   authAdmin: AuthAdminRouteService;
+  autonomyControl: AutonomyControlRouteService;
   approvals: ApprovalsRouteService;
   citadels: CitadelsRouteService;
   compliance: ComplianceRouteService;
@@ -258,6 +264,7 @@ export interface GatewayRouteServiceDependencies {
   agents: AgentsRoutePort;
   assembly: AssemblyRoutePort;
   authAdmin: AuthAdminRoutePort;
+  autonomyControl: AutonomyControlRoutePort;
   approvals: ApprovalRuntime;
   citadels: CitadelsRoutePort;
   masonInterpret?: MasonInterpret;
@@ -330,6 +337,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     agents: createAgentsRouteService(deps.agents),
     assembly: createAssemblyRouteService(deps.assembly),
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
+    autonomyControl: createAutonomyControlRouteService(deps.autonomyControl),
     approvals: new ApprovalsRouteService(deps.approvals),
     citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
     compliance: createComplianceRouteService(deps.compliance),

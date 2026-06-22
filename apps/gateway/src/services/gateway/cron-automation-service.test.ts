@@ -276,6 +276,7 @@ function createService(
         summary: "runtime healthy",
       }),
       noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+      agentTurn: async () => ({ mode: "agent_turn", durableRunId: "durable-1", sessionId: "sess-1", turnId: "turn-1" }),
       ...options.handlers,
     },
   });
@@ -854,6 +855,7 @@ function makeServiceWithNoAgent(opts: {
       curator: async () => {},
       watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
       noAgent: opts.runner,
+      agentTurn: async () => ({ mode: "agent_turn", durableRunId: "durable-1" }),
     },
   };
   return new CronAutomationService(deps);
@@ -901,6 +903,7 @@ describe("contextFrom resolution", () => {
         curator: async () => {},
         watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
         noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+        agentTurn: async () => ({ mode: "agent_turn", durableRunId: "durable-1" }),
       },
     };
     return new CronAutomationService(deps);
@@ -1043,6 +1046,96 @@ describe("no_agent cron action", () => {
       actionConfig: { noAgent: { command: "exit", args: ["2"] } },
     });
     await expect(service.runCronJobNow("probe-fail")).rejects.toThrow("no_agent cron job failed: probe-fail");
+  });
+});
+
+describe("agent_turn cron action", () => {
+  it("dispatches runCronJobNow to the agentTurn handler and emits the enqueued event", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const publishRealtime = vi.fn();
+    const agentTurn = vi.fn(async () => ({
+      mode: "agent_turn" as const,
+      durableRunId: "durable-99",
+      sessionId: "sess-cron",
+      turnId: "turn-99",
+    }));
+    const service = createService(db, publishRealtime, { cronJobs, handlers: { agentTurn } });
+
+    const created = service.createCronJob({
+      jobId: "agent-turn-job",
+      name: "Agent turn job",
+      action: "agent_turn",
+      schedule: "0 12 * * * UTC",
+      actionConfig: { agentTurn: { prompt: "Summarize alerts", deliveryChannel: { channelKey: "telegram" } } },
+    });
+    expect(created.actionConfig).toEqual({
+      agentTurn: {
+        prompt: "Summarize alerts",
+        deliveryChannel: { channelKey: "telegram" },
+        deliverMode: "always",
+      },
+    });
+
+    const result = await service.runCronJobNow("agent-turn-job");
+    expect(result).toMatchObject({ jobId: "agent-turn-job", status: "ok" });
+    expect(agentTurn).toHaveBeenCalledTimes(1);
+    expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({
+      runId: result.runId,
+      config: { prompt: "Summarize alerts" },
+    });
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "cron_job_run",
+      "cron",
+      expect.objectContaining({
+        type: "cron_agent_turn_enqueued",
+        jobId: "agent-turn-job",
+        durableRunId: "durable-99",
+        sessionId: "sess-cron",
+        turnId: "turn-99",
+      }),
+    );
+    expect(cronJobs.get("agent-turn-job")?.lastRunStatus).toBe("ok");
+  });
+
+  it("rejects creating an agent_turn job with an empty prompt", () => {
+    const service = createService(new FakeDb(), vi.fn());
+    expect(() =>
+      service.createCronJob({
+        jobId: "agent-turn-empty",
+        name: "Agent turn empty",
+        action: "agent_turn",
+        schedule: "0 12 * * * UTC",
+        actionConfig: { agentTurn: { prompt: "   " } },
+      }),
+    ).toThrow("non-empty actionConfig.agentTurn.prompt");
+  });
+
+  it("includes due agent_turn jobs in the scheduled due-scan", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const cronJobs = new FakeCronJobs();
+    const agentTurn = vi.fn(async () => ({ mode: "agent_turn" as const, durableRunId: "durable-due" }));
+    const service = createService(new FakeDb(), vi.fn(), { cronJobs, handlers: { agentTurn } });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: "agent-turn-due",
+        action: "agent_turn",
+        schedule: "0 12 * * * UTC",
+        actionConfig: { agentTurn: { prompt: "Run me", deliverMode: "always" } },
+      }),
+    );
+
+    let summary;
+    try {
+      summary = await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(summary).toMatchObject({ dueCount: 1, ranCount: 1 });
+    expect(agentTurn).toHaveBeenCalledTimes(1);
+    expect(cronJobs.get("agent-turn-due")?.lastRunStatus).toBe("ok");
   });
 });
 
@@ -1270,5 +1363,41 @@ describe("findCronRunById", () => {
     expect(lookup?.runId).toBe(result.runId);
     expect(lookup?.status).toBe("ok");
     expect(lookup?.output).toBe("alert");
+  });
+
+  it("returns failed run status and failure metadata when the last run failed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "failed-job",
+      name: "Failed",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "exit", args: ["2"] } },
+    });
+
+    try {
+      await expect(service.runCronJobNow("failed-job")).rejects.toThrow("no_agent cron job failed: failed-job");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const job = service.getCronJob("failed-job");
+    expect(job.lastRunId).toBeDefined();
+    const lookup = service.findCronRunById(job.lastRunId ?? "");
+    expect(lookup).toMatchObject({
+      jobId: "failed-job",
+      runId: job.lastRunId,
+      status: "failed",
+      failure: {
+        message: expect.stringContaining("no_agent cron job failed: failed-job"),
+      },
+      failureCount: 1,
+      backoffUntil: "2026-05-15T12:04:00.000Z",
+    });
   });
 });

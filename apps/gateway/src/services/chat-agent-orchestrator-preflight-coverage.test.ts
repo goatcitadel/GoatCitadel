@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import type { ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
-import { createExecuteToolCallForTest } from "./chat-agent-orchestrator-test-fixtures.js";
+import {
+  createExecuteToolCallForTest,
+  createMockStorage,
+} from "./chat-agent-orchestrator-test-fixtures.js";
+import { IMPROVEMENT_TUNE_SETTING_KEYS } from "./improvement-tune-reads.js";
 
 describe("ChatAgentOrchestrator tool preflight coverage", () => {
   it("persists blocked web tools without invoking runtime tools when web mode is off", async () => {
@@ -187,6 +191,43 @@ describe("ChatAgentOrchestrator tool preflight coverage", () => {
       status: "approval_required",
       approvalId: "approval-shell-preflight-1",
     });
+  });
+
+  it("strengthens blocked-tool guidance when the self-improvement tuner raises blocker strictness (P2-W3)", async () => {
+    // Baseline (no tune applied): the blocked web tool gets the historical
+    // generic guidance — nothing extra. This is the safe-default regression.
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const baseline = await createExecuteToolCall({ invokeTool })({
+      input: turnInput({ content: "Fetch https://example.com/latest and summarize it.", webMode: "off" }),
+      turnId: "turn-blocker-baseline",
+      toolName: "http.get",
+      rawArgs: { url: "https://example.com/latest" },
+    });
+    expect(baseline.record.status).toBe("blocked");
+    expect(baseline.record.failureGuidance).toContain("Retry get");
+    expect(baseline.record.failureGuidance).not.toContain("State the exact blocker");
+
+    // The weekly tuner wrote a raised strictness level into system_settings.
+    // The same blocked action must now carry a concrete, structured unblock path
+    // — proving the written key is actually READ at the decision point.
+    const tunedStorage = createMockStorage() as {
+      systemSettings: { set(key: string, value: unknown): unknown };
+    };
+    tunedStorage.systemSettings.set(IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate, 5);
+    const tunedExecute = createExecuteToolCallForTest({
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>(),
+      toolNames: ["http.get"],
+      storage: tunedStorage as never,
+    });
+    const tuned = await tunedExecute({
+      input: turnInput({ content: "Fetch https://example.com/latest and summarize it.", webMode: "off" }),
+      turnId: "turn-blocker-strict",
+      toolName: "http.get",
+      rawArgs: { url: "https://example.com/latest" },
+    });
+    expect(tuned.record.status).toBe("blocked");
+    expect(tuned.record.failureGuidance).toContain("State the exact blocker");
+    expect(tuned.record.failureGuidance).toContain("Do not silently retry the same blocked action");
   });
 });
 

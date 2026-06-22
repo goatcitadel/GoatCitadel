@@ -27,6 +27,9 @@ import {
   executeDurableWorkflowRun,
   isDurableWorkflowRecoverable,
   markDurableWorkflowUnrecoverable,
+  maybeCleanupSilentHeartbeatTurn,
+  maybeEnqueueAutonomousDelivery,
+  parseAutonomousNotifySignal,
   parseApprovalWaitWorkflowPayload,
   parseCuratorTickWorkflowPayload,
   parseConnectorDeliveryWorkflowPayload,
@@ -279,7 +282,7 @@ describe("durable-execution-service orchestration workflow", () => {
       workspaceId: "default",
       requestedBy: "operator",
       requestedAt: "2026-05-31T00:00:00.000Z",
-      runIds: ["extfx-retry"],
+      runIds: ["extfx-retry", "extfx-retry", "extfx-missing"],
     });
     let storedRun = { ...run, status: "running" as const };
     const externalRun = {
@@ -321,7 +324,12 @@ describe("durable-execution-service orchestration workflow", () => {
           createCheckpoint,
         },
         externalSideEffectRuns: {
-          get: vi.fn(() => externalRun),
+          get: vi.fn((runId: string) => {
+            if (runId === "extfx-retry") {
+              return externalRun;
+            }
+            throw new Error(`missing run ${runId}`);
+          }),
           listByConnection: vi.fn(),
           listByWorkspace: vi.fn(),
         },
@@ -350,16 +358,40 @@ describe("durable-execution-service orchestration workflow", () => {
         idempotencyKey: "key-1",
       }),
     );
-    expect(mutationStore.markCompleted).toHaveBeenCalled();
+    expect(host.buildExternalSideEffectReplayJob).toHaveBeenCalledTimes(1);
+    expect(mutationStore.markCompleted).toHaveBeenCalledTimes(1);
     expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId, status: "completed" }));
     expect(createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         checkpointKind: "run_completed",
         state: expect.objectContaining({
           workflow: "external_side_effect.replay",
+          requestedRunIds: ["extfx-retry", "extfx-retry", "extfx-missing"],
           candidates: 1,
+          found: 1,
+          missing: 1,
+          missingRunIds: ["extfx-missing"],
           executed: 1,
-          skipped: 0,
+          replayed: 1,
+          skipped: 1,
+          replayAuditResults: [
+            expect.objectContaining({
+              runId: "extfx-retry",
+              status: "skipped",
+              reason: "duplicate_requested_run",
+            }),
+            expect.objectContaining({
+              runId: "extfx-missing",
+              status: "not_found",
+              reason: "requested_run_missing",
+            }),
+            expect.objectContaining({
+              runId: "extfx-retry",
+              status: "executed",
+              replayOutcome: "claimed",
+              replayAttempt: "retry_after_failure",
+            }),
+          ],
         }),
       }),
     );
@@ -1256,6 +1288,220 @@ function buildRunWithPayload(workflowKey: string, payload: Record<string, unknow
     payload,
   };
 }
+
+describe("parseAutonomousNotifySignal", () => {
+  it("detects a structured top-level notify:true (pure JSON)", () => {
+    expect(parseAutonomousNotifySignal('{"notify": true}')).toBe(true);
+    expect(parseAutonomousNotifySignal('{"notify": true, "message": "disk full"}')).toBe(true);
+    expect(parseAutonomousNotifySignal('  {"notify":true}  ')).toBe(true);
+  });
+
+  it("treats notify:false / absent / empty as no-notify", () => {
+    expect(parseAutonomousNotifySignal('{"notify": false}')).toBe(false);
+    expect(parseAutonomousNotifySignal('{"message": "fyi"}')).toBe(false);
+    expect(parseAutonomousNotifySignal("nothing notable to report")).toBe(false);
+    expect(parseAutonomousNotifySignal("")).toBe(false);
+    expect(parseAutonomousNotifySignal("   ")).toBe(false);
+  });
+
+  it("matches a quoted notify key embedded in prose (model wrapped the JSON)", () => {
+    expect(parseAutonomousNotifySignal('Urgent: disk full. {"notify": true}')).toBe(true);
+  });
+
+  it("does NOT match bare prose / tool-arg mentions of notify (strict, no false positives)", () => {
+    // The dropped broad fallback used to match these and mis-trigger delivery.
+    expect(parseAutonomousNotifySignal("notify=true")).toBe(false);
+    expect(parseAutonomousNotifySignal("I will notify: true believers tomorrow")).toBe(false);
+    expect(parseAutonomousNotifySignal("Calling tool with notify: true in its args.")).toBe(false);
+    // Pure JSON with notify nested under another key is NOT a top-level signal:
+    // the JSON branch checks only top-level `notify`, so this is correctly false.
+    expect(parseAutonomousNotifySignal('{"args": {"notify": true}}')).toBe(false);
+  });
+});
+
+describe("maybeCleanupSilentHeartbeatTurn", () => {
+  const heartbeatPayload = {
+    version: "chat.turn.execute.v1" as const,
+    sessionId: "session-hb",
+    turnId: "turn-hb",
+    userMessageId: "user-hb",
+    assistantMessageId: "assistant-hb",
+    branchKind: "new" as const,
+    parentTurnId: "turn-prev",
+    threadEventType: "chat_thread_turn_appended" as const,
+    request: { content: "heartbeat self-check" },
+  };
+
+  function buildHeartbeatHost(assistantContent: string, cleanup = vi.fn()) {
+    return {
+      storage: {
+        chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-hb", assistantMessageId: "assistant-hb" })) },
+        chatMessages: { get: vi.fn(() => ({ messageId: "assistant-hb", content: assistantContent })) },
+      },
+      cleanupSilentHeartbeatTurn: cleanup,
+    };
+  }
+
+  function heartbeatRun(content: string, cleanup = vi.fn()) {
+    return {
+      run: {
+        ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
+        metadata: {
+          autonomous: {
+            kind: "heartbeat",
+            systemActorId: "system-heartbeat",
+            reason: "heartbeat self-wake:session-hb",
+            deliverMode: "on_notify",
+          },
+        },
+      },
+      host: buildHeartbeatHost(content, cleanup),
+      cleanup,
+    };
+  }
+
+  it("prunes a silent (notify:false) heartbeat turn from the transcript", () => {
+    const { run, host, cleanup } = heartbeatRun('{"notify": false}');
+
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+
+    expect(cleanup).toHaveBeenCalledWith({
+      sessionId: "session-hb",
+      turnId: "turn-hb",
+      userMessageId: "user-hb",
+      assistantMessageId: "assistant-hb",
+      parentTurnId: "turn-prev",
+    });
+  });
+
+  it("prunes a heartbeat turn that produced empty output", () => {
+    const { run, host, cleanup } = heartbeatRun("   ");
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a notifying heartbeat turn visible (no cleanup)", () => {
+    const { run, host, cleanup } = heartbeatRun('{"notify": true, "message": "Reminder: standup in 5"}');
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op for non-heartbeat autonomous turns (e.g. scheduled/cron)", () => {
+    const cleanup = vi.fn();
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
+      metadata: { autonomous: { kind: "scheduled", systemActorId: "system-cron", deliverMode: "always" } },
+    };
+    maybeCleanupSilentHeartbeatTurn(buildHeartbeatHost('{"notify": false}', cleanup) as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op for non-autonomous (human) turns", () => {
+    const cleanup = vi.fn();
+    const run = buildRunWithPayload("chat.turn.execute", heartbeatPayload);
+    maybeCleanupSilentHeartbeatTurn(buildHeartbeatHost('{"notify": false}', cleanup) as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+});
+
+describe("maybeEnqueueAutonomousDelivery", () => {
+  const chatTurnPayload = {
+    version: "chat.turn.execute.v1" as const,
+    sessionId: "session-cron",
+    turnId: "turn-cron",
+    userMessageId: "user-cron",
+    assistantMessageId: "assistant-cron",
+    branchKind: "new" as const,
+    threadEventType: "chat_thread_turn_appended" as const,
+    request: { content: "Summarize alerts" },
+  };
+
+  function buildDeliveryHost(assistantContent: string, enqueue = vi.fn(() => "delivery-run-1")) {
+    return {
+      storage: {
+        chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-cron", assistantMessageId: "assistant-cron" })) },
+        chatMessages: { get: vi.fn(() => ({ messageId: "assistant-cron", content: assistantContent })) },
+      },
+      enqueueAutonomousChannelDelivery: enqueue,
+    };
+  }
+
+  it("enqueues channel delivery for an autonomous turn with assistant output", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("Overnight summary ready.", enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          systemActorId: "system-cron",
+          reason: "cron agent_turn:job",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram", target: "42" },
+        },
+      },
+    };
+
+    const result = maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload);
+
+    expect(result).toBe("delivery-run-1");
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        sessionId: "session-cron",
+        turnId: "turn-cron",
+        assistantText: "Overnight summary ready.",
+        deliveryChannel: { channelKey: "telegram", target: "42" },
+        systemActorId: "system-cron",
+      }),
+    );
+  });
+
+  it("is a no-op for non-autonomous turns", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("ignored", enqueue);
+    const run = buildRunWithPayload("chat.turn.execute", chatTurnPayload);
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("suppresses delivery for on_notify turns that do not signal notify", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("Nothing actionable overnight.", enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "on_notify",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("delivers on_notify turns that emit a notify signal", () => {
+    const enqueue = vi.fn(() => "delivery-run-2");
+    const host = buildDeliveryHost('Urgent: disk full. {"notify": true}', enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "on_notify",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-2");
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+});
 
 function createApprovalWaitHost(run: DurableRunRecord, status: "pending" | "approved") {
   let storedRun = run;

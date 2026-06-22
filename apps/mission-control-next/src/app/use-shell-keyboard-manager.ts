@@ -57,6 +57,8 @@ export type ShellKeyboardManagerOptions = {
   onJumpToArea?: (area: PrimaryArea) => void;
   /** Called when the user presses "?" (Shift+/) to toggle the shortcuts overlay. */
   onToggleShortcuts?: () => void;
+  /** Suspends shell shortcuts while a modal owns keyboard focus. Escape still dismisses through the normal path. */
+  shellShortcutsSuspended?: boolean;
 };
 
 /** True if the focused element is an editable input the user is typing into. */
@@ -102,15 +104,6 @@ export function useShellKeyboardManager(options: ShellKeyboardManagerOptions): v
     function handleKeyDown(event: KeyboardEvent) {
       const opts = optionsRef.current;
 
-      // Cmd+K — open palette. Fires regardless of focus.
-      if (isCommandPaletteTrigger(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        opts.onOpenPalette();
-        clearGPrefix();
-        return;
-      }
-
       // Escape — palette first, then delegated dismiss.
       if (event.key === "Escape") {
         if (opts.isPaletteOpen && opts.onClosePalette) {
@@ -127,6 +120,20 @@ export function useShellKeyboardManager(options: ShellKeyboardManagerOptions): v
             event.stopPropagation();
           }
         }
+        clearGPrefix();
+        return;
+      }
+
+      if (opts.shellShortcutsSuspended) {
+        clearGPrefix();
+        return;
+      }
+
+      // Cmd+K — open palette. Fires regardless of focus.
+      if (isCommandPaletteTrigger(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        opts.onOpenPalette();
         clearGPrefix();
         return;
       }

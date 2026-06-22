@@ -119,7 +119,10 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
     expect(toolResults.map((message) => message.tool_call_id)).toEqual([toolCallId]);
   });
 
-  it("blocks malformed or phantom provider tool-call batches before executing any sibling tool", async () => {
+  it("hard-fails an unrepairable malformed batch (no valid sibling, no recoverable body)", async () => {
+    // A single phantom call with a blank name and an empty message body: nothing
+    // to pass through, nothing to promote -> the turn still hard-fails closed and
+    // the phantom shell command is never executed.
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce({
@@ -136,17 +139,11 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
                   type: "function",
                   function: { name: "   ", arguments: JSON.stringify({ command: "git status --short" }) },
                 },
-                {
-                  id: "call-valid-docs",
-                  type: "function",
-                  function: { name: "docs_search", arguments: JSON.stringify({ query: "onboarding" }) },
-                },
               ],
             },
           },
         ],
-      })
-      .mockRejectedValueOnce(new Error("repair pass intentionally unavailable"));
+      });
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -179,6 +176,223 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       }),
     );
     expect(result.assistantContent).toContain("stopped before executing tools");
+  });
+
+  it("P0-C: repairs a fuzzed tool name and executes the corrected call", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  // Separator-fuzzed: "docs-search" -> canonical "docs.search".
+                  id: "call-fuzzy-docs",
+                  type: "function",
+                  function: { name: "docs-search", arguments: JSON.stringify({ query: "onboarding checklist" }) },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          { index: 0, message: { role: "assistant", content: "The onboarding checklist covers accounts and hardware." } },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: { matches: [{ title: "Onboarding checklist", snippet: "Accounts and hardware." }] },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-repair-fuzzy-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-repair-fuzzy-1",
+      content: "Find our onboarding checklist notes.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Find our onboarding checklist notes." }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    // The fuzzed name resolved to the canonical tool and executed.
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "docs.search", args: expect.objectContaining({ query: "onboarding checklist" }) }),
+    );
+    expect(result.assistantContent).toContain("onboarding checklist covers accounts");
+    // The repair is recorded honestly on the completion record.
+    expect(result.turnTrace.completion).toEqual(
+      expect.objectContaining({
+        repaired: true,
+        repair: expect.objectContaining({ applied: true, kind: "tool_call_repair", source: "orchestrator" }),
+      }),
+    );
+  });
+
+  it("P0-C: salvages fenced + smart-quoted JSON arguments before executing", async () => {
+    const fencedArgs = '```json\n{ “query”: “quarterly report”, }\n```';
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                { id: "call-fenced", type: "function", function: { name: "docs_search", arguments: fencedArgs } },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Here is the quarterly report summary." } }],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: { matches: [] },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-repair-fenced-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-repair-fenced-1",
+      content: "Summarize the quarterly report.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Summarize the quarterly report." }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "docs.search", args: { query: "quarterly report" } }),
+    );
+  });
+
+  it("P0-C: executes the valid sibling and feeds an unsupported call back as role:tool (deny-wins)", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-valid-docs",
+                  type: "function",
+                  function: { name: "docs_search", arguments: JSON.stringify({ query: "onboarding" }) },
+                },
+                {
+                  // Not in the active schema and not close to any allowed tool.
+                  id: "call-unsupported",
+                  type: "function",
+                  function: { name: "delete_production_database", arguments: JSON.stringify({ confirm: true }) },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Found the onboarding notes." } }],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: { matches: [{ title: "Onboarding", snippet: "notes" }] },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-repair-unsupported-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-repair-unsupported-1",
+      content: "Find onboarding notes.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Find onboarding notes." }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    // Only the allowed tool ran; the unsupported call was NEVER executed.
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "docs.search" }));
+    for (const call of invokeTool.mock.calls) {
+      expect(call[0]?.toolName).not.toBe("delete_production_database");
+    }
+
+    // The follow-up request carries a role:"tool" correction for the unsupported
+    // id, tied to a tool_call of the same id in the assistant message.
+    const secondRequestMessages = requestMessages(createChatCompletion.mock.calls[1]?.[0]);
+    const assistantToolCallIds = new Set(
+      findAssistantToolCallMessages(secondRequestMessages).flatMap(
+        (message) => message.tool_calls?.map((toolCall) => toolCall.id) ?? [],
+      ),
+    );
+    expect(assistantToolCallIds.has("call-unsupported")).toBe(true);
+    const correction = findToolResultMessages(secondRequestMessages).find(
+      (message) => message.tool_call_id === "call-unsupported",
+    );
+    expect(correction).toBeDefined();
+    const correctionPayload = JSON.parse(String(correction?.content)) as Record<string, unknown>;
+    expect(correctionPayload.error).toBe("unsupported_tool");
+    // Feedback lists the valid tools so the model can self-correct next loop.
+    expect(String(correction?.content)).toContain("docs.search");
   });
 
   it("answers every tool call id before the budget-synthesis completion when the model over-requests tools", async () => {
@@ -285,7 +499,11 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
     );
     for (const skipped of skippedResults) {
       const parsed = JSON.parse(String(skipped.content)) as { reason?: string };
-      expect(parsed.reason).toMatch(/tool run budget/i);
+      // In cowork mode the over-cap calls are skipped via the cowork
+      // checkpoint-continue path ("checkpoint window reached"); other modes use
+      // the "tool run budget" reason. Either is a valid skip reason — the
+      // load-bearing invariant (every tool_call_id is answered) is asserted above.
+      expect(parsed.reason).toMatch(/tool run budget|checkpoint window reached/i);
     }
 
     // Tool results stay contiguous after the assistant message: the synthesis
@@ -295,7 +513,8 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       -1,
     );
     const synthesisInstructionIndex = secondRequestMessages.findIndex(
-      (message) => message.role === "system" && /tool budget/i.test(String(message.content)),
+      (message) =>
+        message.role === "system" && /tool budget|checkpoint/i.test(String(message.content)),
     );
     expect(synthesisInstructionIndex).toBeGreaterThan(lastToolResultIndex);
   });

@@ -71,9 +71,25 @@ describe("createChatTurnRuntimeHost", () => {
 
     await expect(host.ingestEvent("event-1", { type: "chat" } as never)).resolves.toBe("ingested");
     expect(host.extractAndPersistLearnedMemory("session-1", "answer", { role: "assistant" } as never)).toBe("memory");
+    expect(
+      host.recordTurnCommitments({
+        sessionId: "session-1",
+        workspaceId: "default",
+        userText: "u",
+        assistantText: "a",
+      }),
+    ).toBe("commitments");
     expect(host.recordCapabilityGapFromTrace({ sessionId: "session-1" } as never)).toBe("gap");
     expect(host.scheduleChatMemoryContextPrewarm({ sessionId: "session-1" } as never)).toBe("prewarm");
     expect(host.scheduleMemoryMaintenancePostTurnEvaluation("session-1", "turn-1")).toBe("maintenance");
+    expect(
+      host.scheduleBackgroundReviewIfDue({
+        sessionId: "session-1",
+        workspaceId: "default",
+        userText: "u",
+        assistantText: "a",
+      }),
+    ).toBe("background-review");
     expect(host.publishRealtime("chat_thread_updated", "chat", {}, undefined)).toBe("published");
     expect(host.commsSend({ message: "hello" } as never)).toBe("sent");
     expect(host.ensureSessionInternalToolGrant("session-1", "tool", "reason")).toBe("grant");
@@ -153,9 +169,11 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     finalizeDurableChatRun: vi.fn(() => "finalized"),
     isFeatureEnabled: vi.fn(() => "enabled"),
     extractAndPersistLearnedMemory: vi.fn(() => "memory"),
+    recordTurnCommitments: vi.fn(() => "commitments"),
     recordCapabilityGapFromTrace: vi.fn(() => "gap"),
     scheduleChatMemoryContextPrewarm: vi.fn(() => "prewarm"),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(() => "maintenance"),
+    scheduleBackgroundReviewIfDue: vi.fn(() => "background-review"),
     publishRealtime: vi.fn(() => "published"),
     ingestEvent: vi.fn(async () => "ingested"),
     commsSend: vi.fn(() => "sent"),

@@ -344,8 +344,32 @@ export interface ImprovementServiceCallbacks {
   captureRoutingPolicySnapshot(targetKey: string): ImprovementRef;
   applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
   restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void;
+  // S2 — skill self-authoring. The gateway delegates these to SkillMutationService.
+  // applySkillRevisionCandidate writes the authored SKILL.md, records the
+  // candidate lifecycle, and (only under master autonomy) promotes it to a
+  // callable `approved` state via this recorded activation. isSkillCallable is
+  // never bypassed; promotion is reversible by restoreSkillRevisionSnapshot.
+  // These are synchronous to fit the activation state machine (the policy
+  // callbacks above are sync); the gateway delegate uses synchronous fs.
+  captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
+  // P2-W3 — close the improvement loop. These getters report the *effective*
+  // value the runtime decision points will read for each tuned setting, using
+  // the same translation the readers use (improvement-tune-reads.ts). The tuner
+  // is storage-only: it writes the raw setting, then records the effective value
+  // these return on the applied auto-tune so the loop is auditable and every
+  // written key is demonstrably read at its decision point.
+  readEffectiveBlockerTemplateStrictness(): number;
+  readEffectiveRetryRepairThreshold(): number;
+  readEffectiveLiveIntentThreshold(): number;
+  // Cross-cutting kill-switch & rollback. Fired after an auto-tune is applied so
+  // the gateway can append a unified autonomy-audit entry. The tune row already
+  // holds its own rollback snapshot, so the restoreRef is just the tuneId; revert
+  // calls revertDecisionAutoTune(tuneId). Optional + best-effort.
+  onAutoTuneApplied?(tuneId: string, settingKey: string): void;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   retryChatTurn(
     sessionId: string,
@@ -1429,7 +1453,7 @@ export class ImprovementService {
       throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
     }
     const activationTarget = this.buildActivationTargetRef(candidate, revision);
-    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey);
+    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey, revision);
     const approval = await this.callbacks.createApproval({
       kind: "improvement_activation",
       riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
@@ -3655,7 +3679,12 @@ export class ImprovementService {
     revision: ImprovementCandidateRevisionRecord,
   ): ImprovementRef {
     return {
-      refType: candidate.kind === "repair_policy" ? "repair_policy_config" : "routing_policy_config",
+      refType:
+        candidate.kind === "skill_revision"
+          ? "skill_revision_config"
+          : candidate.kind === "repair_policy"
+            ? "repair_policy_config"
+            : "routing_policy_config",
       refId: candidate.targetKey,
       hash: revision.changeHash,
       metadata: {
@@ -3663,15 +3692,26 @@ export class ImprovementService {
         fingerprint: candidate.fingerprint,
         kind: candidate.kind,
         targetKey: candidate.targetKey,
-        settingKey:
-          candidate.kind === "repair_policy"
-            ? IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY
-            : IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+        ...(candidate.kind === "skill_revision"
+          ? {}
+          : {
+              settingKey:
+                candidate.kind === "repair_policy"
+                  ? IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY
+                  : IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+            }),
       },
     };
   }
 
-  private captureActivationSnapshot(kind: ImprovementCandidateKind, targetKey: string): ImprovementRef {
+  private captureActivationSnapshot(
+    kind: ImprovementCandidateKind,
+    targetKey: string,
+    revision: ImprovementCandidateRevisionRecord,
+  ): ImprovementRef {
+    if (kind === "skill_revision") {
+      return this.callbacks.captureSkillRevisionSnapshot(targetKey, revision.candidateRef);
+    }
     return kind === "repair_policy"
       ? this.callbacks.captureRepairPolicySnapshot(targetKey)
       : this.callbacks.captureRoutingPolicySnapshot(targetKey);
@@ -3763,6 +3803,12 @@ export class ImprovementService {
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
   ): ImprovementRef {
+    if (kind === "skill_revision") {
+      // Writes the authored SKILL.md, records the candidate lifecycle, and (only
+      // under master autonomy) promotes it to a callable `approved` state via
+      // this recorded, reversible activation. isSkillCallable is never bypassed.
+      return this.callbacks.applySkillRevisionCandidate(targetKey, revision.candidateRef);
+    }
     return kind === "repair_policy"
       ? this.callbacks.applyRepairPolicyCandidate(targetKey, revision.candidateRef)
       : this.callbacks.applyRoutingPolicyCandidate(targetKey, revision.candidateRef);
@@ -3776,7 +3822,9 @@ export class ImprovementService {
   ): ImprovementActivationRecord {
     const candidate = this.readImprovementCandidate(activation.candidateId);
     try {
-      if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
+      if (activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
+        this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
+      } else if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
         this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
       } else {
         this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
@@ -4471,6 +4519,25 @@ export class ImprovementService {
     return mapDecisionAutoTuneRow(row);
   }
 
+  /**
+   * P2-W3: map a tuned setting key to the runtime-effective value its decision
+   * point will read, via the shared getter callbacks. Returns `undefined` for
+   * keys that have no wired decision point (so the audit record simply omits the
+   * field rather than asserting a false "effective" value).
+   */
+  private readEffectiveTuneValue(settingKey: string): number | undefined {
+    switch (settingKey) {
+      case IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE:
+        return this.callbacks.readEffectiveBlockerTemplateStrictness();
+      case IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD:
+        return this.callbacks.readEffectiveRetryRepairThreshold();
+      case IMPROVEMENT_TUNE_KEY_LIVE_INTENT:
+        return this.callbacks.readEffectiveLiveIntentThreshold();
+      default:
+        return undefined;
+    }
+  }
+
   private applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): DecisionAutoTuneRecord {
     const tune = this.readDecisionAutoTune(tuneId);
     if (tune.riskLevel !== "low") {
@@ -4483,6 +4550,11 @@ export class ImprovementService {
     const nextValue = tune.patch.nextValue;
     this.ctx.storage.systemSettings.set(settingKey, nextValue);
     const appliedAt = new Date().toISOString();
+    // P2-W3: record the value the runtime decision point will now actually READ
+    // for this setting, proving the loop is closed (written key ⇒ read key) and
+    // making the applied tune auditable. `undefined` for keys without a wired
+    // decision point (e.g. medium-risk routing weights, which never auto-apply).
+    const effectiveRuntimeValue = this.readEffectiveTuneValue(settingKey);
     this.ctx.gatewaySql
       .prepare(
         `
@@ -4494,13 +4566,27 @@ export class ImprovementService {
       .run({
         tuneId,
         appliedAt,
-        resultJson: JSON.stringify({ appliedBy: mode, settingKey, nextValue }),
+        resultJson: JSON.stringify({
+          appliedBy: mode,
+          settingKey,
+          nextValue,
+          ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
+        }),
       });
     this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
       tuneId,
       settingKey,
       mode,
+      ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
     });
+    // Cross-cutting audit (best-effort): notify the gateway so the applied tune is
+    // captured in the unified autonomy-audit ledger. The tune row carries its own
+    // rollback snapshot, so the audit restoreRef only needs the tuneId.
+    try {
+      this.callbacks.onAutoTuneApplied?.(tuneId, settingKey);
+    } catch {
+      // Audit append must never break the tune apply.
+    }
     return this.readDecisionAutoTune(tuneId);
   }
 

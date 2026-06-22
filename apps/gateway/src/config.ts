@@ -72,6 +72,8 @@ export interface FeatureFlagsConfig {
   codeModeV1Enabled: boolean;
   improvementLedgerV1Enabled: boolean;
   improvementActivationV1Enabled: boolean;
+  coworkRuntimeQualityV1Disabled?: boolean;
+  autonomyV1Disabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -658,6 +660,8 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["codeModeV1Enabled", process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED],
     ["improvementLedgerV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED],
     ["improvementActivationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED],
+    ["coworkRuntimeQualityV1Disabled", process.env.GOATCITADEL_FEATURE_COWORK_RUNTIME_QUALITY_V1_DISABLED],
+    ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1175,6 +1179,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
+      coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
+      // Intentional: autonomy (proactive turns) is ON by default. This is a
+      // `*Disabled` master kill switch — `?? false` means "not disabled" unless
+      // an operator explicitly sets it. Do NOT flip this default.
+      autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

@@ -7,6 +7,11 @@ import path from "node:path";
 import { Storage } from "@goatcitadel/storage";
 import type { ApprovalResolveInput, ImprovementRef } from "@goatcitadel/contracts";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -865,6 +870,10 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
     },
     createChatCompletion: async () => ({ id: "mock", choices: [] }) as never,
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
+    readEffectiveBlockerTemplateStrictness: () =>
+      readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: async () => [],
     retryChatTurn: async () => ({ sessionId: "retry-session", turnId: "retry-turn" }) as never,
     backgroundTasks: new Set<Promise<void>>(),

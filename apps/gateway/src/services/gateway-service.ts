@@ -211,6 +211,7 @@ import type {
   MemoryMaintenanceStatusRecord,
   MemorySearchQuery,
   MemoryWriteInput,
+  CronAgentTurnConfig,
   CronJobRecord,
   DashboardState,
   ChatCompletionRequest,
@@ -356,6 +357,7 @@ import type {
   GuidanceDocType,
   GuidanceDocumentRecord,
   ImprovementRef,
+  OperatorProfileRecord,
   MemoryItemRecord,
   ConnectorDiagnosticReport,
   OrchestrationPlanWorkflowPayload,
@@ -410,6 +412,7 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
 import { AddonsService } from "./addons-service.js";
 import { AddonSlotService } from "./addon-slot-service.js";
 import {
@@ -428,6 +431,25 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
+import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
+import {
+  type AutonomousTurnKind,
+  buildAutonomousTurnContext,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+} from "./gateway/autonomous-turn-policy.js";
+import { BackgroundReviewService } from "./background-review-service.js";
+import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
+import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
+import {
+  buildScheduleCreateActionConfig,
+  isScheduledTurnContext,
+  parseScheduleManageArgs,
+  resolveScheduleCreatorKey,
+  summarizeScheduleJob,
+  validateScheduleCreate,
+} from "./gateway/schedule-tool-support.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -488,6 +510,8 @@ import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
+import { OperatorProfileService } from "./operator-profile-service.js";
+import { AutonomyControlService } from "./autonomy-control-service.js";
 import {
   ChatTurnExecutionRegistry,
   type ActiveChatTurnExecution,
@@ -535,6 +559,11 @@ import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import { CuratorService } from "./curator-service.js";
 import { writeCuratorReport } from "./curator-report.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
@@ -596,7 +625,15 @@ const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
   requireFirstUseConfirmation: true,
 };
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
-const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
+const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
+  "browser.search",
+  "browser.navigate",
+  "browser.extract",
+  "http.get",
+  // P2-S4a: read-only tier-2 recall over this conversation's own message history.
+  "session.search",
+  "local_business.research",
+] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
 const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
@@ -610,6 +647,13 @@ export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angele
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
+/**
+ * P2-S1 background-review counter gate. A successful, eligible root turn bumps
+ * this counter; the self-improvement review runs (and resets it) once it reaches
+ * {@link BACKGROUND_REVIEW_TURN_INTERVAL}. Stored in `system_settings`.
+ */
+const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
+const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY = "update_review_daily_last_day_key_v1";
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const maintenanceSchedulerDisabled =
@@ -749,10 +793,13 @@ export class GatewayService {
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
   private readonly approvalExplainer: ApprovalExplainerService;
+  private readonly commitmentClassifier: CommitmentClassifierService;
+  private readonly backgroundReviewService: BackgroundReviewService;
   public readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
+  private readonly skillMutationService: SkillMutationService;
   public readonly personalityCatalogService: PersonalityCatalogService;
   public readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
@@ -784,6 +831,8 @@ export class GatewayService {
   private readonly continuationGateService: ContinuationGateService;
   private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
+  private readonly operatorProfileService: OperatorProfileService;
+  private readonly autonomyControlService: AutonomyControlService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
@@ -851,6 +900,13 @@ export class GatewayService {
       },
     });
     this.memoryWriteGateService = new MemoryWriteGateService();
+    // P2-S4b cross-session operator profile. Reuses the shared write gate (secrets
+    // always blocked) and the master autonomy switch for auto-apply.
+    this.operatorProfileService = new OperatorProfileService({
+      storage: this.storage,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      memoryWriteGate: this.memoryWriteGateService,
+    });
     this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
@@ -900,6 +956,11 @@ export class GatewayService {
       // scope as a compatibility Citadel fallback. New gateway call sites pass
       // the parent citadelId directly when it is known.
       citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
+      // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
+      // the pure policy-engine executor delegates it back here. The approval gate
+      // and deny-wins still fire first in `engine.invoke`; this hook only runs
+      // after the engine has authorized execution.
+      scheduleManage: (args, policyContext) => this.scheduleManage(args, policyContext),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -1018,6 +1079,12 @@ export class GatewayService {
         this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
+    this.commitmentClassifier = new CommitmentClassifierService({
+      storage: this.storage,
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+    });
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
@@ -1040,6 +1107,36 @@ export class GatewayService {
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
+    this.skillMutationService = new SkillMutationService({
+      rootDir: config.rootDir,
+      skillLifecycle: this.storage.skillLifecycle,
+    });
+    // P2-S1 self-improvement learning loop. Structured-extraction post-turn
+    // service: two cheap read-only model calls (memory + skill) → persist via the
+    // governed operator-profile + skill-mutation services. Auto-apply/secret/
+    // candidate governance lives entirely in those services. Never promotes a
+    // skill to callable (governed activation owns promotion).
+    this.backgroundReviewService = new BackgroundReviewService({
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      recordOperatorProfileFacts: (workspaceId, facts) => {
+        const result = this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts });
+        // Unified audit: only an applied write (full autonomy) yields a
+        // priorSnapshot — that snapshot is value-carrying (storage keeps only the
+        // current revision) so it doubles as the restoreRef. Proposed/blocked
+        // writes persist nothing, so there is nothing to audit. Best-effort.
+        if (result.outcome === "applied" && result.priorSnapshot) {
+          this.autonomyControlService.recordAutonomousMutation({
+            kind: "memory",
+            targetKey: result.record.operatorProfileId,
+            restoreRef: { kind: "memory", priorSnapshot: result.priorSnapshot },
+          });
+        }
+        return result;
+      },
+      draftSkillMutation: (input) => this.skillMutationService.draftSkillMutation(input),
+    });
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
     this.discordRuntimeService = new DiscordRuntimeService({
@@ -1079,20 +1176,10 @@ export class GatewayService {
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
         task: async (job, _context?) => {
-          const task = this.taskLifecycleService.createTask({
-            title: job.name,
-            description: [
-              job.description?.trim() || "Scheduled task created by cron job.",
-              "",
-              `Cron job: ${job.jobId}`,
-              `Triggered at: ${new Date().toISOString()}`,
-            ].join("\n"),
-            status: "inbox",
-            priority: "normal",
-            createdBy: "scheduler",
-          });
+          const task = this.createCronInboxTask(job);
           return { taskId: task.taskId };
         },
+        agentTurn: (input) => this.runCronAgentTurn(input),
         improvement: async () => {
           await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
         },
@@ -1186,6 +1273,11 @@ export class GatewayService {
       detectDelegationRoles: (text) => detectDelegationRoles(text),
       createDurableRun: (input) => this.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      // P1-F5 de-novo origination: cheap read-only planner + eligibility guard.
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      isProactiveDeNovoEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
       backgroundTasks: this.backgroundTasks,
       get closing() {
         return self.closing;
@@ -1381,8 +1473,28 @@ export class GatewayService {
       captureRoutingPolicySnapshot: (targetKey) => this.captureRoutingPolicySnapshot(targetKey),
       applyRoutingPolicyCandidate: (targetKey, revisionRef) => this.applyRoutingPolicyCandidate(targetKey, revisionRef),
       restoreRoutingPolicySnapshot: (snapshotRef) => this.restoreRoutingPolicySnapshot(snapshotRef),
+      captureSkillRevisionSnapshot: (targetKey, revisionRef) =>
+        this.captureSkillRevisionSnapshot(targetKey, revisionRef),
+      applySkillRevisionCandidate: (targetKey, revisionRef) =>
+        this.applySkillRevisionCandidate(targetKey, revisionRef),
+      restoreSkillRevisionSnapshot: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      // P2-W3: report the runtime-effective tune values via the shared reader so
+      // applied auto-tunes are audited against what the decision points will read.
+      readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(this.storage.systemSettings),
+      readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(this.storage.systemSettings),
+      readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(this.storage.systemSettings),
+      // Cross-cutting audit: record applied auto-tunes in the unified ledger. The
+      // tune row holds its own rollback snapshot, so the restoreRef is just the
+      // tuneId. The closure resolves `autonomyControlService` lazily (it is
+      // constructed just after this service), so the deferred call is safe.
+      onAutoTuneApplied: (tuneId, settingKey) =>
+        this.autonomyControlService.recordAutonomousMutation({
+          kind: "tune",
+          targetKey: settingKey,
+          restoreRef: { kind: "tune", tuneId },
+        }),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
       retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
@@ -1408,6 +1520,39 @@ export class GatewayService {
       publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
       cycleDays: 7,
       storage: this.storage,
+      // S3 — idle janitor: gated on workspace idle + master autonomy. Archive is
+      // reversible — we snapshot the prior skill-state row before the disable so
+      // the global "revert autonomous changes" can re-apply it. Archive only ever
+      // disables (never hard-deletes); prune/file-removal stays operator-gated.
+      idleSweep: {
+        isWorkspaceIdle: () => !this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
+        isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+        snapshotSkill: (skillId) => this.captureCuratorIdleSkillSnapshot(skillId),
+      },
+    });
+    // Cross-cutting kill-switch & rollback. Ties every subsystem's existing
+    // snapshot/restore into one operator-facing "revert autonomous changes since
+    // T". Restore callbacks delegate to each subsystem's own (already-landed)
+    // restore path; the kill switch toggles `autonomyV1Disabled` via the
+    // feature-flag update path. Constructed after improvement/curator/operator-
+    // profile so all collaborators already exist.
+    this.autonomyControlService = new AutonomyControlService({
+      storage: this.storage,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      setKillSwitch: (disabled) => {
+        this.updateFeatureFlags({ autonomyV1Disabled: disabled });
+      },
+      restoreHandlers: {
+        restoreSkillRevision: (snapshotRef) =>
+          this.restoreSkillRevisionSnapshot(snapshotRef as ImprovementRef),
+        restoreOperatorProfile: (priorSnapshot) =>
+          this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord),
+        restoreCuratorArchive: (skillId) => this.restoreCuratorIdleSkillSnapshot(skillId),
+        revertTune: (tuneId) => {
+          this.improvementService.revertDecisionAutoTune(tuneId);
+        },
+      },
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1571,6 +1716,7 @@ export class GatewayService {
       evidenceEnvelopeService: this.evidenceEnvelopeService,
       guidanceService: this.guidanceService,
       improvementService: this.improvementService,
+      autonomyControlService: this.autonomyControlService,
       mediaVoiceService: this.mediaVoiceService,
       obsidianVaultService: this.obsidianVaultService,
       onboardingStateHost: this.buildOnboardingStateHost(),
@@ -1635,6 +1781,7 @@ export class GatewayService {
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+      composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -1678,6 +1825,7 @@ export class GatewayService {
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
       requireChatTurnContext: (sessionId, turnId) => this.requireChatTurnContext(sessionId, turnId),
@@ -1692,6 +1840,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
@@ -1761,9 +1910,11 @@ export class GatewayService {
       hooksService: this.hooksService,
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
+      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
@@ -1790,6 +1941,8 @@ export class GatewayService {
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
       commsSend: (input) => this.commsSend(input),
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
+      enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
+      cleanupSilentHeartbeatTurn: (input) => this.cleanupSilentHeartbeatTurn(input),
     };
   }
 
@@ -2402,11 +2555,27 @@ export class GatewayService {
       { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
       { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
+      {
+        label: "skill curator idle janitor",
+        run: () =>
+          this.runBestEffortMaintenance("curator_idle_sweep_failed", () => this.curatorService.maybeRunIdleCurator()),
+      },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
+      {
+        label: "commitment sweep",
+        run: () => this.runBestEffortMaintenance("commitment_sweep_failed", () => this.runCommitmentSweep()),
+      },
+      {
+        label: "heartbeat",
+        run: () => this.runBestEffortMaintenance("heartbeat_failed", () => this.runHeartbeatSweep()),
+      },
       { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
       { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
     ];
-    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    // Wrap each task in an async IIFE so a synchronous throw (e.g. a missing
+    // collaborator method) becomes a rejected promise captured by allSettled,
+    // rather than escaping the map and crashing the whole tick.
+    const results = await Promise.allSettled(tasks.map((task) => (async () => task.run())()));
     const failedLabels: string[] = [];
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
@@ -2610,6 +2779,114 @@ export class GatewayService {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.registerBackgroundTask(task);
+  }
+
+  /**
+   * P2-S1 — schedule the self-improvement background review for a successful root
+   * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
+   * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
+   * — skips child turns and runs fire-and-forget after a successful root turn.
+   *
+   * Guards (master-autonomy / eval-integrity / non-human / closing / child-turn)
+   * are resolved here and re-asserted inside the service; the counter only
+   * advances for eligible turns. The review is a tracked background task that can
+   * never throw out of the turn path.
+   */
+  public scheduleBackgroundReviewIfDue(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+    parentTurnId?: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
+  }): void {
+    // Skip child turns (mirror the memory-maintenance sibling) and a closing gateway.
+    if (this.closing || input.parentTurnId) {
+      return;
+    }
+    // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
+    // human session, but re-reviewing its output is a cost-amplifying loop (and
+    // a heartbeat `{notify:false}` carries no review value).
+    if (input.autonomous) {
+      return;
+    }
+    // Master autonomy kill switch: halts the entire self-improvement loop.
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    if (!autonomyEnabled) {
+      return;
+    }
+    // Eval-integrity / non-human / replay-scratch guard (mirror recordTurnCommitments).
+    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const evalIntegrityTurn = origin === "prompt_pack";
+    const humanSession =
+      origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+    if (evalIntegrityTurn || !humanSession) {
+      return;
+    }
+
+    // Counter gate: only run once every N eligible successful turns; reset on fire.
+    if (!this.advanceBackgroundReviewCounter()) {
+      return;
+    }
+
+    const task = this.backgroundReviewService
+      .runBackgroundReview({
+        sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        parentTurnId: input.parentTurnId,
+        autonomyEnabled,
+        evalIntegrityTurn,
+        humanSession,
+        turnSucceeded: true,
+      })
+      .then((result) => {
+        if (result.ran && result.summaryMarker) {
+          this.publishRealtime("self_improvement_review", "system", {
+            type: "background_review",
+            sessionId: input.sessionId,
+            workspaceId: input.workspaceId,
+            summaryMarker: result.summaryMarker,
+            memoryFactCount: result.memoryFacts.length,
+            skillProposed: result.skillProposed,
+            skillId: result.skillMutation?.skillId,
+          });
+        }
+      })
+      .catch((error) => {
+        log.warn("background review failed", {
+          sessionId: input.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.registerBackgroundTask(task);
+  }
+
+  /**
+   * Increment the background-review turn counter; when it reaches the interval,
+   * reset it to 0 and return `true` (the review should run this turn). Otherwise
+   * persist the bumped counter and return `false`. Best-effort: a storage error
+   * never blocks or crashes the turn path (returns `false`).
+   */
+  private advanceBackgroundReviewCounter(): boolean {
+    try {
+      const current =
+        this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY)?.value ?? 0;
+      const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
+      if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
+        this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
+        return true;
+      }
+      this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
+      return false;
+    } catch (error) {
+      log.warn("background review counter advance failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   public scheduleChatMemoryContextPrewarm(input: {
@@ -3536,6 +3813,56 @@ export class GatewayService {
     return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
   }
 
+  /**
+   * Fire-and-forget post-turn commitment inference (P1-F3). Resolves the master
+   * autonomy / eval-integrity / non-human guards from session metadata, then
+   * runs the cheap hidden classifier as a tracked background task. Never throws
+   * into the calling turn; classifier failures are swallowed inside the service.
+   */
+  public recordTurnCommitments(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
+  }): void {
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    if (!autonomyEnabled) {
+      return;
+    }
+    // Skip autonomous turns: classifying a cron/heartbeat/commitment self-wake's
+    // own output (e.g. a heartbeat `{notify:false}`) is a redundant cheap-model
+    // call and a self-feeding loop — these turns are not user commitments.
+    if (input.autonomous) {
+      return;
+    }
+    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const evalIntegrityTurn = origin === "prompt_pack";
+    const humanSession = origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+    if (evalIntegrityTurn || !humanSession) {
+      return;
+    }
+    const task = this.commitmentClassifier
+      .recordTurnCommitments({
+        sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        autonomyEnabled,
+        evalIntegrityTurn,
+        humanSession,
+      })
+      .then(() => undefined)
+      .catch((error) => {
+        log.warn("commitment classifier failed", {
+          sessionId: input.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.registerBackgroundTask(task);
+  }
+
   public listChatSessionLearnedMemory(
     sessionId: string,
     limit = 200,
@@ -3900,6 +4227,131 @@ export class GatewayService {
 
   private restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void {
     this.restoreImprovementPolicySnapshot(IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+  }
+
+  // ── S2: skill self-authoring activation callbacks ─────────────────────────
+  // These delegate to SkillMutationService. They are the governed write path for
+  // skill_revision candidates flowing through improvement-service
+  // applyActivationChange. isSkillCallable is never bypassed: the candidate is
+  // written non-callable, and promotion to `approved` happens only under master
+  // autonomy and only through this recorded, reversible activation.
+
+  private captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    const { skillId, skillMarkdown } = this.readSkillRevisionRef(targetKey, revisionRef);
+    const snapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
+    // NOTE: the unified autonomy-audit entry is intentionally NOT appended here.
+    // This snapshot is captured at PROPOSAL time (an approval is then created and
+    // the apply happens only later, after approval — or never). Recording the
+    // audit now would leave a phantom entry for a mutation that never landed
+    // (rejected/expired approval, or a throwing apply), which revertAutonomous-
+    // ChangesSince would then "restore". The audit is appended in
+    // applySkillRevisionCandidate AFTER the write actually succeeds.
+    return this.buildSkillRevisionSnapshotRef(snapshot, targetKey);
+  }
+
+  /** Build the value-carrying snapshot ref consumed by restoreSkillRevisionSnapshot. */
+  private buildSkillRevisionSnapshotRef(snapshot: SkillMutationSnapshot, targetKey: string): ImprovementRef {
+    return {
+      refType: "skill_revision_snapshot",
+      refId: snapshot.skillId,
+      hash: createHash("sha1").update(JSON.stringify(snapshot)).digest("hex"),
+      metadata: {
+        targetKey,
+        skillId: snapshot.skillId,
+        snapshot: snapshot as unknown as Record<string, unknown>,
+      },
+    };
+  }
+
+  private applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    const { skillId, skillMarkdown, evaluationRunId, sourceTurnId, summary } = this.readSkillRevisionRef(
+      targetKey,
+      revisionRef,
+    );
+    if (!skillMarkdown) {
+      throw new Error(`Skill revision ${targetKey} is missing skill content; refusing to apply an empty mutation.`);
+    }
+    // Capture the prior state immediately BEFORE the write so the audit restoreRef
+    // carries the correct pre-mutation bytes (the proposal-time snapshot is on the
+    // activation rail; this one backs the unified autonomy-audit ledger).
+    const priorSnapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
+    // Validate + security-scan + secret-block + jail-write as non-callable candidate.
+    const result = this.skillMutationService.applySkillMutationSync({
+      skillMarkdown,
+      skillId,
+      evaluationRunId,
+      sourceTurnId,
+      summary,
+    });
+    // Full autonomy: promote to a callable `approved` state ONLY when the master
+    // autonomy switch is engaged. When off, the skill stays a non-callable
+    // `candidate` (pure proposal mode). Promotion is reversible by the snapshot.
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    const lifecycle = autonomyEnabled
+      ? this.skillMutationService.promoteSelfAuthoredSkill(result.skillId)
+      : result.lifecycle;
+    // Unified audit: append ONLY now that the write (and any promote) has
+    // succeeded, so a failed/blocked apply never leaves a phantom ledger entry.
+    // The snapshot ref is value-carrying (prior bytes inline) and is exactly what
+    // restoreSkillRevisionSnapshot consumes. Best-effort; never blocks the apply.
+    this.autonomyControlService.recordAutonomousMutation({
+      kind: "skill_revision",
+      targetKey: result.skillId,
+      restoreRef: { kind: "skill_revision", snapshotRef: this.buildSkillRevisionSnapshotRef(priorSnapshot, targetKey) },
+    });
+    return {
+      refType: "skill_revision_config",
+      refId: result.skillId,
+      hash: result.changeHash,
+      metadata: {
+        targetKey,
+        skillId: result.skillId,
+        lifecycleState: lifecycle.lifecycleState,
+        autoPromoted: autonomyEnabled,
+        callable: lifecycle.lifecycleState === "approved" || lifecycle.lifecycleState === "trusted",
+      },
+    };
+  }
+
+  private restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void {
+    const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
+    const snapshot = metadata.snapshot;
+    if (!isRecord(snapshot) || typeof snapshot.skillId !== "string") {
+      throw new Error("Skill revision snapshot is missing its captured state; cannot restore.");
+    }
+    this.skillMutationService.restoreSnapshotSync(snapshot as unknown as SkillMutationSnapshot);
+  }
+
+  private readSkillRevisionRef(
+    targetKey: string,
+    revisionRef: ImprovementRef,
+  ): {
+    skillId?: string;
+    skillMarkdown?: string;
+    evaluationRunId?: string;
+    sourceTurnId?: string;
+    summary?: string;
+  } {
+    const metadata = isRecord(revisionRef.metadata) ? revisionRef.metadata : {};
+    const proposed = isRecord(metadata.proposedChange) ? metadata.proposedChange : {};
+    const readString = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim().length > 0 ? value : undefined;
+    const skillMarkdown =
+      readString(metadata.skillMarkdown) ??
+      readString(metadata.skillContent) ??
+      readString(proposed.skillMarkdown) ??
+      readString(proposed.skillContent);
+    const skillId =
+      readString(metadata.skillId) ??
+      readString(proposed.skillId) ??
+      readString(targetKey.startsWith("skill:") ? targetKey.slice("skill:".length) : undefined);
+    return {
+      skillId,
+      skillMarkdown,
+      evaluationRunId: readString(metadata.evaluationRunId) ?? readString(proposed.evaluationRunId),
+      sourceTurnId: readString(metadata.sourceTurnId) ?? readString(proposed.sourceTurnId),
+      summary: readString(metadata.summary) ?? readString(proposed.skillName) ?? readString(proposed.title),
+    };
   }
 
   private captureImprovementPolicySnapshot(
@@ -4764,6 +5216,426 @@ export class GatewayService {
     };
   }
 
+  /**
+   * File the legacy inert inbox record for a scheduled cron job. Shared by the
+   * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
+   * path so the fallback behavior stays byte-identical to today's `task` cron.
+   */
+  private createCronInboxTask(job: CronJobRecord): TaskRecord {
+    return this.taskLifecycleService.createTask({
+      title: job.name,
+      description: [
+        job.description?.trim() || "Scheduled task created by cron job.",
+        "",
+        `Cron job: ${job.jobId}`,
+        `Triggered at: ${new Date().toISOString()}`,
+      ].join("\n"),
+      status: "inbox",
+      priority: "normal",
+      createdBy: "scheduler",
+    });
+  }
+
+  /**
+   * Cron `agent_turn` handler. Wakes the model under the restricted
+   * `scheduled-restricted` profile via a durable `chat.turn.execute` run, unless
+   * the master autonomy kill switch is engaged (`autonomyV1Disabled`) or the job
+   * opted into `inertInboxFallback` — in which case it files the legacy inert
+   * inbox task. Safety: the scheduled turn carries `operatorId:"system-cron"`,
+   * `authActorSource:"none"`, and `permissionProfileId:"scheduled-restricted"`
+   * so dangerous tools become approvals rather than silent actions.
+   */
+  private async runCronAgentTurn(input: {
+    job: CronJobRecord;
+    runId: string;
+    config: CronAgentTurnConfig;
+  }): Promise<AgentTurnCronRunOutcome> {
+    const autonomyDisabled = this.isFeatureEnabled("autonomyV1Disabled");
+    if (autonomyDisabled || input.config.inertInboxFallback) {
+      const task = this.createCronInboxTask(input.job);
+      return { mode: "inbox", taskId: task.taskId };
+    }
+    const sessionId = this.ensureCronAgentSession(input.job.jobId, input.config.sessionId);
+    const run = await this.enqueueAutonomousChatTurn({
+      sessionId,
+      prompt: input.config.prompt,
+      runId: input.runId,
+      systemActorId: "system-cron",
+      reason: `cron agent_turn:${input.job.jobId}`,
+      deliveryChannel: input.config.deliveryChannel,
+      deliverMode: input.config.deliverMode ?? "always",
+    });
+    return {
+      mode: "agent_turn",
+      durableRunId: run?.runId,
+      sessionId,
+      turnId: run?.turnId,
+    };
+  }
+
+  /**
+   * Maintenance-tick commitment sweep (P1-F3). Delivers due + pending inferred
+   * check-ins (oldest-due first) as autonomous (restricted-profile) turns seeded
+   * with the suggested text, respecting per-session cooldown + active-hours, then
+   * marks them sent. No-op while the master autonomy switch is off or durable
+   * execution is disabled (the delivery path requires a durable run). Superseded /
+   * dismissed / already-sent rows are excluded by `listDue` (pending-only).
+   */
+  private async runCommitmentSweep(): Promise<void> {
+    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
+    await runCommitmentSweep({
+      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+      listDueCommitments: (nowIso, limit) => this.storage.agentCommitments.listDue(nowIso, limit),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      deliverCommitment: async (commitment) => {
+        const run = await this.enqueueAutonomousChatTurn({
+          sessionId: commitment.sessionId,
+          prompt: buildCommitmentCheckInPrompt(commitment.suggestedText),
+          runId: `commitment_${commitment.commitmentId}`,
+          systemActorId: "system-commitment",
+          reason: `commitment check-in:${commitment.commitmentId}`,
+          deliverMode: "always",
+        });
+        return Boolean(run?.runId);
+      },
+      markSent: (commitmentId) => this.storage.agentCommitments.markSent(commitmentId),
+    });
+  }
+
+  /**
+   * Maintenance-tick heartbeat sweep (P1-F4). For each eligible idle session,
+   * fires a single silent self-wake turn under the read-only `heartbeat-restricted`
+   * profile with `deliverMode:"on_notify"` — the turn stays silent unless it emits
+   * `{notify:true}`. Multi-gate rate limiting (heartbeat-enabled × eligibility ×
+   * active-hours × idle floor × no-running-turn × cooldown × interval) lives in the
+   * pure `runHeartbeatTick`. No-op while the master autonomy switch is off or
+   * durable execution is disabled (the turn path requires a durable run).
+   * Eval-integrity / non-human / replay-scratch sessions are excluded.
+   */
+  private async runHeartbeatSweep(): Promise<void> {
+    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
+    await runHeartbeatTick({
+      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+      listSessions: (limit) =>
+        this.listChatSessions({ scope: "mission", view: "active", limit }).map((session) => ({
+          sessionId: session.sessionId,
+          lastActivityAt: session.lastActivityAt,
+        })),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      isHeartbeatEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
+      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
+        const run = await this.enqueueAutonomousChatTurn({
+          sessionId,
+          prompt,
+          // Collision-resistant: `Date.now()` could repeat within a tick across
+          // sessions/retries; a UUID guarantees a unique durable run id.
+          runId: `heartbeat_${randomUUID()}`,
+          systemActorId: "system-heartbeat",
+          reason: `heartbeat self-wake:${sessionId}`,
+          kind: "heartbeat",
+          deliverMode: "on_notify",
+        });
+        return Boolean(run?.runId);
+      },
+    });
+  }
+
+  /**
+   * Best-effort logging for autonomous maintenance sweeps (commitment / heartbeat).
+   * These are optional proactive tasks; a failure must never crash the maintenance
+   * tick, which aggregates and rethrows core task failures.
+   */
+  private logMaintenanceTaskFailure(event: string, error: unknown): void {
+    this.recordDevDiagnostic({
+      level: "warn",
+      category: "cron",
+      event,
+      message: event.replace(/_/g, " "),
+      context: { error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  /**
+   * Runs an optional/best-effort autonomous maintenance task so it can never
+   * crash the maintenance tick (which aggregates and rethrows core task
+   * failures). Catches BOTH synchronous throws (e.g. a missing collaborator
+   * method) and async rejections, logging a dev diagnostic instead.
+   */
+  private async runBestEffortMaintenance(event: string, run: () => Promise<unknown> | unknown): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      this.logMaintenanceTaskFailure(event, error);
+    }
+  }
+
+  /**
+   * Whether a session may receive silent heartbeats. Mirrors the human-session /
+   * eval-integrity guard used for the commitment classifier: skip `system` and
+   * `prompt_pack` origins and replay-scratch sessions (safety invariant:
+   * eval-integrity turns are never affected).
+   */
+  private isHeartbeatEligibleSession(sessionId: string): boolean {
+    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
+    if (origin === "system" || origin === "prompt_pack") {
+      return false;
+    }
+    return !this.isReplayScratchSession(sessionId);
+  }
+
+  /**
+   * Resolve a stable cron session for an `agent_turn` job. Reuses an explicitly
+   * configured session id when present, otherwise derives a deterministic
+   * per-job session and creates it (proactiveMode off, system origin) if it does
+   * not yet exist. Immutable: reuses existing rows; only creates when missing.
+   */
+  private ensureCronAgentSession(jobId: string, configuredSessionId?: string): string {
+    const explicit = configuredSessionId?.trim();
+    if (explicit && this.getSession(explicit)) {
+      return explicit;
+    }
+    const peer = `cron_${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}`;
+    const sessionKey = `mission:scheduler:${peer}`;
+    const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
+    if (this.getSession(sessionId)) {
+      return sessionId;
+    }
+    const now = new Date().toISOString();
+    const workspaceId = this.normalizeWorkspaceId(undefined);
+    this.storage.runImmediateTransaction(() => {
+      this.storage.sessions.upsert({
+        sessionId,
+        sessionKey,
+        kind: "dm",
+        channel: "mission",
+        account: "scheduler",
+        displayName: `Cron ${jobId}`,
+        timestamp: now,
+      });
+      this.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
+      this.storage.chatSessionPrefs.ensure(sessionId, now);
+      this.storage.chatSessionMeta.patch(
+        sessionId,
+        { workspaceId, title: `Cron ${jobId}`, origin: "system", includeInHistory: false },
+        now,
+      );
+      this.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
+    });
+    this.ensureChatSessionRuntimeGrants(sessionId);
+    this.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
+    return sessionId;
+  }
+
+  /**
+   * Prepare + enqueue a `chat.turn.execute` durable run for an autonomous
+   * (cron/heartbeat/proactive) turn. Persists the user message + trace via
+   * `prepareAgentChatTurn` (the durable payload's precondition), then creates
+   * the durable run tagged with `metadata.autonomous` so the post-turn delivery
+   * hook in `durable-execution-service.ts` can route the reply to a channel.
+   */
+  private async enqueueAutonomousChatTurn(input: {
+    sessionId: string;
+    prompt: string;
+    runId: string;
+    systemActorId: string;
+    reason: string;
+    /** Restricted profile selector; defaults to `scheduled` (cron/commitment). */
+    kind?: AutonomousTurnKind;
+    deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
+    deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
+  }): Promise<{ runId: string; turnId: string } | undefined> {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
+    }
+    const kind: AutonomousTurnKind = input.kind ?? "scheduled";
+    const permissionProfileId =
+      kind === "heartbeat" ? HEARTBEAT_PERMISSION_PROFILE_ID : SCHEDULED_TURN_PERMISSION_PROFILE_ID;
+    const autonomousContext = buildAutonomousTurnContext({
+      kind,
+      systemActorId: input.systemActorId,
+      runId: input.runId,
+      sessionId: input.sessionId,
+    });
+    const request: ChatSendMessageRequest = {
+      content: input.prompt,
+      operatorId: autonomousContext.policyContext.operatorId,
+      authActorId: autonomousContext.policyContext.authActorId,
+      authActorSource: autonomousContext.policyContext.authActorSource,
+      permissionProfileId,
+    };
+    const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
+    const run = this.createDurableRun({
+      workflowKey: "chat.turn.execute",
+      payload: durableChatTurnPayloadToRecord(
+        this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
+      ),
+      metadata: {
+        surface: prepared.normalized.mode ?? prepared.prefs.mode,
+        objective: prepared.content,
+        autonomous: {
+          kind,
+          systemActorId: input.systemActorId,
+          reason: input.reason,
+          deliverMode: input.deliverMode,
+          ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
+        },
+      },
+    });
+    this.persistInitialDurableChatTurnTrace(prepared, request, run);
+    this.persistChatStreamChunk(
+      {
+        type: "message_start",
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        messageId: prepared.assistantMessageId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: prepared.branchKind,
+        sourceTurnId: prepared.sourceTurnId,
+      },
+      run.runId,
+    );
+    this.requestDurableRunProcessing(run.runId);
+    return { runId: run.runId, turnId: prepared.turnId };
+  }
+
+  /**
+   * Runtime-hook impl for the model-callable `schedule.manage` tool (P1-F2).
+   *
+   * Routed here by the policy-engine executor (`scheduleManage` hook) *after* the
+   * engine has authorized the call — `schedule.manage` is `danger` +
+   * `requiresApproval`, so the normal approval gate fires first for interactive
+   * operators, and the restricted `scheduled-restricted` profile makes a
+   * scheduled turn's call require approval too (anti-recursion). This method:
+   *  - maps `op` to the existing `cronAutomationService` create/list/delete,
+   *  - forces `action:"agent_turn"` for created jobs,
+   *  - stamps the creator actor + permission profile from `policyContext` onto the
+   *    job so F1 fires it bounded to <= the creator's privileges, and
+   *  - enforces the per-creator cap, the >=15min interval floor, and the depth-1
+   *    chain cap (all in the pure `schedule-tool-support` validator).
+   *
+   * The master autonomy kill switch (`autonomyV1Disabled`) hard-disables the
+   * whole tool so no schedule can be created/listed/cancelled while autonomy is
+   * halted.
+   */
+  private async scheduleManage(
+    args: Record<string, unknown>,
+    policyContext: ToolPolicyActorContext | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (this.isFeatureEnabled("autonomyV1Disabled")) {
+      throw new Error("schedule.manage is disabled while the autonomy kill switch is engaged (autonomyV1Disabled).");
+    }
+    const parsed = parseScheduleManageArgs(args);
+    if (parsed.op === "list") {
+      const creatorKey = resolveScheduleCreatorKey(policyContext);
+      const jobs = this.cronAutomationService
+        .listCronJobs()
+        .filter((job) => job.action === "agent_turn")
+        .filter((job) => {
+          if (!creatorKey) {
+            return false;
+          }
+          const createdBy = job.actionConfig?.agentTurn?.createdBy;
+          return createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey;
+        })
+        .map((job) => summarizeScheduleJob(job));
+      return { op: "list", count: jobs.length, jobs };
+    }
+    if (parsed.op === "cancel") {
+      const jobId = parsed.jobId?.trim();
+      if (!jobId) {
+        throw new Error('schedule.manage cancel requires a "jobId".');
+      }
+      const creatorKey = resolveScheduleCreatorKey(policyContext);
+      const existing = this.cronAutomationService.getCronJob(jobId);
+      if (existing.action !== "agent_turn") {
+        throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
+      }
+      const createdBy = existing.actionConfig?.agentTurn?.createdBy;
+      const owned =
+        !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
+      if (!owned) {
+        throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
+      }
+      const result = this.cronAutomationService.deleteCronJob(jobId);
+      return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
+    }
+    // op === "create"
+    const createdByJobId = this.resolveSchedulingTurnJobId(policyContext);
+    const validated = validateScheduleCreate({
+      args: parsed,
+      policyContext,
+      existingJobs: this.cronAutomationService.listCronJobs(),
+      ...(createdByJobId ? { createdByJobId } : {}),
+    });
+    const jobId = this.generateScheduleJobId(validated.name);
+    const created = this.cronAutomationService.createCronJob({
+      jobId,
+      name: validated.name,
+      action: "agent_turn",
+      schedule: validated.schedule,
+      ...(validated.endAt ? { endAt: validated.endAt } : {}),
+      actionConfig: buildScheduleCreateActionConfig(validated),
+    });
+    return {
+      op: "create",
+      jobId: created.jobId,
+      name: created.name,
+      schedule: created.schedule,
+      enabled: created.enabled,
+      ...(created.nextRunAt ? { nextRunAt: created.nextRunAt } : {}),
+      requiresApprovalToRun: false,
+      createdBy: validated.createdBy,
+    };
+  }
+
+  /**
+   * Best-effort: when the calling turn is itself a scheduled (restricted) turn,
+   * find the cron `agent_turn` job that owns the caller's session so the new job
+   * records its parent for the anti-recursion chain. Returns undefined for
+   * interactive callers (depth 0).
+   */
+  private resolveSchedulingTurnJobId(policyContext: ToolPolicyActorContext | undefined): string | undefined {
+    if (!isScheduledTurnContext(policyContext) || !policyContext?.sessionId) {
+      return undefined;
+    }
+    const sessionId = policyContext.sessionId;
+    const match = this.cronAutomationService
+      .listCronJobs()
+      .find((job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId);
+    return match?.jobId;
+  }
+
+  /**
+   * Generate a unique cron job id from a human name plus a short random suffix.
+   * Conforms to the cron id rules (`^[a-z0-9][a-z0-9_-]{2,63}$`) and retries on
+   * the (vanishingly rare) collision so a model-created schedule never clobbers
+   * an existing job.
+   */
+  private generateScheduleJobId(name: string): string {
+    const base = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+    const slug = base.length >= 3 ? base : "scheduled-turn";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+      const candidate = `${slug}-${suffix}`.slice(0, 64);
+      try {
+        this.cronAutomationService.getCronJob(candidate);
+      } catch {
+        return candidate;
+      }
+    }
+    throw new Error("schedule.manage create: could not allocate a unique job id; please retry.");
+  }
+
   public beginDurableChatRun(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
@@ -5230,7 +6102,7 @@ export class GatewayService {
     const workspaceId = this.normalizeWorkspaceId(
       input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
     );
-    const citadelId = input.citadelId ?? this.storage.workspaces.find(workspaceId)?.citadelId;
+    const citadelId = input.citadelId ?? this.storage.workspaces?.find(workspaceId)?.citadelId;
     return this.policyEngine.evaluateAccess(
       this.enrichToolPolicyContext(
         this.applyRuntimeBrowserBackendDefaults(
@@ -5668,6 +6540,131 @@ export class GatewayService {
     });
   }
 
+  /**
+   * Route an autonomous turn's assistant reply to a channel by enqueuing a
+   * durable `connector.delivery` run. Resolves the channel connector by key,
+   * falling back to the connector's default target when no explicit target is
+   * configured. Returns the delivery run id, or undefined when no active channel
+   * connector / target could be resolved (delivery is best-effort, never fatal
+   * to the turn). Carries `system-cron`-class governance so the channel send is
+   * attributed to the autonomous actor.
+   */
+  /** @internal */ public enqueueAutonomousChannelDelivery(
+    input: durableExecutionService.AutonomousChannelDeliveryRequest,
+  ): string | undefined {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return undefined;
+    }
+    const message = input.assistantText.trim();
+    if (!message) {
+      return undefined;
+    }
+    const channelKey = input.deliveryChannel.channelKey.trim();
+    const connector = this.listConnectorRecords("integration_connection").find(
+      (item) => item.status === "active" && item.metadata?.key === channelKey,
+    );
+    if (!connector) {
+      return undefined;
+    }
+    const target =
+      input.deliveryChannel.target?.trim() ||
+      (typeof connector.metadata?.approvalDeliveryTarget === "string"
+        ? connector.metadata.approvalDeliveryTarget.trim()
+        : undefined);
+    if (!target) {
+      return undefined;
+    }
+    const operatorId = input.systemActorId ?? "system-cron";
+    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const run = this.createDurableRun({
+      workflowKey: "connector.delivery",
+      payload: {
+        version: "connector.delivery.v1",
+        connectorId: connector.connectorId,
+        connectorType: connector.connectorType,
+        action: "channel.send",
+        workspaceId,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        operatorId,
+        authActorId: operatorId,
+        authActorSource: "none",
+        originSurface: "scheduler",
+        payload: { target, message },
+      },
+      metadata: {
+        deliveryKind: "autonomous.assistant_message",
+        connectorId: connector.connectorId,
+        connectorType: connector.connectorType,
+        autonomous: true,
+        sourceRunId: input.runId,
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    });
+    return run.runId;
+  }
+
+  /**
+   * Prune a silent heartbeat turn from a human transcript (P1-F4 invisibility).
+   * Removes the seed user message + `{notify:false}` assistant message and the
+   * turn trace, reverting the active branch leaf to the pre-heartbeat leaf, in a
+   * single transaction (mirroring the undo path). Best-effort: a heartbeat is a
+   * silent background tick, so cleanup failures must never surface — they are
+   * logged and swallowed. Only invoked for non-notifying heartbeat turns.
+   */
+  /** @internal */ public cleanupSilentHeartbeatTurn(
+    input: durableExecutionService.SilentHeartbeatCleanupRequest,
+  ): void {
+    try {
+      const messageIds = [input.userMessageId, input.assistantMessageId].filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      );
+      this.storage.runImmediateTransaction(() => {
+        this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
+        this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
+        if (input.parentTurnId) {
+          this.storage.chatSessionBranchState.setActiveLeaf(
+            input.sessionId,
+            input.parentTurnId,
+            new Date().toISOString(),
+          );
+        } else {
+          this.storage.chatSessionBranchState.clear(input.sessionId);
+        }
+      });
+      this.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: "chat_thread_undone",
+          sessionId: input.sessionId,
+          removedTurnIds: [input.turnId],
+          ...(input.parentTurnId ? { activeLeafTurnId: input.parentTurnId } : {}),
+          reason: "silent_heartbeat",
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: input.sessionId,
+            ...(input.parentTurnId ? { turnId: input.parentTurnId } : {}),
+          },
+        },
+      );
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.heartbeat.cleanup_failed",
+        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
   /** @internal */ public getCurrentRequestAttribution(): {
     correlationId?: string;
     traceId?: string;
@@ -6008,6 +7005,66 @@ export class GatewayService {
     return updated;
   }
 
+  /**
+   * Capture a reversible snapshot of a skill's prior runtime-state row before the
+   * S3 idle janitor archives (disables) it. Persisted into `system_settings` so
+   * the global "revert autonomous changes" path can restore the exact prior
+   * state/note via {@link restoreCuratorIdleSkillSnapshot}. Best-effort: a
+   * snapshot failure must not abort the sweep (which is itself failure-isolated),
+   * so this swallows errors. The archive is reversible regardless — a
+   * curator-archived skill is a `disabled` row re-enableable from the snapshot.
+   */
+  private captureCuratorIdleSkillSnapshot(skillId: string): void {
+    try {
+      const prior = this.readSkillStates().get(skillId);
+      this.storage.systemSettings.set(this.curatorIdleSnapshotKey(skillId), {
+        skillId,
+        priorState: prior?.state ?? "enabled",
+        priorNote: prior?.note,
+        priorPinned: prior?.pinned ?? false,
+        capturedAt: new Date().toISOString(),
+      });
+      // Unified audit: the snapshot self-persists in system_settings under the
+      // deterministic key, so the restoreRef only needs the skillId (best-effort).
+      this.autonomyControlService.recordAutonomousMutation({
+        kind: "curator_archive",
+        targetKey: skillId,
+        restoreRef: { kind: "curator_archive", skillId },
+      });
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "cron",
+        event: "curator_idle_snapshot_failed",
+        message: "failed to snapshot skill state before idle archive",
+        context: { skillId, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  /**
+   * Restore a skill archived by the S3 idle janitor to its captured prior state.
+   * Returns false when no snapshot exists for the skill. Used by the global
+   * autonomous-rollback path.
+   */
+  public restoreCuratorIdleSkillSnapshot(skillId: string): boolean {
+    const snapshot = this.storage.systemSettings.get<{
+      skillId: string;
+      priorState: SkillRuntimeState;
+      priorNote?: string;
+      priorPinned?: boolean;
+    }>(this.curatorIdleSnapshotKey(skillId))?.value;
+    if (!snapshot || snapshot.skillId !== skillId) {
+      return false;
+    }
+    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote);
+    return true;
+  }
+
+  private curatorIdleSnapshotKey(skillId: string): string {
+    return `curator_idle_skill_snapshot_v1:${skillId}`;
+  }
+
   public resolveSkillActivation(input: SkillResolveInput) {
     const policy = this.getSkillActivationPolicy();
     const base = this.skillsService.resolveActivation(input);
@@ -6171,6 +7228,22 @@ export class GatewayService {
 
   public buildDefaultChatPersonalityOverlay() {
     return this.personalityCatalogService.buildDefaultChatPersonalityOverlay();
+  }
+
+  /**
+   * Frozen cross-session operator-profile digest for the base prompt (P2-S4b).
+   * Ensures the profile exists (stamping `WorkspacePrefs.operatorProfileId` on
+   * first use), then returns the cached, byte-stable-per-revision digest. Cheap:
+   * no model call on the hot path. Best-effort — a failure must not break a turn.
+   */
+  public composeFrozenOperatorProfileDigest(workspaceId: string): string | undefined {
+    try {
+      const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
+      this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
+      return this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
+    } catch {
+      return undefined;
+    }
   }
 
   public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {
@@ -6954,7 +8027,7 @@ export class GatewayService {
   }
 
   public isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean {
-    return this.readFeatureFlags()[flag];
+    return this.readFeatureFlags()[flag] === true;
   }
 
   public requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void {
@@ -6984,6 +8057,13 @@ export class GatewayService {
       codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
       improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
       improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
+      // These two optional flags must be carried through: `updateFeatureFlags`
+      // does a FULL `set(... next)` (not a merge), so omitting them would silently
+      // wipe a previously-stored value. The autonomy kill switch is toggled this
+      // way, so its persistence depends on this line.
+      coworkRuntimeQualityV1Disabled:
+        patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
+      autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -7014,6 +8094,9 @@ export class GatewayService {
       improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
       improvementActivationV1Enabled:
         stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
+      coworkRuntimeQualityV1Disabled:
+        stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
+      autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
     };
   }
 
@@ -8949,6 +10032,10 @@ function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
   );
 }
 
+function isChatTurnDegradedRecord(value: unknown): boolean {
+  return isRecord(value) && typeof value.reason === "string" && typeof value.recoveredByModel === "boolean";
+}
+
 function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
   return (
     isRecord(value) &&
@@ -9096,6 +10183,9 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             content: value.content,
             ...(typeof value.repaired === "boolean" ? { repaired: value.repaired } : {}),
             ...(isChatTurnRepairRecord(value.repair) ? { repair: value.repair } : {}),
+            ...(isChatTurnDegradedRecord(value.degraded)
+              ? { degraded: value.degraded as { reason: string; recoveredByModel: boolean } }
+              : {}),
           }
         : undefined;
     case "tool_start":

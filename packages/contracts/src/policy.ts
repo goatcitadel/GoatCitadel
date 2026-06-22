@@ -41,6 +41,151 @@ export interface PermissionProfileRecord {
   archivedAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Restricted autonomous-turn permission profiles (Phase 1: proactive/autonomous)
+// ---------------------------------------------------------------------------
+//
+// Shared source of truth for the two built-in restricted profiles used by every
+// cron / scheduled / heartbeat / proactive / background autonomous turn. They
+// live here (the contracts package) so both the storage built-in seed
+// (`permission-profile-repo.ts`) and the gateway policy builder
+// (`gateway/autonomous-turn-policy.ts`) reference the same records without a
+// cross-package dependency inversion. These profiles only *narrow* the tool
+// surface — deny-wins and Citadel Wards in the policy engine are untouched.
+
+/** Permission-profile id for cron / scheduled autonomous agent turns. */
+export const SCHEDULED_TURN_PERMISSION_PROFILE_ID = "scheduled-restricted";
+
+/** Permission-profile id for silent heartbeat (read-only) self-wake turns. */
+export const HEARTBEAT_PERMISSION_PROFILE_ID = "heartbeat-restricted";
+
+/** Stable created/updated timestamp for the built-in restricted profiles. */
+const RESTRICTED_PROFILE_CREATED_AT = "2026-06-21T00:00:00.000Z";
+
+/**
+ * Dangerous / side-effecting tool patterns denied on scheduled autonomous
+ * turns. Denied tools fail closed in the engine (deny-wins): an autonomous turn
+ * that needs one must raise an approval instead of acting silently.
+ *
+ * `schedule.*` is denied outright (anti-recursion): a scheduled/heartbeat turn
+ * runs unattended, so there is no operator to clear an approval. Approval-gating
+ * self-scheduling is therefore NOT a hard block for an autonomous turn — it
+ * would simply park forever (or, worse, auto-approve under a permissive policy).
+ * Denying the whole family means a scheduled turn can never self-schedule more
+ * work. Interactive surfaces still get `schedule.manage` (it is not denied on
+ * non-restricted profiles), so a human can always create/list/cancel schedules.
+ */
+export const SCHEDULED_RESTRICTED_DENY: readonly string[] = [
+  "shell.*",
+  "fs.write",
+  "fs.move",
+  "fs.delete",
+  "git.commit",
+  "git.push",
+  "http.post",
+  "*.send",
+  "mcp.invoke",
+  "browser.interact",
+  // Anti-recursion: scheduled/heartbeat turns cannot create more scheduled work.
+  "schedule.*",
+];
+
+/**
+ * Read-only tool allowlist for heartbeat turns. Expressed as the profile's
+ * effective `toolPatterns` so the deny-by-default posture is structural.
+ */
+export const HEARTBEAT_READ_ONLY_ALLOW: readonly string[] = [
+  "time.now",
+  "memory.read",
+  "memory.search",
+  "calendar.read",
+  "gmail.read",
+];
+
+/**
+ * Deny list for heartbeat turns — enforces a genuine read-only allowlist.
+ *
+ * A heartbeat profile cannot be made read-only by `toolPatterns` alone:
+ * `resolveEffectivePolicy` unions the *base* config's `tools.allow` (which in
+ * the shipped `tool-policy.json` includes broad families such as `session.*`,
+ * `chat.*`, `memory.*`, `skills.*`, `docs.*`, `knowledge.*`, `fs.read`,
+ * `file.*`, `code.search`) into the effective tool set. Because deny-wins is
+ * absolute, the only reliable lever is the deny list. We therefore deny every
+ * non-allowlisted family the base config might grant, plus the dangerous set.
+ * The result is that the effective surface collapses to
+ * {@link HEARTBEAT_READ_ONLY_ALLOW} ("deny the rest"), regardless of how
+ * permissive the base config is. The `memory.read` / `memory.search` reads stay
+ * callable because we deny only the `memory` *write* ops, not `memory.*`.
+ */
+export const HEARTBEAT_RESTRICTED_DENY: readonly string[] = [
+  // Dangerous / side-effecting set (same as scheduled).
+  ...SCHEDULED_RESTRICTED_DENY,
+  // Caution-level mutations inside read families.
+  "memory.write",
+  "memory.upsert",
+  // Non-allowlisted base-config read families (collapse to the allowlist).
+  "fs.*",
+  "file.*",
+  "code.*",
+  "docs.*",
+  "knowledge.*",
+  "session.*",
+  // Authoring / lifecycle / messaging families not needed for a silent read.
+  // (`schedule.*` is already denied via the inherited SCHEDULED_RESTRICTED_DENY.)
+  "skills.*",
+  "skill.*",
+  "chat.*",
+  "connector.*",
+  "task.*",
+  "http.*",
+];
+
+/** The scheduled-restricted built-in profile (side-effecting tools denied). */
+export const SCHEDULED_RESTRICTED_PROFILE: PermissionProfileRecord = {
+  profileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  label: "Scheduled (Restricted)",
+  description:
+    "Restricted profile for cron/scheduled autonomous agent turns. Side-effecting and dangerous tools are denied (they surface as approvals); risky tools require approval. Deny-wins and Citadel Wards still apply.",
+  builtin: true,
+  status: "active",
+  scope: "global",
+  approvalMode: "approve_risky",
+  toolPatterns: ["*"],
+  allow: [],
+  deny: [...SCHEDULED_RESTRICTED_DENY],
+  readAccessMode: "approval_required",
+  defaultForSurfaces: [],
+  createdBy: "system",
+  createdAt: RESTRICTED_PROFILE_CREATED_AT,
+  updatedAt: RESTRICTED_PROFILE_CREATED_AT,
+};
+
+/** The heartbeat-restricted built-in profile (read-only allowlist). */
+export const HEARTBEAT_RESTRICTED_PROFILE: PermissionProfileRecord = {
+  profileId: HEARTBEAT_PERMISSION_PROFILE_ID,
+  label: "Heartbeat (Read-only)",
+  description:
+    "Read-only profile for silent heartbeat self-wake turns. Only time/memory/calendar/gmail read tools are available; all side-effecting tools are denied. Deny-wins and Citadel Wards still apply.",
+  builtin: true,
+  status: "active",
+  scope: "global",
+  approvalMode: "approve_all",
+  toolPatterns: [...HEARTBEAT_READ_ONLY_ALLOW],
+  allow: [],
+  deny: [...HEARTBEAT_RESTRICTED_DENY],
+  readAccessMode: "approval_required",
+  defaultForSurfaces: [],
+  createdBy: "system",
+  createdAt: RESTRICTED_PROFILE_CREATED_AT,
+  updatedAt: RESTRICTED_PROFILE_CREATED_AT,
+};
+
+/** Both restricted profiles seeded for autonomous turns, in id order. */
+export const AUTONOMOUS_RESTRICTED_PROFILES: readonly PermissionProfileRecord[] = [
+  SCHEDULED_RESTRICTED_PROFILE,
+  HEARTBEAT_RESTRICTED_PROFILE,
+];
+
 export interface PermissionProfileCreateInput {
   label: string;
   description?: string;

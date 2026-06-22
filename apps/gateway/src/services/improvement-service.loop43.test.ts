@@ -8,6 +8,11 @@ import {
   type ImprovementServiceCallbacks,
   type ImprovementServiceContext,
 } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 
 interface Harness {
   rootDir: string;
@@ -153,6 +158,9 @@ function createHarness(): Harness {
     restoreRoutingPolicySnapshot: vi.fn(),
     createChatCompletion: vi.fn(),
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: vi.fn(async () => []),
     retryChatTurn: vi.fn(),
     backgroundTasks: new Set<Promise<void>>(),

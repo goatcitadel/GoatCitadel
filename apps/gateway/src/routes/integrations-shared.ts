@@ -37,9 +37,15 @@ export const externalSideEffectRunsQuerySchema = z.object({
 });
 
 const externalConnectorStatusEnum = z.enum(["new", "reviewed", "hidden", "staged"]);
+const externalConnectorWorkspaceIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[a-zA-Z0-9._-]+$/, "workspaceId contains unsupported characters");
 
 export const externalConnectorServicesQuerySchema = z.object({
-  workspaceId: z.string().trim().min(1).max(80).optional(),
+  workspaceId: externalConnectorWorkspaceIdSchema.optional(),
   search: z.string().trim().min(1).max(120).optional(),
   status: z.union([externalConnectorStatusEnum, z.literal("all")]).optional(),
   includeActions: z.preprocess((value) => {
@@ -70,11 +76,11 @@ export const externalConnectorActionParamsSchema = externalConnectorServiceParam
 });
 
 export const externalConnectorDetailQuerySchema = z.object({
-  workspaceId: z.string().trim().min(1).max(80).optional(),
+  workspaceId: externalConnectorWorkspaceIdSchema.optional(),
 });
 
 export const externalConnectorReviewPatchSchema = z.object({
-  workspaceId: z.string().trim().min(1).max(80).optional(),
+  workspaceId: externalConnectorWorkspaceIdSchema.optional(),
   status: externalConnectorStatusEnum.optional(),
   pinned: z.boolean().optional(),
   note: z.string().max(2000).nullable().optional(),
@@ -82,7 +88,7 @@ export const externalConnectorReviewPatchSchema = z.object({
 });
 
 export const externalConnectorStageActionSchema = z.object({
-  workspaceId: z.string().trim().min(1).max(80).optional(),
+  workspaceId: externalConnectorWorkspaceIdSchema.optional(),
   note: z.string().trim().min(1).max(2000).optional(),
 });
 

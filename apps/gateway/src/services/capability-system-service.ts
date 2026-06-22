@@ -3073,54 +3073,87 @@ function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunC
 
 function buildSkillLifecycleRecord(skill: LoadedSkill): SkillLifecycleRecord {
   const now = new Date().toISOString();
-  const provenance = readSkillProvenance(skill);
-  const mapped = mapSkillSource(skill.source, provenance);
+  const sourceManifest = readSkillSourceManifest(skill);
+  const mapped = mapSkillSource(skill.source, sourceManifest);
   return {
     skillId: skill.skillId,
     category: mapped.category,
     lifecycleState: mapped.lifecycleState,
     trustLabel: mapped.trustLabel,
     reviewWarning: mapped.reviewWarning,
-    provenance,
+    provenance: sourceManifest.provenance,
     createdAt: now,
     updatedAt: now,
   };
 }
 
-function readSkillProvenance(skill: LoadedSkill): SkillLifecycleRecord["provenance"] | undefined {
+interface SkillSourceManifestRead {
+  provenance?: SkillLifecycleRecord["provenance"];
+  activationLifecycleState?: Extract<SkillLifecycleRecord["lifecycleState"], "approved" | "trusted">;
+}
+
+function readSkillSourceManifest(skill: LoadedSkill): SkillSourceManifestRead {
   if (skill.source !== "extra") {
     return {
-      source: skill.source,
+      provenance: {
+        source: skill.source,
+      },
     };
   }
   const manifestPath = path.join(skill.dir, "source.json");
   if (!fsSync.existsSync(manifestPath)) {
     return {
-      source: skill.source,
+      provenance: {
+        source: skill.source,
+      },
     };
   }
   try {
-    const parsed = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as {
-      candidate?: {
-        sourceRef?: string;
-        sourceProvider?: string;
-      };
-    };
+    const parsed = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+    const candidate = isRecord(parsed.candidate) ? parsed.candidate : undefined;
+    const activationEvidence = parsed.activationEvidence ?? parsed.activation ?? parsed.governedActivation;
     return {
-      source: skill.source,
-      sourceRef: parsed.candidate?.sourceRef,
-      sourceProvider: parsed.candidate?.sourceProvider,
+      provenance: {
+        source: skill.source,
+        sourceRef: typeof candidate?.sourceRef === "string" ? candidate.sourceRef : undefined,
+        sourceProvider: typeof candidate?.sourceProvider === "string" ? candidate.sourceProvider : undefined,
+      },
+      activationLifecycleState: readSkillActivationLifecycleState(activationEvidence),
     };
   } catch {
     return {
-      source: skill.source,
+      provenance: {
+        source: skill.source,
+      },
     };
   }
 }
 
+function readSkillActivationLifecycleState(
+  value: unknown,
+): Extract<SkillLifecycleRecord["lifecycleState"], "approved" | "trusted"> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const rawState = typeof value.lifecycleState === "string" ? value.lifecycleState : value.status;
+  if (rawState !== "approved" && rawState !== "active" && rawState !== "trusted") {
+    return undefined;
+  }
+  const hasActivationTime = ["activatedAt", "approvedAt", "createdAt"].some(
+    (key) => typeof value[key] === "string" && value[key],
+  );
+  const hasOperatorProof = ["activatedBy", "approvedBy", "operatorId", "approvalId"].some(
+    (key) => typeof value[key] === "string" && value[key],
+  );
+  if (!hasActivationTime || !hasOperatorProof) {
+    return undefined;
+  }
+  return rawState === "trusted" ? "trusted" : "approved";
+}
+
 function mapSkillSource(
   source: LoadedSkill["source"],
-  provenance: SkillLifecycleRecord["provenance"] | undefined,
+  manifest: SkillSourceManifestRead,
 ): Pick<SkillLifecycleRecord, "category" | "lifecycleState" | "trustLabel" | "reviewWarning"> {
   switch (source) {
     case "bundled":
@@ -3145,9 +3178,13 @@ function mapSkillSource(
     default:
       return {
         category: "community_imported",
-        lifecycleState: "approved",
+        lifecycleState: manifest.activationLifecycleState ?? "candidate",
         trustLabel: "Imported/community",
-        reviewWarning: provenance?.sourceRef ? undefined : "Missing provenance manifest; review before trusting.",
+        reviewWarning: manifest.activationLifecycleState
+          ? undefined
+          : manifest.provenance?.sourceRef
+            ? "Imported skill remains inspectable only until governed activation evidence is recorded."
+            : "Missing provenance manifest; imported skill remains non-callable until governed activation.",
       };
   }
 }
@@ -3786,24 +3823,130 @@ function buildCodeModeApprovalPayload(input: {
 }
 
 function validateGuestSource(source: string): void {
-  const forbiddenPatterns: Array<{ pattern: RegExp; label: string }> = [
-    { pattern: /\bimport\s*\(/u, label: "dynamic import" },
-    { pattern: /\bimport\s+[^("'`]/u, label: "import statements" },
-    { pattern: /\brequire\s*\(/u, label: "require" },
-    { pattern: /\bprocess\b/u, label: "process" },
-    { pattern: /\bfetch\b/u, label: "fetch" },
-    {
-      pattern: /\bsetTimeout\b|\bsetInterval\b|\bsetImmediate\b|\bqueueMicrotask\b/u,
-      label: "timers or schedulers",
-    },
-  ];
-  for (const forbidden of forbiddenPatterns) {
-    if (forbidden.pattern.test(source)) {
-      throw new ValidationError({
-        message: `Code Mode source may not reference ${forbidden.label}.`,
-      });
-    }
+  const sourceFile = ts.createSourceFile(
+    "code-mode-source.ts",
+    source,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const parseDiagnostics =
+    (sourceFile as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics ?? [];
+  const parseError = parseDiagnostics[0];
+  if (parseError) {
+    throw new ValidationError({
+      message: `Code Mode source could not be parsed: ${ts.flattenDiagnosticMessageText(parseError.messageText, "\n")}`,
+    });
   }
+  const forbiddenLabel = findForbiddenGuestSourceReference(sourceFile);
+  if (forbiddenLabel) {
+    throw new ValidationError({
+      message: `Code Mode source may not reference ${forbiddenLabel}.`,
+    });
+  }
+}
+
+function findForbiddenGuestSourceReference(root: ts.Node): string | undefined {
+  let forbiddenLabel: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (forbiddenLabel) {
+      return;
+    }
+    if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
+      forbiddenLabel = "import statements";
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      forbiddenLabel = readBlockedGuestSourceCallLabel(node.expression);
+      if (forbiddenLabel) {
+        return;
+      }
+    }
+    if (ts.isPropertyAccessExpression(node) && isProcessGuestSourceExpression(node.expression)) {
+      forbiddenLabel = "process";
+      return;
+    }
+    if (ts.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(node)) {
+      forbiddenLabel = readBlockedGuestSourceIdentifierLabel(node.text);
+      if (forbiddenLabel) {
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return forbiddenLabel;
+}
+
+function readBlockedGuestSourceCallLabel(expression: ts.Expression): string | undefined {
+  if (expression.kind === ts.SyntaxKind.ImportKeyword) {
+    return "dynamic import";
+  }
+  if (isProcessGuestSourceExpression(expression)) {
+    return "process";
+  }
+  if (ts.isIdentifier(expression)) {
+    return readBlockedGuestSourceIdentifierLabel(expression.text);
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    return readBlockedGuestSourceIdentifierLabel(expression.name.text);
+  }
+  return undefined;
+}
+
+function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined {
+  if (text === "require") {
+    return "require";
+  }
+  if (text === "process") {
+    return "process";
+  }
+  if (text === "fetch") {
+    return "fetch";
+  }
+  if (text === "setTimeout" || text === "setInterval" || text === "setImmediate" || text === "queueMicrotask") {
+    return "timers or schedulers";
+  }
+  return undefined;
+}
+
+function isProcessGuestSourceExpression(expression: ts.Expression): boolean {
+  if (ts.isIdentifier(expression)) {
+    return expression.text === "process";
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text === "process" || isProcessGuestSourceExpression(expression.expression);
+  }
+  return false;
+}
+
+function isBlockedGuestSourceIdentifierReference(identifier: ts.Identifier): boolean {
+  const parent = identifier.parent;
+  if (!parent) {
+    return true;
+  }
+  if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isPropertyAssignment(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isBindingElement(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isVariableDeclaration(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isParameter(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isFunctionDeclaration(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) {
+    return false;
+  }
+  return true;
 }
 
 function transpileGuestSource(language: CodeModeLanguage, source: string): string {
@@ -4079,4 +4222,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const __internal = {
   createMinimalSyntheticEnv,
+  // Exposed for tests asserting the single execution chokepoint: a self-authored
+  // skill must be non-callable while `candidate` and callable only once a
+  // governed activation flips it to `approved`/`trusted`.
+  isSkillCallable,
 };

@@ -223,8 +223,8 @@ export function MissionControlNextApp() {
    * Task #38 ("Find a setting"): settings sections appear after the area
    * jumps so "Go to Settings" still wins for a bare "s", and the specific
    * leaves surface as the user types more (e.g. "providers", "mcp").
-   * Includes the rail-hidden onboarding + permissions sections so deep
-   * links stay discoverable.
+   * Includes the release-bearing trust/setup leaves so rail and palette
+   * discoverability stay aligned.
    */
   const commandItems = useMemo<CommandPaletteItem[]>(() => {
     const areaItems = PRIMARY_NAV.map(({ area }) => {
@@ -296,6 +296,7 @@ export function MissionControlNextApp() {
     onDismissTopmost: dismissTopmost,
     onJumpToArea: (area) => navigate(buildPrimaryAreaRoute(area)),
     onToggleShortcuts: () => setShortcutsOpen((open) => !open),
+    shellShortcutsSuspended: shortcutsOpen,
   });
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
@@ -1013,7 +1014,11 @@ export function MissionControlNextApp() {
               </div>
             </aside>
 
-            <main id="main-content" tabIndex={-1} className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}>
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}
+            >
               <PageErrorBoundary
                 resetKey={pageErrorResetKey}
                 pageLabel={currentRouteLabel}
@@ -1278,7 +1283,7 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
 export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
   // Grouping is data-driven from RAIL_GROUPS (route-model) so the nav rail and
   // breadcrumb kickers (routeKicker) can never disagree. See RAIL_GROUPS for the
-  // H-13 rationale on intentionally-ungrouped settings leaves.
+  // rationale on any intentionally ungrouped leaves.
   const groups = RAIL_GROUPS[area];
   if (!groups) {
     return [{ id: `${area}-primary`, items }];

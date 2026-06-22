@@ -81,7 +81,6 @@ export class ChatDelegationRunRepository {
       LEFT JOIN chat_session_meta meta ON meta.session_id = runs.session_id
       WHERE (@workspaceId IS NULL OR meta.workspace_id = @workspaceId)
         AND (@sessionId IS NULL OR runs.session_id = @sessionId)
-        AND (@parentRunId IS NULL OR runs.run_id = @parentRunId)
       ORDER BY runs.started_at DESC, runs.run_id DESC
       LIMIT @limit
     `);
@@ -208,10 +207,12 @@ export class ChatDelegationRunRepository {
       limit?: number;
     } = {},
   ): ChatDelegationRunRecord[] {
+    if (input.parentRunId?.trim()) {
+      return [];
+    }
     const rawRows = this.listRecentStmt.all({
       workspaceId: input.workspaceId?.trim() || null,
       sessionId: input.sessionId?.trim() || null,
-      parentRunId: input.parentRunId?.trim() || null,
       limit: Math.max(1, Math.min(input.limit ?? 100, 1000)),
     });
     if (!Array.isArray(rawRows)) {
