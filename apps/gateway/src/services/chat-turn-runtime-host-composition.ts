@@ -148,6 +148,7 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
   return {
     extractAndPersistLearnedMemory: (sessionId, content, sourceRef) =>
       source.extractAndPersistLearnedMemory(sessionId, content, sourceRef),
+    recordTurnCommitments: (input) => source.recordTurnCommitments(input),
     recordCapabilityGapFromTrace: (input) => source.recordCapabilityGapFromTrace(input),
     scheduleChatMemoryContextPrewarm: (input) => source.scheduleChatMemoryContextPrewarm(input),
     scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>

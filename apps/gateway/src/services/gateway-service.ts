@@ -434,6 +434,8 @@ import {
   buildAutonomousTurnContext,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
+import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
 import {
   buildScheduleCreateActionConfig,
   isScheduledTurnContext,
@@ -763,6 +765,7 @@ export class GatewayService {
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
   private readonly approvalExplainer: ApprovalExplainerService;
+  private readonly commitmentClassifier: CommitmentClassifierService;
   public readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
@@ -1037,6 +1040,12 @@ export class GatewayService {
         this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
+    this.commitmentClassifier = new CommitmentClassifierService({
+      storage: this.storage,
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+    });
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
@@ -1687,6 +1696,7 @@ export class GatewayService {
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
       requireChatTurnContext: (sessionId, turnId) => this.requireChatTurnContext(sessionId, turnId),
@@ -1770,6 +1780,7 @@ export class GatewayService {
       hooksService: this.hooksService,
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
+      recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
@@ -2413,6 +2424,7 @@ export class GatewayService {
       { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
+      { label: "commitment sweep", run: () => this.runCommitmentSweep() },
       { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
       { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
     ];
@@ -3544,6 +3556,48 @@ export class GatewayService {
     },
   ): void {
     return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
+  }
+
+  /**
+   * Fire-and-forget post-turn commitment inference (P1-F3). Resolves the master
+   * autonomy / eval-integrity / non-human guards from session metadata, then
+   * runs the cheap hidden classifier as a tracked background task. Never throws
+   * into the calling turn; classifier failures are swallowed inside the service.
+   */
+  public recordTurnCommitments(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+  }): void {
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    if (!autonomyEnabled) {
+      return;
+    }
+    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const evalIntegrityTurn = origin === "prompt_pack";
+    const humanSession = origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+    if (evalIntegrityTurn || !humanSession) {
+      return;
+    }
+    const task = this.commitmentClassifier
+      .recordTurnCommitments({
+        sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        autonomyEnabled,
+        evalIntegrityTurn,
+        humanSession,
+      })
+      .then(() => undefined)
+      .catch((error) => {
+        log.warn("commitment classifier failed", {
+          sessionId: input.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.registerBackgroundTask(task);
   }
 
   public listChatSessionLearnedMemory(
@@ -4829,6 +4883,37 @@ export class GatewayService {
       sessionId,
       turnId: run?.turnId,
     };
+  }
+
+  /**
+   * Maintenance-tick commitment sweep (P1-F3). Delivers due + pending inferred
+   * check-ins (oldest-due first) as autonomous (restricted-profile) turns seeded
+   * with the suggested text, respecting per-session cooldown + active-hours, then
+   * marks them sent. No-op while the master autonomy switch is off or durable
+   * execution is disabled (the delivery path requires a durable run). Superseded /
+   * dismissed / already-sent rows are excluded by `listDue` (pending-only).
+   */
+  private async runCommitmentSweep(): Promise<void> {
+    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
+    await runCommitmentSweep({
+      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+      listDueCommitments: (nowIso, limit) => this.storage.agentCommitments.listDue(nowIso, limit),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      deliverCommitment: async (commitment) => {
+        const run = await this.enqueueAutonomousChatTurn({
+          sessionId: commitment.sessionId,
+          prompt: buildCommitmentCheckInPrompt(commitment.suggestedText),
+          runId: `commitment_${commitment.commitmentId}`,
+          systemActorId: "system-commitment",
+          reason: `commitment check-in:${commitment.commitmentId}`,
+          deliverMode: "always",
+        });
+        return Boolean(run?.runId);
+      },
+      markSent: (commitmentId) => this.storage.agentCommitments.markSent(commitmentId),
+    });
   }
 
   /**

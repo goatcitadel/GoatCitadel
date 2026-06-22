@@ -866,6 +866,7 @@ function createHost(): ChatTurnStreamHost & {
     collectSpecialistCandidateSuggestions: vi.fn(() => []),
     publishRealtime: vi.fn(),
     extractAndPersistLearnedMemory: vi.fn(),
+    recordTurnCommitments: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(),
     recordCapabilityGapFromTrace: vi.fn(),

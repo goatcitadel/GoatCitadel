@@ -1489,6 +1489,16 @@ export async function* streamPreparedAgentChatTurn(
         sourceRef: assistantMessageId,
         trace: hydratedTrace,
       });
+      // P1-F3: infer future follow-up check-ins from a successful turn (streaming
+      // path). Fire-and-forget beside learned-memory; host applies all guards.
+      if (hydratedTrace.status === "completed") {
+        host.recordTurnCommitments({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          userText: prepared.content,
+          assistantText: finalText,
+        });
+      }
       host.scheduleChatMemoryContextPrewarm({
         sessionId,
         prompt: finalText,
@@ -1978,6 +1988,16 @@ export async function* streamPreparedAgentChatTurn(
         sourceRef: assistantMessageId,
         trace: hydratedTrace,
       });
+      // P1-F3: infer future follow-up check-ins from a successful turn (durable
+      // streaming path). Fire-and-forget beside learned-memory; host guards apply.
+      if (hydratedTrace.status === "completed") {
+        host.recordTurnCommitments({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          userText: prepared.content,
+          assistantText: finalText,
+        });
+      }
       host.scheduleChatMemoryContextPrewarm({
         sessionId,
         prompt: finalText,

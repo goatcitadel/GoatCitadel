@@ -115,6 +115,20 @@ export interface ChatTurnMemorySideEffects {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void;
+  /**
+   * Fire-and-forget post-turn commitment inference (P1-F3). Runs a cheap hidden
+   * classifier over the just-completed transcript to infer future follow-up
+   * check-ins, persisted (deduped, confidence-gated) for the maintenance sweep
+   * to deliver. The host applies the master-autonomy / eval-integrity /
+   * non-human guards; the entry service only supplies the transcript. Errors are
+   * swallowed by the host — this never affects the turn.
+   */
+  recordTurnCommitments(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+  }): void;
   scheduleChatMemoryContextPrewarm(input: {
     sessionId: string;
     prompt: string;

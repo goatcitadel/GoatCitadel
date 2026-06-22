@@ -1436,6 +1436,33 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 123,
+    name: "agent_commitments_schema",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_commitments (
+          commitment_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT 'default',
+          kind TEXT NOT NULL,
+          due_at TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          dedupe_key TEXT NOT NULL,
+          suggested_text TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_by TEXT NOT NULL DEFAULT 'classifier',
+          created_at TEXT NOT NULL,
+          sent_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_commitments_session_dedupe
+          ON agent_commitments(session_id, dedupe_key);
+        CREATE INDEX IF NOT EXISTS idx_agent_commitments_status_due
+          ON agent_commitments(status, due_at);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

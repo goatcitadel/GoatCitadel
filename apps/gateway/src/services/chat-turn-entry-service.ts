@@ -538,6 +538,17 @@ async function runAgentSendChatMessageLlmPath(
       sourceRef: assistantEventId,
       trace: hydratedTrace,
     });
+    // P1-F3: infer future follow-up check-ins from a successful turn's transcript
+    // (fire-and-forget, beside learned-memory). The host applies the autonomy /
+    // eval-integrity / non-human guards and swallows errors.
+    if (finalTraceStatus === "completed") {
+      host.recordTurnCommitments({
+        sessionId,
+        workspaceId: prepared.workspaceId,
+        userText: prepared.content,
+        assistantText,
+      });
+    }
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
     host.publishRealtime(
       "chat_thread_updated",

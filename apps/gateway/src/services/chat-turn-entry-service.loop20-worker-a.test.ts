@@ -200,6 +200,7 @@ function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
     collectSpecialistCandidateSuggestions: vi.fn(() => []),
     recordCapabilityGapFromTrace: vi.fn(),
     extractAndPersistLearnedMemory: vi.fn(),
+    recordTurnCommitments: vi.fn(),
     updateActiveLeafOrThrow: vi.fn(),
     publishRealtime: vi.fn(),
     isReplayScratchSession: vi.fn(() => false),

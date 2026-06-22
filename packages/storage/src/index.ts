@@ -52,6 +52,7 @@ import { ChatSideChatRepository } from "./chat-side-chat-repo.js";
 import { ChatAttachmentRepository } from "./chat-attachment-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
+import { AgentCommitmentRepository } from "./agent-commitment-repo.js";
 import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
 import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
 import { ChatExecutionPlanRepository } from "./chat-execution-plan-repo.js";
@@ -173,6 +174,7 @@ export class Storage {
   public readonly chatAttachments: ChatAttachmentRepository;
   public readonly chatSessionPrefs: ChatSessionPrefsRepository;
   public readonly sessionAutonomyPrefs: SessionAutonomyPrefsRepository;
+  public readonly agentCommitments: AgentCommitmentRepository;
   public readonly chatMessages: ChatMessageRepository;
   public readonly chatTurnTraces: ChatTurnTraceRepository;
   public readonly chatStreamEvents: ChatStreamEventRepository;
@@ -285,6 +287,7 @@ export class Storage {
     this.chatAttachments = new ChatAttachmentRepository(this.db);
     this.chatSessionPrefs = new ChatSessionPrefsRepository(this.db);
     this.sessionAutonomyPrefs = new SessionAutonomyPrefsRepository(this.db);
+    this.agentCommitments = new AgentCommitmentRepository(this.db);
     this.chatMessages = new ChatMessageRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.chatTurnTraces = new ChatTurnTraceRepository(this.db);
     this.chatStreamEvents = new ChatStreamEventRepository(this.db);
