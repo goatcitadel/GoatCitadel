@@ -23,6 +23,12 @@ export interface McpAuthStateRecord {
   tokenExpiresAt?: string;
   oauthState?: string;
   scopes?: string[];
+  /**
+   * MCP v2 resource indicator: the resource server this token is scoped to. Makes
+   * the per-server token scoping explicit/auditable so a token minted for one MCP
+   * server is not reused against another (resource-indicator semantics).
+   */
+  resourceIndicator?: string;
   updatedAt: string;
   lastRefreshedAt?: string;
   error?: string;

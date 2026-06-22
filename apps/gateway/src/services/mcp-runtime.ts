@@ -7,6 +7,7 @@ import type {
   McpNormalizedContentItem,
   McpServerRecord,
   McpToolRecord,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
@@ -56,6 +57,22 @@ interface HttpMcpClient {
 export interface McpRuntimeTransportOptions {
   networkAllowlist?: string[];
   oauthAccessTokenResolver?: (server: McpServerRecord) => Promise<string | undefined> | string | undefined;
+  /** Caller context forwarded into `tools/list` so MCP servers can filter tools by who is asking (MCP v2 context-aware discovery). */
+  actorContext?: ToolPolicyActorContext;
+}
+
+/** Build the `tools/list` params, namespacing caller context under `context` so servers that ignore it are unaffected. */
+function buildToolsListParams(actorContext?: ToolPolicyActorContext): Record<string, unknown> {
+  if (!actorContext) {
+    return {};
+  }
+  const context: Record<string, unknown> = {};
+  if (actorContext.operatorId) context.operatorId = actorContext.operatorId;
+  if (actorContext.workspaceId) context.workspaceId = actorContext.workspaceId;
+  if (actorContext.sessionId) context.sessionId = actorContext.sessionId;
+  if (actorContext.permissionProfileId) context.permissionProfileId = actorContext.permissionProfileId;
+  if (actorContext.surface) context.surface = actorContext.surface;
+  return Object.keys(context).length > 0 ? { context } : {};
 }
 
 export interface McpBrowserFallbackTarget {
@@ -97,12 +114,13 @@ export async function discoverMcpTools(
   timeoutMs = DEFAULT_STDIO_TIMEOUT_MS,
   options: McpRuntimeTransportOptions = {},
 ): Promise<McpToolRecord[]> {
+  const listParams = buildToolsListParams(options.actorContext);
   if (server.transport === "http" || server.transport === "sse") {
     if (!server.url?.trim()) {
       return [];
     }
     return withHttpMcpClient(server, timeoutMs, options, async (client) => {
-      const response = await client.request("tools/list", {});
+      const response = await client.request("tools/list", listParams);
       return normalizeDiscoveredTools(server, response);
     });
   }
@@ -110,7 +128,7 @@ export async function discoverMcpTools(
     return [];
   }
   return withStdioMcpClient(server, timeoutMs, async (client) => {
-    const response = await client.request("tools/list", {});
+    const response = await client.request("tools/list", listParams);
     return normalizeDiscoveredTools(server, response);
   });
 }

@@ -66,6 +66,7 @@ describe("McpOAuthTokenService", () => {
           refreshTokenRef: "keychain:goatcitadel:mcp:server-1:refresh-token",
           tokenExpiresAt: "2026-06-03T13:00:00.000Z",
           scopes: ["remote.read", "remote.write"],
+          resourceIndicator: "mcp://server-1",
           oauthState: undefined,
           lastCodePreview: "secret-c",
         });

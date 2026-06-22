@@ -165,6 +165,7 @@ export class McpOAuthTokenService {
       refreshTokenRef: refreshToken || previous.refreshTokenRef ? tokenRefFromAccount(refreshAccount) : undefined,
       tokenExpiresAt: resolveTokenExpiresAt(response),
       scopes: normalizeScopes(response.scope) ?? previous.scopes,
+      resourceIndicator: `mcp://${serverId}`,
       updatedAt: now,
       lastRefreshedAt: now,
       error: undefined,

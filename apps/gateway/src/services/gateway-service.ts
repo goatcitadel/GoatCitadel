@@ -1475,8 +1475,7 @@ export class GatewayService {
       restoreRoutingPolicySnapshot: (snapshotRef) => this.restoreRoutingPolicySnapshot(snapshotRef),
       captureSkillRevisionSnapshot: (targetKey, revisionRef) =>
         this.captureSkillRevisionSnapshot(targetKey, revisionRef),
-      applySkillRevisionCandidate: (targetKey, revisionRef) =>
-        this.applySkillRevisionCandidate(targetKey, revisionRef),
+      applySkillRevisionCandidate: (targetKey, revisionRef) => this.applySkillRevisionCandidate(targetKey, revisionRef),
       restoreSkillRevisionSnapshot: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
@@ -1543,8 +1542,7 @@ export class GatewayService {
         this.updateFeatureFlags({ autonomyV1Disabled: disabled });
       },
       restoreHandlers: {
-        restoreSkillRevision: (snapshotRef) =>
-          this.restoreSkillRevisionSnapshot(snapshotRef as ImprovementRef),
+        restoreSkillRevision: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef as ImprovementRef),
         restoreOperatorProfile: (priorSnapshot) =>
           this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord),
         restoreCuratorArchive: (skillId) => this.restoreCuratorIdleSkillSnapshot(skillId),
@@ -2872,8 +2870,7 @@ export class GatewayService {
    */
   private advanceBackgroundReviewCounter(): boolean {
     try {
-      const current =
-        this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY)?.value ?? 0;
+      const current = this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY)?.value ?? 0;
       const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
       if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
         this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
@@ -3839,7 +3836,8 @@ export class GatewayService {
     }
     const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
     const evalIntegrityTurn = origin === "prompt_pack";
-    const humanSession = origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+    const humanSession =
+      origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
     if (evalIntegrityTurn || !humanSession) {
       return;
     }
@@ -5557,8 +5555,7 @@ export class GatewayService {
         throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
       }
       const createdBy = existing.actionConfig?.agentTurn?.createdBy;
-      const owned =
-        !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
+      const owned = !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
       if (!owned) {
         throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
       }
@@ -8061,8 +8058,7 @@ export class GatewayService {
       // does a FULL `set(... next)` (not a merge), so omitting them would silently
       // wipe a previously-stored value. The autonomy kill switch is toggled this
       // way, so its persistence depends on this line.
-      coworkRuntimeQualityV1Disabled:
-        patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
+      coworkRuntimeQualityV1Disabled: patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8364,12 +8360,13 @@ export class GatewayService {
   /** @internal */ public async resolveConnectedMcpTools(
     server: McpServerRecord,
     existingTools: McpToolRecord[],
+    actorContext?: ToolPolicyActorContext,
   ): Promise<McpToolRecord[]> {
     if (isInternalMcpApprovalInboxServer(server)) {
       return createInternalMcpApprovalInboxTools(server.serverId);
     }
     if (server.transport === "stdio") {
-      const discovered = await discoverMcpTools(server);
+      const discovered = await discoverMcpTools(server, undefined, { actorContext });
       if (discovered.length > 0) {
         return discovered;
       }
@@ -8378,6 +8375,7 @@ export class GatewayService {
       const discovered = await discoverMcpTools(server, undefined, {
         networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
         oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
+        actorContext,
       });
       if (discovered.length > 0) {
         return discovered;
