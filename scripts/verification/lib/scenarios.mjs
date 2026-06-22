@@ -5959,23 +5959,10 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
   }
 
   // The dev seed assigns the verification workspace to the default personal
-  // Citadel. Seed that Citadel with governance content so Citadel routes avoid
-  // 404 console errors while Projects/Sessions/Artifacts keep a matching
-  // workspace + citadel scope.
+  // Citadel. Seed that existing Citadel with governance content so Citadel
+  // routes avoid 404 console errors while Projects/Sessions/Artifacts keep a
+  // matching workspace + citadel scope.
   const citadelId = "personal";
-  assertOk(
-    await requestJson(gatewayUrl, "/api/v1/citadels", {
-      method: "POST",
-      body: {
-        citadelId,
-        name: "Mission Control Next Personal Verification Citadel",
-        slug: citadelId,
-        kind: "personal",
-        defaultWorkspaceId: workspaceId,
-      },
-    }),
-    "create mission-control-next citadel identity",
-  );
   assertOk(
     await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/charter`, {
       method: "PUT",
