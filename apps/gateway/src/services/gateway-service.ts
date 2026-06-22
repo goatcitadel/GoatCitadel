@@ -437,6 +437,7 @@ import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
+import { BackgroundReviewService } from "./background-review-service.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
 import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
@@ -638,6 +639,13 @@ export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angele
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
+/**
+ * P2-S1 background-review counter gate. A successful, eligible root turn bumps
+ * this counter; the self-improvement review runs (and resets it) once it reaches
+ * {@link BACKGROUND_REVIEW_TURN_INTERVAL}. Stored in `system_settings`.
+ */
+const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
+const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY = "update_review_daily_last_day_key_v1";
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const maintenanceSchedulerDisabled =
@@ -778,6 +786,7 @@ export class GatewayService {
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
+  private readonly backgroundReviewService: BackgroundReviewService;
   public readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
@@ -1092,6 +1101,19 @@ export class GatewayService {
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
       skillLifecycle: this.storage.skillLifecycle,
+    });
+    // P2-S1 self-improvement learning loop. Structured-extraction post-turn
+    // service: two cheap read-only model calls (memory + skill) → persist via the
+    // governed operator-profile + skill-mutation services. Auto-apply/secret/
+    // candidate governance lives entirely in those services. Never promotes a
+    // skill to callable (governed activation owns promotion).
+    this.backgroundReviewService = new BackgroundReviewService({
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      recordOperatorProfileFacts: (workspaceId, facts) =>
+        this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts }),
+      draftSkillMutation: (input) => this.skillMutationService.draftSkillMutation(input),
     });
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
@@ -1747,6 +1769,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
@@ -1820,6 +1843,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
@@ -2679,6 +2703,106 @@ export class GatewayService {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.registerBackgroundTask(task);
+  }
+
+  /**
+   * P2-S1 — schedule the self-improvement background review for a successful root
+   * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
+   * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
+   * — skips child turns and runs fire-and-forget after a successful root turn.
+   *
+   * Guards (master-autonomy / eval-integrity / non-human / closing / child-turn)
+   * are resolved here and re-asserted inside the service; the counter only
+   * advances for eligible turns. The review is a tracked background task that can
+   * never throw out of the turn path.
+   */
+  public scheduleBackgroundReviewIfDue(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+    parentTurnId?: string;
+  }): void {
+    // Skip child turns (mirror the memory-maintenance sibling) and a closing gateway.
+    if (this.closing || input.parentTurnId) {
+      return;
+    }
+    // Master autonomy kill switch: halts the entire self-improvement loop.
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    if (!autonomyEnabled) {
+      return;
+    }
+    // Eval-integrity / non-human / replay-scratch guard (mirror recordTurnCommitments).
+    const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
+    const evalIntegrityTurn = origin === "prompt_pack";
+    const humanSession =
+      origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(input.sessionId);
+    if (evalIntegrityTurn || !humanSession) {
+      return;
+    }
+
+    // Counter gate: only run once every N eligible successful turns; reset on fire.
+    if (!this.advanceBackgroundReviewCounter()) {
+      return;
+    }
+
+    const task = this.backgroundReviewService
+      .runBackgroundReview({
+        sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        parentTurnId: input.parentTurnId,
+        autonomyEnabled,
+        evalIntegrityTurn,
+        humanSession,
+        turnSucceeded: true,
+      })
+      .then((result) => {
+        if (result.ran && result.summaryMarker) {
+          this.publishRealtime("self_improvement_review", "system", {
+            type: "background_review",
+            sessionId: input.sessionId,
+            workspaceId: input.workspaceId,
+            summaryMarker: result.summaryMarker,
+            memoryFactCount: result.memoryFacts.length,
+            skillProposed: result.skillProposed,
+            skillId: result.skillMutation?.skillId,
+          });
+        }
+      })
+      .catch((error) => {
+        log.warn("background review failed", {
+          sessionId: input.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.registerBackgroundTask(task);
+  }
+
+  /**
+   * Increment the background-review turn counter; when it reaches the interval,
+   * reset it to 0 and return `true` (the review should run this turn). Otherwise
+   * persist the bumped counter and return `false`. Best-effort: a storage error
+   * never blocks or crashes the turn path (returns `false`).
+   */
+  private advanceBackgroundReviewCounter(): boolean {
+    try {
+      const current =
+        this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY)?.value ?? 0;
+      const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
+      if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
+        this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
+        return true;
+      }
+      this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
+      return false;
+    } catch (error) {
+      log.warn("background review counter advance failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   public scheduleChatMemoryContextPrewarm(input: {

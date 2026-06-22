@@ -869,6 +869,7 @@ function createHost(): ChatTurnStreamHost & {
     recordTurnCommitments: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(),
+    scheduleBackgroundReviewIfDue: vi.fn(),
     recordCapabilityGapFromTrace: vi.fn(),
     markChatTurnCancelled: vi.fn(() => trace),
   } as unknown as ChatTurnStreamHost & {

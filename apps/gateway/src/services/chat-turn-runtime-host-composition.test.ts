@@ -82,6 +82,14 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.recordCapabilityGapFromTrace({ sessionId: "session-1" } as never)).toBe("gap");
     expect(host.scheduleChatMemoryContextPrewarm({ sessionId: "session-1" } as never)).toBe("prewarm");
     expect(host.scheduleMemoryMaintenancePostTurnEvaluation("session-1", "turn-1")).toBe("maintenance");
+    expect(
+      host.scheduleBackgroundReviewIfDue({
+        sessionId: "session-1",
+        workspaceId: "default",
+        userText: "u",
+        assistantText: "a",
+      }),
+    ).toBe("background-review");
     expect(host.publishRealtime("chat_thread_updated", "chat", {}, undefined)).toBe("published");
     expect(host.commsSend({ message: "hello" } as never)).toBe("sent");
     expect(host.ensureSessionInternalToolGrant("session-1", "tool", "reason")).toBe("grant");
@@ -165,6 +173,7 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     recordCapabilityGapFromTrace: vi.fn(() => "gap"),
     scheduleChatMemoryContextPrewarm: vi.fn(() => "prewarm"),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(() => "maintenance"),
+    scheduleBackgroundReviewIfDue: vi.fn(() => "background-review"),
     publishRealtime: vi.fn(() => "published"),
     ingestEvent: vi.fn(async () => "ingested"),
     commsSend: vi.fn(() => "sent"),

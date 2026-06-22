@@ -261,6 +261,7 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
     triggerChatSessionProactive: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(),
+    scheduleBackgroundReviewIfDue: vi.fn(),
   } as unknown as ChatTurnEntryHost & {
     patchedTraces: Array<Partial<ChatTurnTraceRecord>>;
   };

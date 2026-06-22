@@ -157,6 +157,7 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
     scheduleChatMemoryContextPrewarm: (input) => source.scheduleChatMemoryContextPrewarm(input),
     scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
       source.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+    scheduleBackgroundReviewIfDue: (input) => source.scheduleBackgroundReviewIfDue(input),
   };
 }
 

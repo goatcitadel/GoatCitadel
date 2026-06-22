@@ -1498,6 +1498,15 @@ export async function* streamPreparedAgentChatTurn(
           userText: prepared.content,
           assistantText: finalText,
         });
+        // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
+        // gates on master autonomy / eval-integrity / non-human + the turn counter.
+        host.scheduleBackgroundReviewIfDue({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          userText: prepared.content,
+          assistantText: finalText,
+          parentTurnId: prepared.parentTurnId,
+        });
       }
       host.scheduleChatMemoryContextPrewarm({
         sessionId,
@@ -1996,6 +2005,15 @@ export async function* streamPreparedAgentChatTurn(
           workspaceId: prepared.workspaceId,
           userText: prepared.content,
           assistantText: finalText,
+        });
+        // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
+        // gates on master autonomy / eval-integrity / non-human + the turn counter.
+        host.scheduleBackgroundReviewIfDue({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          userText: prepared.content,
+          assistantText: finalText,
+          parentTurnId: prepared.parentTurnId,
         });
       }
       host.scheduleChatMemoryContextPrewarm({

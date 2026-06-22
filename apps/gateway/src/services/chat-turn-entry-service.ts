@@ -548,6 +548,15 @@ async function runAgentSendChatMessageLlmPath(
         userText: prepared.content,
         assistantText,
       });
+      // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
+      // gates on master autonomy / eval-integrity / non-human + the turn counter.
+      host.scheduleBackgroundReviewIfDue({
+        sessionId,
+        workspaceId: prepared.workspaceId,
+        userText: prepared.content,
+        assistantText,
+        parentTurnId: prepared.parentTurnId,
+      });
     }
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
     host.publishRealtime(

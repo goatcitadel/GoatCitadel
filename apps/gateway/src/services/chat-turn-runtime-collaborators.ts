@@ -135,6 +135,21 @@ export interface ChatTurnMemorySideEffects {
     relationScope?: MemoryRelationScope;
   }): void;
   scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
+  /**
+   * Fire-and-forget self-improvement background review (P2-S1). After a
+   * successful root turn, distills durable operator facts and (when a reusable
+   * procedure emerged) drafts a candidate skill — counter-gated to run every few
+   * turns. The host resolves the master-autonomy / eval-integrity / non-human
+   * guards and the counter; the entry/stream services only supply the transcript.
+   * Errors are swallowed by the host — this never affects the turn.
+   */
+  scheduleBackgroundReviewIfDue(input: {
+    sessionId: string;
+    workspaceId: string;
+    userText: string;
+    assistantText: string;
+    parentTurnId?: string;
+  }): void;
   recordCapabilityGapFromTrace(input: {
     sessionId: string;
     turnId: string;
