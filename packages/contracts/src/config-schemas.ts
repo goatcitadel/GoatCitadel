@@ -675,6 +675,10 @@ export const AssistantConfigInputSchema = z
         // features ship ON by default; setting one of these to `true` disables
         // that feature (default-on with a reversible operator kill switch).
         coworkRuntimeQualityV1Disabled: z.boolean().optional(),
+        // Master autonomy kill switch (Phase 1 proactivity / self-improvement).
+        // Absent/false ⇒ autonomy ON; `true` halts ALL proactive, scheduled,
+        // heartbeat, and self-improvement loops immediately. Single global switch.
+        autonomyV1Disabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

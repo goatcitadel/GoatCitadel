@@ -7016,6 +7016,7 @@ export class GatewayService {
         stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
       coworkRuntimeQualityV1Disabled:
         stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
+      autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
     };
   }
 

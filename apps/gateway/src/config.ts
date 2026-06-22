@@ -73,6 +73,7 @@ export interface FeatureFlagsConfig {
   improvementLedgerV1Enabled: boolean;
   improvementActivationV1Enabled: boolean;
   coworkRuntimeQualityV1Disabled?: boolean;
+  autonomyV1Disabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -660,6 +661,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["improvementLedgerV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED],
     ["improvementActivationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED],
     ["coworkRuntimeQualityV1Disabled", process.env.GOATCITADEL_FEATURE_COWORK_RUNTIME_QUALITY_V1_DISABLED],
+    ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1178,6 +1180,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
       coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
+      autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

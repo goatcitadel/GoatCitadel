@@ -11,7 +11,13 @@ import type {
   PermissionProfileUpdateInput,
   PermissionSurface,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  HEARTBEAT_RESTRICTED_PROFILE,
+  NotFoundError,
+  SCHEDULED_RESTRICTED_PROFILE,
+  ValidationError,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -129,6 +135,11 @@ export const BUILTIN_PERMISSION_PROFILES: PermissionProfileRecord[] = [
     createdAt: BUILTIN_CREATED_AT,
     updatedAt: BUILTIN_CREATED_AT,
   },
+  // Phase 1 (proactive/autonomous): restricted profiles for cron/scheduled and
+  // heartbeat turns. Canonical records live in @goatcitadel/contracts so the
+  // gateway policy builder and this seed share one source of truth.
+  SCHEDULED_RESTRICTED_PROFILE,
+  HEARTBEAT_RESTRICTED_PROFILE,
 ];
 
 export class PermissionProfileRepository {
