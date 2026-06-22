@@ -244,6 +244,42 @@ describe("repairToolCalls — valid calls pass through alongside repairs", () =>
     expect(ids).toEqual(["call-fuzzy", "call-valid"]);
     expect(result.repaired.find((call) => call.id === "call-fuzzy")?.toolName).toBe("memory.search");
   });
+
+  it("preserves arguments for an id-less call mixed with an id-bearing one (positional fallback)", () => {
+    // Regression: a provider emitted a MIXED batch — one call carries an id, one
+    // is id-less. inspect assigns the id-less call a fresh synthetic id, so it can
+    // never match by id. Grouping must still pair it positionally, or the id-less
+    // call loses its rawCall and its arguments are silently dropped (args:{}).
+    const maps = makeMaps(["browser.search", "memory.search"]);
+    const message = {
+      tool_calls: [
+        // id-bearing, fuzzed name -> matched by id
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "browser-search", arguments: JSON.stringify({ query: "weather" }) },
+        },
+        // id-LESS, fuzzed name -> synthetic id, must be matched positionally
+        {
+          type: "function",
+          function: { name: "memory-search", arguments: JSON.stringify({ query: "notes" }) },
+        },
+      ],
+    };
+    const { result } = inspectAndRepair(message, maps);
+    expect(result.unresolved).toHaveLength(0);
+    expect(result.feedback).toHaveLength(0);
+    expect(result.repaired).toHaveLength(2);
+
+    const idBearing = result.repaired.find((call) => call.id === "call_1");
+    expect(idBearing).toMatchObject({ toolName: "browser.search", args: { query: "weather" } });
+
+    // The id-less call keeps BOTH its resolved name and its arguments.
+    const idLess = result.repaired.find((call) => call.id !== "call_1");
+    expect(idLess?.toolName).toBe("memory.search");
+    expect(idLess?.args).toEqual({ query: "notes" });
+    expect(JSON.parse(idLess!.rawArguments)).toEqual({ query: "notes" });
+  });
 });
 
 describe("repairToolCalls — fail-closed security invariant", () => {

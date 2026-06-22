@@ -134,26 +134,37 @@ function groupIssuesByPosition(
   issues: ToolCallProtocolIssue[],
 ): Map<number, ToolCallProtocolIssue[]> {
   const grouped = new Map<number, ToolCallProtocolIssue[]>();
-  // Fast path: when every issue id matches a raw call id, trust the id linkage.
+  // Pass 1: link every issue whose id matches a raw call id. A provider can emit
+  // a MIXED batch (some calls carry ids, some are id-less); inspect assigns a
+  // fresh synthetic id to each id-less call, so those never match here.
   const byId = new Map<string, number>();
   rawToolCalls.forEach((rawCall, index) => {
     if (rawCall && typeof rawCall === "object" && typeof rawCall.id === "string" && rawCall.id.trim()) {
       byId.set(rawCall.id, index);
     }
   });
+  const matchedById = new Set<ToolCallProtocolIssue>();
+  const used = new Set<number>();
   for (const issue of issues) {
     const index = byId.get(issue.id);
     if (index !== undefined) {
       appendToGroup(grouped, index, issue);
+      matchedById.add(issue);
+      used.add(index);
     }
   }
-  if (grouped.size > 0 || issues.length === 0) {
+  if (matchedById.size === issues.length) {
     return grouped;
   }
-  // Fallback (id-less raw calls): pair issues to positions by recomputing the
-  // kind each raw call would produce, consuming positions left-to-right.
-  const used = new Set<number>();
+  // Pass 2 (id-less raw calls): pair the STILL-unmatched issues to the remaining
+  // positions by recomputing the kind each raw call would produce, consuming
+  // positions left-to-right. Continuing here even after pass 1 matched some
+  // issues keeps id-less calls from losing their positional rawCall (and thus
+  // their arguments) just because a sibling call happened to carry an id.
   for (const issue of issues) {
+    if (matchedById.has(issue)) {
+      continue;
+    }
     for (let index = 0; index < rawToolCalls.length; index += 1) {
       if (used.has(index)) {
         continue;

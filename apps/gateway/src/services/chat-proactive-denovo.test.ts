@@ -397,20 +397,22 @@ describe("ChatProactiveService de-novo origination (P1-F5)", () => {
     const { service, triggered } = createHarness({
       messages: [],
       commitments: [commitment()],
-      // Last self-wake 5 minutes ago ⇒ inside the 1h de-novo cadence floor.
-      prefs: { lastProactiveAt: "2026-06-22T11:55:00.000Z" },
-      now: "2026-06-22T12:00:00.000Z",
+      // Last self-wake 5 minutes ago (relative to the real clock) => inside the 1h
+      // de-novo cadence floor. Relative so it stays valid regardless of wall time.
+      prefs: { lastProactiveAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
     });
     await runTick(service);
     expect(triggered).toEqual([]);
   });
 
   it("scheduler skips de-novo outside active hours", async () => {
+    // A 1-hour active window that deterministically excludes the current local
+    // hour, so this stays correct regardless of the wall-clock time the suite runs.
+    const offStart = (new Date().getHours() + 3) % 24;
     const { service, triggered } = createHarness({
       messages: [],
       commitments: [commitment()],
-      prefs: { activeHours: { start: 8, end: 9 } },
-      now: "2026-06-22T12:00:00.000Z", // local hour 12, outside 08–09
+      prefs: { activeHours: { start: offStart, end: (offStart + 1) % 24 } },
     });
     await runTick(service);
     expect(triggered).toEqual([]);
@@ -460,8 +462,8 @@ describe("ChatProactiveService de-novo origination (P1-F5)", () => {
     const { service, triggered } = createHarness({
       messages: [],
       commitments: [commitment()],
-      prefs: { cooldownSeconds: 600, lastProactiveAt: "2026-06-22T11:59:00.000Z" },
-      now: "2026-06-22T12:00:00.000Z",
+      // Last self-wake 1 minute ago (relative) => inside the 600s cooldown.
+      prefs: { cooldownSeconds: 600, lastProactiveAt: new Date(Date.now() - 60 * 1000).toISOString() },
     });
     await runTick(service);
     expect(triggered).toEqual([]);

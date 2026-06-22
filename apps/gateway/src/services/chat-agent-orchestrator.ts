@@ -2961,9 +2961,12 @@ export class ChatAgentOrchestrator {
         );
         // An empty terminal turn that needed synthesis at all is degraded. The
         // pass only counts as a real recovery when the model actually produced
-        // text (not the deterministic template floor). noteDegradedOutcome is a
-        // no-op on eval-integrity turns, so this never touches scored runs.
-        noteDegradedOutcome(synthesizedFallback.deterministic ? "empty_answer" : "empty_answer");
+        // text (not the deterministic template floor): a deterministic floor is
+        // an unrecovered "empty_answer", while a model-synthesized answer is an
+        // "empty_recovered" outcome so the audit reason distinguishes the two.
+        // noteDegradedOutcome is a no-op on eval-integrity turns, so this never
+        // touches scored runs.
+        noteDegradedOutcome(synthesizedFallback.deterministic ? "empty_answer" : "empty_recovered");
         if (!synthesizedFallback.deterministic && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           markAnswerRecoveredByModel();
         }
@@ -3008,7 +3011,11 @@ export class ChatAgentOrchestrator {
       const footerParts: string[] = [];
       if (degradedOutcome) {
         const degradedFooter = buildDegradedAnswerFooter(degradedOutcome);
-        if (degradedFooter && !assistantContent.toLowerCase().includes("may be incomplete")) {
+        // Dedup against the footer's own distinctive clause rather than the
+        // generic "may be incomplete" tail — the latter collides with ordinary
+        // model prose ("this estimate may be incomplete") and would wrongly
+        // suppress the disclosure.
+        if (degradedFooter && !assistantContent.toLowerCase().includes("could not fully complete this turn")) {
           footerParts.push(degradedFooter);
         }
       }

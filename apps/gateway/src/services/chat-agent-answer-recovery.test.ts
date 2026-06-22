@@ -80,6 +80,25 @@ describe("buildDegradedAnswerFooter", () => {
     expect(footer.split("\n")).toHaveLength(1);
     expect(footer.toLowerCase()).toContain("incomplete");
   });
+
+  it("uses a footer-specific dedup marker that does not collide with ordinary model prose", () => {
+    // The orchestrator dedups the degraded footer against the distinctive clause
+    // "could not fully complete this turn" rather than the generic tail
+    // "may be incomplete". Guards against re-introducing the collision-prone check
+    // that suppressed the footer whenever the model's own answer happened to say
+    // something like "this estimate may be incomplete".
+    const DEDUP_MARKER = "could not fully complete this turn";
+    const footer = buildDegradedAnswerFooter({ reason: "budget", recoveredByModel: false });
+
+    // The marker must be drawn from the footer itself (so the dedup actually works
+    // when the footer was previously appended).
+    expect(footer.toLowerCase()).toContain(DEDUP_MARKER);
+
+    // Ordinary model prose that merely echoes the generic tail must NOT contain the
+    // marker, so it can never wrongly suppress the disclosure.
+    const modelProse = "Based on the partial data, this estimate may be incomplete.";
+    expect(modelProse.toLowerCase()).not.toContain(DEDUP_MARKER);
+  });
 });
 
 describe("collectFailedFileMutations", () => {

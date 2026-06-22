@@ -2,7 +2,42 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
-import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
+import {
+  createMockStorage,
+  createToolCatalog,
+  namedToolCallCompletion,
+} from "./chat-agent-orchestrator-test-fixtures.js";
+
+function emptyAssistantCompletion(): ChatCompletionResponse {
+  return {
+    model: "gpt-5.4",
+    choices: [{ index: 0, message: { role: "assistant", content: "" } }],
+  };
+}
+
+function assistantTextCompletion(content: string): ChatCompletionResponse {
+  return {
+    model: "gpt-5.4",
+    choices: [{ index: 0, message: { role: "assistant", content } }],
+  };
+}
+
+function toolTurn(sessionId: string, content: string): ChatAgentTurnInput {
+  return {
+    sessionId,
+    turnId: randomUUID(),
+    userMessageId: `msg-${sessionId}`,
+    content,
+    mode: "chat",
+    providerId: "openai",
+    model: "gpt-5.4",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    toolAutonomy: "safe_auto",
+    historyMessages: [{ role: "user", content }],
+  };
+}
 
 function baseTurn(sessionId: string, content: string): ChatAgentTurnInput {
   return {
@@ -102,6 +137,62 @@ describe("ChatAgentOrchestrator P0-B answer-recovery ladder", () => {
     // The turn is marked degraded and (no model recovery) the calm footer is surfaced.
     expect(result.turnTrace.completion?.degraded).toMatchObject({ recoveredByModel: false });
     expect(result.assistantContent.toLowerCase()).toContain("may be incomplete");
+  });
+
+  it("records distinct degraded.reason for a deterministic vs a model-synthesized empty-output recovery", async () => {
+    // A turn WITH tool runs that ends empty bypasses the no-tool nudge and falls
+    // straight to the empty-output synthesis pass, so the synthesis ternary — not
+    // the nudge — sets the degraded reason. The two outcomes must be auditably
+    // distinct (regression for the dead `... ? "empty_answer" : "empty_answer"`).
+    const invokeResult: ToolInvokeResult = {
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-search",
+      result: { results: [{ title: "T", url: "https://example.com", snippet: "s" }] },
+    };
+
+    // memory.search is used (not browser.search) because web tools are gated off
+    // when webMode is "off"; a knowledge-pack tool stays in the active schema so
+    // the call actually executes and the turn carries a tool run.
+
+    // Model-synthesized branch: tool call -> empty terminal -> synthesis returns text.
+    const modelSynthesized = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "q" }))
+      .mockResolvedValueOnce(emptyAssistantCompletion())
+      .mockResolvedValue(assistantTextCompletion("Here is the synthesized final answer for you."));
+    const recoveredOrchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search"]),
+      createChatCompletion: modelSynthesized,
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue(invokeResult),
+    });
+    const recovered = await recoveredOrchestrator.run(toolTurn("sess-empty-synth-model", "Find something."));
+
+    expect(recovered.turnTrace.completion?.degraded?.reason).toBe("empty_recovered");
+    expect(recovered.turnTrace.completion?.degraded?.recoveredByModel).toBe(true);
+
+    // Deterministic branch: tool call -> empty terminal -> synthesis also returns
+    // empty, so the deterministic template floor is used.
+    const deterministic = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("memory.search", { query: "q" }))
+      .mockResolvedValue(emptyAssistantCompletion());
+    const deterministicOrchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search"]),
+      createChatCompletion: deterministic,
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue(invokeResult),
+    });
+    const floored = await deterministicOrchestrator.run(toolTurn("sess-empty-synth-det", "Find something."));
+
+    expect(floored.turnTrace.completion?.degraded?.reason).toBe("empty_answer");
+    expect(floored.turnTrace.completion?.degraded?.recoveredByModel).toBe(false);
+
+    // The whole point: the two outcomes are auditably different.
+    expect(recovered.turnTrace.completion?.degraded?.reason).not.toBe(
+      floored.turnTrace.completion?.degraded?.reason,
+    );
   });
 
   it("leaves eval-integrity turns untouched (no nudge, no degraded sidecar)", async () => {
