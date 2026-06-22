@@ -19,8 +19,32 @@ export interface EventIngestOptions {
   payload: GatewayEventInput;
 }
 
+/**
+ * Resolve the billing credential class + pool for a usage row. Honors values the
+ * producer set explicitly; otherwise derives from providerId — Claude subscription
+ * (claude-code OAuth) draws from the separate Agent-SDK credit pool, everything else
+ * is standard API-key usage. Anthropic's Jun-2026 billing-pool split.
+ */
+export function deriveCredentialDims(usage: GatewayEventInput["usage"]): {
+  credentialType?: "api_key" | "oauth" | "unknown";
+  usagePool?: "standard" | "subscription" | "unknown";
+} {
+  if (usage?.credentialType || usage?.usagePool) {
+    return { credentialType: usage.credentialType, usagePool: usage.usagePool };
+  }
+  const providerId = usage?.providerId?.trim().toLowerCase();
+  if (!providerId) {
+    return {};
+  }
+  if (providerId === "claude-code") {
+    return { credentialType: "oauth", usagePool: "subscription" };
+  }
+  return { credentialType: "api_key", usagePool: "standard" };
+}
+
 export class EventIngestService {
   private readonly tokenCostLedger: TokenCostLedger;
+  private subscriptionUsageWarned = false;
 
   public constructor(private readonly storage: Storage) {
     this.tokenCostLedger = new TokenCostLedger(storage.costLedger);
@@ -93,14 +117,24 @@ export class EventIngestService {
         timestamp: now,
       });
 
+      const credentialDims = deriveCredentialDims(options.payload.usage);
+      if (credentialDims.usagePool === "subscription" && !this.subscriptionUsageWarned) {
+        this.subscriptionUsageWarned = true;
+        // eslint-disable-next-line no-console -- operator billing diagnostic; mirrors the outbox-failure warning below.
+        console.warn(
+          "[billing] subscription/OAuth credentials draw from the separate Anthropic Agent-SDK " +
+            "credit pool (since 2026-06-15) and can hard-fail when exhausted; prefer a Platform API " +
+            "key for programmatic usage.",
+        );
+      }
       this.tokenCostLedger.record({
         sessionId: route.sessionId,
         agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
         taskId: options.payload.taskId,
         providerId: options.payload.usage?.providerId,
         modelId: options.payload.usage?.model,
-        credentialType: options.payload.usage?.credentialType,
-        usagePool: options.payload.usage?.usagePool,
+        credentialType: credentialDims.credentialType,
+        usagePool: credentialDims.usagePool,
         tokenInput: options.payload.usage?.inputTokens,
         tokenOutput: options.payload.usage?.outputTokens,
         tokenCachedInput: options.payload.usage?.cachedInputTokens,

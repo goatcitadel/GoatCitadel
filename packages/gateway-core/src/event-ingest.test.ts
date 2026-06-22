@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { EventIngestService } from "./event-ingest.js";
+import { deriveCredentialDims, EventIngestService } from "./event-ingest.js";
 
 function buildPayload(): GatewayEventInput {
   return {
@@ -446,15 +446,18 @@ describe("EventIngestService", () => {
     const storage = {
       runImmediateTransaction: vi.fn((callback: () => unknown) => callback()),
       idempotency: {
-        find: vi.fn().mockReturnValueOnce(undefined).mockReturnValueOnce({
-          endpoint: "/api/v1/gateway/events",
-          idempotencyKey: "idem-1",
-          eventId: "evt-1",
-          sessionKey: session.sessionKey,
-          payloadHash: hashOf(buildPayload()),
-          receivedAt: "2026-03-22T00:00:00.000Z",
-          status: "accepted",
-        }),
+        find: vi
+          .fn()
+          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce({
+            endpoint: "/api/v1/gateway/events",
+            idempotencyKey: "idem-1",
+            eventId: "evt-1",
+            sessionKey: session.sessionKey,
+            payloadHash: hashOf(buildPayload()),
+            receivedAt: "2026-03-22T00:00:00.000Z",
+            status: "accepted",
+          }),
         insertPendingIfAbsent: vi.fn(() => false),
         markProcessed: vi.fn(),
       },
@@ -768,5 +771,36 @@ describe("EventIngestService", () => {
       }),
     );
     warnSpy.mockRestore();
+  });
+});
+
+describe("deriveCredentialDims", () => {
+  it("maps claude-code subscription OAuth to the subscription credit pool", () => {
+    expect(deriveCredentialDims({ providerId: "claude-code" })).toEqual({
+      credentialType: "oauth",
+      usagePool: "subscription",
+    });
+  });
+
+  it("maps other providers to standard API-key usage", () => {
+    expect(deriveCredentialDims({ providerId: "anthropic" })).toEqual({
+      credentialType: "api_key",
+      usagePool: "standard",
+    });
+    expect(deriveCredentialDims({ providerId: "openai" })).toEqual({
+      credentialType: "api_key",
+      usagePool: "standard",
+    });
+  });
+
+  it("honors values the producer set explicitly", () => {
+    expect(
+      deriveCredentialDims({ providerId: "anthropic", credentialType: "oauth", usagePool: "subscription" }),
+    ).toEqual({ credentialType: "oauth", usagePool: "subscription" });
+  });
+
+  it("returns empty dims when no provider is attributed", () => {
+    expect(deriveCredentialDims(undefined)).toEqual({});
+    expect(deriveCredentialDims({ inputTokens: 5 })).toEqual({});
   });
 });
