@@ -2432,8 +2432,18 @@ export class GatewayService {
       { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
-      { label: "commitment sweep", run: () => this.runCommitmentSweep() },
-      { label: "heartbeat", run: () => this.runHeartbeatSweep() },
+      {
+        label: "commitment sweep",
+        run: () =>
+          this.runCommitmentSweep().catch((error) =>
+            this.logMaintenanceTaskFailure("commitment_sweep_failed", error),
+          ),
+      },
+      {
+        label: "heartbeat",
+        run: () =>
+          this.runHeartbeatSweep().catch((error) => this.logMaintenanceTaskFailure("heartbeat_failed", error)),
+      },
       { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
       { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
     ];
@@ -4962,6 +4972,21 @@ export class GatewayService {
         });
         return Boolean(run?.runId);
       },
+    });
+  }
+
+  /**
+   * Best-effort logging for autonomous maintenance sweeps (commitment / heartbeat).
+   * These are optional proactive tasks; a failure must never crash the maintenance
+   * tick, which aggregates and rethrows core task failures.
+   */
+  private logMaintenanceTaskFailure(event: string, error: unknown): void {
+    this.recordDevDiagnostic({
+      level: "warn",
+      category: "cron",
+      event,
+      message: event.replace(/_/g, " "),
+      context: { error: error instanceof Error ? error.message : String(error) },
     });
   }
 
