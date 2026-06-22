@@ -2606,7 +2606,7 @@ export async function runSurfaceRegressionLane(context, options = {}) {
         colorScheme: "dark",
       });
       if (fixture && verificationTarget.isNext) {
-        await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+        await installMissionControlNextBrowserState(browserContext, fixture.workspaceId, fixture.citadelId);
       }
       const page = await browserContext.newPage();
       const browserLog = attachBrowserLogging(page);
@@ -3596,7 +3596,7 @@ export async function runVisualRegressionLane(context, options = {}) {
           timezoneId: "UTC",
         });
         if (fixture && verificationTarget.isNext) {
-          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId, fixture.citadelId);
         }
         try {
           const page = await browserContext.newPage();
@@ -5958,21 +5958,19 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
     createdAgents.push(response.body);
   }
 
-  // Stage the verification workspace AS a Citadel so the release-bearing Citadel
-  // surfaces render real governance content under the fixture. Without a Charter,
-  // getCitadel / getGatehouse / exportBlueprint return 404, which the browser logs
-  // as console errors and the visual-regression console-health gate rejects (the
-  // Overview and Blueprint routes fail to capture). Citadel state is read only by
-  // the Citadel routes, so staging here cannot drift any other route's baseline.
-  const citadelId = workspaceId;
+  // The dev seed assigns the verification workspace to the default personal
+  // Citadel. Seed that Citadel with governance content so Citadel routes avoid
+  // 404 console errors while Projects/Sessions/Artifacts keep a matching
+  // workspace + citadel scope.
+  const citadelId = "personal";
   assertOk(
     await requestJson(gatewayUrl, "/api/v1/citadels", {
       method: "POST",
       body: {
         citadelId,
-        name: "Mission Control Next Verification Citadel",
+        name: "Mission Control Next Personal Verification Citadel",
         slug: citadelId,
-        kind: "company",
+        kind: "personal",
         defaultWorkspaceId: workspaceId,
       },
     }),
@@ -5983,7 +5981,7 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
       method: "PUT",
       body: {
         purpose: "Coordinate Mission Control verification work under explicit, reviewable governance.",
-        kind: "company",
+        kind: "personal",
         goals: ["Keep operator work legible", "Prove governance surfaces render real content"],
         boundaries: ["No external writes without approval", "Sensitive work stays sealed"],
         successDefinition: ["Release-bearing Citadel surfaces are visually verified"],
@@ -6163,6 +6161,7 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
     workspaceId,
     sessionId,
     sessionIds: seededSessionIds,
+    citadelId,
     sessions: {
       approval: sessionId,
       ...(userInputSessionId ? { userInput: userInputSessionId } : {}),
@@ -6185,15 +6184,15 @@ async function stabilizeMissionControlNextFileFixtureMtime(runtimeRoot, serializ
   await fs.utimes(fullPath, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME);
 }
 
-async function installMissionControlNextBrowserState(browserContext, workspaceId) {
+async function installMissionControlNextBrowserState(browserContext, workspaceId, citadelId = "personal") {
   await browserContext.addInitScript(
-    ({ activeWorkspaceId }) => {
+    ({ activeWorkspaceId, activeCitadelId }) => {
       window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
-      window.localStorage.setItem("goatcitadel.ui.citadel_id.v1", activeWorkspaceId);
+      window.localStorage.setItem("goatcitadel.ui.citadel_id.v1", activeCitadelId);
       window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
       window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
     },
-    { activeWorkspaceId: workspaceId },
+    { activeWorkspaceId: workspaceId, activeCitadelId: citadelId },
   );
 }
 
