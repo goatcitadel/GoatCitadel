@@ -206,6 +206,55 @@ describe("GatewayService loop 27 large service coverage", () => {
     expect(gateway.storage.remoteActionTokens.updateState).toHaveBeenCalledWith("expired-token", "expired");
   });
 
+  it("rejects remote action tokens that are empty, unknown, mismatched, or already consumed (security invariants)", () => {
+    vi.setSystemTime(new Date("2026-05-15T00:00:00.000Z"));
+    const { gateway } = createGatewayHarness({
+      storage: {
+        remoteActionTokens: {
+          findByTokenHash: vi.fn(() => undefined),
+          get: vi.fn(),
+          updateState: vi.fn(),
+        },
+      },
+    });
+
+    // Empty token is rejected before any lookup.
+    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "   ", "approval.resolve")).toThrow(
+      /required/i,
+    );
+
+    // Unknown token hash cannot resolve anything (the public /remote-resolve endpoint
+    // is safe only because it requires an unguessable, server-minted token).
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "bogus-token", "approval.resolve"),
+    ).toThrow();
+    expect(gateway.storage.remoteActionTokens.updateState).not.toHaveBeenCalled();
+
+    // A token minted for a different action type cannot be used to resolve approvals.
+    gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({
+      actionType: "connector.mutation",
+      connectorId: "conn-1",
+      expiresAt: "2026-05-15T00:05:00.000Z",
+      state: "pending",
+      tokenId: "token-x",
+    }));
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "wrong-action", "approval.resolve"),
+    ).toThrow(/bound to/i);
+
+    // An already-consumed token cannot be replayed (single-use).
+    gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({
+      actionType: "approval.resolve",
+      connectorId: "conn-1",
+      expiresAt: "2026-05-15T00:05:00.000Z",
+      state: "consumed",
+      tokenId: "token-y",
+    }));
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve"),
+    ).toThrow(/already been consumed/i);
+  });
+
   it("guards connector lookup and runtime profile updates with explicit operator-facing errors", () => {
     const { gateway } = createGatewayHarness({
       listConnectorRecords: vi.fn(() => [{ connectorId: "conn-1", connectorType: "integration_connection" }]),
