@@ -46,6 +46,7 @@ export const PROMPT_PACK_MEMORY_TOOL_NAME_LIST = ["memory.read", "memory.search"
 
 export const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAME_LIST = [
   "session.status",
+  "session.search",
   "time.now",
   "fs.read",
   "fs.list",

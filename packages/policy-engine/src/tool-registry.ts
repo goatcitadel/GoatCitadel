@@ -66,6 +66,39 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "session.search",
+    category: "session",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Full-text search over past messages in this conversation's history (tier-2 recall). Use to pull older context that is no longer in the active window.",
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        scope: { type: "string", enum: ["session", "all"] },
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+        contextRadius: { type: "integer", minimum: 0, maximum: 10 },
+      },
+      required: ["query"],
+    },
+    examples: [
+      {
+        title: "Recall what was decided earlier about deployment",
+        args: { query: "deployment decision", limit: 5 },
+      },
+    ],
+    pack: "core",
+    readOnly: true,
+    deterministic: true,
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["recall_history", "memory_lookup"],
+    usageHints: [
+      "Use when the user references something from earlier in the conversation that you can no longer see.",
+      "Defaults to this session; pass scope:'all' only when you must search across other conversations.",
+    ],
+  },
+  {
     name: "memory.read",
     category: "memory",
     riskLevel: "safe",

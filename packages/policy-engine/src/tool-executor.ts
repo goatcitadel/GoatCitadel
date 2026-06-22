@@ -220,6 +220,8 @@ export async function executeTool(
   switch (request.toolName) {
     case "session.status":
       return finalizeToolResult({ sessionId: request.sessionId, status: "ok" });
+    case "session.search":
+      return finalizeToolResult(sessionSearch(request, storage));
     case "time.now":
       return finalizeToolResult(timeNow());
     case "fs.read":
@@ -1047,6 +1049,29 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
     chunksSaved: chunks.length,
   };
+}
+
+/**
+ * P2-S4a `session.search`: read-only FTS recall over persisted chat messages.
+ *
+ * Defaults to the calling session (`scope:"session"`); `scope:"all"` searches every
+ * session. Query sanitisation lives in the storage repo, so arbitrary user text is
+ * safe here. The repo enforces sensible limit/context-radius bounds.
+ */
+function sessionSearch(request: ToolInvokeRequest, storage: Storage) {
+  const query = (asString(request.args.query) ?? "").trim();
+  const scope = asString(request.args.scope) === "all" ? "all" : "session";
+  const limit = clampInt(request.args.limit, 10, 1, 50);
+  const contextRadius = clampInt(request.args.contextRadius, 2, 0, 10);
+  if (!query) {
+    return { scope, query: "", hits: [] };
+  }
+  const hits = storage.chatMessages.searchMessages(query, {
+    ...(scope === "session" ? { sessionId: request.sessionId } : {}),
+    limit,
+    contextRadius,
+  });
+  return { scope, query, hits };
 }
 
 async function memoryRead(args: Record<string, unknown>, storage: Storage) {

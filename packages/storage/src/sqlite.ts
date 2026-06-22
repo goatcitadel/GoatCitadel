@@ -1486,6 +1486,19 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "session_autonomy_prefs", "active_hours_json", "TEXT");
     },
   },
+  {
+    version: 125,
+    name: "chat_messages_fts_recall_schema",
+    up: (db) => {
+      // P2-S4a session.search: FTS5 recall index over persisted chat messages.
+      // The table + sync triggers are co-located with chat_messages for fresh DBs;
+      // this migration adds them to existing databases and backfills prior rows.
+      if (tableExists(db, "chat_messages")) {
+        createChatMessagesFtsSchema(db);
+        backfillChatMessagesFts(db);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1512,13 +1525,52 @@ function createSqliteSchemaBlueprintFromDatabase(db: DatabaseSync): SqliteSchema
       )
       .all() as Array<{ name: string; sql: string }>;
 
-    const tables = tableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
+    // The Postgres runtime schema is auto-derived from this blueprint. FTS5 virtual
+    // tables and their auto-generated shadow tables (`<name>_data/_idx/_content/
+    // _config/_docsize`) are SQLite-only and non-portable, so they must never reach
+    // the Postgres mirror. Drop them here, at the single source the mirror reads.
+    const portableTableRows = excludeFtsVirtualTables(tableRows);
+
+    const tables = portableTableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
     return { tables };
   } finally {
     if (typeof db.close === "function") {
       db.close();
     }
   }
+}
+
+/**
+ * The five suffixes SQLite appends to an FTS5 virtual table to create its backing
+ * "shadow" tables. These are real `CREATE TABLE` rows in `sqlite_master`, so they
+ * would otherwise be reflected into the Postgres mirror.
+ */
+const FTS5_SHADOW_TABLE_SUFFIXES = ["_data", "_idx", "_content", "_config", "_docsize"] as const;
+
+/**
+ * Drop FTS5 virtual tables and their auto-generated shadow tables from a set of
+ * `sqlite_master` table rows. The virtual table is identified by its
+ * `CREATE VIRTUAL TABLE ... USING fts5` DDL; each shadow table is identified by
+ * matching a virtual table's name plus one of {@link FTS5_SHADOW_TABLE_SUFFIXES}.
+ * Matching shadow tables by their owning virtual table's name (rather than the
+ * suffix alone) avoids excluding any ordinary table that merely ends in `_config`.
+ */
+function excludeFtsVirtualTables(
+  tableRows: Array<{ name: string; sql: string }>,
+): Array<{ name: string; sql: string }> {
+  const virtualTableNames = new Set(
+    tableRows.filter((row) => /create\s+virtual\s+table/i.test(row.sql)).map((row) => row.name),
+  );
+  if (virtualTableNames.size === 0) {
+    return tableRows;
+  }
+  const shadowTableNames = new Set<string>();
+  for (const baseName of virtualTableNames) {
+    for (const suffix of FTS5_SHADOW_TABLE_SUFFIXES) {
+      shadowTableNames.add(`${baseName}${suffix}`);
+    }
+  }
+  return tableRows.filter((row) => !virtualTableNames.has(row.name) && !shadowTableNames.has(row.name));
 }
 
 function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): SqliteSchemaTableBlueprint {
@@ -4723,6 +4775,9 @@ export const __sqliteInternals = {
   getPromptPackBenchmarkDedupCompletenessRankForTest,
   getPromptPackBenchmarkDedupTimestampForTest,
   getPromptPackBenchmarkDedupOrdinalForTest,
+  createChatMessagesFtsSchema,
+  backfillChatMessagesFts,
+  excludeFtsVirtualTables,
 };
 
 function createLlmRuntimeMeasurementSchema(db: DatabaseSync): void {
@@ -5122,6 +5177,73 @@ function createOperationalHotPathSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_policy_blocks_session_time
       ON policy_blocks(session_id, timestamp DESC);
   `);
+  // P2-S4a: co-locate the chat-message FTS5 recall index with its source table so
+  // fresh databases (which replay every migration) build it alongside chat_messages.
+  // Existing databases pick it up via the sequential migration below, which also
+  // backfills already-persisted rows.
+  createChatMessagesFtsSchema(db);
+}
+
+/**
+ * P2-S4a (`session.search`): a contentless FTS5 index mirroring `chat_messages`,
+ * kept in sync by INSERT/UPDATE/DELETE triggers. Hermes' tier-2 recall — the agent
+ * searches older persisted turns on demand instead of relying only on the frozen
+ * snapshot.
+ *
+ * Uses the external-content pattern (`content='chat_messages'`, `content_rowid='seq'`)
+ * so the index stores only the inverted terms, not a second copy of every message.
+ * The triggers follow the canonical SQLite FTS5 "external content table" recipe
+ * (https://www.sqlite.org/fts5.html#external_content_tables): the delete/update
+ * triggers emit a special `'delete'` row into the FTS table to retract the old terms
+ * before the new ones are indexed.
+ *
+ * NOTE FOR THE POSTGRES MIRROR: FTS5 virtual tables (and their shadow tables) are
+ * non-portable. They are excluded from the SQLite schema blueprint at its source
+ * (`createSqliteSchemaBlueprintFromDatabase`) so `buildPostgresRuntimeSchemaSql`
+ * never tries to reflect them. Keep that guard in lockstep with this table's name.
+ */
+function createChatMessagesFtsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts USING fts5(
+      content,
+      session_id UNINDEXED,
+      role UNINDEXED,
+      message_id UNINDEXED,
+      content='chat_messages',
+      content_rowid='seq'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_ai AFTER INSERT ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(rowid, content, session_id, role, message_id)
+      VALUES (new.seq, new.content, new.session_id, new.role, new.message_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_ad AFTER DELETE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, session_id, role, message_id)
+      VALUES ('delete', old.seq, old.content, old.session_id, old.role, old.message_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS chat_messages_fts_au AFTER UPDATE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, session_id, role, message_id)
+      VALUES ('delete', old.seq, old.content, old.session_id, old.role, old.message_id);
+      INSERT INTO chat_messages_fts(rowid, content, session_id, role, message_id)
+      VALUES (new.seq, new.content, new.session_id, new.role, new.message_id);
+    END;
+  `);
+}
+
+/**
+ * P2-S4a backfill: rebuild the FTS index from the existing `chat_messages` rows.
+ * Runs once when the sequential migration first adds the index to an existing
+ * database. Safe to re-run: the FTS5 `'rebuild'` command rebuilds from the linked
+ * content table, so it is idempotent. Skipped when there are no rows to index.
+ */
+function backfillChatMessagesFts(db: DatabaseSync): void {
+  const row = db.prepare("SELECT COUNT(1) AS count FROM chat_messages").get() as { count?: number } | undefined;
+  if (!row || Number(row.count ?? 0) === 0) {
+    return;
+  }
+  db.exec(`INSERT INTO chat_messages_fts(chat_messages_fts) VALUES ('rebuild');`);
 }
 
 function createAuthDeviceAccessSchema(db: DatabaseSync): void {

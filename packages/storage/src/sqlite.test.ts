@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase, createSqliteSchemaBlueprint } from "./sqlite.js";
+import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
 
 function makeBenchmarkRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -675,4 +676,113 @@ test("SQLite benchmark dedup ranking orders completeness, timestamp, and row ord
       makeBenchmarkRow({ item_id: "row-2", run_status: "completed", rowid: 2 }),
     ) < 0,
   );
+});
+
+test("P2-S4a chat_messages FTS migration creates the index, triggers, and backfills existing rows", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    // Build a database up to (but not including) the FTS migration, then seed rows
+    // that pre-date the index — exactly the existing-DB upgrade path.
+    __sqliteInternals.migrate(db);
+    db.exec(`
+      DROP TRIGGER IF EXISTS chat_messages_fts_ai;
+      DROP TRIGGER IF EXISTS chat_messages_fts_ad;
+      DROP TRIGGER IF EXISTS chat_messages_fts_au;
+      DROP TABLE IF EXISTS chat_messages_fts;
+      DELETE FROM schema_migrations WHERE version = 125;
+    `);
+    db.prepare(
+      `INSERT INTO chat_messages (message_id, session_id, role, actor_type, actor_id, content, timestamp, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "msg-pre-1",
+      "sess-pre",
+      "user",
+      "user",
+      "operator",
+      "pre-existing backfilltoken history",
+      "2026-06-01T00:00:00.000Z",
+      "2026-06-01T00:00:00.000Z",
+    );
+
+    // Re-run the migrator: only migration 125 is outstanding.
+    __sqliteInternals.migrate(db);
+
+    const ftsTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_messages_fts'")
+      .get() as { name: string } | undefined;
+    assert.equal(ftsTable?.name, "chat_messages_fts");
+
+    const triggers = new Set(
+      (
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_messages'")
+          .all() as Array<{ name: string }>
+      ).map((row) => row.name),
+    );
+    assert.ok(triggers.has("chat_messages_fts_ai"));
+    assert.ok(triggers.has("chat_messages_fts_ad"));
+    assert.ok(triggers.has("chat_messages_fts_au"));
+
+    // Backfill indexed the pre-existing row.
+    const matches = db
+      .prepare(
+        `SELECT m.message_id AS message_id
+         FROM chat_messages_fts JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
+         WHERE chat_messages_fts MATCH ?`,
+      )
+      .all('"backfilltoken"') as Array<{ message_id: string }>;
+    assert.deepEqual(
+      matches.map((row) => row.message_id),
+      ["msg-pre-1"],
+    );
+
+    // The migration is idempotent on re-run (IF NOT EXISTS + rebuild).
+    assert.doesNotThrow(() => __sqliteInternals.applySchemaMigrationForTest(125, db));
+  } finally {
+    db.close();
+  }
+});
+
+test("P2-S4a excludeFtsVirtualTables drops fts5 virtual + shadow tables but keeps ordinary tables", () => {
+  const rows = [
+    { name: "chat_messages", sql: "CREATE TABLE chat_messages (seq INTEGER)" },
+    { name: "chat_messages_fts", sql: "CREATE VIRTUAL TABLE chat_messages_fts USING fts5(content)" },
+    { name: "chat_messages_fts_data", sql: "CREATE TABLE 'chat_messages_fts_data'(id INTEGER)" },
+    { name: "chat_messages_fts_idx", sql: "CREATE TABLE 'chat_messages_fts_idx'(segid)" },
+    { name: "chat_messages_fts_content", sql: "CREATE TABLE 'chat_messages_fts_content'(id INTEGER)" },
+    { name: "chat_messages_fts_config", sql: "CREATE TABLE 'chat_messages_fts_config'(k)" },
+    { name: "chat_messages_fts_docsize", sql: "CREATE TABLE 'chat_messages_fts_docsize'(id INTEGER)" },
+    // An ordinary table that merely ends in _config must be retained.
+    { name: "a2a_task_push_configs", sql: "CREATE TABLE a2a_task_push_configs (id TEXT)" },
+  ];
+  const kept = __sqliteInternals.excludeFtsVirtualTables(rows).map((row) => row.name);
+  assert.deepEqual(kept, ["chat_messages", "a2a_task_push_configs"]);
+
+  // No-op when there are no virtual tables.
+  const noVirtual = [{ name: "plain", sql: "CREATE TABLE plain (id TEXT)" }];
+  assert.deepEqual(__sqliteInternals.excludeFtsVirtualTables(noVirtual), noVirtual);
+});
+
+test("P2-S4a SQLite blueprint and Postgres mirror exclude the chat_messages FTS artifacts", () => {
+  const blueprint = createSqliteSchemaBlueprint();
+  const tableNames = blueprint.tables.map((table) => table.name);
+  assert.ok(tableNames.includes("chat_messages"), "the real chat_messages table is still in the blueprint");
+  for (const ftsName of [
+    "chat_messages_fts",
+    "chat_messages_fts_data",
+    "chat_messages_fts_idx",
+    "chat_messages_fts_content",
+    "chat_messages_fts_config",
+    "chat_messages_fts_docsize",
+  ]) {
+    assert.ok(!tableNames.includes(ftsName), `${ftsName} must be excluded from the blueprint`);
+  }
+
+  // The auto-derived Postgres schema must contain no FTS5 artifacts at all.
+  const postgresSql = buildPostgresRuntimeSchemaSql();
+  assert.match(postgresSql, /CREATE TABLE IF NOT EXISTS chat_messages \(/);
+  assert.doesNotMatch(postgresSql, /chat_messages_fts/);
+  assert.doesNotMatch(postgresSql, /VIRTUAL TABLE/i);
+  assert.doesNotMatch(postgresSql, /fts5/i);
 });

@@ -616,7 +616,14 @@ const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
   requireFirstUseConfirmation: true,
 };
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
-const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
+const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
+  "browser.search",
+  "browser.navigate",
+  "browser.extract",
+  "http.get",
+  // P2-S4a: read-only tier-2 recall over this conversation's own message history.
+  "session.search",
+] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
 const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";

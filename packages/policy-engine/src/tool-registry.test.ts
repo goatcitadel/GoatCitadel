@@ -75,6 +75,24 @@ describe("tool registry", () => {
     });
   });
 
+  it("registers session.search as a safe, read-only recall tool (P2-S4a)", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    const tool = catalog.find((item) => item.toolName === "session.search");
+
+    expect(tool).toMatchObject({
+      category: "session",
+      riskLevel: "safe",
+      requiresApproval: false,
+      readOnly: true,
+      pack: "core",
+    });
+    expect(tool?.argSchema).toMatchObject({ required: ["query"] });
+    const scopeSchema = (tool?.argSchema as { properties?: { scope?: { enum?: string[] } } } | undefined)?.properties
+      ?.scope;
+    expect(scopeSchema?.enum).toEqual(["session", "all"]);
+    expect(tool?.recommendedContexts).toEqual(expect.arrayContaining(["chat", "cowork", "code"]));
+  });
+
   it("registers schedule.manage as a danger, approval-gated tool (P1-F2)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "schedule.manage");

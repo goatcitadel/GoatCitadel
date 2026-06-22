@@ -28,6 +28,69 @@ export interface ChatMessageRepositoryOptions {
   logger?: { warn: (data: unknown, msg: string) => void };
 }
 
+/** A single ranked FTS hit plus a small surrounding context window. */
+export interface ChatMessageSearchHit {
+  messageId: string;
+  sessionId: string;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: string;
+  /** BM25 score (lower is a better match; surfaced for callers that rank further). */
+  score: number;
+  /** The ±contextRadius messages around the hit, in chronological order (includes the hit). */
+  context: ChatMessageSearchContextEntry[];
+}
+
+export interface ChatMessageSearchContextEntry {
+  messageId: string;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: string;
+  /** True for the entry that actually matched the query. */
+  isHit: boolean;
+}
+
+export interface SearchMessagesOptions {
+  /** Restrict the search to a single session. Omit to search across all sessions. */
+  sessionId?: string;
+  /** Maximum number of ranked hits to return (clamped to [1, 50]). */
+  limit?: number;
+  /** Number of neighbouring messages to include on each side of a hit (clamped to [0, 10]). */
+  contextRadius?: number;
+}
+
+interface ChatMessageSearchRow {
+  seq: number;
+  message_id: string;
+  session_id: string;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: string;
+  score: number;
+}
+
+/**
+ * Convert arbitrary user text into a safe FTS5 MATCH expression.
+ *
+ * FTS5 treats characters like `"`, `*`, `:`, `^`, `(`, `)`, `-`, and the bare
+ * keywords AND/OR/NOT/NEAR as query operators; passing raw user input straight to
+ * MATCH throws `fts5: syntax error near …` on perfectly ordinary punctuation. We
+ * tokenise on non-alphanumeric runs and wrap each token in a double-quoted string
+ * literal (doubling any embedded quote), then AND them together implicitly. Every
+ * operator therefore degrades to a literal search term and the expression can never
+ * be malformed. Returns `null` when the input contains no searchable tokens.
+ */
+export function buildSafeFtsMatchQuery(rawQuery: string): string | null {
+  if (typeof rawQuery !== "string") {
+    return null;
+  }
+  const tokens = rawQuery.match(/[\p{L}\p{N}]+/gu);
+  if (!tokens || tokens.length === 0) {
+    return null;
+  }
+  return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+}
+
 export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
@@ -35,6 +98,9 @@ export class ChatMessageRepository {
   private readonly listBeforeSeqStmt;
   private readonly getStmt;
   private readonly getCursorStmt;
+  private readonly searchStmt;
+  private readonly searchScopedStmt;
+  private readonly contextWindowStmt;
   private readonly deleteByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
@@ -95,6 +161,101 @@ export class ChatMessageRepository {
       WHERE session_id = ? AND message_id = ?
       LIMIT 1
     `);
+    // P2-S4a session.search: BM25-ranked full-text recall over persisted messages.
+    // The join back to chat_messages resolves the canonical row (the FTS table is
+    // contentless). `bm25(chat_messages_fts)` returns ascending rank (lower = better).
+    this.searchStmt = db.prepare(`
+      SELECT
+        m.seq AS seq,
+        m.message_id AS message_id,
+        m.session_id AS session_id,
+        m.role AS role,
+        m.content AS content,
+        m.timestamp AS timestamp,
+        bm25(chat_messages_fts) AS score
+      FROM chat_messages_fts
+      JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
+      WHERE chat_messages_fts MATCH ?
+      ORDER BY score ASC
+      LIMIT ?
+    `);
+    this.searchScopedStmt = db.prepare(`
+      SELECT
+        m.seq AS seq,
+        m.message_id AS message_id,
+        m.session_id AS session_id,
+        m.role AS role,
+        m.content AS content,
+        m.timestamp AS timestamp,
+        bm25(chat_messages_fts) AS score
+      FROM chat_messages_fts
+      JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
+      WHERE chat_messages_fts MATCH ? AND m.session_id = ?
+      ORDER BY score ASC
+      LIMIT ?
+    `);
+    this.contextWindowStmt = db.prepare(`
+      SELECT message_id, role, content, timestamp, seq
+      FROM chat_messages
+      WHERE session_id = ? AND seq >= ? AND seq <= ?
+      ORDER BY seq ASC
+    `);
+  }
+
+  /**
+   * Full-text recall over persisted chat messages (tier-2 memory).
+   *
+   * Ranks hits by BM25, optionally scoped to one session, and attaches a ±N-message
+   * context window around each hit. The query text is sanitised via
+   * {@link buildSafeFtsMatchQuery} so arbitrary punctuation/operators never raise an
+   * FTS syntax error. Returns `[]` for an empty/no-token query or when nothing matches.
+   */
+  public searchMessages(query: string, options: SearchMessagesOptions = {}): ChatMessageSearchHit[] {
+    const matchExpression = buildSafeFtsMatchQuery(query);
+    if (matchExpression === null) {
+      return [];
+    }
+    const limit = clampSearchInt(options.limit, 10, 1, 50);
+    const contextRadius = clampSearchInt(options.contextRadius, 2, 0, 10);
+    const sessionId = options.sessionId?.trim();
+
+    const rows = sessionId
+      ? toSearchRows(this.searchScopedStmt.all(matchExpression, sessionId, limit))
+      : toSearchRows(this.searchStmt.all(matchExpression, limit));
+
+    return rows.map((row) => ({
+      messageId: row.message_id,
+      sessionId: row.session_id,
+      role: row.role,
+      content: row.content,
+      timestamp: row.timestamp,
+      score: row.score,
+      context: this.loadContextWindow(row, contextRadius),
+    }));
+  }
+
+  private loadContextWindow(row: ChatMessageSearchRow, contextRadius: number): ChatMessageSearchContextEntry[] {
+    if (contextRadius <= 0) {
+      return [
+        {
+          messageId: row.message_id,
+          role: row.role,
+          content: row.content,
+          timestamp: row.timestamp,
+          isHit: true,
+        },
+      ];
+    }
+    const windowRows = toContextRows(
+      this.contextWindowStmt.all(row.session_id, row.seq - contextRadius, row.seq + contextRadius),
+    );
+    return windowRows.map((windowRow) => ({
+      messageId: windowRow.message_id,
+      role: windowRow.role,
+      content: windowRow.content,
+      timestamp: windowRow.timestamp,
+      isHit: windowRow.message_id === row.message_id,
+    }));
   }
 
   public upsert(message: ChatMessageRecord, now = new Date().toISOString()): void {
@@ -449,4 +610,53 @@ function toCursorRow(value: unknown): { seq?: number } | undefined {
   return typeof value.seq === "number" || value.seq === undefined
     ? { seq: value.seq as number | undefined }
     : undefined;
+}
+
+function clampSearchInt(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function isChatMessageSearchRow(value: unknown): value is ChatMessageSearchRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.seq === "number" &&
+    typeof value.message_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.role === "string" &&
+    typeof value.content === "string" &&
+    typeof value.timestamp === "string" &&
+    typeof value.score === "number"
+  );
+}
+
+function toSearchRows(value: unknown): ChatMessageSearchRow[] {
+  return Array.isArray(value) ? value.filter(isChatMessageSearchRow) : [];
+}
+
+interface ChatMessageContextRow {
+  message_id: string;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: string;
+  seq: number;
+}
+
+function isChatMessageContextRow(value: unknown): value is ChatMessageContextRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.message_id === "string" &&
+    typeof value.role === "string" &&
+    typeof value.content === "string" &&
+    typeof value.timestamp === "string" &&
+    typeof value.seq === "number"
+  );
+}
+
+function toContextRows(value: unknown): ChatMessageContextRow[] {
+  return Array.isArray(value) ? value.filter(isChatMessageContextRow) : [];
 }

@@ -163,6 +163,77 @@ describe("executeTool", () => {
     expect(resolveFixedOutboundHostsForTool("whatsapp.react")).toContain("graph.facebook.com");
   });
 
+  it("dispatches session.search to the chat-message repo scoped to the calling session", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const searchMessages = vi.fn(() => [
+      {
+        messageId: "m1",
+        sessionId: "sess-search",
+        role: "user",
+        content: "deploy the gateway",
+        timestamp: "2026-06-01T00:00:00.000Z",
+        score: -1.2,
+        context: [{ messageId: "m1", role: "user", content: "deploy the gateway", timestamp: "2026-06-01T00:00:00.000Z", isHit: true }],
+      },
+    ]);
+    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "session.search",
+      args: { query: "gateway deploy", limit: 5 },
+      agentId: "agent",
+      sessionId: "sess-search",
+    };
+
+    const result = await executeTool(request, policyConfig, searchStorage);
+
+    // Default scope is the calling session.
+    expect(searchMessages).toHaveBeenCalledWith("gateway deploy", {
+      sessionId: "sess-search",
+      limit: 5,
+      contextRadius: 2,
+    });
+    expect(result).toMatchObject({ scope: "session", query: "gateway deploy" });
+    expect(Array.isArray(result.hits)).toBe(true);
+    expect((result.hits as unknown[]).length).toBe(1);
+  });
+
+  it("session.search with scope:all does not pass a sessionId filter", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const searchMessages = vi.fn(() => []);
+    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "session.search",
+      args: { query: "anything", scope: "all" },
+      agentId: "agent",
+      sessionId: "sess-search",
+    };
+
+    const result = await executeTool(request, policyConfig, searchStorage);
+
+    expect(searchMessages).toHaveBeenCalledWith("anything", { limit: 10, contextRadius: 2 });
+    expect(result).toMatchObject({ scope: "all", query: "anything", hits: [] });
+  });
+
+  it("session.search returns empty without hitting the repo for a blank query", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const searchMessages = vi.fn(() => []);
+    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "session.search",
+      args: { query: "   " },
+      agentId: "agent",
+      sessionId: "sess-search",
+    };
+
+    const result = await executeTool(request, policyConfig, searchStorage);
+
+    expect(searchMessages).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ scope: "session", query: "", hits: [] });
+  });
+
   it("blocks tool side effects that contain an active browser canary", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const envelope = createUntrustedContentEnvelope("browser.extract", "hostile page text");
