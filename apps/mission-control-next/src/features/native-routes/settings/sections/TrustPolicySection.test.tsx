@@ -94,4 +94,16 @@ describe("TrustPolicySection", () => {
     expect(text).toContain("Evaluate and approve through the owner lifecycle before promotion.");
     expect(text).toContain("No last-use evidence");
   });
+
+  it("labels trust matrix cells for compact card layout", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<TrustPolicySection {...makeProps()} />);
+    });
+
+    const cells = renderer!.root.findAll((node) => node.type === "td" && typeof node.props["data-label"] === "string");
+
+    expect(cells.map((cell) => cell.props["data-label"])).toContain("Owner action");
+    expect(cells.map((cell) => cell.props["data-label"])).toContain("Last-use evidence");
+  });
 });

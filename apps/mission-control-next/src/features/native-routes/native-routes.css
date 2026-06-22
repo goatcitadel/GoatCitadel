@@ -42,6 +42,13 @@
   line-height: 1.2;
 }
 
+.mc-next-shell[data-area="settings"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="library"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="projects"] .mc-next-rail-link > div > span {
+  display: none;
+}
+
 .mc-next-shell[data-area="library"] .notification-stack,
 .mc-next-shell[data-area="ops"] .notification-stack,
 .mc-next-shell[data-area="settings"] .notification-stack {
@@ -1539,12 +1546,131 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.mc-next-cowork-task-grid {
+.mc-next-directory-grid-native.mc-next-cowork-task-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.mc-next-directory-grid-native.mc-next-native-board-grid {
+  grid-template-columns: minmax(14rem, 0.75fr) minmax(20rem, 1fr) minmax(20rem, 1fr);
+  align-items: start;
 }
 
 .mc-next-cowork-workbench {
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.85fr);
+}
+
+.mc-next-cowork-task-grid > .mc-next-cowork-workbench,
+.mc-next-cowork-task-grid > .mc-next-directory-quickjump-card {
+  grid-column: 1 / -1;
+}
+
+.mc-next-cowork-detail-anchor {
+  display: grid;
+  min-width: 0;
+  outline: none;
+  scroll-margin-top: 0.85rem;
+}
+
+.mc-next-cowork-detail-anchor:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 62%, transparent);
+  outline-offset: 3px;
+}
+
+.mc-next-cowork-board-distribution-card {
+  grid-column: 1 / -1;
+}
+
+.mc-next-cowork-selected-task-summary {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+  padding: 0.56rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--mc-area-color) 62%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-selected-task-summary[data-status="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+  border-left-color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--gc-risk-danger) 9%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-selected-task-summary strong {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-selected-task-summary p,
+.mc-next-cowork-selected-task-summary span {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-lead-stack {
+  display: grid;
+  gap: 0.52rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-lead-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(14rem, 0.75fr);
+  gap: 0.52rem;
+  min-width: 0;
+  padding: 0.56rem 0.62rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-danger) 30%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--gc-risk-danger) 70%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--gc-risk-danger) 8%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-lead-detail div {
+  display: grid;
+  align-content: start;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-lead-detail span {
+  color: color-mix(in oklab, var(--gc-risk-danger) 68%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  line-height: 1.18;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-lead-detail strong {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-lead-detail p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell[data-area="cowork"][data-section="tasks"] .mc-next-surface-host-work,
+.mc-next-shell[data-area="cowork"][data-section="board"] .mc-next-surface-host-work {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-cowork-execution-card {
@@ -1563,6 +1689,8 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 0.45rem;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.46rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
   border-radius: var(--r-sm);
@@ -1599,6 +1727,12 @@
   color: var(--text-secondary);
   font-size: var(--text-2xs);
   line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-attention-strip .mc-next-button,
+.mc-next-cowork-attention-strip .gc-button {
+  justify-self: end;
 }
 
 .mc-next-cowork-execution-kicker {
@@ -1817,7 +1951,26 @@
 }
 
 .mc-next-board-lanes {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(13rem, 1fr));
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-list {
+  max-height: min(44vh, 26rem);
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item strong,
+.mc-next-board-lanes .mc-next-directory-lane-item p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item strong {
+  -webkit-line-clamp: 2;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item p {
+  -webkit-line-clamp: 2;
 }
 
 .mc-next-directory-lane {
@@ -1871,9 +2024,12 @@
 }
 
 .mc-next-directory-lane-item {
+  appearance: none;
   display: grid;
+  align-content: start;
   gap: 0.22rem;
   min-width: 0;
+  min-height: 5.6rem;
   padding: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
   border-radius: var(--r-sm);
@@ -1884,6 +2040,7 @@
   color: var(--text-primary);
   text-align: left;
   white-space: normal;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
@@ -3053,6 +3210,82 @@
   color: var(--text-muted);
 }
 
+@media (max-width: 1023px) {
+  .mc-next-trust-policy-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    scrollbar-gutter: auto;
+  }
+
+  .mc-next-trust-policy-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .mc-next-trust-policy-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .mc-next-trust-policy-table tbody,
+  .mc-next-trust-policy-table tr,
+  .mc-next-trust-policy-table th,
+  .mc-next-trust-policy-table td {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .mc-next-trust-policy-table tbody {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .mc-next-trust-policy-table tbody tr {
+    padding: 0.58rem 0.62rem;
+    border: 1px solid color-mix(in oklab, var(--border) 68%, transparent);
+    border-radius: var(--r-sm);
+    background: color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+  }
+
+  .mc-next-trust-policy-table th,
+  .mc-next-trust-policy-table td {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .mc-next-trust-policy-table td {
+    display: grid;
+    grid-template-columns: minmax(7.5rem, 0.42fr) minmax(0, 1fr);
+    gap: 0.5rem;
+    padding-top: 0.42rem;
+  }
+
+  .mc-next-trust-policy-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: var(--text-2xs);
+    font-weight: 800;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .mc-next-trust-policy-table tbody th strong,
+  .mc-next-trust-policy-table tbody th span,
+  .mc-next-trust-policy-table td strong,
+  .mc-next-trust-policy-table td span {
+    max-width: 100%;
+  }
+}
+
 .mc-next-settings-source-legend {
   display: flex;
   flex-wrap: wrap;
@@ -3505,6 +3738,9 @@
   .mc-next-settings-grid.is-three-column,
   .mc-next-native-projects-grid,
   .mc-next-native-work-pair,
+  .mc-next-directory-grid-native.mc-next-native-board-grid,
+  .mc-next-native-board-grid,
+  .mc-next-directory-grid-native.mc-next-cowork-task-grid,
   .mc-next-cowork-task-grid,
   .mc-next-task-lanes,
   .mc-next-board-lanes {
@@ -3522,6 +3758,10 @@
 
   .mc-next-cowork-attention-strip {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-lead-detail {
+    grid-template-columns: 1fr;
   }
 
   .mc-next-project-intake-grid,
@@ -5049,8 +5289,62 @@
    system instead of a collection of equal-weight diagnostic slabs. */
 .mc-next-directory-page {
   gap: 0.88rem;
-  max-width: min(100%, 1360px);
+  max-width: min(100%, 1680px);
   padding: 1rem 1.1rem 1.35rem;
+}
+
+.mc-next-body.is-work-area .mc-next-directory-page {
+  max-width: 100%;
+  margin-inline: 0;
+}
+
+.mc-next-directory-page,
+.mc-next-directory-grid-native,
+.mc-next-native-work-pair,
+.mc-next-native-stack,
+.mc-next-settings-grid,
+.mc-next-settings-stack,
+.mc-next-settings-panel,
+.mc-next-settings-panel-body,
+.mc-next-directory-card,
+.mc-next-directory-card-body {
+  min-width: 0;
+}
+
+.mc-next-directory-grid-native > *,
+.mc-next-native-work-pair > *,
+.mc-next-settings-grid > *,
+.mc-next-settings-stack > *,
+.mc-next-settings-panel-body > * {
+  min-width: 0;
+}
+
+.mc-next-directory-grid-native {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+}
+
+.mc-next-settings-grid {
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.38fr);
+}
+
+.mc-next-settings-grid.is-balanced {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr));
+}
+
+.mc-next-settings-grid.is-detail-wide {
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.5fr);
+}
+
+.mc-next-settings-grid.is-three-column {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 1439px) {
+  .mc-next-settings-grid,
+  .mc-next-settings-grid.is-detail-wide,
+  .mc-next-settings-grid.is-three-column {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  }
 }
 
 .mc-next-directory-header {

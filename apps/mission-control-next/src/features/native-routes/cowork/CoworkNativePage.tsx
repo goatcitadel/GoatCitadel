@@ -1,16 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  CircleDashed,
-  Eye,
-  PlayCircle,
-  Plus,
-  RefreshCw,
-  Save,
-  Undo2,
-  Workflow,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Save, Undo2, Workflow } from "lucide-react";
 import {
   addTaskDeliverable,
   createTask,
@@ -24,7 +13,7 @@ import {
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { EmptyState, NativeButton } from "../primitives";
+import { NativeButton } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -49,6 +38,7 @@ import {
   LibraryNotice,
 } from "../shared/library-primitives";
 import { CoworkExecutionGlance, buildCoworkExecutionSnapshot } from "./CoworkExecutionGlance";
+import { NativeLane } from "./NativeLane";
 
 type TaskCardRecord = TaskRecord;
 type CoworkOperatorRecord = {
@@ -121,6 +111,8 @@ export function CoworkNativePage({
     error: null,
     data: [],
   });
+  const detailAnchorRef = useRef<HTMLElement | null>(null);
+  const [detailFocusRequest, setDetailFocusRequest] = useState(0);
   const isMounted = useIsMounted();
 
   const loadCowork = useCallback(async () => {
@@ -276,6 +268,19 @@ export function CoworkNativePage({
       cancelled = true;
     };
   }, [activeCitadelId, activeWorkspaceId, selectedTask]);
+
+  useEffect(() => {
+    if (detailFocusRequest === 0) {
+      return;
+    }
+    const revealDetail = () => {
+      detailAnchorRef.current?.scrollIntoView?.({ block: "start", inline: "nearest", behavior: "smooth" });
+      detailAnchorRef.current?.focus?.({ preventScroll: true });
+    };
+    revealDetail();
+    const settledRevealId = globalThis.setTimeout(revealDetail, 200);
+    return () => globalThis.clearTimeout(settledRevealId);
+  }, [deliverables.loading, detailFocusRequest, selectedTask?.taskId]);
 
   const refreshCowork = async () => {
     try {
@@ -436,6 +441,14 @@ export function CoworkNativePage({
     }
   };
 
+  const handleOpenBlocker = useCallback(() => {
+    if (!coworkContinuation.firstBlockedTaskId) {
+      return;
+    }
+    setSelectedTaskId(coworkContinuation.firstBlockedTaskId);
+    setDetailFocusRequest((current) => current + 1);
+  }, [coworkContinuation.firstBlockedTaskId]);
+
   const content =
     section === "board" ? (
       <NativeGrid className="mc-next-native-board-grid">
@@ -466,6 +479,7 @@ export function CoworkNativePage({
           title="Board truth"
           subtitle="Current task state, blocker pressure, and supported handoffs without overstating autonomous control."
           density="compact"
+          className="mc-next-cowork-board-truth-card"
           stats={[
             { label: "Intent model", value: "Recorded" },
             { label: "Live control", value: "Executor-honored" },
@@ -508,7 +522,62 @@ export function CoworkNativePage({
             </NativeButton>
           </LibraryButtonRow>
         </NativeCard>
-        <NativeCard title="Work distribution" subtitle="Current task flow by status lane." density="compact">
+        <section ref={detailAnchorRef} className="mc-next-cowork-detail-anchor" tabIndex={-1}>
+          <NativeCard
+            title={selectedTask?.status === "blocked" ? "Blocker detail" : "Selected task"}
+            subtitle={
+              selectedTask
+                ? `${formatTaskStatus(selectedTask.status)} · ${selectedTask.priority} priority`
+                : "Select a lane item to inspect it."
+            }
+            density="compact"
+            className="mc-next-cowork-board-selected-card"
+            stats={
+              selectedTask
+                ? [
+                    { label: "Status", value: formatTaskStatus(selectedTask.status) },
+                    { label: "Updated", value: formatDateTime(selectedTask.updatedAt ?? selectedTask.createdAt) },
+                  ]
+                : undefined
+            }
+          >
+            {selectedTask ? (
+              <>
+                <div className="mc-next-cowork-selected-task-summary" data-status={selectedTask.status}>
+                  <strong>{selectedTask.title}</strong>
+                  <p>{selectedTask.description?.trim() || "No task description has been captured yet."}</p>
+                  <span>{coworkContinuation.hierarchyDetail}</span>
+                </div>
+                <LibraryButtonRow>
+                  <NativeButton
+                    variant="default"
+                    onClick={() => navigate({ area: "cowork", section: "tasks", theme: route.theme })}
+                  >
+                    <Workflow className="h-4 w-4" />
+                    Open task detail
+                  </NativeButton>
+                  {selectedTask.status === "blocked" ? (
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      Review approvals
+                    </NativeButton>
+                  ) : null}
+                </LibraryButtonRow>
+              </>
+            ) : (
+              <LibraryEmptyState label="Select a task from a lane to inspect it." />
+            )}
+          </NativeCard>
+        </section>
+        <NativeCard
+          title="Work distribution"
+          subtitle="Current task flow by status lane."
+          density="compact"
+          className="mc-next-cowork-board-distribution-card"
+        >
           <div className="mc-next-board-lanes">
             <NativeLane
               title="Planning"
@@ -549,11 +618,7 @@ export function CoworkNativePage({
           onContinue={() => navigate({ area: "cowork", theme: route.theme })}
           onOpenApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
           onOpenBoard={() => navigate({ area: "cowork", section: "board", theme: route.theme })}
-          onOpenBlocker={
-            coworkContinuation.firstBlockedTaskId
-              ? () => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)
-              : undefined
-          }
+          onOpenBlocker={coworkContinuation.firstBlockedTaskId ? handleOpenBlocker : undefined}
         />
         <section className="mc-next-native-work-pair mc-next-cowork-workbench" aria-label="Cowork task workbench">
           <NativeCard
@@ -651,165 +716,171 @@ export function CoworkNativePage({
               />
             </div>
           </NativeCard>
-          <NativeCard
-            title={selectedTask?.title ?? "Task detail"}
-            subtitle={selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."}
-            density="compact"
-            className="mc-next-cowork-task-detail-card"
-            scrollBody
-            bodyMaxHeight="min(68vh, 38rem)"
-          >
-            {selectedTask ? (
-              <>
-                <LibraryFieldGrid>
-                  <LibraryField label="Title">
-                    <input
-                      className="mc-next-settings-input"
-                      value={detailDraft.title}
-                      onChange={(event) => setDetailDraft((current) => ({ ...current, title: event.target.value }))}
-                    />
-                  </LibraryField>
-                  <LibraryField label="Status">
-                    <select
-                      className="mc-next-settings-input"
-                      value={detailDraft.status}
-                      onChange={(event) =>
-                        setDetailDraft((current) => ({
-                          ...current,
-                          status: event.target.value as TaskRecord["status"],
-                        }))
-                      }
+          <section ref={detailAnchorRef} className="mc-next-cowork-detail-anchor" tabIndex={-1}>
+            <NativeCard
+              title={selectedTask?.title ?? "Task detail"}
+              subtitle={
+                selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."
+              }
+              density="compact"
+              className="mc-next-cowork-task-detail-card"
+              scrollBody
+              bodyMaxHeight="min(68vh, 38rem)"
+            >
+              {selectedTask ? (
+                <>
+                  <LibraryFieldGrid>
+                    <LibraryField label="Title">
+                      <input
+                        className="mc-next-settings-input"
+                        value={detailDraft.title}
+                        onChange={(event) => setDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                      />
+                    </LibraryField>
+                    <LibraryField label="Status">
+                      <select
+                        className="mc-next-settings-input"
+                        value={detailDraft.status}
+                        onChange={(event) =>
+                          setDetailDraft((current) => ({
+                            ...current,
+                            status: event.target.value as TaskRecord["status"],
+                          }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      >
+                        {TASK_STATUS_OPTIONS.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </LibraryField>
+                    <LibraryField label="Priority">
+                      <select
+                        className="mc-next-settings-input"
+                        value={detailDraft.priority}
+                        onChange={(event) =>
+                          setDetailDraft((current) => ({
+                            ...current,
+                            priority: event.target.value as TaskRecord["priority"],
+                          }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      >
+                        {TASK_PRIORITY_OPTIONS.map((priority) => (
+                          <option key={priority} value={priority}>
+                            {priority}
+                          </option>
+                        ))}
+                      </select>
+                    </LibraryField>
+                    <LibraryField label="Description" span={2}>
+                      <textarea
+                        className="mc-next-settings-textarea"
+                        value={detailDraft.description}
+                        onChange={(event) =>
+                          setDetailDraft((current) => ({ ...current, description: event.target.value }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      />
+                    </LibraryField>
+                  </LibraryFieldGrid>
+                  <LibraryButtonRow>
+                    <NativeButton
+                      variant="default"
+                      onClick={() => void handleSaveTask()}
                       disabled={Boolean(selectedTask.deletedAt)}
                     >
-                      {TASK_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                  </LibraryField>
-                  <LibraryField label="Priority">
-                    <select
-                      className="mc-next-settings-input"
-                      value={detailDraft.priority}
-                      onChange={(event) =>
-                        setDetailDraft((current) => ({
-                          ...current,
-                          priority: event.target.value as TaskRecord["priority"],
-                        }))
-                      }
-                      disabled={Boolean(selectedTask.deletedAt)}
-                    >
-                      {TASK_PRIORITY_OPTIONS.map((priority) => (
-                        <option key={priority} value={priority}>
-                          {priority}
-                        </option>
-                      ))}
-                    </select>
-                  </LibraryField>
-                  <LibraryField label="Description" span={2}>
-                    <textarea
-                      className="mc-next-settings-textarea"
-                      value={detailDraft.description}
-                      onChange={(event) =>
-                        setDetailDraft((current) => ({ ...current, description: event.target.value }))
-                      }
-                      disabled={Boolean(selectedTask.deletedAt)}
-                    />
-                  </LibraryField>
-                </LibraryFieldGrid>
-                <LibraryButtonRow>
-                  <NativeButton
-                    variant="default"
-                    onClick={() => void handleSaveTask()}
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  >
-                    <Save className="h-4 w-4" />
-                    Save task
-                  </NativeButton>
-                  {selectedTask.deletedAt ? (
-                    <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
-                      <Undo2 className="h-4 w-4" />
-                      Restore
+                      <Save className="h-4 w-4" />
+                      Save task
                     </NativeButton>
-                  ) : (
-                    <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
-                      <Undo2 className="h-4 w-4" />
-                      Move to trash
-                    </NativeButton>
-                  )}
-                </LibraryButtonRow>
-                <LibraryCodeBlock label="Task -> deliverables">
-                  {`${selectedTask.title}\n${coworkContinuation.hierarchyDetail}`}
-                </LibraryCodeBlock>
-                {deliverables.error ? (
-                  <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} />
-                ) : null}
-                <LibraryFieldGrid>
-                  <LibraryField label="Deliverable title">
-                    <input
-                      className="mc-next-settings-input"
-                      value={deliverableDraft.title}
-                      onChange={(event) =>
-                        setDeliverableDraft((current) => ({ ...current, title: event.target.value }))
-                      }
-                      disabled={Boolean(selectedTask.deletedAt)}
-                    />
-                  </LibraryField>
-                  <LibraryField label="Type">
-                    <select
-                      className="mc-next-settings-input"
-                      value={deliverableDraft.deliverableType}
-                      onChange={(event) =>
-                        setDeliverableDraft((current) => ({
-                          ...current,
-                          deliverableType: event.target.value as TaskDeliverableRecord["deliverableType"],
-                        }))
-                      }
+                    {selectedTask.deletedAt ? (
+                      <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
+                        <Undo2 className="h-4 w-4" />
+                        Restore
+                      </NativeButton>
+                    ) : (
+                      <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
+                        <Undo2 className="h-4 w-4" />
+                        Move to trash
+                      </NativeButton>
+                    )}
+                  </LibraryButtonRow>
+                  <LibraryCodeBlock label="Task -> deliverables">
+                    {`${selectedTask.title}\n${coworkContinuation.hierarchyDetail}`}
+                  </LibraryCodeBlock>
+                  {deliverables.error ? (
+                    <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} />
+                  ) : null}
+                  <LibraryFieldGrid>
+                    <LibraryField label="Deliverable title">
+                      <input
+                        className="mc-next-settings-input"
+                        value={deliverableDraft.title}
+                        onChange={(event) =>
+                          setDeliverableDraft((current) => ({ ...current, title: event.target.value }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      />
+                    </LibraryField>
+                    <LibraryField label="Type">
+                      <select
+                        className="mc-next-settings-input"
+                        value={deliverableDraft.deliverableType}
+                        onChange={(event) =>
+                          setDeliverableDraft((current) => ({
+                            ...current,
+                            deliverableType: event.target.value as TaskDeliverableRecord["deliverableType"],
+                          }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      >
+                        {TASK_DELIVERABLE_TYPE_OPTIONS.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                    </LibraryField>
+                    <LibraryField label="Path or link" span={2}>
+                      <input
+                        className="mc-next-settings-input"
+                        value={deliverableDraft.path}
+                        onChange={(event) =>
+                          setDeliverableDraft((current) => ({ ...current, path: event.target.value }))
+                        }
+                        disabled={Boolean(selectedTask.deletedAt)}
+                      />
+                    </LibraryField>
+                  </LibraryFieldGrid>
+                  <LibraryButtonRow>
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() => void handleAddDeliverable()}
                       disabled={Boolean(selectedTask.deletedAt)}
                     >
-                      {TASK_DELIVERABLE_TYPE_OPTIONS.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </LibraryField>
-                  <LibraryField label="Path or link" span={2}>
-                    <input
-                      className="mc-next-settings-input"
-                      value={deliverableDraft.path}
-                      onChange={(event) => setDeliverableDraft((current) => ({ ...current, path: event.target.value }))}
-                      disabled={Boolean(selectedTask.deletedAt)}
-                    />
-                  </LibraryField>
-                </LibraryFieldGrid>
-                <LibraryButtonRow>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() => void handleAddDeliverable()}
-                    disabled={Boolean(selectedTask.deletedAt)}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add deliverable
-                  </NativeButton>
-                </LibraryButtonRow>
-                <NativeList
-                  items={(deliverables.data ?? []).map((item) => ({
-                    title: item.title,
-                    meta: item.deliverableType,
-                    body: item.path ?? item.description ?? "No path or description.",
-                  }))}
-                  emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
-                  density="compact"
-                  maxHeight="12rem"
-                  ariaLabel="Task deliverables"
-                />
-              </>
-            ) : (
-              <LibraryEmptyState label="Create or select a task to edit it." />
-            )}
-          </NativeCard>
+                      <Plus className="h-4 w-4" />
+                      Add deliverable
+                    </NativeButton>
+                  </LibraryButtonRow>
+                  <NativeList
+                    items={(deliverables.data ?? []).map((item) => ({
+                      title: item.title,
+                      meta: item.deliverableType,
+                      body: item.path ?? item.description ?? "No path or description.",
+                    }))}
+                    emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
+                    density="compact"
+                    maxHeight="12rem"
+                    ariaLabel="Task deliverables"
+                  />
+                </>
+              ) : (
+                <LibraryEmptyState label="Create or select a task to edit it." />
+              )}
+            </NativeCard>
+          </section>
         </section>
         <QuickJumpCard
           title="Cowork routes"
@@ -831,33 +902,51 @@ export function CoworkNativePage({
   // no task is visible there is no active run, so the lead is suppressed.
   const hasActiveRun = tasks.length > 0 || deletedTasks.length > 0;
   const leadIsBlocker = coworkContinuation.blockerCount > 0 && Boolean(coworkContinuation.firstBlockedTaskId);
+  const showLeadBlockerDetail =
+    leadIsBlocker && detailFocusRequest > 0 && selectedTask?.taskId === coworkContinuation.firstBlockedTaskId;
   const leadContent = hasActiveRun ? (
-    <article
-      className="mc-next-cowork-attention-strip"
-      data-tone={leadIsBlocker ? "blocked" : "attention"}
-      aria-label="Cowork next action"
-    >
-      <div>
+    <div className="mc-next-cowork-lead-stack">
+      <article
+        className="mc-next-cowork-attention-strip"
+        data-tone={leadIsBlocker ? "blocked" : "attention"}
+        aria-label="Cowork next action"
+      >
+        <div>
+          {leadIsBlocker ? (
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          ) : (
+            <Workflow className="h-4 w-4" aria-hidden="true" />
+          )}
+          <strong>{leadIsBlocker ? "Blocked" : `Next: ${coworkContinuation.nextActionLabel}`}</strong>
+        </div>
+        <p>{coworkContinuation.nextActionDetail}</p>
         {leadIsBlocker ? (
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          <NativeButton variant="secondary" onClick={handleOpenBlocker}>
+            <AlertTriangle className="h-4 w-4" />
+            Open blocker
+          </NativeButton>
         ) : (
-          <Workflow className="h-4 w-4" aria-hidden="true" />
+          <NativeButton variant="default" onClick={() => navigate({ area: "cowork", theme: route.theme })}>
+            <Workflow className="h-4 w-4" />
+            Continue Cowork
+          </NativeButton>
         )}
-        <strong>{leadIsBlocker ? "Blocked" : `Next: ${coworkContinuation.nextActionLabel}`}</strong>
-      </div>
-      <p>{coworkContinuation.nextActionDetail}</p>
-      {leadIsBlocker ? (
-        <NativeButton variant="secondary" onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}>
-          <AlertTriangle className="h-4 w-4" />
-          Open blocker
-        </NativeButton>
-      ) : (
-        <NativeButton variant="default" onClick={() => navigate({ area: "cowork", theme: route.theme })}>
-          <Workflow className="h-4 w-4" />
-          Continue Cowork
-        </NativeButton>
-      )}
-    </article>
+      </article>
+      {showLeadBlockerDetail && selectedTask ? (
+        <section className="mc-next-cowork-lead-detail" data-status={selectedTask.status}>
+          <div>
+            <span>Selected blocker</span>
+            <strong>{selectedTask.title}</strong>
+            <p>{selectedTask.description?.trim() || "No task description has been captured yet."}</p>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{formatTaskStatus(selectedTask.status)}</strong>
+            <p>{coworkContinuation.hierarchyDetail}</p>
+          </div>
+        </section>
+      ) : null}
+    </div>
   ) : undefined;
 
   return (
@@ -910,74 +999,4 @@ async function fetchTasksByViewPaged(
     }
   }
   return { items, nextCursor, view };
-}
-
-function NativeLane({
-  title,
-  count,
-  items,
-  selectedTaskId,
-  onSelect,
-}: {
-  title: string;
-  count: number;
-  items: TaskCardRecord[];
-  selectedTaskId?: string;
-  onSelect?: (taskId: string) => void;
-}) {
-  return (
-    <section className="mc-next-directory-lane">
-      <div className="mc-next-directory-lane-head">
-        <strong>{title}</strong>
-        <span>{count}</span>
-      </div>
-      {items.length === 0 ? (
-        <EmptyState size="compact" title="No items in this lane." />
-      ) : (
-        <div className="mc-next-directory-lane-list">
-          {items.map((item) => (
-            <button
-              key={item.taskId}
-              type="button"
-              className={`mc-next-directory-lane-item${selectedTaskId === item.taskId ? " is-selected" : ""}`}
-              data-status={item.status}
-              aria-pressed={selectedTaskId === item.taskId}
-              aria-label={`${item.title}: ${formatTaskStatus(item.status)}, ${item.priority} priority`}
-              onClick={() => onSelect?.(item.taskId)}
-            >
-              <div className="mc-next-directory-lane-meta">
-                <span>{item.priority}</span>
-                <span>{formatDateTime(item.updatedAt)}</span>
-              </div>
-              <strong title={item.title}>{item.title}</strong>
-              <p title={item.description?.trim() || undefined}>{item.description?.trim() || "No description yet."}</p>
-              <div className="mc-next-directory-lane-status" data-status={item.status}>
-                <TaskStatusIcon status={item.status} />
-                <span>{formatTaskStatus(item.status)}</span>
-                {item.assignedAgentId ? (
-                  <span className="mc-next-directory-lane-agent">Agent {item.assignedAgentId}</span>
-                ) : null}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function TaskStatusIcon({ status }: { status: TaskRecord["status"] }) {
-  if (status === "blocked") {
-    return <AlertTriangle className="h-4 w-4" aria-hidden="true" />;
-  }
-  if (status === "review") {
-    return <Eye className="h-4 w-4" aria-hidden="true" />;
-  }
-  if (status === "in_progress" || status === "testing") {
-    return <PlayCircle className="h-4 w-4" aria-hidden="true" />;
-  }
-  if (status === "done") {
-    return <CheckCircle2 className="h-4 w-4" aria-hidden="true" />;
-  }
-  return <CircleDashed className="h-4 w-4" aria-hidden="true" />;
 }

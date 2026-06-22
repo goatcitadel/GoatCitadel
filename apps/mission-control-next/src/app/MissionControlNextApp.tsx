@@ -319,12 +319,12 @@ export function MissionControlNextApp() {
     () => describeRealtimeTruthUi(streamState, streamTruthMode),
     [streamState, streamTruthMode],
   );
-  // F1 (topbar density): below the laptop breakpoint the lower-priority topbar
+  // F1 (topbar density): below the compact desktop breakpoint the lower-priority topbar
   // controls collapse into an overflow menu so the right cluster never clips
-  // behind `overflow: clip`. Mirrors the `@media (max-width: 1279px)` CSS tier so
+  // behind `overflow: clip`. Mirrors the `@media (max-width: 1439px)` CSS tier so
   // JS placement and the responsive stylesheet stay in lockstep. Falls back to
   // the roomy inline layout when matchMedia is unavailable (SSR / test renderer).
-  const isCompactTopbar = useMediaQuery("(max-width: 1279px)");
+  const isCompactTopbar = useMediaQuery("(max-width: 1439px)");
   // WS-E: below the rail breakpoint the `.mc-next-rail` becomes the hamburger
   // drawer (areas live in the topbar on desktop, which is hidden here). Mirror
   // the `@media (max-width: 1023px)` CSS tier so the in-drawer area switcher

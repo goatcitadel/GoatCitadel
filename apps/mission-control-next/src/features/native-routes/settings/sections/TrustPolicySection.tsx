@@ -105,7 +105,9 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <SettingsGrid variant="detail-wide">
-        <NativeCard density="compact" className="mc-next-settings-panel"
+        <NativeCard
+          density="compact"
+          className="mc-next-settings-panel"
           title="Trust & Policy snapshot"
           subtitle={`Read-only dashboard for ${activeWorkspaceId} capability, tool, and source posture. Open owner surfaces to edit.`}
           stats={[
@@ -134,7 +136,9 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           </SettingsButtonRow>
         </NativeCard>
         <SettingsStack>
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Edit owners"
             subtitle="This page does not replace the existing editors; it keeps their trust signals together."
           >
@@ -176,7 +180,9 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           </NativeCard>
         </SettingsStack>
       </SettingsGrid>
-      <NativeCard density="compact" className="mc-next-settings-panel"
+      <NativeCard
+        density="compact"
+        className="mc-next-settings-panel"
         title="Trust matrix"
         subtitle="Capability, tool, and source rows with callable posture, grants, blockers, and last-use evidence."
         scrollBody
@@ -309,18 +315,18 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
                   {row.source ? ` - ${row.source}` : ""}
                 </span>
               </th>
-              <td>
+              <td data-label="Status">
                 <TrustPolicyStatusBadge status={normalizeTrustPolicyStatus(row.status)} />
               </td>
-              <td>{row.trustState?.trim() || "Unknown"}</td>
-              <td>{labelForCallableState(row)}</td>
-              <td>{formatList(row.grants, "No grants attached")}</td>
-              <td>{formatList(row.blockers, "No blockers reported")}</td>
-              <td>
+              <td data-label="Trust state">{row.trustState?.trim() || "Unknown"}</td>
+              <td data-label="Callable state">{labelForCallableState(row)}</td>
+              <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
+              <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
+              <td data-label="Owner action">
                 <strong>{row.owner ?? "Unknown owner"}</strong>
                 <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
               </td>
-              <td>{formatLastUse(row)}</td>
+              <td data-label="Last-use evidence">{formatLastUse(row)}</td>
             </tr>
           ))}
         </tbody>
@@ -562,7 +568,7 @@ function withTrustPolicyOwnerAction(row: TrustPolicyMatrixRow): TrustPolicyMatri
       : status === "approval_required"
         ? "Review the approval or grant before allowing runtime use."
         : status === "blocked" || status === "quarantined"
-          ? blockers[0] ?? "Resolve the blocker in the owner surface before runtime use."
+          ? (blockers[0] ?? "Resolve the blocker in the owner surface before runtime use.")
           : status === "not_callable"
             ? "Use as inspectable context only until an owner promotes it."
             : status === "experimental"
@@ -594,7 +600,11 @@ function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
     case "addons.installed":
       return "Settings / Add-ons";
     default:
-      return row.kind === "tool" ? "Settings / Tools" : row.kind === "capability" ? "Library / Capabilities" : "Settings";
+      return row.kind === "tool"
+        ? "Settings / Tools"
+        : row.kind === "capability"
+          ? "Library / Capabilities"
+          : "Settings";
   }
 }
 
