@@ -1207,6 +1207,11 @@ export class GatewayService {
       detectDelegationRoles: (text) => detectDelegationRoles(text),
       createDurableRun: (input) => this.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      // P1-F5 de-novo origination: cheap read-only planner + eligibility guard.
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      isProactiveDeNovoEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
       backgroundTasks: this.backgroundTasks,
       get closing() {
         return self.closing;
