@@ -289,7 +289,13 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
 }
 
 function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
-  const { system, messages } = buildAnthropicMessagesInput(request.messages);
+  const built = buildAnthropicMessagesInput(request.messages);
+  // Prompt caching is always on for Anthropic: it is strictly an optimization
+  // (a cache hit is cheaper, a miss costs nothing extra) and the provider-call
+  // adapter has no feature-flag access without widening LlmProviderAdapterHost
+  // across every provider. The umbrella kill switch (coworkRuntimeQualityV1Disabled)
+  // is enforced upstream where the base prompt is assembled, not here.
+  const { system, messages } = applyAnthropicCacheBreakpoints(built.system, built.messages);
   const reasoningEffort = request.reasoning?.effort;
   const thinkingEnabled = Boolean(reasoningEffort && reasoningEffort !== "none");
   const payload: Record<string, unknown> = {
@@ -461,6 +467,114 @@ function buildAnthropicMessagesInput(messages: ChatCompletionRequest["messages"]
         : undefined;
 
   return { system, messages: normalizedMessages };
+}
+
+const ANTHROPIC_MAX_CACHE_BREAKPOINTS = 4;
+const ANTHROPIC_EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
+
+/**
+ * Places Anthropic `cache_control: { type: "ephemeral" }` breakpoints so the
+ * large, mostly-stable prefix is a cache READ across the multi-loop tool calls
+ * within a turn:
+ *
+ *   - one breakpoint on the system block (the P0-A base prompt now leads the
+ *     system instruction, making it the stable, cacheable prefix), and
+ *   - one each on the last and second-to-last non-system messages, so a cache
+ *     write at the tail of one loop becomes a read on the next.
+ *
+ * Anthropic caps a request at 4 breakpoints; this never emits more. The input is
+ * deep-copied before any `cache_control` is attached — caller-owned system/
+ * message arrays are never mutated. A string `system` is converted to block form
+ * so the breakpoint can attach.
+ */
+function applyAnthropicCacheBreakpoints(
+  system: string | Array<Record<string, unknown>> | undefined,
+  messages: Array<Record<string, unknown>>,
+): {
+  system?: string | Array<Record<string, unknown>>;
+  messages: Array<Record<string, unknown>>;
+} {
+  let remainingBreakpoints = ANTHROPIC_MAX_CACHE_BREAKPOINTS;
+
+  // System block first: it is the longest stable prefix, so it earns a
+  // breakpoint ahead of the recent messages.
+  let cachedSystem = system;
+  if (system !== undefined && remainingBreakpoints > 0) {
+    const systemBlocks = toSystemBlocks(system);
+    if (systemBlocks.length > 0) {
+      cachedSystem = attachCacheControlToLastBlock(systemBlocks);
+      remainingBreakpoints -= 1;
+    }
+  }
+
+  // Reserve one breakpoint for the very last non-system message and, when budget
+  // allows, the one before it. Walk from the tail so the freshest turns get the
+  // breakpoints (older prefix stays a cache read).
+  const cachedMessages = messages.map((message) => ({ ...message }));
+  const targetIndices: number[] = [];
+  for (let index = cachedMessages.length - 1; index >= 0 && targetIndices.length < 2; index -= 1) {
+    targetIndices.push(index);
+  }
+  for (const index of targetIndices) {
+    if (remainingBreakpoints <= 0) {
+      break;
+    }
+    const target = cachedMessages[index];
+    if (!target) {
+      continue;
+    }
+    const updated = attachCacheControlToMessage(target);
+    if (updated) {
+      cachedMessages[index] = updated;
+      remainingBreakpoints -= 1;
+    }
+  }
+
+  return { system: cachedSystem, messages: cachedMessages };
+}
+
+function toSystemBlocks(system: string | Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (typeof system === "string") {
+    return system.trim() ? [{ type: "text", text: system }] : [];
+  }
+  return system.map((block) => ({ ...block }));
+}
+
+function attachCacheControlToLastBlock(
+  blocks: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const lastIndex = blocks.length - 1;
+  if (lastIndex < 0) {
+    return blocks;
+  }
+  const next = blocks.slice();
+  next[lastIndex] = { ...next[lastIndex], cache_control: { ...ANTHROPIC_EPHEMERAL_CACHE_CONTROL } };
+  return next;
+}
+
+/**
+ * Attaches a breakpoint to the last content block of a message, converting a
+ * string `content` to block form when needed. Returns `undefined` when the
+ * message has no cacheable content (so the caller does not spend a breakpoint).
+ */
+function attachCacheControlToMessage(
+  message: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const content = message.content;
+  if (typeof content === "string") {
+    if (!content.trim()) {
+      return undefined;
+    }
+    return {
+      ...message,
+      content: [{ type: "text", text: content, cache_control: { ...ANTHROPIC_EPHEMERAL_CACHE_CONTROL } }],
+    };
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    const blocks = content.map((block) => (isRecord(block) ? { ...block } : block)) as Array<Record<string, unknown>>;
+    return { ...message, content: attachCacheControlToLastBlock(blocks) };
+  }
+  return undefined;
 }
 
 function mapAnthropicMessageContent(

@@ -115,7 +115,7 @@ describe("anthropicProviderAdapter", () => {
     });
     expect(payload.system).toEqual([
       { type: "text", text: "Use tools only when needed." },
-      { type: "text", text: "Be exact." },
+      { type: "text", text: "Be exact.", cache_control: { type: "ephemeral" } },
     ]);
     expect(payload.tools).toEqual([
       {
@@ -133,6 +133,7 @@ describe("anthropicProviderAdapter", () => {
           id: "call_existing",
           name: "lookup",
           input: { query: "goat" },
+          cache_control: { type: "ephemeral" },
         },
       ],
     });
@@ -590,6 +591,7 @@ describe("anthropicProviderAdapter", () => {
           {
             type: "image",
             source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" },
+            cache_control: { type: "ephemeral" },
           },
         ],
       },
@@ -622,8 +624,110 @@ describe("anthropicProviderAdapter", () => {
     expect(payload.messages).toEqual([
       {
         role: "user",
-        content: [{ type: "image", source: { type: "url", url: "https://example.test/cat.jpg" } }],
+        content: [
+          {
+            type: "image",
+            source: { type: "url", url: "https://example.test/cat.jpg" },
+            cache_control: { type: "ephemeral" },
+          },
+        ],
       },
     ]);
   });
+
+  it("places ephemeral cache breakpoints on the system block and recent messages within the 4-breakpoint cap", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "msg_cache", model: "claude-test", content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await anthropicProviderAdapter.chatCompletions(
+      {
+        messages: [
+          { role: "system", content: "Large stable base prompt." },
+          { role: "user", content: "first question" },
+          { role: "assistant", content: "first answer" },
+          { role: "user", content: "second question" },
+          { role: "assistant", content: "second answer" },
+          { role: "user", content: "third question" },
+        ],
+      },
+      resolved,
+      "claude-test",
+      host,
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+
+    // System (string) is converted to block form so the breakpoint can attach.
+    expect(payload.system).toEqual([
+      { type: "text", text: "Large stable base prompt.", cache_control: { type: "ephemeral" } },
+    ]);
+
+    const messages = payload.messages as Array<{ content: unknown }>;
+    // Last two non-system messages carry a breakpoint; earlier ones do not.
+    expect(messages[messages.length - 1].content).toEqual([
+      { type: "text", text: "third question", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(messages[messages.length - 2].content).toEqual([
+      { type: "text", text: "second answer", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(messages[0].content).toBe("first question");
+    expect(messages[1].content).toBe("first answer");
+
+    expect(countCacheBreakpoints(payload)).toBe(3);
+    expect(countCacheBreakpoints(payload)).toBeLessThanOrEqual(4);
+  });
+
+  it("never exceeds 4 cache breakpoints across a long history", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "msg_cap", model: "claude-test", content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const longHistory = Array.from({ length: 40 }, (_value, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `turn ${index}`,
+    }));
+
+    await anthropicProviderAdapter.chatCompletions(
+      { messages: [{ role: "system", content: "stable prefix" }, ...longHistory] },
+      resolved,
+      "claude-test",
+      host,
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(countCacheBreakpoints(payload)).toBeLessThanOrEqual(4);
+    // System + 2 recent messages = 3 with this layout.
+    expect(countCacheBreakpoints(payload)).toBe(3);
+  });
 });
+
+function countCacheBreakpoints(payload: Record<string, unknown>): number {
+  let count = 0;
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (record.cache_control) {
+        count += 1;
+      }
+      for (const key of Object.keys(record)) {
+        visit(record[key]);
+      }
+    }
+  };
+  visit(payload.system);
+  visit(payload.messages);
+  return count;
+}
