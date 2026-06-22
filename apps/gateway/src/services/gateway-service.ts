@@ -597,6 +597,7 @@ import {
 } from "./comms-service.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import { createInternalMcpApprovalInboxTools, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
+import { createInternalMcpDurableTasksTools, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { applyMcpRedaction, inferMcpCategory, normalizeMcpPolicy, wildcardMatch } from "./mcp-server-policy.js";
@@ -1373,6 +1374,17 @@ export class GatewayService {
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
+      durableTasks: {
+        listRuns: (limit) => this.storage.durableRuns.listRuns(limit),
+        getRun: (runId) => {
+          try {
+            return this.storage.durableRuns.getRun(runId);
+          } catch {
+            return undefined;
+          }
+        },
+        cancelRun: (runId) => this.durableOperatorService.cancelRun(runId),
+      },
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       normalizeToolInvokeRequest: (request) =>
@@ -8364,6 +8376,9 @@ export class GatewayService {
   ): Promise<McpToolRecord[]> {
     if (isInternalMcpApprovalInboxServer(server)) {
       return createInternalMcpApprovalInboxTools(server.serverId);
+    }
+    if (isInternalMcpDurableTasksServer(server)) {
+      return createInternalMcpDurableTasksTools(server.serverId);
     }
     if (server.transport === "stdio") {
       const discovered = await discoverMcpTools(server, undefined, { actorContext });

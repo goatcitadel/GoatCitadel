@@ -20,6 +20,11 @@ import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import {
+  handleInternalMcpDurableTasksInvoke,
+  isInternalMcpDurableTasksServer,
+  type McpDurableTasksPort,
+} from "./mcp-durable-tasks.js";
+import {
   buildMcpStaleAuthInvokeError,
   isMcpAuthReadinessInvokeBlocked,
   resolveMcpInvokeAuthReadiness,
@@ -155,6 +160,7 @@ export interface ToolInvocationCoordinatorHost {
     ApprovalInboxRepository,
     "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
   >;
+  readonly durableTasks: McpDurableTasksPort;
   readonly policyEngine: {
     invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
     invoke(request: {
@@ -908,11 +914,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           approvalInbox: this.host.approvalInbox,
           resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
         })
-      : await this.host.invokeMcpRuntimeTool(server, {
-          toolName: input.toolName,
-          arguments: input.arguments,
-          signal: input.signal,
-        });
+      : isInternalMcpDurableTasksServer(server)
+        ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
+        : await this.host.invokeMcpRuntimeTool(server, {
+            toolName: input.toolName,
+            arguments: input.arguments,
+            signal: input.signal,
+          });
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
     const runtimeDegraded = "degraded" in runtime ? runtime.degraded : undefined;
     if (runtimeRetryCount || runtime.output?.degradedReason) {

@@ -1,5 +1,6 @@
 import type { McpServerTemplateRecord } from "@goatcitadel/contracts";
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
+import { MCP_DURABLE_TASKS_URL } from "./mcp-durable-tasks.js";
 
 export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
@@ -17,6 +18,25 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
       requireFirstToolApproval: false,
       redactionMode: "basic",
       allowedToolPatterns: [MCP_APPROVAL_DELIVERY_TOOL_NAME, "goatcitadel.approval.remote_action_inbox.*"],
+      blockedToolPatterns: [],
+    },
+    enabledByDefault: false,
+  },
+  {
+    templateId: "durable-tasks",
+    label: "GoatCitadel Durable Tasks",
+    description:
+      "Internal MCP surface exposing durable agent tasks (long-running async runs) for list/get/cancel (MCP v2 Tasks).",
+    transport: "http",
+    url: MCP_DURABLE_TASKS_URL,
+    authType: "none",
+    category: "orchestration",
+    trustTier: "trusted",
+    costTier: "free",
+    policy: {
+      requireFirstToolApproval: false,
+      redactionMode: "basic",
+      allowedToolPatterns: ["goatcitadel.durable.tasks.*"],
       blockedToolPatterns: [],
     },
     enabledByDefault: false,
