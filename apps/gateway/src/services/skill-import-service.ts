@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
+import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
 import {
   SKILL_BUNDLE_MANIFEST_FILENAME,
   isSkillBundleAssetLocationAllowed,
@@ -2635,10 +2636,10 @@ async function scanSkillDirectory(dir: string): Promise<{
         continue;
       }
       const text = readResult.text;
-      if (/(rm\s+-rf|del\s+\/f|powershell\s+-enc|invoke-webrequest\s+.*\|\s*iex)/i.test(text)) {
+      if (SUSPICIOUS_SCRIPT_PATTERN.test(text)) {
         suspiciousSignals.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
       }
-      if (/(https?:\/\/|fetch\s*\(|axios\.|curl\s+)/i.test(text)) {
+      if (NETWORK_INDICATOR_PATTERN.test(text)) {
         networkSignals.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
       }
     }

@@ -411,6 +411,7 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
 import { AddonsService } from "./addons-service.js";
 import { AddonSlotService } from "./addon-slot-service.js";
 import {
@@ -773,6 +774,7 @@ export class GatewayService {
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
+  private readonly skillMutationService: SkillMutationService;
   public readonly personalityCatalogService: PersonalityCatalogService;
   public readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
@@ -1071,6 +1073,10 @@ export class GatewayService {
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
+    this.skillMutationService = new SkillMutationService({
+      rootDir: config.rootDir,
+      skillLifecycle: this.storage.skillLifecycle,
+    });
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
     this.discordRuntimeService = new DiscordRuntimeService({
@@ -1407,6 +1413,11 @@ export class GatewayService {
       captureRoutingPolicySnapshot: (targetKey) => this.captureRoutingPolicySnapshot(targetKey),
       applyRoutingPolicyCandidate: (targetKey, revisionRef) => this.applyRoutingPolicyCandidate(targetKey, revisionRef),
       restoreRoutingPolicySnapshot: (snapshotRef) => this.restoreRoutingPolicySnapshot(snapshotRef),
+      captureSkillRevisionSnapshot: (targetKey, revisionRef) =>
+        this.captureSkillRevisionSnapshot(targetKey, revisionRef),
+      applySkillRevisionCandidate: (targetKey, revisionRef) =>
+        this.applySkillRevisionCandidate(targetKey, revisionRef),
+      restoreSkillRevisionSnapshot: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
@@ -3983,6 +3994,106 @@ export class GatewayService {
 
   private restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void {
     this.restoreImprovementPolicySnapshot(IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+  }
+
+  // ── S2: skill self-authoring activation callbacks ─────────────────────────
+  // These delegate to SkillMutationService. They are the governed write path for
+  // skill_revision candidates flowing through improvement-service
+  // applyActivationChange. isSkillCallable is never bypassed: the candidate is
+  // written non-callable, and promotion to `approved` happens only under master
+  // autonomy and only through this recorded, reversible activation.
+
+  private captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    const { skillId, skillMarkdown } = this.readSkillRevisionRef(targetKey, revisionRef);
+    const snapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
+    return {
+      refType: "skill_revision_snapshot",
+      refId: snapshot.skillId,
+      hash: createHash("sha1").update(JSON.stringify(snapshot)).digest("hex"),
+      metadata: {
+        targetKey,
+        skillId: snapshot.skillId,
+        snapshot: snapshot as unknown as Record<string, unknown>,
+      },
+    };
+  }
+
+  private applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    const { skillId, skillMarkdown, evaluationRunId, sourceTurnId, summary } = this.readSkillRevisionRef(
+      targetKey,
+      revisionRef,
+    );
+    if (!skillMarkdown) {
+      throw new Error(`Skill revision ${targetKey} is missing skill content; refusing to apply an empty mutation.`);
+    }
+    // Validate + security-scan + secret-block + jail-write as non-callable candidate.
+    const result = this.skillMutationService.applySkillMutationSync({
+      skillMarkdown,
+      skillId,
+      evaluationRunId,
+      sourceTurnId,
+      summary,
+    });
+    // Full autonomy: promote to a callable `approved` state ONLY when the master
+    // autonomy switch is engaged. When off, the skill stays a non-callable
+    // `candidate` (pure proposal mode). Promotion is reversible by the snapshot.
+    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
+    const lifecycle = autonomyEnabled
+      ? this.skillMutationService.promoteSelfAuthoredSkill(result.skillId)
+      : result.lifecycle;
+    return {
+      refType: "skill_revision_config",
+      refId: result.skillId,
+      hash: result.changeHash,
+      metadata: {
+        targetKey,
+        skillId: result.skillId,
+        lifecycleState: lifecycle.lifecycleState,
+        autoPromoted: autonomyEnabled,
+        callable: lifecycle.lifecycleState === "approved" || lifecycle.lifecycleState === "trusted",
+      },
+    };
+  }
+
+  private restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void {
+    const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
+    const snapshot = metadata.snapshot;
+    if (!isRecord(snapshot) || typeof snapshot.skillId !== "string") {
+      throw new Error("Skill revision snapshot is missing its captured state; cannot restore.");
+    }
+    this.skillMutationService.restoreSnapshotSync(snapshot as unknown as SkillMutationSnapshot);
+  }
+
+  private readSkillRevisionRef(
+    targetKey: string,
+    revisionRef: ImprovementRef,
+  ): {
+    skillId?: string;
+    skillMarkdown?: string;
+    evaluationRunId?: string;
+    sourceTurnId?: string;
+    summary?: string;
+  } {
+    const metadata = isRecord(revisionRef.metadata) ? revisionRef.metadata : {};
+    const proposed = isRecord(metadata.proposedChange) ? metadata.proposedChange : {};
+    const readString = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim().length > 0 ? value : undefined;
+    const skillMarkdown =
+      readString(metadata.skillMarkdown) ??
+      readString(metadata.skillContent) ??
+      readString(proposed.skillMarkdown) ??
+      readString(proposed.skillContent);
+    const skillId =
+      readString(metadata.skillId) ??
+      readString(proposed.skillId) ??
+      readString(targetKey.startsWith("skill:") ? targetKey.slice("skill:".length) : undefined);
+    return {
+      skillId,
+      skillMarkdown,
+      evaluationRunId: readString(metadata.evaluationRunId) ?? readString(proposed.evaluationRunId),
+      sourceTurnId: readString(metadata.sourceTurnId) ?? readString(proposed.sourceTurnId),
+      summary: readString(metadata.summary) ?? readString(proposed.skillName) ?? readString(proposed.title),
+    };
   }
 
   private captureImprovementPolicySnapshot(

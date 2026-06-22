@@ -344,6 +344,16 @@ export interface ImprovementServiceCallbacks {
   captureRoutingPolicySnapshot(targetKey: string): ImprovementRef;
   applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
   restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void;
+  // S2 — skill self-authoring. The gateway delegates these to SkillMutationService.
+  // applySkillRevisionCandidate writes the authored SKILL.md, records the
+  // candidate lifecycle, and (only under master autonomy) promotes it to a
+  // callable `approved` state via this recorded activation. isSkillCallable is
+  // never bypassed; promotion is reversible by restoreSkillRevisionSnapshot.
+  // These are synchronous to fit the activation state machine (the policy
+  // callbacks above are sync); the gateway delegate uses synchronous fs.
+  captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
@@ -1429,7 +1439,7 @@ export class ImprovementService {
       throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
     }
     const activationTarget = this.buildActivationTargetRef(candidate, revision);
-    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey);
+    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey, revision);
     const approval = await this.callbacks.createApproval({
       kind: "improvement_activation",
       riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
@@ -3655,7 +3665,12 @@ export class ImprovementService {
     revision: ImprovementCandidateRevisionRecord,
   ): ImprovementRef {
     return {
-      refType: candidate.kind === "repair_policy" ? "repair_policy_config" : "routing_policy_config",
+      refType:
+        candidate.kind === "skill_revision"
+          ? "skill_revision_config"
+          : candidate.kind === "repair_policy"
+            ? "repair_policy_config"
+            : "routing_policy_config",
       refId: candidate.targetKey,
       hash: revision.changeHash,
       metadata: {
@@ -3663,15 +3678,26 @@ export class ImprovementService {
         fingerprint: candidate.fingerprint,
         kind: candidate.kind,
         targetKey: candidate.targetKey,
-        settingKey:
-          candidate.kind === "repair_policy"
-            ? IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY
-            : IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+        ...(candidate.kind === "skill_revision"
+          ? {}
+          : {
+              settingKey:
+                candidate.kind === "repair_policy"
+                  ? IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY
+                  : IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+            }),
       },
     };
   }
 
-  private captureActivationSnapshot(kind: ImprovementCandidateKind, targetKey: string): ImprovementRef {
+  private captureActivationSnapshot(
+    kind: ImprovementCandidateKind,
+    targetKey: string,
+    revision: ImprovementCandidateRevisionRecord,
+  ): ImprovementRef {
+    if (kind === "skill_revision") {
+      return this.callbacks.captureSkillRevisionSnapshot(targetKey, revision.candidateRef);
+    }
     return kind === "repair_policy"
       ? this.callbacks.captureRepairPolicySnapshot(targetKey)
       : this.callbacks.captureRoutingPolicySnapshot(targetKey);
@@ -3763,6 +3789,12 @@ export class ImprovementService {
     targetKey: string,
     revision: ImprovementCandidateRevisionRecord,
   ): ImprovementRef {
+    if (kind === "skill_revision") {
+      // Writes the authored SKILL.md, records the candidate lifecycle, and (only
+      // under master autonomy) promotes it to a callable `approved` state via
+      // this recorded, reversible activation. isSkillCallable is never bypassed.
+      return this.callbacks.applySkillRevisionCandidate(targetKey, revision.candidateRef);
+    }
     return kind === "repair_policy"
       ? this.callbacks.applyRepairPolicyCandidate(targetKey, revision.candidateRef)
       : this.callbacks.applyRoutingPolicyCandidate(targetKey, revision.candidateRef);
@@ -3776,7 +3808,9 @@ export class ImprovementService {
   ): ImprovementActivationRecord {
     const candidate = this.readImprovementCandidate(activation.candidateId);
     try {
-      if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
+      if (activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
+        this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
+      } else if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
         this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
       } else {
         this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);

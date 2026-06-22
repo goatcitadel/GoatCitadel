@@ -4079,4 +4079,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const __internal = {
   createMinimalSyntheticEnv,
+  // Exposed for tests asserting the single execution chokepoint: a self-authored
+  // skill must be non-callable while `candidate` and callable only once a
+  // governed activation flips it to `approved`/`trusted`.
+  isSkillCallable,
 };
