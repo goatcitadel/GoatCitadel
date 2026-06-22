@@ -1,7 +1,4 @@
-import type {
-  RemoteActionTokenRecord,
-  RemoteActionTokenState,
-} from "@goatcitadel/contracts";
+import type { RemoteActionTokenRecord, RemoteActionTokenState } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
@@ -26,6 +23,7 @@ export class RemoteActionTokenRepository {
   private readonly getStmt;
   private readonly getByHashStmt;
   private readonly setStateStmt;
+  private readonly consumePendingStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -45,6 +43,14 @@ export class RemoteActionTokenRepository {
           consumed_at = @consumedAt,
           consumed_by = @consumedBy
       WHERE token_id = @tokenId
+    `);
+    this.consumePendingStmt = db.prepare(`
+      UPDATE remote_action_tokens
+      SET state = 'consumed',
+          consumed_at = @consumedAt,
+          consumed_by = @consumedBy
+      WHERE token_id = @tokenId
+        AND state = 'pending'
     `);
   }
 
@@ -118,6 +124,21 @@ export class RemoteActionTokenRepository {
     });
     return this.get(tokenId);
   }
+
+  public consumePending(
+    tokenId: string,
+    input: {
+      consumedAt: string;
+      consumedBy: string;
+    },
+  ): RemoteActionTokenRecord | undefined {
+    const result = this.consumePendingStmt.run({
+      tokenId,
+      consumedAt: input.consumedAt,
+      consumedBy: input.consumedBy,
+    });
+    return (result.changes ?? 0) > 0 ? this.get(tokenId) : undefined;
+  }
 }
 
 function mapRow(row: RemoteActionTokenRow): RemoteActionTokenRecord {
@@ -141,5 +162,3 @@ function normalizeObject(value: Record<string, unknown> | undefined): Record<str
   }
   return value;
 }
-
-

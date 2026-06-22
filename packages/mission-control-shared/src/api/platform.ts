@@ -294,6 +294,9 @@ export async function fetchEvidenceEnvelopes(
   query: EvidenceEnvelopeListQuery = {},
 ): Promise<{ items: EvidenceEnvelope[] }> {
   const params = new URLSearchParams();
+  if (query.workspaceId) {
+    params.set("workspaceId", query.workspaceId);
+  }
   if (query.sessionId) {
     params.set("sessionId", query.sessionId);
   }

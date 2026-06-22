@@ -252,6 +252,41 @@ describe("client-core", () => {
       kind: "network",
       method: "POST",
     });
+
+    fetchMock.mockResolvedValueOnce(new Response("{not json", { status: 200 }));
+    await expect(request("/api/v1/settings", { method: "POST" })).rejects.toMatchObject({
+      kind: "protocol",
+      method: "POST",
+    });
+  });
+
+  it("does not let generic request headers override gateway-controlled headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await request("/api/v1/chat/messages", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer caller",
+        "Content-Type": "text/plain",
+        "Idempotency-Key": "caller-key",
+        "x-goatcitadel-browser-intent": "caller-intent",
+        "x-goatcitadel-correlation-id": "caller-correlation",
+        "X-Test": "yes",
+      },
+      body: "{}",
+    });
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).toMatchObject({
+      "Content-Type": "application/json",
+      "Idempotency-Key": "uuid-1",
+      "x-goatcitadel-browser-intent": "mutation",
+      "x-goatcitadel-correlation-id": "uuid-1",
+      "x-goatcitadel-origin-surface": "chat",
+      "X-Test": "yes",
+    });
+    expect(headers.Authorization).toBeUndefined();
   });
 
   it("retries safe requests after transient HTTP and network failures", async () => {

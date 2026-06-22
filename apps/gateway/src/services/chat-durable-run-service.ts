@@ -151,6 +151,16 @@ export function finalizeDurableChatRun(
     });
     return;
   }
+  if (currentRun && currentRun.status !== "running") {
+    deps.patchDurableTraceIfPresent(prepared.turnId, {
+      durable: {
+        runId,
+        status: currentRun.status,
+        ...(currentRun.status === "waiting" ? { checkpointKind: "run_waiting" } : {}),
+      },
+    });
+    return;
+  }
   const checkpointState = buildDurableCheckpointState(deps, prepared, trace);
   if (
     trace.status === "waiting_for_approval" ||

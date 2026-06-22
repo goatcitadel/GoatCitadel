@@ -931,6 +931,7 @@ export async function approvePhase(
 
   const nextRun: OrchestrationRun = {
     ...run,
+    status: "running",
     executionState: "resume_requested",
     pendingApprovalPhaseId: phaseId,
     pendingApprovedBy: approvedBy,

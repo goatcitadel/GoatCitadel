@@ -18,6 +18,7 @@ import {
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
 const RUNTIME_POLL_INTERVAL_MS = 15_000;
+const BASE_OPS_POLL_SOURCES = ["dashboard", "health", "daemon"] as const;
 
 type RuntimeSnapshotData = {
   dashboard: Awaited<ReturnType<typeof fetchDashboardState>> | null;
@@ -61,7 +62,9 @@ export type RuntimeSnapshotSourceStatus =
 
 export type RuntimeSnapshotSourceStatusMap = Record<RuntimeSnapshotSourceKey, RuntimeSnapshotSourceStatus>;
 
-export function useOpsRuntimeSnapshot() {
+type RuntimeSnapshotReloadMode = "full" | "poll";
+
+export function useOpsRuntimeSnapshot(activeSection = "activity") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -69,85 +72,117 @@ export function useOpsRuntimeSnapshot() {
   const [data, setData] = useState<RuntimeSnapshotData | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [isStale, setIsStale] = useState(false);
+  const dataRef = useRef<RuntimeSnapshotData | null>(null);
   // Monotonic load id: results from a superseded load (overlapping reloads, or a
   // reload that resolves after unmount/teardown) are dropped. Mirrors the guard in
   // useCrossProjectRecentSessions / useApprovalQueue.
   const loadSequenceRef = useRef(0);
 
-  const load = useCallback(async () => {
-    const [
-      dashboard,
-      timeline,
-      health,
-      cost,
-      daemon,
-      backups,
-      sessions,
-      mcpServers,
-      runtimeMeasurements,
-      localEngines,
-      evalProofRuns,
-    ] = await Promise.all([
-      captureRuntimeSource(() => fetchDashboardState()),
-      captureRuntimeSource(() => fetchTimelineSummary()),
-      captureRuntimeSource(() => fetchHealthSummary()),
-      captureRuntimeSource(() => fetchCostSummary("day")),
-      captureRuntimeSource(() => fetchDaemonStatus()),
-      captureRuntimeSource(() => listBackups(10)),
-      captureRuntimeSource(() => fetchSessions()),
-      captureRuntimeSource(() => fetchMcpServers()),
-      captureRuntimeSource(() => fetchLlmRuntimeMeasurements({ limit: 20 })),
-      captureRuntimeSource(() => fetchLlmLocalEngines()),
-      captureRuntimeSource(() => fetchLlmEvalProofRuns(10)),
-    ]);
-
-    return {
-      dashboard: readRuntimeSourceData(dashboard, null),
-      timeline: readRuntimeSourceData(timeline, null),
-      health: readRuntimeSourceData(health, null),
-      cost: readRuntimeSourceData(cost, null),
-      daemon: readRuntimeSourceData(daemon, null),
-      backups: readRuntimeSourceData(backups, { items: [] }).items,
-      sessions: readRuntimeSourceData(sessions, { items: [] }).items,
-      mcpServers: readRuntimeSourceData(mcpServers, { items: [] }).items,
-      runtimeMeasurements: readRuntimeSourceData(runtimeMeasurements, { items: [] }).items,
-      localEngines: readRuntimeSourceData(localEngines, { items: [] }).items,
-      evalProofRuns: readRuntimeSourceData(evalProofRuns, { items: [] }).items,
-      sourceStatus: {
-        dashboard: readRuntimeSourceStatus(dashboard),
-        timeline: readRuntimeSourceStatus(timeline),
-        health: readRuntimeSourceStatus(health),
-        cost: readRuntimeSourceStatus(cost),
-        daemon: readRuntimeSourceStatus(daemon),
-        backups: readRuntimeSourceStatus(backups),
-        sessions: readRuntimeSourceStatus(sessions),
-        mcpServers: readRuntimeSourceStatus(mcpServers),
-        runtimeMeasurements: readRuntimeSourceStatus(runtimeMeasurements),
-        localEngines: readRuntimeSourceStatus(localEngines),
-        evalProofRuns: readRuntimeSourceStatus(evalProofRuns),
-      },
-    } satisfies RuntimeSnapshotData;
+  const commitData = useCallback((next: RuntimeSnapshotData) => {
+    dataRef.current = next;
+    setData(next);
   }, []);
 
-  const reload = useCallback(async () => {
-    const loadId = loadSequenceRef.current + 1;
-    loadSequenceRef.current = loadId;
-    setError(null);
-    try {
-      const next = await load();
-      if (loadSequenceRef.current !== loadId) {
-        return;
+  const load = useCallback(
+    async (mode: RuntimeSnapshotReloadMode = "full") => {
+      const sourceSet = mode === "poll" ? buildOpsPollSourceSet(activeSection) : undefined;
+      const current = dataRef.current;
+      const [
+        dashboard,
+        timeline,
+        health,
+        cost,
+        daemon,
+        backups,
+        sessions,
+        mcpServers,
+        runtimeMeasurements,
+        localEngines,
+        evalProofRuns,
+      ] = await Promise.all([
+        loadRuntimeSnapshotSource("dashboard", current, sourceSet, null, () => fetchDashboardState()),
+        loadRuntimeSnapshotSource("timeline", current, sourceSet, null, () => fetchTimelineSummary()),
+        loadRuntimeSnapshotSource("health", current, sourceSet, null, () => fetchHealthSummary()),
+        loadRuntimeSnapshotSource("cost", current, sourceSet, null, () => fetchCostSummary("day")),
+        loadRuntimeSnapshotSource("daemon", current, sourceSet, null, () => fetchDaemonStatus()),
+        loadRuntimeSnapshotSource("backups", current, sourceSet, [], async () => (await listBackups(10)).items),
+        loadRuntimeSnapshotSource("sessions", current, sourceSet, [], async () => (await fetchSessions()).items),
+        loadRuntimeSnapshotSource("mcpServers", current, sourceSet, [], async () => (await fetchMcpServers()).items),
+        loadRuntimeSnapshotSource(
+          "runtimeMeasurements",
+          current,
+          sourceSet,
+          [],
+          async () => (await fetchLlmRuntimeMeasurements({ limit: 20 })).items,
+        ),
+        loadRuntimeSnapshotSource(
+          "localEngines",
+          current,
+          sourceSet,
+          [],
+          async () => (await fetchLlmLocalEngines()).items,
+        ),
+        loadRuntimeSnapshotSource(
+          "evalProofRuns",
+          current,
+          sourceSet,
+          [],
+          async () => (await fetchLlmEvalProofRuns(10)).items,
+        ),
+      ]);
+
+      return {
+        dashboard: dashboard.data,
+        timeline: timeline.data,
+        health: health.data,
+        cost: cost.data,
+        daemon: daemon.data,
+        backups: backups.data,
+        sessions: sessions.data,
+        mcpServers: mcpServers.data,
+        runtimeMeasurements: runtimeMeasurements.data,
+        localEngines: localEngines.data,
+        evalProofRuns: evalProofRuns.data,
+        sourceStatus: {
+          dashboard: dashboard.status,
+          timeline: timeline.status,
+          health: health.status,
+          cost: cost.status,
+          daemon: daemon.status,
+          backups: backups.status,
+          sessions: sessions.status,
+          mcpServers: mcpServers.status,
+          runtimeMeasurements: runtimeMeasurements.status,
+          localEngines: localEngines.status,
+          evalProofRuns: evalProofRuns.status,
+        },
+      } satisfies RuntimeSnapshotData;
+    },
+    [activeSection],
+  );
+
+  const reload = useCallback(
+    async (mode: RuntimeSnapshotReloadMode = "full") => {
+      const loadId = loadSequenceRef.current + 1;
+      loadSequenceRef.current = loadId;
+      setError(null);
+      try {
+        const next = await load(mode);
+        if (loadSequenceRef.current !== loadId) {
+          return;
+        }
+        commitData(next);
+        setLastFetchedAt(Date.now());
+        setIsStale(false);
+      } catch (loadError) {
+        if (loadSequenceRef.current !== loadId) {
+          return;
+        }
+        setError(getErrorMessage(loadError));
       }
-      setData(next);
-      setLastFetchedAt(Date.now());
-      setIsStale(false);
-    } catch (loadError) {
-      if (loadSequenceRef.current !== loadId) {
-        return;
-      }
-      setError(getErrorMessage(loadError));
-    }
-  }, [load]);
+    },
+    [commitData, load],
+  );
 
   useEffect(() => {
     const loadId = loadSequenceRef.current + 1;
@@ -159,7 +194,7 @@ export function useOpsRuntimeSnapshot() {
         if (loadSequenceRef.current !== loadId) {
           return;
         }
-        setData(next);
+        commitData(next);
         setLastFetchedAt(Date.now());
         setIsStale(false);
       })
@@ -180,7 +215,7 @@ export function useOpsRuntimeSnapshot() {
       // after unmount or session switch cannot setState on an unmounted hook.
       loadSequenceRef.current += 1;
     };
-  }, [load]);
+  }, [commitData, load]);
 
   // Mirror the polling pattern used by `useApprovalQueue`: subscribe to the
   // shared refresh bus so realtime events trigger an immediate refetch, and
@@ -190,8 +225,8 @@ export function useOpsRuntimeSnapshot() {
   // stale data after the tab refocuses.
   useRefreshSubscription(
     "system",
-    async () => {
-      await reload();
+    async (signal) => {
+      await reload(signal.reason === "fallback_poll" || signal.eventType === "fallback_poll" ? "poll" : "full");
     },
     {
       coalesceMs: 1000,
@@ -232,18 +267,20 @@ export function useOpsRuntimeSnapshot() {
       try {
         const response =
           action === "start" ? await startDaemon() : action === "restart" ? await restartDaemon() : await stopDaemon();
-        setData((current) =>
-          current
+        setData((current) => {
+          const next = current
             ? {
                 ...current,
                 daemon: response.status,
                 sourceStatus: {
                   ...current.sourceStatus,
-                  daemon: { status: "ok" },
+                  daemon: { status: "ok" as const },
                 },
               }
-            : current,
-        );
+            : current;
+          dataRef.current = next;
+          return next;
+        });
         setNotice({
           tone: response.accepted ? "success" : "warning",
           message: response.reason,
@@ -285,12 +322,52 @@ async function captureRuntimeSource<T>(load: () => Promise<T>): Promise<RuntimeS
   }
 }
 
-function readRuntimeSourceData<T, Fallback>(source: RuntimeSourceResult<T>, fallback: Fallback): T | Fallback {
-  return source.ok ? source.data : fallback;
+async function loadRuntimeSnapshotSource<K extends RuntimeSnapshotSourceKey>(
+  key: K,
+  current: RuntimeSnapshotData | null,
+  sourceSet: ReadonlySet<RuntimeSnapshotSourceKey> | undefined,
+  fallback: RuntimeSnapshotData[K],
+  load: () => Promise<RuntimeSnapshotData[K]>,
+): Promise<{ data: RuntimeSnapshotData[K]; status: RuntimeSnapshotSourceStatus }> {
+  if (sourceSet && !sourceSet.has(key)) {
+    return {
+      data: current?.[key] ?? fallback,
+      status: current?.sourceStatus[key] ?? { status: "ok" },
+    };
+  }
+  const source = await captureRuntimeSource(load);
+  return {
+    data: source.ok ? source.data : fallback,
+    status: readRuntimeSourceStatus(source),
+  };
 }
 
 function readRuntimeSourceStatus(source: RuntimeSourceResult<unknown>): RuntimeSnapshotSourceStatus {
   return source.ok ? { status: "ok" } : { status: "error", message: source.message };
+}
+
+function buildOpsPollSourceSet(activeSection: string): ReadonlySet<RuntimeSnapshotSourceKey> {
+  return new Set([...BASE_OPS_POLL_SOURCES, ...sourcesForOpsSection(activeSection)]);
+}
+
+function sourcesForOpsSection(activeSection: string): RuntimeSnapshotSourceKey[] {
+  switch (activeSection) {
+    case "sessions":
+      return ["sessions"];
+    case "schedules":
+    case "improvement":
+    case "notifications":
+    case "activity":
+      return ["timeline"];
+    case "costs":
+      return ["cost"];
+    case "runtime":
+      return ["backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
+    case "diagnostics":
+      return ["timeline", "backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
+    default:
+      return ["timeline"];
+  }
 }
 
 function getErrorMessage(error: unknown) {

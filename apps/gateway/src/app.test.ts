@@ -392,6 +392,35 @@ describe("gateway request diagnostics", () => {
       await app.close();
     }
   });
+
+  it("strips query strings from recorded request diagnostics", async () => {
+    configureDiagnosticsGateway(tempRoots);
+    const app = await buildApp();
+    try {
+      const correlationId = "diag-corr-token";
+      const health = await app.inject({
+        method: "GET",
+        url: "/health?access_token=secret-token&state=ok",
+        headers: {
+          "x-goatcitadel-correlation-id": correlationId,
+        },
+      });
+      expect(health.statusCode).toBe(200);
+
+      const diagnostics = await app.inject({
+        method: "GET",
+        url: "/api/v1/dev/diagnostics?category=api&limit=20",
+      });
+      expect(diagnostics.statusCode).toBe(200);
+      const bodyText = diagnostics.body;
+      expect(bodyText).toContain("/health");
+      expect(bodyText).not.toContain("secret-token");
+      expect(bodyText).not.toContain("access_token");
+      expect(bodyText).not.toContain("state=ok");
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 function configureDiagnosticsGateway(tempRoots: string[]): void {

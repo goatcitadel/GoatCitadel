@@ -28,7 +28,7 @@ export interface ParsedApiError {
 }
 
 export interface ApiRequestErrorOptions {
-  kind: "http" | "network";
+  kind: "http" | "network" | "protocol";
   method: string;
   path: string;
   status?: number;
@@ -39,7 +39,7 @@ export interface ApiRequestErrorOptions {
 }
 
 export class ApiRequestError extends Error {
-  public readonly kind: "http" | "network";
+  public readonly kind: "http" | "network" | "protocol";
 
   public readonly method: string;
 
@@ -83,6 +83,9 @@ export function shouldRetrySafeRequest(method: string, error?: ApiRequestError):
   }
   if (error.kind === "network") {
     return true;
+  }
+  if (error.kind === "protocol") {
+    return false;
   }
   return error.status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(error.status);
 }

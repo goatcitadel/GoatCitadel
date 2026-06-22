@@ -260,6 +260,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
       remoteActionTokens: {
         findByTokenHash: vi.fn(),
         get: vi.fn(),
+        consumePending: vi.fn((tokenId: string, patch?: Record<string, unknown>) => ({
+          tokenId,
+          state: "consumed",
+          ...patch,
+        })),
         updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
           tokenId,
           state,

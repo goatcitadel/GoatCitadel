@@ -89,7 +89,7 @@ export function RuntimeRoutePage({
   navigate,
 }: NativeRoutePagesProps) {
   const section = (route.section ?? "activity") as NonNullable<AppRoute["section"]>;
-  const runtime = useOpsRuntimeSnapshot();
+  const runtime = useOpsRuntimeSnapshot(section);
   const data = runtime.data;
   const [activityFilter, setActivityFilter] = useState<"all" | "errors" | "approvals" | "runtime">("all");
   const [scheduleDraft, setScheduleDraft] = useState({
@@ -515,11 +515,7 @@ export function RuntimeRoutePage({
                 </label>
               </div>
               <div className="mc-next-runtime-actions">
-                <NativeButton
-                  variant="outline"
-                  onClick={() => void handleCreateSchedule()}
-                  disabled={scheduleCreating}
-                >
+                <NativeButton variant="outline" onClick={() => void handleCreateSchedule()} disabled={scheduleCreating}>
                   {scheduleCreating ? "Creating..." : "Create schedule"}
                 </NativeButton>
               </div>
@@ -592,11 +588,7 @@ export function RuntimeRoutePage({
                 </label>
               </div>
               <div className="mc-next-runtime-actions">
-                <NativeButton
-                  variant="outline"
-                  onClick={() => void handleDraftAutomation()}
-                  disabled={automationBusy}
-                >
+                <NativeButton variant="outline" onClick={() => void handleDraftAutomation()} disabled={automationBusy}>
                   {automationBusy ? "Drafting..." : "Preview recipe"}
                 </NativeButton>
               </div>
@@ -867,9 +859,7 @@ export function RuntimeRoutePage({
                 { label: "MCP", value: String(data.mcpServers.length) },
               ]}
             >
-              {runtime.notice ? (
-                <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} />
-              ) : null}
+              {runtime.notice ? <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} /> : null}
               <div className="mc-next-runtime-chip-row">
                 <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
                   {daemonRuntimeUnavailable
@@ -1435,13 +1425,7 @@ export function RuntimeRoutePage({
  * day spend as supporting facts. Reuses the same daemon/health/cost fields the
  * Runtime posture card and head metrics render; it adds no new data source.
  */
-function RuntimeHeroLead({
-  data,
-  pendingApprovals,
-}: {
-  data: OpsRuntimeData;
-  pendingApprovals: number;
-}) {
+function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pendingApprovals: number }) {
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const daemonRunning = daemonRuntimeUnavailable
     ? null
@@ -1461,11 +1445,7 @@ function RuntimeHeroLead({
     : daemonRunning
       ? "Gateway runtime is serving and under operator control."
       : "Gateway runtime is reachable, but the daemon is stopped.";
-  const readinessTone: StatusChipTone = daemonRuntimeUnavailable
-    ? "critical"
-    : daemonRunning
-      ? "success"
-      : "warning";
+  const readinessTone: StatusChipTone = daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning";
 
   return (
     <>

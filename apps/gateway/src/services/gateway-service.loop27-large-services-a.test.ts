@@ -170,6 +170,12 @@ describe("GatewayService loop 27 large service coverage", () => {
         remoteActionTokens: {
           findByTokenHash: vi.fn(() => pending),
           get: vi.fn(() => ({ ...pending, tokenId: "token-2" })),
+          consumePending: vi.fn((tokenId: string, patch?: Record<string, unknown>) => ({
+            ...pending,
+            tokenId,
+            state: "consumed",
+            ...patch,
+          })),
           updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
             ...pending,
             tokenId,
@@ -194,6 +200,20 @@ describe("GatewayService loop 27 large service coverage", () => {
       state: "consumed",
       consumedBy: "connector:conn-1",
     });
+    expect(gateway.storage.remoteActionTokens.consumePending).toHaveBeenCalledWith(
+      "token-1",
+      expect.objectContaining({ consumedBy: "connector:conn-1" }),
+    );
+    expect(gateway.storage.remoteActionTokens.consumePending).toHaveBeenCalledWith(
+      "token-2",
+      expect.objectContaining({ consumedBy: "connector:conn-1" }),
+    );
+
+    gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => pending);
+    gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve"),
+    ).toThrow("already been consumed");
 
     gateway.storage.remoteActionTokens.get = vi.fn(() => ({
       ...pending,

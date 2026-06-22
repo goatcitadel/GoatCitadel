@@ -236,15 +236,18 @@ describe("durable routes", () => {
 
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/pause", payload: { actorId: "operator:1" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/pause", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/resume", payload: { actorId: "operator:2" } }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/resume", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "operator:3" } }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "operator:3" } }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
       app.inject({

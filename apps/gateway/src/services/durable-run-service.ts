@@ -59,6 +59,17 @@ const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
 const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
+const COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT = "cowork.turn.operator_resume";
+
+class DurableWorkflowTimeoutError extends Error {
+  public constructor(
+    public readonly runId: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`);
+    this.name = "DurableWorkflowTimeoutError";
+  }
+}
 
 function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
   return {
@@ -225,7 +236,9 @@ export class DurableRunService {
     }
     this.workerStopped = false;
     const backgroundTasks = this.deps.backgroundTasks;
-    const bootTask = this.performBootRecovery();
+    const bootTask = this.performBootRecovery().catch((error) => {
+      this.reportWorkerBackgroundFailure("boot_recovery", error);
+    });
     backgroundTasks.add(bootTask);
     void bootTask.finally(() => {
       backgroundTasks.delete(bootTask);
@@ -299,6 +312,30 @@ export class DurableRunService {
     };
   }
 
+  private reportWorkerBackgroundFailure(stage: "boot_recovery" | "run_processing", error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.resolveLogger().error(
+      {
+        stage,
+        error: message,
+      },
+      "durable worker background task failed",
+    );
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_worker_background_failure",
+        stage,
+        error: message,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+      },
+    );
+  }
+
   stopWorker(): void {
     this.workerStopped = true;
     this.workerRequested = false;
@@ -321,19 +358,25 @@ export class DurableRunService {
       return;
     }
     const backgroundTasks = this.deps.backgroundTasks;
-    const task = Promise.resolve().then(async () => {
-      this.workerActive = true;
-      try {
-        do {
-          this.workerRequested = false;
-          await this.reconcileRecoverableRuns();
-          await this.drainQueuedRuns();
-        } while (this.workerRequested && !this.workerStopped);
-      } finally {
-        this.workerActive = false;
+    const task = Promise.resolve()
+      .then(async () => {
+        this.workerActive = true;
+        try {
+          do {
+            this.workerRequested = false;
+            await this.reconcileRecoverableRuns();
+            await this.drainQueuedRuns();
+          } while (this.workerRequested && !this.workerStopped);
+        } finally {
+          this.workerActive = false;
+        }
+      })
+      .catch((error) => {
+        this.reportWorkerBackgroundFailure("run_processing", error);
+      })
+      .finally(() => {
         backgroundTasks.delete(task);
-      }
-    });
+      });
     backgroundTasks.add(task);
   }
 
@@ -926,7 +969,14 @@ export class DurableRunService {
               ),
         );
       } catch (error) {
-        await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
+        if (isDurableWorkflowTimeoutError(error) && isCoworkDurableChatTurnRun(run)) {
+          await this.markCoworkRunWaitingForOperator(run, error);
+        } else {
+          await this.failWorkflowRun(
+            run,
+            error instanceof Error ? error.message : "Durable workflow execution failed.",
+          );
+        }
       } finally {
         const current = this.ctx.storage.durableRuns.getRun(run.runId);
         if (current.status === "running") {
@@ -1045,7 +1095,7 @@ export class DurableRunService {
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        const error = new Error(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`);
+        const error = new DurableWorkflowTimeoutError(runId, timeoutMs);
         controller.abort(error);
         reject(error);
       }, timeoutMs);
@@ -1060,6 +1110,76 @@ export class DurableRunService {
         },
       );
     });
+  }
+
+  private async markCoworkRunWaitingForOperator(
+    run: DurableRunRecord,
+    error: DurableWorkflowTimeoutError,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const waitForEvent = {
+      eventKey: COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT,
+      correlationId: run.runId,
+    };
+    const checkpointState = {
+      workflowKey: run.workflowKey,
+      reason: "cowork_workflow_timeout",
+      message: error.message,
+      timeoutMs: error.timeoutMs,
+      waitForEvent,
+    };
+    const waiting = this.retryDurableRunUpdate(run.runId, (current) => {
+      if (this.isTerminalRunStatus(current.status)) {
+        return current;
+      }
+      if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        return current;
+      }
+      let next!: DurableRunRecord;
+      this.ctx.storage.runImmediateTransaction(() => {
+        next = this.ctx.storage.durableRuns.updateRun({
+          runId: current.runId,
+          status: "waiting",
+          clearFinishedAt: true,
+          clearLease: true,
+          clearLastError: true,
+          updatedAt: now,
+          metadata: {
+            ...current.metadata,
+            waitForEvent,
+            coworkWatchdog: {
+              reason: "workflow_timeout",
+              timedOutAt: now,
+              timeoutMs: error.timeoutMs,
+              message: error.message,
+            },
+          },
+          expectedVersion: current.version,
+        });
+        this.ctx.storage.durableRuns.createCheckpoint({
+          runId: next.runId,
+          checkpointKind: "run_waiting",
+          state: checkpointState,
+          createdAt: now,
+        });
+        this.recordDurableTimelineEvent(next.runId, "run_waiting", checkpointState);
+      });
+      return next;
+    });
+    if (waiting.status !== "waiting") {
+      return;
+    }
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_waiting",
+        runId: waiting.runId,
+        reason: "cowork_workflow_timeout",
+        waitForEvent,
+      },
+      buildDurableRealtimeOptions(waiting.runId),
+    );
   }
 
   private abortActiveRun(runId: string, reason: string): void {
@@ -1442,11 +1562,12 @@ export class DurableRunService {
   }
 }
 
-export function resolveDurableWorkflowTimeoutMs(run: DurableRunRecord, defaultTimeoutMs: number): number | undefined {
-  if (isCoworkDurableChatTurnRun(run)) {
-    return undefined;
-  }
+export function resolveDurableWorkflowTimeoutMs(_run: DurableRunRecord, defaultTimeoutMs: number): number | undefined {
   return defaultTimeoutMs;
+}
+
+function isDurableWorkflowTimeoutError(error: unknown): error is DurableWorkflowTimeoutError {
+  return error instanceof DurableWorkflowTimeoutError;
 }
 
 function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {

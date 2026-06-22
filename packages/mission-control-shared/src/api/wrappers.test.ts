@@ -688,8 +688,14 @@ describe("shared API wrappers", () => {
       { method: "POST" },
     );
     await expectCall(
-      platform.fetchEvidenceEnvelopes({ sessionId: "s", turnId: "t", runId: "r", limit: 7 }),
-      "/api/v1/evidence/envelopes?sessionId=s&turnId=t&runId=r&limit=7",
+      platform.fetchEvidenceEnvelopes({
+        workspaceId: "workspace-a",
+        sessionId: "s",
+        turnId: "t",
+        runId: "r",
+        limit: 7,
+      }),
+      "/api/v1/evidence/envelopes?workspaceId=workspace-a&sessionId=s&turnId=t&runId=r&limit=7",
     );
     await expectCall(platform.fetchOrchestrationRunContext("run/1"), "/api/v1/orchestration/runs/run%2F1/context");
     await expectCall(platform.fetchOrchestrationRun("run/1"), "/api/v1/orchestration/runs/run%2F1");

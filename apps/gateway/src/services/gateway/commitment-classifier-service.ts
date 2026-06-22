@@ -78,9 +78,7 @@ export class CommitmentClassifierService {
    * check-ins. Pure read: makes one model call, returns the parsed structured
    * output, persists nothing. Returns `[]` on empty input or any model/parse error.
    */
-  public async classifyTurnForCommitments(
-    input: CommitmentClassifierTurnInput,
-  ): Promise<CommitmentClassification[]> {
+  public async classifyTurnForCommitments(input: CommitmentClassifierTurnInput): Promise<CommitmentClassification[]> {
     const transcript = buildTranscript(input.userText, input.assistantText);
     if (!transcript) {
       return [];
@@ -162,7 +160,7 @@ export class CommitmentClassifierService {
         );
         persisted.push(record);
       } catch {
-        // A single bad row never aborts the rest.
+        // Intentionally continue: a single bad row never aborts the rest.
       }
     }
     return persisted;

@@ -1589,6 +1589,7 @@ export class GatewayService {
       },
       writeGate: this.memoryWriteGateService,
       evidence: this.evidenceEnvelopeService,
+      resolveSessionWorkspaceId: (sessionId) => this.storage.chatSessionMeta.get(sessionId)?.workspaceId,
       resolveLearnedMemoryPolicy: (sessionId) => {
         if (this.isReplayScratchSession(sessionId)) {
           return {
@@ -6822,10 +6823,16 @@ export class GatewayService {
         message: "Remote action token has expired.",
       });
     }
-    return this.storage.remoteActionTokens.updateState(current.tokenId, "consumed", {
+    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
       consumedAt: new Date().toISOString(),
       consumedBy: `connector:${current.connectorId}`,
     });
+    if (!consumed) {
+      throw new ConflictError({
+        message: "Remote action token has already been consumed.",
+      });
+    }
+    return consumed;
   }
 
   /** @internal */ public consumeRemoteActionTokenById(
@@ -6856,10 +6863,16 @@ export class GatewayService {
         message: "Remote action token has expired.",
       });
     }
-    return this.storage.remoteActionTokens.updateState(current.tokenId, "consumed", {
+    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
       consumedAt: new Date().toISOString(),
       consumedBy: `connector:${current.connectorId}`,
     });
+    if (!consumed) {
+      throw new ConflictError({
+        message: "Remote action token has already been consumed.",
+      });
+    }
+    return consumed;
   }
 
   public listSkills(): SkillListItem[] {

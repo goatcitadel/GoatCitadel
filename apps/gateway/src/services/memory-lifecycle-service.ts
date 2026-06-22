@@ -133,6 +133,7 @@ export interface MemoryLifecycleDependencies {
   };
   readonly writeGate?: MemoryWriteGateService;
   readonly evidence?: Pick<EvidenceEnvelopeService, "createEnvelope">;
+  resolveSessionWorkspaceId?: (sessionId: string) => string | undefined;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
 }
 
@@ -331,7 +332,11 @@ export class MemoryLifecycleService {
       createdAt: now,
       updatedAt: now,
     };
-    this.assertStructuredMemoryWriteAllowed(entity.authority, serializeStructuredMemoryForGate(entity));
+    this.assertStructuredMemoryWriteAllowed(
+      entity.authority,
+      serializeStructuredMemoryForGate(entity),
+      entity.workspaceId,
+    );
     this.deps.admin.gatewaySql
       .prepare(
         `
@@ -456,7 +461,10 @@ export class MemoryLifecycleService {
     const now = new Date().toISOString();
     const relationType = input.relationType.trim() || "related_to";
     const title = input.title?.trim() || `${from.title} ${relationType} ${to.title}`;
-    const metadata = await withMemoryEmbeddingMetadata(input.metadata ?? {}, buildStructuredMemoryEmbeddingText([title]));
+    const metadata = await withMemoryEmbeddingMetadata(
+      input.metadata ?? {},
+      buildStructuredMemoryEmbeddingText([title]),
+    );
     const relation: MemoryRelationRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId ?? from.workspaceId),
@@ -473,7 +481,11 @@ export class MemoryLifecycleService {
       createdAt: now,
       updatedAt: now,
     };
-    this.assertStructuredMemoryWriteAllowed(relation.authority, serializeStructuredMemoryForGate(relation));
+    this.assertStructuredMemoryWriteAllowed(
+      relation.authority,
+      serializeStructuredMemoryForGate(relation),
+      relation.workspaceId,
+    );
     this.deps.admin.gatewaySql
       .prepare(
         `
@@ -579,7 +591,11 @@ export class MemoryLifecycleService {
       createdAt: now,
       updatedAt: now,
     };
-    this.assertStructuredMemoryWriteAllowed(decision.authority, serializeStructuredMemoryForGate(decision));
+    this.assertStructuredMemoryWriteAllowed(
+      decision.authority,
+      serializeStructuredMemoryForGate(decision),
+      decision.workspaceId,
+    );
     this.deps.admin.gatewaySql
       .prepare(
         `
@@ -644,6 +660,7 @@ export class MemoryLifecycleService {
     this.assertStructuredMemoryWriteAllowed(
       "operator",
       `${current.title}\n${current.decision}\n${retrospective.outcome}\n${retrospective.notes}`,
+      current.workspaceId,
     );
     this.deps.admin.gatewaySql
       .prepare(
@@ -1151,10 +1168,7 @@ export class MemoryLifecycleService {
     };
   }
 
-  public batchMutateMemoryItems(
-    input: MemoryBatchMutationRequest,
-    actorId = "operator",
-  ): MemoryBatchMutationResponse {
+  public batchMutateMemoryItems(input: MemoryBatchMutationRequest, actorId = "operator"): MemoryBatchMutationResponse {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const operations = normalizeBatchMutationOperations(input.operations);
     const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
@@ -1434,16 +1448,18 @@ export class MemoryLifecycleService {
   public recordMemoryFeedback(input: MemoryFeedbackInput, actorId = "operator"): MemoryFeedbackRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     this.ensureFeedbackSchema();
+    const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId);
     this.assertMemoryFeedbackContentAllowed(
       JSON.stringify({
         note: input.note ?? "",
         metadata: input.metadata ?? {},
       }),
+      workspaceId,
     );
     const now = new Date().toISOString();
     const feedback: MemoryFeedbackRecord = {
       feedbackId: randomUUID(),
-      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      workspaceId,
       kind: normalizeMemoryFeedbackKind(input.kind),
       status: "open",
       targetKind: normalizeMemoryFeedbackTargetKind(input.targetKind),
@@ -1516,7 +1532,7 @@ export class MemoryLifecycleService {
         rationale: candidate.rationale,
         metadata: candidate.metadata ?? {},
       });
-      this.assertMemoryFeedbackContentAllowed(contentForGuard);
+      this.assertMemoryFeedbackContentAllowed(contentForGuard, workspaceId);
       candidateIssues.set(candidate.dedupKey, candidate);
     };
 
@@ -1757,7 +1773,7 @@ export class MemoryLifecycleService {
       sourceRefs: input.sourceRefs ?? [],
       metadata: input.metadata ?? {},
     });
-    this.assertTraceCandidateContentAllowed(contentForGuard);
+    this.assertTraceCandidateContentAllowed(contentForGuard, input.workspaceId);
     const now = new Date().toISOString();
     const metadata = await withMemoryEmbeddingMetadata(
       input.metadata ?? {},
@@ -1807,6 +1823,7 @@ export class MemoryLifecycleService {
       });
     this.deps.evidence?.createEnvelope({
       eventKind: "memory_write",
+      workspaceId: candidate.workspaceId,
       metadata: {
         traceMemoryCandidate: true,
         authority: candidate.authority,
@@ -2007,7 +2024,10 @@ export class MemoryLifecycleService {
     if (!policy.allowWrite) {
       return;
     }
-    if (this.scanBrowserContentGuardForMemory(content, { sessionId, sourceRef: source.sourceRef }).blocked) {
+    const workspaceId = this.deps.resolveSessionWorkspaceId?.(sessionId);
+    if (
+      this.scanBrowserContentGuardForMemory(content, { sessionId, workspaceId, sourceRef: source.sourceRef }).blocked
+    ) {
       return;
     }
     if (this.deps.writeGate) {
@@ -2022,6 +2042,7 @@ export class MemoryLifecycleService {
       });
       this.deps.evidence?.createEnvelope({
         eventKind: "memory_write",
+        workspaceId,
         sessionId,
         memoryLineage: [source.sourceRef],
         metadata: {
@@ -2188,7 +2209,11 @@ export class MemoryLifecycleService {
       createdAt: now,
       updatedAt: now,
     };
-    this.assertStructuredMemoryWriteAllowed(learning.authority, serializeLearningForGate(learning));
+    this.assertStructuredMemoryWriteAllowed(
+      learning.authority,
+      serializeLearningForGate(learning),
+      learning.workspaceId,
+    );
     this.deps.admin.gatewaySql
       .prepare(
         `
@@ -2463,10 +2488,11 @@ export class MemoryLifecycleService {
     });
   }
 
-  private assertTraceCandidateContentAllowed(content: string): void {
+  private assertTraceCandidateContentAllowed(content: string, workspaceId?: string): void {
     if (SECRET_LIKE_TRACE_PATTERN.test(content)) {
       this.deps.evidence?.createEnvelope({
         eventKind: "memory_write",
+        workspaceId: normalizeStructuredWorkspaceId(workspaceId),
         metadata: {
           traceMemoryCandidate: true,
           decision: "blocked_secret_like_content",
@@ -2478,6 +2504,7 @@ export class MemoryLifecycleService {
       });
     }
     const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      workspaceId: normalizeStructuredWorkspaceId(workspaceId),
       structuredMemory: true,
       traceMemoryCandidate: true,
       authority: "agent_proposed",
@@ -2490,10 +2517,11 @@ export class MemoryLifecycleService {
     }
   }
 
-  private assertMemoryFeedbackContentAllowed(content: string): void {
+  private assertMemoryFeedbackContentAllowed(content: string, workspaceId?: string): void {
     if (SECRET_LIKE_TRACE_PATTERN.test(content)) {
       this.deps.evidence?.createEnvelope({
         eventKind: "memory_write",
+        workspaceId: normalizeStructuredWorkspaceId(workspaceId),
         metadata: {
           memoryFeedback: true,
           decision: "blocked_secret_like_content",
@@ -2505,6 +2533,7 @@ export class MemoryLifecycleService {
       });
     }
     const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      workspaceId: normalizeStructuredWorkspaceId(workspaceId),
       structuredMemory: true,
       memoryFeedback: true,
       authority: "operator",
@@ -2517,8 +2546,13 @@ export class MemoryLifecycleService {
     }
   }
 
-  private assertStructuredMemoryWriteAllowed(authority: StructuredMemoryAuthority, content: string): void {
+  private assertStructuredMemoryWriteAllowed(
+    authority: StructuredMemoryAuthority,
+    content: string,
+    workspaceId?: string,
+  ): void {
     const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      workspaceId: normalizeStructuredWorkspaceId(workspaceId),
       structuredMemory: true,
       authority,
     });
@@ -2536,6 +2570,7 @@ export class MemoryLifecycleService {
     if (decision && decision.decision !== "allowed") {
       this.deps.evidence?.createEnvelope({
         eventKind: "memory_write",
+        workspaceId: normalizeStructuredWorkspaceId(workspaceId),
         metadata: {
           decision,
           claimPreview: decision.redactionStatus === "blocked_secret" ? "[redacted]" : content.slice(0, 240),
@@ -2557,6 +2592,7 @@ export class MemoryLifecycleService {
     if (browserContentGuard.blocked) {
       this.deps.evidence?.createEnvelope({
         eventKind: "browser_content_guard",
+        workspaceId: readRecordString(metadata, "workspaceId"),
         metadata: {
           ...metadata,
           browserContentGuard,
@@ -3186,7 +3222,10 @@ function normalizeStringArray(value: string[] | undefined): string[] {
  * string for embedding generation, dropping empties.
  */
 function buildStructuredMemoryEmbeddingText(parts: Array<string | undefined>): string {
-  return parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part)).join("\n");
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
 function calculateLexicalOverlap(prompt: string, contextText: string): number {

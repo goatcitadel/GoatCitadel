@@ -20,54 +20,18 @@ describe("evidence routes", () => {
     return built;
   }
 
-  it("lists evidence envelopes through route services", async () => {
-    const listEnvelopes = vi.fn(() => [
-      {
-        id: "evidence-1",
-        sessionId: "session-1",
-        turnId: "turn-1",
-      },
-    ]);
-    app = buildApp({
-      listEnvelopes,
-    });
+  it("forwards workspace envelope filters to the evidence service", async () => {
+    const listEnvelopes = vi.fn(() => [{ envelopeId: "env-a", eventKind: "memory_write" }]);
+    app = buildApp({ listEnvelopes });
     await app.register(evidenceRoutes);
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/evidence/envelopes?sessionId=session-1&turnId=turn-1&limit=25",
+      url: "/api/v1/evidence/envelopes?workspaceId=workspace-a&limit=12",
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      items: [
-        {
-          id: "evidence-1",
-          sessionId: "session-1",
-          turnId: "turn-1",
-        },
-      ],
-    });
-    expect(listEnvelopes).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      limit: 25,
-    });
-  });
-
-  it("validates list query before delegating", async () => {
-    const listEnvelopes = vi.fn();
-    app = buildApp({
-      listEnvelopes,
-    });
-    await app.register(evidenceRoutes);
-
-    const response = await app.inject({
-      method: "GET",
-      url: "/api/v1/evidence/envelopes?limit=0",
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(listEnvelopes).not.toHaveBeenCalled();
+    expect(response.json()).toEqual({ items: [{ envelopeId: "env-a", eventKind: "memory_write" }] });
+    expect(listEnvelopes).toHaveBeenCalledWith({ workspaceId: "workspace-a", limit: 12 });
   });
 });

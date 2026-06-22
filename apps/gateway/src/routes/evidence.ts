@@ -3,6 +3,7 @@ import { z } from "zod";
 import { withRouteAccess } from "./route-access.js";
 
 const listQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
   sessionId: z.string().trim().min(1).optional(),
   turnId: z.string().trim().min(1).optional(),
   runId: z.string().trim().min(1).optional(),

@@ -658,7 +658,7 @@ describe("orchestration routes", () => {
       run: {
         runId: "run-1",
         planId: "plan-1",
-        status: "paused",
+        status: "running",
         startedAt: "2026-04-19T00:00:00.000Z",
         totalCostUsd: 0.5,
         totalIterations: 1,
@@ -688,6 +688,7 @@ describe("orchestration routes", () => {
     expect(approvePhase).toHaveBeenCalledWith("run-1", "phase-2", "operator-auth", 0.5, undefined);
     expect(response.json()).toMatchObject({
       run: {
+        status: "running",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-2",
       },

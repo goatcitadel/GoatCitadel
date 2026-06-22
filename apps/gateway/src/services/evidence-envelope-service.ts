@@ -9,6 +9,7 @@ import type { Storage } from "@goatcitadel/storage";
 
 export interface EvidenceEnvelopeCreateRequest {
   eventKind: EvidenceEnvelopeEventKind;
+  workspaceId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;
@@ -42,10 +43,12 @@ export class EvidenceEnvelopeService {
   public createEnvelope(input: EvidenceEnvelopeCreateRequest): EvidenceEnvelope {
     const createdAt = input.createdAt ?? new Date().toISOString();
     const metadata = redactEvidenceValue(input.metadata ?? {}) as Record<string, unknown>;
-    const latest = this.deps.storage.evidenceEnvelopes.latest();
+    const workspaceId = input.workspaceId?.trim() || undefined;
+    const latest = this.deps.storage.evidenceEnvelopes.latest({ workspaceId });
     const previousEnvelopeHash = latest?.contentHash;
     const payload = {
       eventKind: input.eventKind,
+      workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
       runId: input.runId,
@@ -72,6 +75,7 @@ export class EvidenceEnvelopeService {
     const envelope = this.deps.storage.evidenceEnvelopes.create({
       envelopeId: randomUUID(),
       eventKind: input.eventKind,
+      workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
       runId: input.runId,
@@ -90,6 +94,7 @@ export class EvidenceEnvelopeService {
     this.deps.publishRealtime?.("evidence_envelope_recorded", "runtime", {
       envelopeId: envelope.envelopeId,
       eventKind: envelope.eventKind,
+      workspaceId: envelope.workspaceId,
       sessionId: envelope.sessionId,
       turnId: envelope.turnId,
       runId: envelope.runId,

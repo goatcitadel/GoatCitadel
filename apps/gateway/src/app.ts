@@ -186,6 +186,8 @@ export async function buildApp() {
     requestState.requestSessionId = sessionId;
     requestState.requestStartedAtMs = performance.now();
     reply.header("x-goatcitadel-correlation-id", correlationId);
+    const diagnosticRequestUrl = stripDiagnosticUrlQuery(request.url);
+    const diagnosticRoute = request.routeOptions.url || diagnosticRequestUrl;
     enterRequestAttribution({
       correlationId,
       traceId,
@@ -193,20 +195,20 @@ export async function buildApp() {
     });
     enterDevDiagnosticsContext({
       correlationId,
-      route: request.routeOptions.url || request.url,
+      route: diagnosticRoute,
       sessionId,
     });
     app.gatewayRuntime?.recordDevDiagnostic({
       level: "debug",
       category: "api",
       event: "request.start",
-      message: `${request.method} ${request.url}`,
-      route: request.routeOptions.url || request.url,
+      message: `${request.method} ${diagnosticRoute}`,
+      route: diagnosticRoute,
       correlationId,
       sessionId,
       context: {
         method: request.method,
-        url: request.url,
+        url: diagnosticRequestUrl,
         originSurface,
       },
     });
@@ -230,12 +232,13 @@ export async function buildApp() {
   app.addHook("onResponse", async (request, reply) => {
     const requestState = request as typeof request & GatewayRequestState;
     const durationMs = calculateRequestDurationMs(requestState);
+    const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
     app.gatewayRuntime?.recordDevDiagnostic({
       level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
       category: "api",
       event: "request.finish",
-      message: `${request.method} ${request.url} -> ${reply.statusCode}`,
-      route: request.routeOptions.url || request.url,
+      message: `${request.method} ${diagnosticRoute} -> ${reply.statusCode}`,
+      route: diagnosticRoute,
       correlationId: requestState.correlationId,
       sessionId: requestState.requestSessionId,
       durationMs,
@@ -250,12 +253,13 @@ export async function buildApp() {
   app.addHook("onError", async (request, reply, error) => {
     const requestState = request as typeof request & GatewayRequestState;
     const durationMs = calculateRequestDurationMs(requestState);
+    const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
     app.gatewayRuntime?.recordDevDiagnostic({
       level: "error",
       category: "api",
       event: "request.error",
-      message: `${request.method} ${request.url} failed`,
-      route: request.routeOptions.url || request.url,
+      message: `${request.method} ${diagnosticRoute} failed`,
+      route: diagnosticRoute,
       correlationId: requestState.correlationId,
       sessionId: requestState.requestSessionId,
       durationMs,
@@ -607,6 +611,18 @@ function calculateRequestDurationMs(request: GatewayRequestState): number | unde
   return Math.max(0, Math.round((performance.now() - request.requestStartedAtMs) * 1000) / 1000);
 }
 
+function stripDiagnosticUrlQuery(url: string | undefined): string {
+  const value = (url ?? "").trim();
+  if (!value) {
+    return "/";
+  }
+  const queryIndex = value.indexOf("?");
+  const fragmentIndex = value.indexOf("#");
+  const candidates = [queryIndex, fragmentIndex].filter((index) => index >= 0);
+  const end = candidates.length > 0 ? Math.min(...candidates) : value.length;
+  return value.slice(0, end) || "/";
+}
+
 export const __internal = {
   isLoopbackRateLimitAllowlisted,
   normalizeConfiguredOrigin,
@@ -614,5 +630,6 @@ export const __internal = {
   classifyRateLimitBucket,
   applyBaselineSecurityHeaders,
   calculateRequestDurationMs,
+  stripDiagnosticUrlQuery,
   BASELINE_CONTENT_SECURITY_POLICY,
 };

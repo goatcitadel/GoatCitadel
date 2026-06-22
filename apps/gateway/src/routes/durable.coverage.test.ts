@@ -98,21 +98,37 @@ describe("durable routes additional coverage", () => {
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/pause", payload: { actorId: "operator" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/pause", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 409 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/resume", payload: { actorId: "" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/resume", payload: { actorId: "operator" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/resume", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 409 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "operator" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: {} }),
     ).resolves.toMatchObject({ statusCode: 409 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/retry", payload: { reason: "" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/durable/runs/run-1/retry",
+        payload: { reason: "manual", actorId: "operator" },
+      }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/retry", payload: { reason: "manual" } }),
@@ -143,11 +159,18 @@ describe("durable routes additional coverage", () => {
     const recovered = await app.inject({
       method: "POST",
       url: "/api/v1/durable/dead-letters/dead-1/recover",
-      payload: { actorId: "operator", maxAttempts: 3 },
+      payload: { maxAttempts: 3 },
     });
     expect(recovered.statusCode).toBe(200);
     expect(durable.recoverDeadLetter).toHaveBeenCalledWith("dead-1", "ip:127.0.0.1", { maxAttempts: 3 });
 
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/durable/dead-letters/dead-2/recover",
+        payload: { actorId: "operator", maxAttempts: 3 },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/durable/dead-letters/dead-2/recover", payload: { maxAttempts: 0 } }),
     ).resolves.toMatchObject({ statusCode: 400 });

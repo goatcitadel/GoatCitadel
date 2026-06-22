@@ -69,6 +69,31 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(expired.consumedBy, "connector:mission-control");
   });
 
+  it("atomically consumes pending tokens once and preserves the first consumer", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      tokenHash: "hash-atomic",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-21T00:00:00.000Z",
+    });
+
+    const first = repo.consumePending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:first",
+    });
+    const second = repo.consumePending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:01.000Z",
+      consumedBy: "connector:second",
+    });
+
+    assert.equal(first?.state, "consumed");
+    assert.equal(second, undefined);
+    const persisted = repo.get(created.tokenId);
+    assert.equal(persisted.consumedAt, "2026-03-20T10:00:00.000Z");
+    assert.equal(persisted.consumedBy, "connector:first");
+  });
+
   it("validates required token fields and reports missing reads", () => {
     const repo = createRepo();
 

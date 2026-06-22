@@ -1501,6 +1501,19 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "cost_ledger", "usage_pool", "TEXT");
     },
   },
+  {
+    version: 129,
+    name: "runtime_evidence_workspace_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "runtime_evidence_envelopes", "workspace_id", "TEXT");
+      if (tableExists(db, "runtime_evidence_envelopes")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_runtime_evidence_workspace_created
+            ON runtime_evidence_envelopes(workspace_id, created_at DESC);
+        `);
+      }
+    },
+  },
 ];
 
 function createAutonomyAuditSchema(db: DatabaseSync): void {
@@ -6403,6 +6416,7 @@ function createRuntimeEvidenceEnvelopeSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS runtime_evidence_envelopes (
       envelope_id TEXT PRIMARY KEY,
       event_kind TEXT NOT NULL,
+      workspace_id TEXT,
       session_id TEXT,
       turn_id TEXT,
       run_id TEXT,
@@ -6421,6 +6435,8 @@ function createRuntimeEvidenceEnvelopeSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_runtime_evidence_session_created
       ON runtime_evidence_envelopes(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_evidence_workspace_created
+      ON runtime_evidence_envelopes(workspace_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_runtime_evidence_turn_created
       ON runtime_evidence_envelopes(turn_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_runtime_evidence_run_created

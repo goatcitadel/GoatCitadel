@@ -302,6 +302,7 @@ describe("OrchestrationRepository", () => {
     const updated = repo.updateRunIfCurrentState(
       {
         ...run,
+        status: "running",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-1",
       },
@@ -310,12 +311,14 @@ describe("OrchestrationRepository", () => {
     const stale = repo.updateRunIfCurrentState(
       {
         ...run,
+        status: "running",
         executionState: "resume_requested",
         pendingApprovedBy: "duplicate",
       },
       { status: "paused", executionState: "paused_for_approval" },
     );
 
+    assert.equal(updated?.status, "running");
     assert.equal(updated?.executionState, "resume_requested");
     assert.equal(stale, undefined);
     assert.equal(repo.getRun("run-cas").pendingApprovedBy, undefined);

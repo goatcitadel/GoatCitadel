@@ -36,10 +36,11 @@ const createRunBodySchema = z.object({
     .optional(),
 });
 
-const retryBodySchema = z.object({
-  reason: z.string().min(1).optional(),
-  actorId: z.string().min(1).optional(),
-});
+const retryBodySchema = z
+  .object({
+    reason: z.string().min(1).optional(),
+  })
+  .strict();
 
 const wakeBodySchema = z.object({
   eventKey: z.string().min(1),
@@ -47,14 +48,13 @@ const wakeBodySchema = z.object({
   correlationId: z.string().optional(),
 });
 
-const actorBodySchema = z.object({
-  actorId: z.string().min(1).optional(),
-});
+const actorBodySchema = z.object({}).strict();
 
-const deadLetterRecoverBodySchema = z.object({
-  actorId: z.string().min(1).optional(),
-  maxAttempts: z.number().int().min(1).max(20).optional(),
-});
+const deadLetterRecoverBodySchema = z
+  .object({
+    maxAttempts: z.number().int().min(1).max(20).optional(),
+  })
+  .strict();
 
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: {

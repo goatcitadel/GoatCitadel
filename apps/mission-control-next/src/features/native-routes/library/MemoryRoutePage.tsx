@@ -10,7 +10,14 @@ import type {
   MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
-import { EmptyState, FilterPillGroup, NativeButton, NoticeBanner, StatusChip, type FilterPillOption } from "../primitives";
+import {
+  EmptyState,
+  FilterPillGroup,
+  NativeButton,
+  NoticeBanner,
+  StatusChip,
+  type FilterPillOption,
+} from "../primitives";
 import {
   describeQmdImpact,
   formatBytes,
@@ -307,7 +314,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   useEffect(() => {
     let cancelled = false;
     setEvidence((current) => ({ ...current, loading: true, error: null }));
-    void fetchEvidenceEnvelopes({ limit: 12 })
+    void fetchEvidenceEnvelopes({ workspaceId: activeWorkspaceId, limit: 12 })
       .then((result) => {
         if (!cancelled) {
           setEvidence({ loading: false, error: null, items: result.items });
@@ -468,10 +475,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                         <Settings className="h-4 w-4" />
                         Open settings
                       </NativeButton>
-                      <NativeButton
-                        variant="default"
-                        onClick={() => navigate({ area: "chat", theme: route.theme })}
-                      >
+                      <NativeButton variant="default" onClick={() => navigate({ area: "chat", theme: route.theme })}>
                         <MessageSquareText className="h-4 w-4" />
                         Continue without durable memory
                       </NativeButton>
@@ -714,7 +718,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               aria-label="Refresh evidence envelopes"
               onClick={() => {
                 setEvidence((current) => ({ ...current, loading: true, error: null }));
-                void fetchEvidenceEnvelopes({ limit: 12 })
+                void fetchEvidenceEnvelopes({ workspaceId: activeWorkspaceId, limit: 12 })
                   .then((result) => {
                     if (isMounted()) {
                       setEvidence({ loading: false, error: null, items: result.items });

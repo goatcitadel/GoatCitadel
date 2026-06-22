@@ -689,12 +689,13 @@ describe("orchestration-lifecycle-service", () => {
 
     const result = await approvePhase(host, "run-1", "phase-1", "operator", 0.5);
 
-    expect(result.run.status).toBe("paused");
+    expect(result.run.status).toBe("running");
     expect(result.run.executionState).toBe("resume_requested");
     expect(result.run.pendingApprovalPhaseId).toBe("phase-1");
     expect(host.orchestrationEngine.approvePhase).not.toHaveBeenCalled();
     expect(host.storage.orchestration.updateRunIfCurrentState).toHaveBeenCalledWith(
       expect.objectContaining({
+        status: "running",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-1",
       }),

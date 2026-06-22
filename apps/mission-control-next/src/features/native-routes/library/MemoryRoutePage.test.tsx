@@ -799,7 +799,7 @@ describe("MemoryRoutePage", () => {
       await Promise.resolve();
     });
 
-    expect(evidenceApiMocks.fetchEvidenceEnvelopes).toHaveBeenCalledWith({ limit: 12 });
+    expect(evidenceApiMocks.fetchEvidenceEnvelopes).toHaveBeenCalledWith({ workspaceId: "default", limit: 12 });
     expect(collectText(renderer!.root)).toContain("approved");
 
     evidenceApiMocks.fetchEvidenceEnvelopes.mockRejectedValueOnce(new Error("evidence route offline"));

@@ -31,6 +31,13 @@ const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 let volatileGatewayBasicAuth: Pick<GatewayAuthState, "mode" | "username" | "password"> | undefined;
+const PROTECTED_GATEWAY_HEADER_NAMES = new Set([
+  "authorization",
+  "content-type",
+  "idempotency-key",
+  BROWSER_MUTATION_INTENT_HEADER,
+  "x-goatcitadel-correlation-id",
+]);
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -132,7 +139,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 async function requestUncoalesced<T>(path: string, init: RequestInit | undefined, method: string): Promise<T> {
   const correlationId = createCorrelationId();
-  const headers = buildGatewayHeaders(path, method, correlationId, init?.headers);
+  const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers));
   recordClientDiagnostic({
     level: "info",
     category: "api",
@@ -219,7 +226,22 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
         return undefined as T;
       }
       const bodyText = await res.text();
-      return bodyText ? unwrapApiResponse<T>(JSON.parse(bodyText)) : (undefined as T);
+      if (!bodyText) {
+        return undefined as T;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(bodyText);
+      } catch (error) {
+        throw new ApiRequestError(`Protocol error ${method} ${path}: malformed JSON response`, {
+          kind: "protocol",
+          method,
+          path,
+          bodyText,
+          cause: error,
+        });
+      }
+      return unwrapApiResponse<T>(payload);
     } catch (error) {
       lastError =
         error instanceof ApiRequestError
@@ -260,12 +282,38 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
             error: lastError.message,
           },
         });
+      } else if (lastError.kind === "protocol") {
+        setDevDiagnosticsLastRequestError(`${method} ${path}: protocol error`);
+        recordClientDiagnostic({
+          level: "error",
+          category: "api",
+          event: "request.protocol_error",
+          message: `${method} ${path} returned a malformed response`,
+          correlationId,
+          route: path,
+          context: {
+            error: lastError.message,
+          },
+        });
       }
       throw lastError;
     }
   }
 
   throw lastError ?? new Error(`Unreachable request state for ${method} ${path}`);
+}
+
+function filterGatewayExtraHeaders(extraHeaders?: HeadersInit): Record<string, string> {
+  if (!extraHeaders) {
+    return {};
+  }
+  const entries: Array<[string, string]> =
+    typeof Headers !== "undefined" && extraHeaders instanceof Headers
+      ? Array.from(extraHeaders.entries())
+      : Array.isArray(extraHeaders)
+        ? extraHeaders.map(([name, value]) => [String(name), String(value)])
+        : Object.entries(extraHeaders).map(([name, value]) => [name, String(value)]);
+  return Object.fromEntries(entries.filter(([name]) => !PROTECTED_GATEWAY_HEADER_NAMES.has(name.trim().toLowerCase())));
 }
 
 function buildGetRequestCoalescingKey(path: string, method: string, init?: RequestInit): string | undefined {

@@ -15,6 +15,7 @@ export type EvidenceEnvelopeSignatureStatus = "signed_hmac" | "unsigned_local" |
 export interface EvidenceEnvelope {
   envelopeId: string;
   eventKind: EvidenceEnvelopeEventKind;
+  workspaceId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;
@@ -32,6 +33,7 @@ export interface EvidenceEnvelope {
 }
 
 export interface EvidenceEnvelopeListQuery {
+  workspaceId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;

@@ -37,6 +37,7 @@ describe("EvidenceEnvelopeRepository", () => {
     const first = repo.create({
       envelopeId: "env-1",
       eventKind: "tool_invocation",
+      workspaceId: "workspace-a",
       sessionId: "session-1",
       contentHash: "hash-1",
       payloadHash: "payload-1",
@@ -48,6 +49,7 @@ describe("EvidenceEnvelopeRepository", () => {
     const second = repo.create({
       envelopeId: "env-2",
       eventKind: "memory_write",
+      workspaceId: "workspace-a",
       sessionId: "session-1",
       contentHash: "hash-2",
       previousEnvelopeHash: first.contentHash,
@@ -57,14 +59,34 @@ describe("EvidenceEnvelopeRepository", () => {
       metadata: { decision: { decision: "proposed" } },
       createdAt: "2026-05-04T00:00:01.000Z",
     });
+    repo.create({
+      envelopeId: "env-3",
+      eventKind: "memory_write",
+      workspaceId: "workspace-b",
+      sessionId: "session-2",
+      contentHash: "hash-3",
+      payloadHash: "payload-3",
+      signatureStatus: "unsigned_local",
+      createdAt: "2026-05-04T00:00:02.000Z",
+    });
 
     assert.equal(second.previousEnvelopeHash, "hash-1");
-    assert.equal(repo.latest()?.envelopeId, "env-2");
+    assert.equal(repo.latest({ workspaceId: "workspace-a" })?.envelopeId, "env-2");
+    assert.equal(repo.latest({ workspaceId: "workspace-b" })?.envelopeId, "env-3");
     assert.deepEqual(
       repo.list({ sessionId: "session-1" }).map((item) => item.envelopeId),
       ["env-2", "env-1"],
     );
+    assert.deepEqual(
+      repo.list({ workspaceId: "workspace-a" }).map((item) => item.envelopeId),
+      ["env-2", "env-1"],
+    );
+    assert.deepEqual(
+      repo.list({ workspaceId: "workspace-b" }).map((item) => item.envelopeId),
+      ["env-3"],
+    );
     assert.deepEqual(repo.get("env-1")?.toolCallHashes, ["tool-hash-1"]);
+    assert.equal(repo.get("env-1")?.workspaceId, "workspace-a");
   });
 
   it("handles missing rows, blank filters, malformed JSON, and create readback fallback", () => {
@@ -127,6 +149,7 @@ describe("EvidenceEnvelopeRepository", () => {
     assert.deepEqual(fallback, {
       envelopeId: "env-fallback",
       eventKind: "tool_invocation",
+      workspaceId: undefined,
       sessionId: undefined,
       turnId: undefined,
       runId: undefined,
@@ -151,6 +174,7 @@ describe("EvidenceEnvelopeRepository", () => {
 
     const listSql = db.sql.find((sql) => sql.includes("session_id") && sql.includes("ORDER BY created_at"));
     assert.ok(listSql);
+    assert.match(listSql, /\(@workspaceId::text IS NULL OR workspace_id = @workspaceId::text\)/);
     assert.match(listSql, /\(@sessionId::text IS NULL OR session_id = @sessionId::text\)/);
     assert.match(listSql, /\(@turnId::text IS NULL OR turn_id = @turnId::text\)/);
     assert.match(listSql, /\(@runId::text IS NULL OR run_id = @runId::text\)/);

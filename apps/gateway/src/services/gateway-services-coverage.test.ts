@@ -283,7 +283,9 @@ describe("gateway service coverage helpers", () => {
     const publishRealtime = vi.fn();
     const storage = {
       evidenceEnvelopes: {
-        latest: vi.fn(() => created.at(-1)),
+        latest: vi.fn((query?: { workspaceId?: string }) =>
+          created.filter((item) => !query?.workspaceId || item.workspaceId === query.workspaceId).at(-1),
+        ),
         create: vi.fn((input) => {
           const envelope = { ...input };
           created.push(envelope);
@@ -300,6 +302,7 @@ describe("gateway service coverage helpers", () => {
 
     const envelope = service.createEnvelope({
       eventKind: "tool_call_completed",
+      workspaceId: "workspace-a",
       sessionId: "sess-1",
       toolCallHashes: [" hash-b ", "hash-a", "hash-a", ""],
       memoryLineage: ["memory-2", "memory-1"],
@@ -311,12 +314,20 @@ describe("gateway service coverage helpers", () => {
     });
     const second = service.createEnvelope({
       eventKind: "approval_resolved",
+      workspaceId: "workspace-a",
       sessionId: "sess-1",
       createdAt: "2026-05-14T00:00:01.000Z",
+    });
+    const otherWorkspace = service.createEnvelope({
+      eventKind: "approval_resolved",
+      workspaceId: "workspace-b",
+      sessionId: "sess-2",
+      createdAt: "2026-05-14T00:00:02.000Z",
     });
 
     expect(envelope).toMatchObject({
       eventKind: "tool_call_completed",
+      workspaceId: "workspace-a",
       toolCallHashes: ["hash-a", "hash-b"],
       memoryLineage: ["memory-1", "memory-2"],
       signatureStatus: "signed_hmac",
@@ -326,7 +337,10 @@ describe("gateway service coverage helpers", () => {
       },
     });
     expect(second.previousEnvelopeHash).toBe(envelope.contentHash);
+    expect(otherWorkspace.previousEnvelopeHash).toBeUndefined();
     expect(service.listEnvelopes({ sessionId: "sess-1" })[0]).toMatchObject({ sessionId: "sess-1" });
+    expect(storage.evidenceEnvelopes.latest).toHaveBeenCalledWith({ workspaceId: "workspace-a" });
+    expect(storage.evidenceEnvelopes.latest).toHaveBeenCalledWith({ workspaceId: "workspace-b" });
     expect(publishRealtime).toHaveBeenCalledWith(
       "evidence_envelope_recorded",
       "runtime",

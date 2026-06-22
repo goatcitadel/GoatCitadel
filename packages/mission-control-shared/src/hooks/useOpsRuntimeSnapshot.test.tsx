@@ -1,12 +1,16 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOpsRuntimeSnapshot } from "./useOpsRuntimeSnapshot";
+import { useRefreshSubscription } from "./useRefreshSubscription";
 
 const apiMocks = vi.hoisted(() => ({
   fetchCostSummary: vi.fn(),
   fetchDaemonStatus: vi.fn(),
   fetchDashboardState: vi.fn(),
   fetchHealthSummary: vi.fn(),
+  fetchLlmEvalProofRuns: vi.fn(),
+  fetchLlmLocalEngines: vi.fn(),
+  fetchLlmRuntimeMeasurements: vi.fn(),
   fetchMcpServers: vi.fn(),
   fetchSessions: vi.fn(),
   fetchTimelineSummary: vi.fn(),
@@ -21,6 +25,9 @@ vi.mock("../api/client", () => ({
   fetchDaemonStatus: apiMocks.fetchDaemonStatus,
   fetchDashboardState: apiMocks.fetchDashboardState,
   fetchHealthSummary: apiMocks.fetchHealthSummary,
+  fetchLlmEvalProofRuns: apiMocks.fetchLlmEvalProofRuns,
+  fetchLlmLocalEngines: apiMocks.fetchLlmLocalEngines,
+  fetchLlmRuntimeMeasurements: apiMocks.fetchLlmRuntimeMeasurements,
   fetchMcpServers: apiMocks.fetchMcpServers,
   fetchSessions: apiMocks.fetchSessions,
   fetchTimelineSummary: apiMocks.fetchTimelineSummary,
@@ -39,8 +46,8 @@ vi.mock("./useRefreshSubscription", () => ({
 
 type HookValue = ReturnType<typeof useOpsRuntimeSnapshot>;
 
-function Harness({ onValue }: { onValue: (value: HookValue) => void }) {
-  const value = useOpsRuntimeSnapshot();
+function Harness({ onValue, section }: { onValue: (value: HookValue) => void; section?: string }) {
+  const value = useOpsRuntimeSnapshot(section);
   onValue(value);
   return null;
 }
@@ -162,6 +169,9 @@ describe("useOpsRuntimeSnapshot", () => {
     apiMocks.fetchMcpServers.mockResolvedValue({
       items: [{ serverId: "mcp-1", label: "GitHub", transport: "stdio", enabled: true, category: "code" }],
     });
+    apiMocks.fetchLlmRuntimeMeasurements.mockResolvedValue({ items: [] });
+    apiMocks.fetchLlmLocalEngines.mockResolvedValue({ items: [] });
+    apiMocks.fetchLlmEvalProofRuns.mockResolvedValue({ items: [] });
     apiMocks.startDaemon.mockResolvedValue({
       accepted: true,
       reason: "Started",
@@ -200,6 +210,7 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.fetchTimelineSummary).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchHealthSummary).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchCostSummary).toHaveBeenCalledWith("day");
+    expect(apiMocks.fetchLlmRuntimeMeasurements).toHaveBeenCalledWith({ limit: 20 });
     expect(latest?.loading).toBe(false);
     expect(latest?.error).toBeNull();
     expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
@@ -257,6 +268,43 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(2);
     expect(latest?.notice).toEqual({ tone: "success", message: "Restarted" });
     expect(latest?.daemonBusy).toBeNull();
+  });
+
+  it("uses the fallback poll for base sources plus only the active Ops section", async () => {
+    await act(async () => {
+      renderer = create(
+        <Harness
+          section="costs"
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+
+    const refreshCallback = vi.mocked(useRefreshSubscription).mock.calls.at(-1)?.[1];
+    expect(refreshCallback).toBeDefined();
+    Object.values(apiMocks).forEach((mock) => mock.mockClear());
+    await act(async () => {
+      await refreshCallback?.({
+        topic: "system",
+        reason: "fallback_poll",
+        source: "test",
+        eventType: "fallback_poll",
+        timestamp: Date.now(),
+      });
+    });
+    await flush();
+
+    expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchHealthSummary).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchDaemonStatus).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchCostSummary).toHaveBeenCalledWith("day");
+    expect(apiMocks.fetchTimelineSummary).not.toHaveBeenCalled();
+    expect(apiMocks.fetchSessions).not.toHaveBeenCalled();
+    expect(apiMocks.fetchMcpServers).not.toHaveBeenCalled();
+    expect(apiMocks.fetchLlmRuntimeMeasurements).not.toHaveBeenCalled();
   });
 
   it("ignores late load resolution and rejection after unmount", async () => {

@@ -8,7 +8,7 @@ import {
 } from "./durable-run-service.js";
 
 describe("DurableRunService", () => {
-  it("does not apply the default workflow timeout to Cowork chat turn runs", () => {
+  it("applies the workflow timeout to Cowork chat turn runs as a watchdog", () => {
     const run = {
       ...createRun("run-cowork", "queued", "chat.turn.execute"),
       payload: {
@@ -17,7 +17,7 @@ describe("DurableRunService", () => {
       },
     };
 
-    expect(resolveDurableWorkflowTimeoutMs(run, 300_000)).toBeUndefined();
+    expect(resolveDurableWorkflowTimeoutMs(run, 300_000)).toBe(300_000);
   });
 
   it("keeps the default workflow timeout for non-Cowork durable runs", () => {
@@ -152,6 +152,53 @@ describe("DurableRunService", () => {
     );
     expect(runs.get("run-unrecoverable")?.status).toBe("failed");
     expect(timeline.map((item) => item.eventType)).toContain("run_failed");
+  });
+
+  it("reports background worker failures instead of leaving rejected worker promises silent", async () => {
+    const runs = new Map<string, DurableRunRecord>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const logger: DurableRunServiceLogger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const context = createContext(runs, checkpoints, timeline, { publishRealtime, logger });
+    context.storage.durableRuns.listExpiredRunningRunIds = vi.fn(() => {
+      throw new Error("recovery scan failed");
+    }) as never;
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(async () => undefined),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "recovery scan failed",
+      }),
+      "durable worker background task failed",
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_worker_background_failure",
+        error: "recovery scan failed",
+      }),
+      expect.objectContaining({
+        eventClass: "operational_signal",
+      }),
+    );
   });
 
   it("waits until retry backoff is due before claiming queued runs", async () => {
@@ -872,6 +919,73 @@ describe("DurableRunService", () => {
       expect(renewLease).toHaveBeenCalledTimes(3);
       expect(runs.get(run.runId)?.status).toBe("failed");
       expect(timeline.map((item) => item.eventType)).toContain("run_failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("moves timed-out Cowork chat turns to waiting with operator resume metadata", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = {
+        ...createRun("run-cowork-timeout", "queued", "chat.turn.execute"),
+        payload: {
+          version: "chat.turn.execute.v1",
+          request: { mode: "cowork" },
+        },
+      };
+      const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      const publishRealtime = vi.fn();
+      const context = createContext(runs, checkpoints, timeline, { publishRealtime });
+      context.config.assistant.durable.workflowTimeoutMs = 50;
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow: vi.fn(() => new Promise<void>(() => undefined)),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      const tasks = [...backgroundTasks];
+      await vi.advanceTimersByTimeAsync(60);
+      await Promise.allSettled(tasks);
+
+      expect(runs.get(run.runId)).toMatchObject({
+        status: "waiting",
+        leaseOwnerId: undefined,
+        leaseExpiresAt: undefined,
+        lastError: undefined,
+        metadata: expect.objectContaining({
+          waitForEvent: {
+            eventKey: "cowork.turn.operator_resume",
+            correlationId: run.runId,
+          },
+          coworkWatchdog: expect.objectContaining({
+            reason: "workflow_timeout",
+            timeoutMs: 50,
+          }),
+        }),
+      });
+      expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_waiting");
+      expect(timeline.map((item) => item.eventType)).toContain("run_waiting");
+      expect(timeline.map((item) => item.eventType)).not.toContain("run_failed");
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "durable",
+        expect.objectContaining({
+          type: "durable_run_waiting",
+          runId: run.runId,
+          reason: "cowork_workflow_timeout",
+        }),
+        expect.objectContaining({
+          eventClass: "domain_fact",
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

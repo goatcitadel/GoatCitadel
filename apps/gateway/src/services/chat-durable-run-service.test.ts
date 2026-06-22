@@ -360,6 +360,49 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("does not let late traces rewrite durable runs that already moved out of running", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "completed",
+      completion: {
+        status: "complete",
+        finishReason: "stop",
+        repaired: false,
+      },
+    });
+    const state = createFinalizeState();
+    state.runs.set("run-late-waiting", {
+      ...createRun("run-late-waiting", "waiting"),
+      metadata: {
+        waitForEvent: {
+          eventKey: "cowork.turn.operator_resume",
+          correlationId: "run-late-waiting",
+        },
+      },
+    });
+
+    finalizeDurableChatRun(state.deps, "run-late-waiting", prepared, trace);
+
+    expect(state.runs.get("run-late-waiting")).toMatchObject({
+      status: "waiting",
+    });
+    expect(state.runs.get("run-late-waiting")?.finishedAt).toBeUndefined();
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-late-waiting",
+            status: "waiting",
+            checkpointKind: "run_waiting",
+          },
+        },
+      },
+    ]);
+  });
+
   it("records completed checkpoints with tool and artifact summaries", () => {
     const prepared = createPreparedTurn({ content: "Ship the patch" });
     const trace = createTrace({

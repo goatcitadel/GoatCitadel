@@ -4585,7 +4585,7 @@ export class ImprovementService {
     try {
       this.callbacks.onAutoTuneApplied?.(tuneId, settingKey);
     } catch {
-      // Audit append must never break the tune apply.
+      // Best-effort audit append must never break the tune apply.
     }
     return this.readDecisionAutoTune(tuneId);
   }

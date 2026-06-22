@@ -9,6 +9,7 @@ import { safeJsonParse } from "./safe-json.js";
 interface EvidenceEnvelopeRow {
   envelope_id: string;
   event_kind: EvidenceEnvelopeEventKind;
+  workspace_id: string | null;
   session_id: string | null;
   turn_id: string | null;
   run_id: string | null;
@@ -28,6 +29,7 @@ interface EvidenceEnvelopeRow {
 export interface EvidenceEnvelopeCreateInput {
   envelopeId: string;
   eventKind: EvidenceEnvelopeEventKind;
+  workspaceId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;
@@ -45,6 +47,7 @@ export interface EvidenceEnvelopeCreateInput {
 }
 
 export interface EvidenceEnvelopeListInput {
+  workspaceId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;
@@ -62,11 +65,11 @@ export class EvidenceEnvelopeRepository {
       buildOptionalTextFilterSql(this.db.dialect, column, param);
     this.insertStmt = db.prepare(`
       INSERT INTO runtime_evidence_envelopes (
-        envelope_id, event_kind, session_id, turn_id, run_id, approval_id,
+        envelope_id, event_kind, workspace_id, session_id, turn_id, run_id, approval_id,
         content_hash, previous_envelope_hash, payload_hash, tool_call_hashes_json,
         memory_lineage_json, policy_hash, signature_status, signature, metadata_json, created_at
       ) VALUES (
-        @envelopeId, @eventKind, @sessionId, @turnId, @runId, @approvalId,
+        @envelopeId, @eventKind, @workspaceId, @sessionId, @turnId, @runId, @approvalId,
         @contentHash, @previousEnvelopeHash, @payloadHash, @toolCallHashesJson,
         @memoryLineageJson, @policyHash, @signatureStatus, @signature, @metadataJson, @createdAt
       )
@@ -74,12 +77,14 @@ export class EvidenceEnvelopeRepository {
     this.getStmt = db.prepare("SELECT * FROM runtime_evidence_envelopes WHERE envelope_id = ?");
     this.latestStmt = db.prepare(`
       SELECT * FROM runtime_evidence_envelopes
+      WHERE ${optionalTextFilter("workspace_id", "@workspaceId")}
       ORDER BY created_at DESC, envelope_id DESC
       LIMIT 1
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM runtime_evidence_envelopes
-      WHERE ${optionalTextFilter("session_id", "@sessionId")}
+      WHERE ${optionalTextFilter("workspace_id", "@workspaceId")}
+        AND ${optionalTextFilter("session_id", "@sessionId")}
         AND ${optionalTextFilter("turn_id", "@turnId")}
         AND ${optionalTextFilter("run_id", "@runId")}
       ORDER BY created_at DESC, envelope_id DESC
@@ -92,6 +97,7 @@ export class EvidenceEnvelopeRepository {
     this.insertStmt.run({
       envelopeId: input.envelopeId,
       eventKind: input.eventKind,
+      workspaceId: input.workspaceId?.trim() || null,
       sessionId: input.sessionId ?? null,
       turnId: input.turnId ?? null,
       runId: input.runId ?? null,
@@ -114,14 +120,21 @@ export class EvidenceEnvelopeRepository {
     return mapRow(toRow(this.getStmt.get(envelopeId)));
   }
 
-  public latest(): EvidenceEnvelope | undefined {
-    return mapRow(toRow(this.latestStmt.get()));
+  public latest(input: Pick<EvidenceEnvelopeListInput, "workspaceId"> = {}): EvidenceEnvelope | undefined {
+    return mapRow(
+      toRow(
+        this.latestStmt.get({
+          workspaceId: input.workspaceId?.trim() || null,
+        }),
+      ),
+    );
   }
 
   public list(input: EvidenceEnvelopeListInput = {}): EvidenceEnvelope[] {
     const rows = toRows(
       this.listStmt.all({
         sessionId: input.sessionId?.trim() || null,
+        workspaceId: input.workspaceId?.trim() || null,
         turnId: input.turnId?.trim() || null,
         runId: input.runId?.trim() || null,
         limit: Math.max(1, Math.min(input.limit ?? 100, 500)),
@@ -149,6 +162,7 @@ function mapRow(row: EvidenceEnvelopeRow | undefined): EvidenceEnvelope | undefi
   return {
     envelopeId: row.envelope_id,
     eventKind: row.event_kind,
+    workspaceId: row.workspace_id ?? undefined,
     sessionId: row.session_id ?? undefined,
     turnId: row.turn_id ?? undefined,
     runId: row.run_id ?? undefined,
@@ -170,6 +184,7 @@ function mapInput(input: EvidenceEnvelopeCreateInput, createdAt: string): Eviden
   return {
     envelopeId: input.envelopeId,
     eventKind: input.eventKind,
+    workspaceId: input.workspaceId,
     sessionId: input.sessionId,
     turnId: input.turnId,
     runId: input.runId,

@@ -2039,4 +2039,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS usage_pool TEXT;
     `,
   },
+  {
+    version: 68,
+    name: "runtime_evidence_workspace_scope",
+    sql: `
+      ALTER TABLE runtime_evidence_envelopes
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_runtime_evidence_workspace_created
+        ON runtime_evidence_envelopes(workspace_id, created_at DESC);
+    `,
+  },
 ];
