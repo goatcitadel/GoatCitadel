@@ -78,6 +78,31 @@ describe("local embeddings provider selection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("treats an unknown provider id as unavailable → pseudo, never calling fetch even with a URL configured", async () => {
+    // A typo'd/misconfigured provider must degrade to pseudo, NOT fall through to
+    // live HTTP against GOATCITADEL_EMBEDDINGS_URL under the guise of `remote`.
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "gpt5-embeddings-typo");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "https://api.example.com/v1/embeddings");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const profile = currentEmbeddingProfile();
+    const generated = await generateEmbedding("unknown provider");
+
+    expect(profile.provider).toBe("pseudo");
+    expect(profile).toMatchObject({
+      provider: "pseudo",
+      status: "fallback",
+      requestedProvider: "gpt5-embeddings-typo",
+      fallbackReason: "embedding-provider-unavailable: gpt5-embeddings-typo",
+    });
+    expect(generated.metadata.provider).toBe("pseudo");
+    expect(generated.method).toBe("pseudo-embedding");
+    expect(generated.metadata.fallbackReason).toBe("embedding-provider-unavailable: gpt5-embeddings-typo");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("resolves an active llamacpp profile when fully configured", () => {
     vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
     vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");

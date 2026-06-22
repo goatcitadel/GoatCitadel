@@ -110,6 +110,29 @@ describe("AutonomyAuditRepository", () => {
     assert.equal(repo.markReverted("missing"), false);
   });
 
+  it("unmarkReverted rolls back a claim so the entry is un-reverted and retryable", () => {
+    const repo = createRepo();
+    const a = repo.append(tuneEntry(), "2026-06-22T00:00:00.000Z");
+    assert.equal(repo.markReverted(a.auditId, "2026-06-22T01:00:00.000Z"), true);
+    // Excluded once reverted.
+    assert.equal(repo.listUnrevertedSince("2026-06-22T00:00:00.000Z").length, 0);
+
+    // Roll back the claim.
+    assert.equal(repo.unmarkReverted(a.auditId), true);
+    const reloaded = repo.get(a.auditId);
+    assert.equal(reloaded?.reverted, false);
+    assert.equal(reloaded?.revertedAt, undefined);
+    // Visible to a retry again.
+    assert.deepEqual(
+      repo.listUnrevertedSince("2026-06-22T00:00:00.000Z").map((e) => e.targetKey),
+      ["decision.retryThreshold"],
+    );
+
+    // No-op when not reverted or missing.
+    assert.equal(repo.unmarkReverted(a.auditId), false);
+    assert.equal(repo.unmarkReverted("missing"), false);
+  });
+
   it("summarizes counts per kind and lists recent newest-first", () => {
     const repo = createRepo();
     const t = repo.append(tuneEntry(), "2026-06-22T00:00:00.000Z");

@@ -234,9 +234,10 @@ describe("chat turn planning helpers", () => {
       }),
     ).toEqual(baseline);
 
-    // The tuner raising sensitivity toward 0.95 lifts the L1 cutoff above 0.78
-    // (0.55 + (0.95 - 0.6) = 0.90), so the same turn now escalates to L2 web
-    // retrieval — proving the written tune actually changes the decision.
+    // Even at the MAX tuned sensitivity (0.95), an ordinary memory-on turn
+    // (L1 base 0.78) must NOT escalate: the escalation cutoff is capped just
+    // below 0.78, so tuning sharpens live-intent sensitivity WITHOUT forcing
+    // every memory-backed turn onto web/L2 ("always web" regression — finding 4).
     const tuned = buildRetrievalTrace({
       content: "summarize the attached document",
       retrievalMode: "layered",
@@ -244,8 +245,20 @@ describe("chat turn planning helpers", () => {
       memoryMode: "workspace",
       liveIntentThreshold: 0.95,
     });
-    expect(tuned.l2Used).toBe(true);
-    expect(tuned.escalationReason).toBe("low_retrieval_confidence");
+    expect(tuned.l2Used).toBe(false);
+    expect(tuned.escalationReason).toBeUndefined();
+
+    // The raised sensitivity still bites where intended: a memory-OFF turn has a
+    // weak L1 base (0.2) and escalates to L2 at the tuned threshold.
+    const tunedWeak = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "off",
+      liveIntentThreshold: 0.95,
+    });
+    expect(tunedWeak.l2Used).toBe(true);
+    expect(tunedWeak.escalationReason).toBe("low_retrieval_confidence");
 
     // The escalation still respects webMode === "off" regardless of sensitivity.
     expect(
@@ -253,7 +266,7 @@ describe("chat turn planning helpers", () => {
         content: "summarize the attached document",
         retrievalMode: "layered",
         webMode: "off",
-        memoryMode: "workspace",
+        memoryMode: "off",
         liveIntentThreshold: 0.95,
       }).l2Used,
     ).toBe(false);

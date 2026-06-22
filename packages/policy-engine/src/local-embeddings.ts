@@ -17,6 +17,16 @@ import type { MemoryEmbeddingProfile, MemoryEmbeddingProfileRequest } from "@goa
  */
 export type EmbeddingProviderId = "pseudo" | "llamacpp" | "remote";
 
+/**
+ * Provider selection as resolved from raw config. Adds an `"unsupported"`
+ * sentinel for provider ids we do not recognise: unlike the concrete provider
+ * ids it never maps onto a real transport — it is always treated as unavailable
+ * and degrades to the pseudo fallback (no HTTP attempt), even when an embeddings
+ * URL is configured. It is deliberately NOT part of {@link EmbeddingProviderId}
+ * (the type stamped onto vectors), which only ever holds real provider ids.
+ */
+type ResolvedProviderSelection = EmbeddingProviderId | "unsupported";
+
 export interface EmbeddingMetadata extends Record<string, unknown> {
   provider: EmbeddingProviderId;
   modelId: string;
@@ -70,7 +80,10 @@ export async function generateEmbedding(
   request?: MemoryEmbeddingProfileRequest,
 ): Promise<GeneratedEmbedding> {
   const providerId = resolveEmbeddingProviderId(request);
-  if (providerId === "pseudo") {
+  if (providerId === "pseudo" || providerId === "unsupported") {
+    // Pseudo, or an unrecognised provider id — both resolve to a pseudo profile
+    // (the latter a `embedding-provider-unavailable` fallback). Never touch the
+    // network for an unknown provider, even if an embeddings URL is configured.
     return createPseudoEmbedding(text, now, resolveEmbeddingProfile(request));
   }
   const realProfile = resolveEmbeddingProfile(request);
@@ -284,19 +297,21 @@ async function fetchEmbeddingJson(
   }
 }
 
-function resolveEmbeddingProviderId(request?: MemoryEmbeddingProfileRequest): EmbeddingProviderId {
+function resolveEmbeddingProviderId(request?: MemoryEmbeddingProfileRequest): ResolvedProviderSelection {
   const requested =
     optionalString(request?.provider) ?? optionalString(process.env.GOATCITADEL_EMBEDDINGS_PROVIDER) ?? "pseudo";
   return normalizeProviderId(requested);
 }
 
 /**
- * Map an arbitrary provider string onto a known {@link EmbeddingProviderId}.
- * Recognised aliases collapse onto `llamacpp`/`remote`; everything else (incl.
- * historical values like `remote-openai-compatible`) resolves to the provider
- * whose config makes it usable, else stays unsupported.
+ * Map an arbitrary provider string onto a known provider selection. Recognised
+ * aliases collapse onto `llamacpp`/`remote` (incl. historical values like
+ * `remote-openai-compatible`); `pseudo` stays pseudo; anything else resolves to
+ * `"unsupported"` so it is treated as unavailable and degrades to the pseudo
+ * fallback — a typo'd/misconfigured provider must NEVER make live HTTP calls to
+ * the configured embeddings URL under the guise of `remote`.
  */
-function normalizeProviderId(value: string): EmbeddingProviderId {
+function normalizeProviderId(value: string): ResolvedProviderSelection {
   const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, "-");
   if (normalized === "pseudo") {
     return "pseudo";
@@ -321,9 +336,9 @@ function normalizeProviderId(value: string): EmbeddingProviderId {
   ) {
     return "remote";
   }
-  // Unknown provider id — keep it as a non-pseudo sentinel so resolution stamps
-  // an explicit `embedding-provider-unavailable` fallback.
-  return "remote";
+  // Unknown provider id — unsupported. Resolution stamps an explicit
+  // `embedding-provider-unavailable` pseudo fallback and never attempts HTTP.
+  return "unsupported";
 }
 
 function resolveEmbeddingProfile(request?: MemoryEmbeddingProfileRequest): MemoryEmbeddingProfile {
@@ -333,6 +348,12 @@ function resolveEmbeddingProfile(request?: MemoryEmbeddingProfileRequest): Memor
   const source = resolveEmbeddingProfileSource(request);
   if (providerId === "pseudo") {
     return resolvePseudoProfile(request, source);
+  }
+  if (providerId === "unsupported") {
+    // Unrecognised provider id → unavailable. Stamp the pseudo fallback (with the
+    // historical reason) and never resolve a real-provider profile, so the
+    // generate path cannot reach the HTTP transport.
+    return pseudoFallbackProfile(request, requestedRaw, `embedding-provider-unavailable: ${requestedRaw}`);
   }
   const realProfile = resolveRealProviderProfile(request, providerId, source);
   if (realProfile) {

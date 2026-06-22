@@ -110,6 +110,44 @@ describe("OperatorProfileService.recordOperatorProfileFacts", () => {
     expect(result.record.facts).toHaveLength(2);
   });
 
+  it("excludes a blocked secret from proposedFacts when autonomy is off (content dedup, not reference)", async () => {
+    const storage = await createStorage();
+    const service = createService(storage, { autonomyDisabled: true });
+
+    const result = service.recordOperatorProfileFacts("default", {
+      facts: [
+        { kind: "fact", content: "Prefers dark mode.", confidence: 0.7 },
+        { kind: "fact", content: "API key is sk-abcdef0123456789abcdef.", confidence: 0.9 },
+      ],
+      // Default authority (agent_proposed): non-secret facts are held as proposed.
+    });
+
+    expect(result.outcome).toBe("proposed");
+    expect(result.blockedFacts).toHaveLength(1);
+    // The blocked secret must NOT leak into the proposed-for-review list.
+    expect(result.proposedFacts).toHaveLength(1);
+    expect(result.proposedFacts?.map((fact) => fact.content)).toEqual(["Prefers dark mode."]);
+    expect(JSON.stringify(result.proposedFacts)).not.toContain("sk-abcdef");
+  });
+
+  it("does not re-apply a blocked secret under full autonomy (content dedup in auto-apply)", async () => {
+    const storage = await createStorage();
+    const service = createService(storage, { autonomyDisabled: false });
+
+    const result = service.recordOperatorProfileFacts("default", {
+      facts: [
+        { kind: "preference", content: "Prefers metric units.", confidence: 0.9 },
+        { kind: "fact", content: "Token is ghp_abcdef0123456789abcdef.", confidence: 0.9 },
+      ],
+      // agent_proposed → gate marks both proposed; auto-apply must still drop the secret.
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(result.blockedFacts).toHaveLength(1);
+    expect(result.record.facts.map((fact) => fact.content)).toEqual(["Prefers metric units."]);
+    expect(JSON.stringify(result.record)).not.toContain("ghp_abcdef");
+  });
+
   it("blocks secret-like facts even under full autonomy", async () => {
     const storage = await createStorage();
     const service = createService(storage, { autonomyDisabled: false });

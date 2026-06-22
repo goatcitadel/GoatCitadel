@@ -177,6 +177,39 @@ describe("SkillMutationService", () => {
     expect(reverted ? isSkillCallable(reverted, "enabled") : false).toBe(false);
   });
 
+  it("refuses to restore a snapshot with an empty skillId and does not wipe the jail root", async () => {
+    const harness = createHarness();
+    // Seed a real authored skill so we can prove it survives a malformed restore.
+    const real = await harness.service.draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Keep me.") });
+    expect(fsSync.existsSync(real.skillFilePath)).toBe(true);
+
+    // A deserialized snapshot with a blank skillId would resolve to the jail ROOT;
+    // the "did-not-exist" branch would then rm -rf the whole self-skills dir.
+    const malformed = {
+      skillId: "   ",
+      skillFilePath: path.join(harness.service.selfSkillsRoot, "SKILL.md"),
+      existed: false,
+      capturedAt: new Date().toISOString(),
+    } as unknown as Parameters<typeof harness.service.restoreSnapshotSync>[0];
+
+    expect(() => harness.service.restoreSnapshotSync(malformed)).toThrow(/invalid \(empty\) skillId/i);
+    await expect(harness.service.restoreSnapshot(malformed)).rejects.toThrow(/invalid \(empty\) skillId/i);
+
+    // The jail root and the real skill are untouched.
+    expect(fsSync.existsSync(harness.service.selfSkillsRoot)).toBe(true);
+    expect(fsSync.existsSync(real.skillFilePath)).toBe(true);
+  });
+
+  it("refuses to restore a snapshot whose skillId is not a string", async () => {
+    const harness = createHarness();
+    const malformed = {
+      skillId: undefined,
+      existed: false,
+      capturedAt: new Date().toISOString(),
+    } as unknown as Parameters<typeof harness.service.restoreSnapshotSync>[0];
+    expect(() => harness.service.restoreSnapshotSync(malformed)).toThrow(/invalid \(empty\) skillId/i);
+  });
+
   it("reverts an overwrite back to the prior SKILL.md bytes and lifecycle", async () => {
     const harness = createHarness();
     const first = await harness.service.draftSkillMutation({

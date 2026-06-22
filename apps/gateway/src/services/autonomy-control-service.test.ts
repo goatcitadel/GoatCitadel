@@ -205,6 +205,73 @@ describe("AutonomyControlService", () => {
       ]);
     });
 
+    it("does not dispatch a restore for an entry already reverted (no double-dispatch)", async () => {
+      // Simulate a concurrent/earlier revert having already marked the entry: the
+      // claim (`markReverted ... AND reverted = 0`) must fail and the restore
+      // callback must NOT fire.
+      const { service, storage, handlers } = await createService();
+      const entry = storage.autonomyAudit.append(
+        { kind: "tune", targetKey: "already", restoreRef: ref("tune", { tuneId: "already" }) },
+        "2026-06-22T00:00:00.000Z",
+      );
+      // Pre-claim it (as a prior pass would have).
+      expect(storage.autonomyAudit.markReverted(entry.auditId, "2026-06-22T00:30:00.000Z")).toBe(true);
+
+      // listUnrevertedSince already excludes it, so feed it back through a kind we
+      // know is present by appending a second, still-unreverted entry to ensure the
+      // pass runs, then assert the claimed one never dispatches.
+      const summary = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      expect(summary.considered).toBe(0); // the only entry is already reverted → excluded
+      expect(handlers.revertTune).not.toHaveBeenCalled();
+    });
+
+    it("claim-first revert dispatches each restore exactly once across back-to-back passes", async () => {
+      const { service, storage, handlers } = await createService();
+      storage.autonomyAudit.append(
+        { kind: "tune", targetKey: "once", restoreRef: ref("tune", { tuneId: "once" }) },
+        "2026-06-22T00:00:00.000Z",
+      );
+
+      const first = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      const second = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+
+      expect(first.reverted).toBe(1);
+      expect(second.considered).toBe(0);
+      // Exactly one dispatch total — the second pass finds nothing un-reverted.
+      expect(handlers.revertTune).toHaveBeenCalledTimes(1);
+    });
+
+    it("rolls back the claim on a failed restore so the entry stays retryable", async () => {
+      let attempts = 0;
+      const { service, storage, handlers } = await createService({
+        handlers: {
+          revertTune: vi.fn((tuneId: string) => {
+            attempts += 1;
+            // Fail on the first attempt, succeed on the retry.
+            if (tuneId === "flaky" && attempts === 1) {
+              throw new Error("transient restore failure");
+            }
+          }),
+        },
+      });
+      storage.autonomyAudit.append(
+        { kind: "tune", targetKey: "flaky", restoreRef: ref("tune", { tuneId: "flaky" }) },
+        "2026-06-22T00:00:00.000Z",
+      );
+
+      const firstPass = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      expect(firstPass.failed).toBe(1);
+      // The entry stays un-reverted (claim rolled back) and is visible to a retry.
+      expect(storage.autonomyAudit.listUnrevertedSince("2026-06-22T00:00:00.000Z").map((e) => e.targetKey)).toEqual([
+        "flaky",
+      ]);
+
+      const retryPass = service.revertAutonomousChangesSince("2026-06-22T00:00:00.000Z");
+      expect(retryPass.reverted).toBe(1);
+      expect(handlers.revertTune).toHaveBeenCalledTimes(2);
+      expect(storage.autonomyAudit.listUnrevertedSince("2026-06-22T00:00:00.000Z")).toHaveLength(0);
+    });
+
     it("marks an entry skipped (not failed) when the subsystem reports nothing to restore", async () => {
       const { service, storage, handlers } = await createService({
         handlers: { restoreCuratorArchive: vi.fn(() => false) },

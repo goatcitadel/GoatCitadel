@@ -188,6 +188,21 @@ export function shouldEscalateForLiveIntentSensitivity(input: {
   // Baseline 0.6 → 0.55 cutoff (current behaviour). Each +0.05 of sensitivity
   // lifts the cutoff by 0.05, so a more sensitive setting escalates on higher
   // (less-bad) L1 confidence values too.
-  const escalationCutoff = 0.55 + (input.liveIntentThreshold - IMPROVEMENT_TUNE_DEFAULTS.liveIntentThreshold);
+  const rawCutoff = 0.55 + (input.liveIntentThreshold - IMPROVEMENT_TUNE_DEFAULTS.liveIntentThreshold);
+  // Cap the cutoff safely BELOW the normal "memory-on" L1 confidence floor
+  // (0.78 in buildRetrievalTrace). Without this cap, a fully-tuned threshold
+  // (0.95) lifts the cutoff to ~0.90 > 0.78, which would make EVERY memory-on
+  // turn escalate to web/L2 — "always web" after a few tune steps. Capping keeps
+  // tuning sharpening live-intent sensitivity (borderline / memory-off turns)
+  // without forcing universal escalation of ordinary memory-backed turns.
+  const escalationCutoff = Math.min(rawCutoff, LIVE_INTENT_ESCALATION_CUTOFF_CEILING);
   return input.l1Confidence < escalationCutoff;
 }
+
+/**
+ * Upper bound on the live-intent escalation cutoff. Sits just under the
+ * normal+memory `l1Base` (0.78) computed in `buildRetrievalTrace`, so a tuned
+ * threshold can never escalate an ordinary memory-backed turn purely on
+ * confidence. (Live-intent keyword turns still escalate via their own branch.)
+ */
+export const LIVE_INTENT_ESCALATION_CUTOFF_CEILING = 0.74;

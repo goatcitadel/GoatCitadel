@@ -4238,7 +4238,19 @@ export class GatewayService {
   private captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
     const { skillId, skillMarkdown } = this.readSkillRevisionRef(targetKey, revisionRef);
     const snapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
-    const ref: ImprovementRef = {
+    // NOTE: the unified autonomy-audit entry is intentionally NOT appended here.
+    // This snapshot is captured at PROPOSAL time (an approval is then created and
+    // the apply happens only later, after approval — or never). Recording the
+    // audit now would leave a phantom entry for a mutation that never landed
+    // (rejected/expired approval, or a throwing apply), which revertAutonomous-
+    // ChangesSince would then "restore". The audit is appended in
+    // applySkillRevisionCandidate AFTER the write actually succeeds.
+    return this.buildSkillRevisionSnapshotRef(snapshot, targetKey);
+  }
+
+  /** Build the value-carrying snapshot ref consumed by restoreSkillRevisionSnapshot. */
+  private buildSkillRevisionSnapshotRef(snapshot: SkillMutationSnapshot, targetKey: string): ImprovementRef {
+    return {
       refType: "skill_revision_snapshot",
       refId: snapshot.skillId,
       hash: createHash("sha1").update(JSON.stringify(snapshot)).digest("hex"),
@@ -4248,15 +4260,6 @@ export class GatewayService {
         snapshot: snapshot as unknown as Record<string, unknown>,
       },
     };
-    // Unified audit: this snapshot ref is value-carrying (the prior SKILL.md bytes
-    // travel inline) and is exactly what restoreSkillRevisionSnapshot consumes, so
-    // it doubles as the restoreRef. Best-effort; never blocks the activation.
-    this.autonomyControlService.recordAutonomousMutation({
-      kind: "skill_revision",
-      targetKey: snapshot.skillId,
-      restoreRef: { kind: "skill_revision", snapshotRef: ref },
-    });
-    return ref;
   }
 
   private applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
@@ -4267,6 +4270,10 @@ export class GatewayService {
     if (!skillMarkdown) {
       throw new Error(`Skill revision ${targetKey} is missing skill content; refusing to apply an empty mutation.`);
     }
+    // Capture the prior state immediately BEFORE the write so the audit restoreRef
+    // carries the correct pre-mutation bytes (the proposal-time snapshot is on the
+    // activation rail; this one backs the unified autonomy-audit ledger).
+    const priorSnapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
     // Validate + security-scan + secret-block + jail-write as non-callable candidate.
     const result = this.skillMutationService.applySkillMutationSync({
       skillMarkdown,
@@ -4282,6 +4289,15 @@ export class GatewayService {
     const lifecycle = autonomyEnabled
       ? this.skillMutationService.promoteSelfAuthoredSkill(result.skillId)
       : result.lifecycle;
+    // Unified audit: append ONLY now that the write (and any promote) has
+    // succeeded, so a failed/blocked apply never leaves a phantom ledger entry.
+    // The snapshot ref is value-carrying (prior bytes inline) and is exactly what
+    // restoreSkillRevisionSnapshot consumes. Best-effort; never blocks the apply.
+    this.autonomyControlService.recordAutonomousMutation({
+      kind: "skill_revision",
+      targetKey: result.skillId,
+      restoreRef: { kind: "skill_revision", snapshotRef: this.buildSkillRevisionSnapshotRef(priorSnapshot, targetKey) },
+    });
     return {
       refType: "skill_revision_config",
       refId: result.skillId,

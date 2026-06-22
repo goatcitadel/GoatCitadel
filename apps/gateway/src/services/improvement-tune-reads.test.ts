@@ -156,4 +156,51 @@ describe("shouldEscalateForLiveIntentSensitivity", () => {
     expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.7, liveIntentThreshold: 0.78 })).toBe(true);
     expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.78, liveIntentThreshold: 0.78 })).toBe(false);
   });
+
+  it("at the MAX tuned threshold (0.95) does NOT force every memory-on turn to escalate", () => {
+    // Regression: the raw cutoff at 0.95 is 0.55 + 0.35 = 0.90 > the normal
+    // memory-on l1Base (0.78). Without the cap that made EVERY memory-on turn
+    // escalate ("always web"). The cutoff is capped just below 0.78, so:
+    //   - normal+memory turns (l1Base 0.78) do NOT escalate on confidence alone,
+    const maxThreshold = resolveLiveIntentThreshold(1); // tuner clamps to 0.95-ish band; 1 → 1, cap still applies
+    expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.78, liveIntentThreshold: maxThreshold })).toBe(
+      false,
+    );
+    expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.78, liveIntentThreshold: 0.95 })).toBe(false);
+    //   - but weak/memory-off turns (l1Base 0.2, or borderline 0.64) still do.
+    expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.2, liveIntentThreshold: 0.95 })).toBe(true);
+    expect(shouldEscalateForLiveIntentSensitivity({ l1Confidence: 0.64, liveIntentThreshold: 0.95 })).toBe(true);
+  });
+});
+
+// Integration-flavoured guard: drive the actual buildRetrievalTrace decision at
+// the max tuned threshold and assert ordinary memory-on turns are not all forced
+// to web/L2. This protects the *wiring* (cutoff vs l1Base) end to end.
+describe("buildRetrievalTrace live-intent escalation under a fully-tuned threshold", () => {
+  it("does not escalate an ordinary memory-on, non-live-intent turn at threshold 0.95", async () => {
+    const { buildRetrievalTrace } = await import("./chat-turn-planning-helpers.js");
+    const trace = buildRetrievalTrace({
+      content: "Summarize my notes about the project plan.",
+      retrievalMode: "layered",
+      memoryMode: "on",
+      webMode: "auto",
+      liveIntentThreshold: 0.95,
+    });
+    expect(trace.confidenceL1).toBe(0.78);
+    expect(trace.l2Used).toBe(false);
+    expect(trace.escalationReason).toBeUndefined();
+  });
+
+  it("still escalates an explicit live-intent turn at threshold 0.95", async () => {
+    const { buildRetrievalTrace } = await import("./chat-turn-planning-helpers.js");
+    const trace = buildRetrievalTrace({
+      content: "What is the latest price right now?",
+      retrievalMode: "layered",
+      memoryMode: "on",
+      webMode: "auto",
+      liveIntentThreshold: 0.95,
+    });
+    expect(trace.l2Used).toBe(true);
+    expect(trace.escalationReason).toBe("explicit_live_data_intent");
+  });
 });

@@ -191,8 +191,12 @@ export class OperatorProfileService {
       : accepted;
 
     if (factsToApply.length === 0) {
+      // Exclude blocked facts by CONTENT: `normalizeFacts` returns fresh objects
+      // each call, so a reference check against `blockedFacts` never matches and
+      // would leak a blocked (secret) fact into `proposedFacts`.
+      const blockedContents = new Set(blockedFacts.map((fact) => fact.content));
       const proposedFacts = anyProposed
-        ? normalizeFacts(input.facts).filter((fact) => !blockedFacts.includes(fact))
+        ? normalizeFacts(input.facts).filter((fact) => !blockedContents.has(fact.content))
         : [];
       return {
         record: profile,
@@ -292,10 +296,14 @@ export class OperatorProfileService {
     facts: OperatorProfileFact[],
     alreadyBlocked: OperatorProfileFact[],
   ): OperatorProfileFact[] {
-    const blockedSet = new Set(alreadyBlocked);
+    // Dedup by CONTENT, not reference: `normalizeFacts` produces new objects on
+    // every call, so an identity `Set(alreadyBlocked)` never matches the
+    // re-normalized facts and the already-blocked exclusion would silently no-op
+    // (relying entirely on the operator-authority secret re-check below).
+    const blockedContents = new Set(alreadyBlocked.map((fact) => fact.content));
     const out: OperatorProfileFact[] = [];
     for (const fact of normalizeFacts(facts)) {
-      if (blockedSet.has(fact)) {
+      if (blockedContents.has(fact.content)) {
         continue;
       }
       const decision = this.gate.evaluate({ authority: "operator", content: fact.content });

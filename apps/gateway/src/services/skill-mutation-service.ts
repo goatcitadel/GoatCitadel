@@ -244,6 +244,7 @@ export class SkillMutationService {
 
   /** Restore a snapshot: revert the SKILL.md bytes and lifecycle row (or remove). */
   public async restoreSnapshot(snapshot: SkillMutationSnapshot): Promise<void> {
+    assertValidSnapshotSkillId(snapshot);
     const skillDir = this.resolveSkillDir(snapshot.skillId);
     const skillFilePath = path.join(skillDir, "SKILL.md");
     const sourceJsonPath = path.join(skillDir, "source.json");
@@ -282,6 +283,7 @@ export class SkillMutationService {
 
   /** Synchronous variant of {@link restoreSnapshot} for the activation path. */
   public restoreSnapshotSync(snapshot: SkillMutationSnapshot): void {
+    assertValidSnapshotSkillId(snapshot);
     const skillDir = this.resolveSkillDir(snapshot.skillId);
     const skillFilePath = path.join(skillDir, "SKILL.md");
     const sourceJsonPath = path.join(skillDir, "source.json");
@@ -355,5 +357,21 @@ export class SkillMutationService {
     const skillDir = path.resolve(this.selfSkillsRoot, skillId);
     assertWritePathInJail(skillDir, [this.selfSkillsRoot]);
     return skillDir;
+  }
+}
+
+/**
+ * Guard against a malformed snapshot reaching the restore path. Snapshots are
+ * deserialized from the autonomy-audit / activation rails via a type cast (no
+ * runtime validation), so a missing/empty `skillId` could otherwise resolve to
+ * the self-skills jail ROOT itself — and the "did-not-exist" restore branch
+ * `fs.rm(skillDir, { recursive: true })` would then wipe every self-authored
+ * skill. The jail assertion does not catch the empty-id case (the root resolves
+ * inside itself), so reject it explicitly here. Path traversal is still caught by
+ * `assertWritePathInJail` downstream.
+ */
+function assertValidSnapshotSkillId(snapshot: SkillMutationSnapshot): void {
+  if (typeof snapshot.skillId !== "string" || snapshot.skillId.trim().length === 0) {
+    throw new Error("Skill mutation snapshot has an invalid (empty) skillId; refusing to restore.");
   }
 }

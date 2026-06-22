@@ -41,6 +41,7 @@ export class AutonomyAuditRepository {
   private readonly listRecentStmt;
   private readonly countAllStmt;
   private readonly markRevertedStmt;
+  private readonly clearRevertedStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.appendStmt = db.prepare(`
@@ -74,6 +75,11 @@ export class AutonomyAuditRepository {
       UPDATE autonomy_audit
       SET reverted = 1, reverted_at = @revertedAt
       WHERE audit_id = @auditId AND reverted = 0
+    `);
+    this.clearRevertedStmt = db.prepare(`
+      UPDATE autonomy_audit
+      SET reverted = 0, reverted_at = NULL
+      WHERE audit_id = @auditId AND reverted = 1
     `);
   }
 
@@ -138,6 +144,17 @@ export class AutonomyAuditRepository {
    */
   public markReverted(auditId: string, now = new Date().toISOString()): boolean {
     const result = this.markRevertedStmt.run({ auditId, revertedAt: now });
+    return toCount(result.changes) > 0;
+  }
+
+  /**
+   * Clear the reverted flag on an entry. Inverse of {@link markReverted}; used to
+   * roll back a *claim* when the restore that the caller intended to perform
+   * threw, so the entry stays retryable on a later pass. Returns true if it
+   * transitioned (was reverted), false otherwise.
+   */
+  public unmarkReverted(auditId: string): boolean {
+    const result = this.clearRevertedStmt.run({ auditId });
     return toCount(result.changes) > 0;
   }
 }

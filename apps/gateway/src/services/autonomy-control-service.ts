@@ -182,17 +182,27 @@ export class AutonomyControlService {
   /** Restore a single entry with per-entry failure isolation. */
   private revertOne(entry: AutonomyAuditEntry): AutonomyRevertEntryResult {
     const base = { auditId: entry.auditId, kind: entry.kind, targetKey: entry.targetKey };
+    // Claim the entry BEFORE dispatching the restore. `markReverted` is an atomic
+    // `... AND reverted = 0` update that returns false if the row was already
+    // reverted (e.g. a concurrent revert pass), so claiming first guarantees the
+    // restore callback runs at most once per entry — no double-dispatch races.
+    const claimed = this.storage.autonomyAudit.markReverted(entry.auditId, this.now());
+    if (!claimed) {
+      return { ...base, status: "skipped" };
+    }
     try {
       const applied = this.dispatchRestore(entry.restoreRef);
       if (!applied) {
         // The subsystem reported nothing to restore (e.g. snapshot already gone).
-        // Mark reverted anyway so it does not block subsequent passes.
-        this.storage.autonomyAudit.markReverted(entry.auditId, this.now());
+        // The entry is already marked reverted (claimed above) so it does not
+        // block subsequent passes.
         return { ...base, status: "skipped" };
       }
-      this.storage.autonomyAudit.markReverted(entry.auditId, this.now());
       return { ...base, status: "reverted" };
     } catch (error) {
+      // The restore threw: roll back the claim so the entry stays UN-reverted and
+      // a later pass can retry it (the claim only existed to guard the dispatch).
+      this.storage.autonomyAudit.unmarkReverted(entry.auditId);
       const message = describeError(error);
       this.recordDevDiagnostic({
         level: "warn",
