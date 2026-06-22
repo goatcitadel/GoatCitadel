@@ -6,6 +6,11 @@ import type { ApprovalCreateInput, ApprovalRequest, LoadedSkill, ToolCatalogEntr
 import { Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import { LlmService } from "./llm-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
@@ -1184,6 +1189,9 @@ function createImprovementHarness(input: { ledgerEnabled: boolean }) {
     restoreRoutingPolicySnapshot: () => undefined,
     createChatCompletion: async () => ({ id: "mock", choices: [] }) as never,
     getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-4.1-mini" }),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: async () => [],
     retryChatTurn: async () => ({ sessionId: "session-loop8", turnId: "turn-loop8" }) as never,
     backgroundTasks: new Set<Promise<void>>(),

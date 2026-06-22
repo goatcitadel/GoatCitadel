@@ -76,6 +76,14 @@ import {
 } from "./chat-agent-completion-adapters.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import {
+  IMPROVEMENT_TUNE_DEFAULTS,
+  readBlockerTemplateStrictness,
+  readRetryRepairThreshold,
+  resolveBlockerTemplateStrictness,
+  shouldAttemptIncompleteCompletionRepair,
+  shouldUseStrictBlockerTemplate,
+} from "./improvement-tune-reads.js";
+import {
   createLoopGuardTrace,
   detectToolLoopRisk,
   initializeToolLoopGuardState,
@@ -461,6 +469,16 @@ type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>
 
 export class ChatAgentOrchestrator {
   public constructor(private readonly deps: ChatAgentOrchestratorDeps) {}
+
+  /**
+   * P2-W3: blocker-template strictness for this turn, read from the
+   * self-improvement tuner's setting. Passed to `buildToolFailureGuidance` at
+   * the blocked-tool sites so a raised level produces more specific blocker
+   * explanations. Safe default (1) keeps the historical text.
+   */
+  private readBlockerStrictness(): number {
+    return readBlockerTemplateStrictness(this.deps.storage.systemSettings);
+  }
 
   public async run(input: ChatAgentTurnInput): Promise<ChatAgentTurnResult> {
     const events: ChatStreamChunkDraft[] = [];
@@ -2880,10 +2898,22 @@ export class ChatAgentOrchestrator {
       }
     }
 
+    // P2-W3: the self-improvement tuner lowers `improvement_tune_retry_threshold_v1`
+    // when too many turns fail without attempting a repair. At the default (1)
+    // this gate is byte-identical to the historical `status !== "complete"`
+    // check; at 0 it also lets a turn that *failed* despite a "complete"
+    // provider response get one repair pass ("attempt one repair more often").
+    // The live-viewer suppression guard is always respected (never overridden by
+    // a tune) so we cannot double-render after partial output.
+    const incompleteRepairThreshold = readRetryRepairThreshold(this.deps.storage.systemSettings);
     if (
       !approvalPayload &&
       finalStatus !== "cancelled" &&
-      completionState.status !== "complete" &&
+      shouldAttemptIncompleteCompletionRepair({
+        completionIsIncomplete: completionState.status !== "complete",
+        turnFailed: finalStatus === "failed",
+        retryThreshold: incompleteRepairThreshold,
+      }) &&
       !suppressIncompleteCompletionRepair
     ) {
       const repairedCompletion = await this.repairIncompleteAssistantCompletion({
@@ -3462,6 +3492,7 @@ export class ChatAgentOrchestrator {
           status: "blocked",
           args: preflight.args,
           error: preflight.blockedReason,
+          blockerStrictness: this.readBlockerStrictness(),
         }),
         finishedAt: new Date().toISOString(),
       });
@@ -3669,6 +3700,7 @@ export class ChatAgentOrchestrator {
               args: preflight.args,
               error: fallbackError,
               result: writeFallback.result.result,
+              blockerStrictness: this.readBlockerStrictness(),
             }),
             finishedAt: new Date().toISOString(),
           });
@@ -3702,6 +3734,7 @@ export class ChatAgentOrchestrator {
             args: preflight.args,
             error: result.policyReason,
             result: persistedToolResult,
+            blockerStrictness: this.readBlockerStrictness(),
           }),
           finishedAt: new Date().toISOString(),
         });
@@ -5453,11 +5486,74 @@ function buildToolFailureGuidance(input: {
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: string;
+  /**
+   * P2-W3: blocker-template strictness (1..10) read from the self-improvement
+   * tuner's `improvement_tune_blocker_template_v1`. The tuner raises it when
+   * blocked/denied explanations are too vague to act on. At the default (1) the
+   * guidance is byte-identical to before; at >=2 a more specific, structured
+   * blocker explanation is appended for blocked/denied actions so the model has
+   * a concrete unblock path. See improvement-tune-reads.ts.
+   */
+  blockerStrictness?: number;
 }): string | undefined {
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
     typeof input.result?.browserFailureClass === "string" ? input.result.browserFailureClass : undefined;
+  const baseGuidance = buildToolFailureGuidanceBase({ ...input, normalizedError, host, browserFailureClass });
+  return applyBlockerTemplateStrictness({
+    baseGuidance,
+    status: input.status,
+    toolName: input.toolName,
+    error: input.error,
+    host,
+    strictness: resolveBlockerTemplateStrictness(input.blockerStrictness ?? IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate),
+  });
+}
+
+/**
+ * P2-W3: when the blocker-template strictness level is above baseline, append a
+ * concrete, structured unblock path to a blocked/denied action's guidance.
+ * Returns the base guidance unchanged at the default level so behaviour is
+ * identical until the self-improvement loop actually raises the level.
+ */
+function applyBlockerTemplateStrictness(input: {
+  baseGuidance: string | undefined;
+  status: ChatToolRunRecord["status"];
+  toolName: string;
+  error?: string;
+  host?: string;
+  strictness: number;
+}): string | undefined {
+  if (input.status !== "blocked") {
+    return input.baseGuidance;
+  }
+  if (!shouldUseStrictBlockerTemplate(input.strictness)) {
+    return input.baseGuidance;
+  }
+  const reason = (input.error ?? "").trim();
+  const detail = [
+    `${formatToolLabel(input.toolName)} was blocked${reason ? `: ${reason}` : " by policy"}.`,
+    "State the exact blocker, the specific approval or capability needed to proceed, and a concrete alternative the operator can take now.",
+    input.host ? `If a host is involved (${input.host}), name it and request allowlist approval rather than retrying it.` : undefined,
+    "Do not silently retry the same blocked action or imply it succeeded.",
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  return input.baseGuidance ? `${input.baseGuidance} ${detail}` : detail;
+}
+
+function buildToolFailureGuidanceBase(input: {
+  toolName: string;
+  status: ChatToolRunRecord["status"];
+  args?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  normalizedError: string;
+  host?: string;
+  browserFailureClass?: string;
+}): string | undefined {
+  const { normalizedError, host, browserFailureClass } = input;
 
   if (input.toolName.startsWith("browser.") || input.toolName.startsWith("http.")) {
     if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlisted\b/.test(normalizedError)) {

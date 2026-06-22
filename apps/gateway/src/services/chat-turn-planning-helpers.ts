@@ -16,6 +16,11 @@ import type {
 import type { OrchestrationPlan as ModeOrchestrationPlan, OrchestrationRole } from "../orchestration/types.js";
 import { isImageMimeType, toTitleCase } from "./chat-turn-helpers.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
+import {
+  IMPROVEMENT_TUNE_DEFAULTS,
+  resolveLiveIntentThreshold,
+  shouldEscalateForLiveIntentSensitivity,
+} from "./improvement-tune-reads.js";
 
 export interface ResolvedRuntimeGuidance {
   workspaceId: string;
@@ -383,12 +388,30 @@ export function buildRetrievalTrace(input: {
   retrievalMode: ChatRetrievalMode;
   webMode: ChatWebMode;
   memoryMode: ChatSessionPrefsRecord["memoryMode"];
+  /**
+   * P2-W3: live-data intent sensitivity (0..1) read from the self-improvement
+   * tuner's `improvement_tune_live_intent_threshold_v1`. Defaults to the
+   * baseline (0.6) so the escalation rule is byte-identical when the loop has
+   * applied no tune. Higher values escalate web (L2) retrieval on borderline,
+   * non-keyword turns too. See improvement-tune-reads.ts.
+   */
+  liveIntentThreshold?: number;
 }): NonNullable<ChatTurnTraceRecord["retrieval"]> {
   const liveIntent = /\b(latest|today|weather|news|price|current|right now|time)\b/i.test(input.content);
   const l0Base = liveIntent ? 0.55 : 0.86;
   const l1Base = input.memoryMode === "off" ? 0.2 : liveIntent ? 0.64 : 0.78;
   const shouldUseLayered = input.retrievalMode === "layered";
-  const shouldUseL2 = shouldUseLayered && (liveIntent || l1Base < 0.55) && input.webMode !== "off";
+  const liveIntentThreshold = resolveLiveIntentThreshold(
+    input.liveIntentThreshold ?? IMPROVEMENT_TUNE_DEFAULTS.liveIntentThreshold,
+  );
+  // The non-keyword escalation branch widens with the tuned sensitivity: at the
+  // 0.6 baseline this is exactly `l1Base < 0.55` (current behaviour); a higher
+  // threshold lifts the L1-confidence cutoff so weaker retrieval also escalates.
+  const lowConfidenceEscalation = shouldEscalateForLiveIntentSensitivity({
+    l1Confidence: l1Base,
+    liveIntentThreshold,
+  });
+  const shouldUseL2 = shouldUseLayered && (liveIntent || lowConfidenceEscalation) && input.webMode !== "off";
   return {
     l0Used: true,
     l1Used: input.memoryMode !== "off",

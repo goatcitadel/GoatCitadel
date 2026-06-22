@@ -211,6 +211,54 @@ describe("chat turn planning helpers", () => {
     ).toMatchObject({ l1Used: false, l2Used: false });
   });
 
+  it("escalates web retrieval per the tuned live-data intent sensitivity (P2-W3)", () => {
+    // A non-keyword, memory-on turn: L1 base is 0.78 (>= 0.55), so at the 0.6
+    // baseline it must NOT escalate — identical to the historical behaviour.
+    const baseline = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "workspace",
+    });
+    expect(baseline.l2Used).toBe(false);
+    expect(baseline.escalationReason).toBeUndefined();
+
+    // Passing the baseline threshold explicitly is byte-identical to omitting it.
+    expect(
+      buildRetrievalTrace({
+        content: "summarize the attached document",
+        retrievalMode: "layered",
+        webMode: "auto",
+        memoryMode: "workspace",
+        liveIntentThreshold: 0.6,
+      }),
+    ).toEqual(baseline);
+
+    // The tuner raising sensitivity toward 0.95 lifts the L1 cutoff above 0.78
+    // (0.55 + (0.95 - 0.6) = 0.90), so the same turn now escalates to L2 web
+    // retrieval — proving the written tune actually changes the decision.
+    const tuned = buildRetrievalTrace({
+      content: "summarize the attached document",
+      retrievalMode: "layered",
+      webMode: "auto",
+      memoryMode: "workspace",
+      liveIntentThreshold: 0.95,
+    });
+    expect(tuned.l2Used).toBe(true);
+    expect(tuned.escalationReason).toBe("low_retrieval_confidence");
+
+    // The escalation still respects webMode === "off" regardless of sensitivity.
+    expect(
+      buildRetrievalTrace({
+        content: "summarize the attached document",
+        retrievalMode: "layered",
+        webMode: "off",
+        memoryMode: "workspace",
+        liveIntentThreshold: 0.95,
+      }).l2Used,
+    ).toBe(false);
+  });
+
   it("allows planner drafts to refine production work while preserving synthesis and review control steps", () => {
     const templatePlan = createCoworkPlan();
     const draft = coercePlannerExecutionPlanDraft(

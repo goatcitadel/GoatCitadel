@@ -61,6 +61,7 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
+import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
 import { sanitizeMobileContextForAudit } from "./mobile-route-service.js";
 import {
   routeWithModelRouter,
@@ -99,6 +100,7 @@ type ChatTurnPrepStorage = Pick<
   | "chatSessionProjects"
   | "chatSideChats"
   | "chatSpecialistCandidates"
+  | "systemSettings"
   | "workspaces"
 > & {
   audit?: Pick<Storage["audit"], "append">;
@@ -425,6 +427,10 @@ export async function prepareAgentChatTurn(
     retrievalMode: autonomy.retrievalMode,
     webMode: normalized.webMode ?? prefs.webMode,
     memoryMode: normalized.memoryMode ?? prefs.memoryMode,
+    // P2-W3: close the self-improvement loop — read the live-data intent
+    // sensitivity the weekly tuner writes so a raised threshold actually
+    // escalates web retrieval. Safe default (0.6) keeps current behaviour.
+    liveIntentThreshold: readLiveIntentThreshold(host.storage.systemSettings),
   });
   // Previously the personality overlay (and any base instruction) was applied
   // only in chat mode, so cowork/code turns reached the model with no agent

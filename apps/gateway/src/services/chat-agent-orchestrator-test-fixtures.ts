@@ -618,6 +618,7 @@ export function httpGetToolCallCompletion(args: Record<string, unknown>): ChatCo
 export function createMockStorage(): unknown {
   const traces = new Map<string, ChatTurnTraceRecord>();
   const toolRuns = new Map<string, ChatToolRunRecord>();
+  const systemSettings = new Map<string, unknown>();
   return {
     chatTurnTraces: {
       get(turnId: string): ChatTurnTraceRecord {
@@ -675,6 +676,20 @@ export function createMockStorage(): unknown {
     },
     chatSessionProjects: {
       get: () => undefined,
+    },
+    // In-memory system_settings so P2-W3 decision-point reads (blocker-template
+    // strictness, retry threshold) resolve against a real store in tests.
+    systemSettings: {
+      get<T = unknown>(key: string): { key: string; value: T; updatedAt: string } | undefined {
+        if (!systemSettings.has(key)) {
+          return undefined;
+        }
+        return { key, value: systemSettings.get(key) as T, updatedAt: "2026-03-22T12:00:00.000Z" };
+      },
+      set<T>(key: string, value: T): { key: string; value: T; updatedAt: string } {
+        systemSettings.set(key, value);
+        return { key, value, updatedAt: "2026-03-22T12:00:00.000Z" };
+      },
     },
     _getTrace: (turnId: string) => traces.get(turnId),
     chatExecutionPlans: {

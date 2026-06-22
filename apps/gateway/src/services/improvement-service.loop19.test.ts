@@ -6,6 +6,11 @@ import { Storage } from "@goatcitadel/storage";
 import type { ApprovalResolveInput, ImprovementRef } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -470,6 +475,9 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
     }),
     createChatCompletion: vi.fn(async () => ({ id: "mock", choices: [] }) as never),
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
+    readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: vi.fn(async () => []),
     retryChatTurn: vi.fn(async () => ({ sessionId: "retry-session", turnId: "retry-turn" }) as never),
     backgroundTasks: new Set<Promise<void>>(),

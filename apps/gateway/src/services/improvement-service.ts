@@ -356,6 +356,15 @@ export interface ImprovementServiceCallbacks {
   restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
+  // P2-W3 — close the improvement loop. These getters report the *effective*
+  // value the runtime decision points will read for each tuned setting, using
+  // the same translation the readers use (improvement-tune-reads.ts). The tuner
+  // is storage-only: it writes the raw setting, then records the effective value
+  // these return on the applied auto-tune so the loop is auditable and every
+  // written key is demonstrably read at its decision point.
+  readEffectiveBlockerTemplateStrictness(): number;
+  readEffectiveRetryRepairThreshold(): number;
+  readEffectiveLiveIntentThreshold(): number;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   retryChatTurn(
     sessionId: string,
@@ -4505,6 +4514,25 @@ export class ImprovementService {
     return mapDecisionAutoTuneRow(row);
   }
 
+  /**
+   * P2-W3: map a tuned setting key to the runtime-effective value its decision
+   * point will read, via the shared getter callbacks. Returns `undefined` for
+   * keys that have no wired decision point (so the audit record simply omits the
+   * field rather than asserting a false "effective" value).
+   */
+  private readEffectiveTuneValue(settingKey: string): number | undefined {
+    switch (settingKey) {
+      case IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE:
+        return this.callbacks.readEffectiveBlockerTemplateStrictness();
+      case IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD:
+        return this.callbacks.readEffectiveRetryRepairThreshold();
+      case IMPROVEMENT_TUNE_KEY_LIVE_INTENT:
+        return this.callbacks.readEffectiveLiveIntentThreshold();
+      default:
+        return undefined;
+    }
+  }
+
   private applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): DecisionAutoTuneRecord {
     const tune = this.readDecisionAutoTune(tuneId);
     if (tune.riskLevel !== "low") {
@@ -4517,6 +4545,11 @@ export class ImprovementService {
     const nextValue = tune.patch.nextValue;
     this.ctx.storage.systemSettings.set(settingKey, nextValue);
     const appliedAt = new Date().toISOString();
+    // P2-W3: record the value the runtime decision point will now actually READ
+    // for this setting, proving the loop is closed (written key ⇒ read key) and
+    // making the applied tune auditable. `undefined` for keys without a wired
+    // decision point (e.g. medium-risk routing weights, which never auto-apply).
+    const effectiveRuntimeValue = this.readEffectiveTuneValue(settingKey);
     this.ctx.gatewaySql
       .prepare(
         `
@@ -4528,12 +4561,18 @@ export class ImprovementService {
       .run({
         tuneId,
         appliedAt,
-        resultJson: JSON.stringify({ appliedBy: mode, settingKey, nextValue }),
+        resultJson: JSON.stringify({
+          appliedBy: mode,
+          settingKey,
+          nextValue,
+          ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
+        }),
       });
     this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
       tuneId,
       settingKey,
       mode,
+      ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
     });
     return this.readDecisionAutoTune(tuneId);
   }

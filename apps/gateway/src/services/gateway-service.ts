@@ -557,6 +557,11 @@ import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import {
+  readBlockerTemplateStrictness,
+  readLiveIntentThreshold,
+  readRetryRepairThreshold,
+} from "./improvement-tune-reads.js";
 import { CuratorService } from "./curator-service.js";
 import { writeCuratorReport } from "./curator-report.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
@@ -1458,6 +1463,11 @@ export class GatewayService {
       restoreSkillRevisionSnapshot: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      // P2-W3: report the runtime-effective tune values via the shared reader so
+      // applied auto-tunes are audited against what the decision points will read.
+      readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(this.storage.systemSettings),
+      readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(this.storage.systemSettings),
+      readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(this.storage.systemSettings),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
       retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
