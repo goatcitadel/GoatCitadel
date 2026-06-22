@@ -431,11 +431,14 @@ import {
 import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
+  type AutonomousTurnKind,
   buildAutonomousTurnContext,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
+import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
 import {
   buildScheduleCreateActionConfig,
   isScheduledTurnContext,
@@ -2425,6 +2428,7 @@ export class GatewayService {
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
       { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
       { label: "commitment sweep", run: () => this.runCommitmentSweep() },
+      { label: "heartbeat", run: () => this.runHeartbeatSweep() },
       { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
       { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
     ];
@@ -4917,6 +4921,60 @@ export class GatewayService {
   }
 
   /**
+   * Maintenance-tick heartbeat sweep (P1-F4). For each eligible idle session,
+   * fires a single silent self-wake turn under the read-only `heartbeat-restricted`
+   * profile with `deliverMode:"on_notify"` — the turn stays silent unless it emits
+   * `{notify:true}`. Multi-gate rate limiting (heartbeat-enabled × eligibility ×
+   * active-hours × idle floor × no-running-turn × cooldown × interval) lives in the
+   * pure `runHeartbeatTick`. No-op while the master autonomy switch is off or
+   * durable execution is disabled (the turn path requires a durable run).
+   * Eval-integrity / non-human / replay-scratch sessions are excluded.
+   */
+  private async runHeartbeatSweep(): Promise<void> {
+    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
+    await runHeartbeatTick({
+      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
+      listSessions: (limit) =>
+        this.listChatSessions({ scope: "mission", view: "active", limit }).map((session) => ({
+          sessionId: session.sessionId,
+          lastActivityAt: session.lastActivityAt,
+        })),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      isHeartbeatEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
+      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
+        const run = await this.enqueueAutonomousChatTurn({
+          sessionId,
+          prompt,
+          runId: `heartbeat_${sessionId}_${Date.now()}`,
+          systemActorId: "system-heartbeat",
+          reason: `heartbeat self-wake:${sessionId}`,
+          kind: "heartbeat",
+          deliverMode: "on_notify",
+        });
+        return Boolean(run?.runId);
+      },
+    });
+  }
+
+  /**
+   * Whether a session may receive silent heartbeats. Mirrors the human-session /
+   * eval-integrity guard used for the commitment classifier: skip `system` and
+   * `prompt_pack` origins and replay-scratch sessions (safety invariant:
+   * eval-integrity turns are never affected).
+   */
+  private isHeartbeatEligibleSession(sessionId: string): boolean {
+    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
+    if (origin === "system" || origin === "prompt_pack") {
+      return false;
+    }
+    return !this.isReplayScratchSession(sessionId);
+  }
+
+  /**
    * Resolve a stable cron session for an `agent_turn` job. Reuses an explicitly
    * configured session id when present, otherwise derives a deterministic
    * per-job session and creates it (proactiveMode off, system origin) if it does
@@ -4972,14 +5030,19 @@ export class GatewayService {
     runId: string;
     systemActorId: string;
     reason: string;
+    /** Restricted profile selector; defaults to `scheduled` (cron/commitment). */
+    kind?: AutonomousTurnKind;
     deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
     deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
   }): Promise<{ runId: string; turnId: string } | undefined> {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
     }
+    const kind: AutonomousTurnKind = input.kind ?? "scheduled";
+    const permissionProfileId =
+      kind === "heartbeat" ? HEARTBEAT_PERMISSION_PROFILE_ID : SCHEDULED_TURN_PERMISSION_PROFILE_ID;
     const autonomousContext = buildAutonomousTurnContext({
-      kind: "scheduled",
+      kind,
       systemActorId: input.systemActorId,
       runId: input.runId,
       sessionId: input.sessionId,
@@ -4989,7 +5052,7 @@ export class GatewayService {
       operatorId: autonomousContext.policyContext.operatorId,
       authActorId: autonomousContext.policyContext.authActorId,
       authActorSource: autonomousContext.policyContext.authActorSource,
-      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+      permissionProfileId,
     };
     const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
     const run = this.createDurableRun({
@@ -5001,7 +5064,7 @@ export class GatewayService {
         surface: prepared.normalized.mode ?? prepared.prefs.mode,
         objective: prepared.content,
         autonomous: {
-          kind: "scheduled",
+          kind,
           systemActorId: input.systemActorId,
           reason: input.reason,
           deliverMode: input.deliverMode,

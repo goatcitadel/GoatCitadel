@@ -1463,6 +1463,29 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 124,
+    name: "session_autonomy_heartbeat_columns",
+    up: (db) => {
+      // P1-F4 heartbeat (silent self-wake). Additive columns on the existing
+      // table — defaults backfill existing rows without rewriting them. Heartbeat
+      // defaults ON (chosen on-by-default posture); the master autonomy switch
+      // still gates whether any tick fires.
+      addColumnIfMissingIfTableExists(
+        db,
+        "session_autonomy_prefs",
+        "heartbeat_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+      );
+      addColumnIfMissingIfTableExists(
+        db,
+        "session_autonomy_prefs",
+        "heartbeat_interval_seconds",
+        "INTEGER NOT NULL DEFAULT 3600",
+      );
+      addColumnIfMissingIfTableExists(db, "session_autonomy_prefs", "active_hours_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -3751,6 +3774,9 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
       reflection_mode TEXT NOT NULL DEFAULT 'off',
       last_proactive_at TEXT,
       last_proactive_run_id TEXT,
+      heartbeat_enabled INTEGER NOT NULL DEFAULT 1,
+      heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+      active_hours_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
