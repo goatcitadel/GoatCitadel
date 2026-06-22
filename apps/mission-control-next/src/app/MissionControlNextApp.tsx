@@ -296,6 +296,7 @@ export function MissionControlNextApp() {
     onDismissTopmost: dismissTopmost,
     onJumpToArea: (area) => navigate(buildPrimaryAreaRoute(area)),
     onToggleShortcuts: () => setShortcutsOpen((open) => !open),
+    shellShortcutsSuspended: shortcutsOpen,
   });
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));

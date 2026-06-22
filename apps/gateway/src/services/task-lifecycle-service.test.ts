@@ -687,6 +687,57 @@ describe("TaskLifecycleService agentic runtime", () => {
     expect(secondPage.nextCursor).toBeUndefined();
   });
 
+  it("merges fresh projected Cowork runs before task-backed rows on the first page", () => {
+    const { service, storage } = createService();
+    storage.chatSessionMeta.ensure("projected-session", "2026-05-05T12:05:00.000Z", "default");
+    storage.chatDelegationRuns.create({
+      runId: "projected-newest",
+      sessionId: "projected-session",
+      taskId: "chat-orchestration:turn-projected",
+      objective: "Fresh projected orchestration",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-05-05T12:05:00.000Z",
+    });
+    storage.tasks.create(
+      {
+        title: "Task backed run",
+        status: "in_progress",
+        priority: "normal",
+        agenticContext: {
+          runId: "task-backed",
+          surface: "cowork",
+          status: "running",
+          parentSessionId: "sess-task",
+        },
+      },
+      "2026-05-05T12:04:00.000Z",
+    );
+    storage.tasks.create(
+      {
+        title: "Older task backed run",
+        status: "in_progress",
+        priority: "normal",
+        agenticContext: {
+          runId: "task-older",
+          surface: "cowork",
+          status: "running",
+          parentSessionId: "sess-task",
+        },
+      },
+      "2026-05-05T12:03:00.000Z",
+    );
+
+    const firstPage = service.listAgenticRuns({ surface: "cowork", limit: 2 });
+
+    expect(firstPage.items.map((item) => item.runId)).toEqual(["projected-newest", "task-backed"]);
+    expect(firstPage.nextCursor).toBe(`${firstPage.items[1]!.updatedAt}|${firstPage.items[1]!.taskId}`);
+    expect(service.listAgenticRuns({ surface: "cowork", limit: 2, cursor: firstPage.nextCursor }).items).toEqual([
+      expect.objectContaining({ runId: "task-older" }),
+    ]);
+  });
+
   it("defaults agentic run listings to the default workspace", () => {
     const { service } = createService();
     service.createTask({

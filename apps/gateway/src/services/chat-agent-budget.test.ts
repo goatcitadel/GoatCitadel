@@ -92,14 +92,20 @@ describe("chat-agent-budget", () => {
     ).toEqual(
       expect.objectContaining({
         maxToolLoops: 6,
-        maxToolRunsPerTurn: Number.POSITIVE_INFINITY,
-        boundedByTurnBudget: false,
-        boundedByToolRunBudget: false,
+        maxToolRunsPerTurn: 48,
         searchMaxResults: 8,
         maxTokens: 1600,
         minSynthesisReserveMs: 15000,
       }),
     );
+    expect(
+      resolveChatExecutionBudget({
+        mode: "cowork",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        liveDataIntent: true,
+      }),
+    ).toEqual(expect.objectContaining({ maxToolRunsPerTurn: 8, turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.liveData }));
 
     expect(
       resolveChatExecutionBudget({
@@ -162,6 +168,7 @@ describe("chat-agent-budget", () => {
       const budget = resolveChatExecutionBudget(testCase.input);
       expect(budget.turnBudgetMs).toBe(testCase.turnBudgetMs);
       expect(budget.completionTimeoutMs).toBe(testCase.completionTimeoutMs);
+      expect(Number.isFinite(budget.maxToolRunsPerTurn)).toBe(true);
       expect(budget.turnBudgetMs).toBeLessThan(THIRTY_MINUTES_MS);
       expect(budget.completionTimeoutMs).toBeLessThanOrEqual(budget.turnBudgetMs);
       expect(budget.expensiveToolMinimumRemainingMs).toBeLessThan(budget.turnBudgetMs);

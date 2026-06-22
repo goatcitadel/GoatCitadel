@@ -11,6 +11,7 @@ const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
 const COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS = 6;
 const COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN = 16;
+const COWORK_RESEARCH_LIST_EXTENDED_MAX_TOOL_RUNS_PER_TURN = 48;
 const COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS = 8;
 const PROMPT_LAB_EXPLICIT_MAX_TOOL_LOOPS = 8;
 const PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN = 12;
@@ -63,8 +64,6 @@ export interface ChatExecutionBudget {
   readonly completionTimeoutMs: number;
   readonly maxToolLoops: number;
   readonly maxToolRunsPerTurn: number;
-  readonly boundedByTurnBudget?: boolean;
-  readonly boundedByToolRunBudget?: boolean;
   readonly searchMaxResults: number;
   readonly maxTokens?: number;
   readonly minSynthesisReserveMs: number;
@@ -201,34 +200,29 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     promptLabHarness: input.promptLabHarness,
     promptLabExplicitTools: input.promptLabExplicitTools,
   });
-  budget = applyCoworkAgenticUnboundedBudget(budget, input);
+  budget = applyCoworkResearchListExtendedBudget(budget, input);
   if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
     return budget;
   }
   return {
     ...budget,
     maxToolLoops: Math.min(budget.maxToolLoops, input.promptLabExplicitTools ? 4 : 3),
-    maxToolRunsPerTurn:
-      budget.boundedByToolRunBudget === false
-        ? budget.maxToolRunsPerTurn
-        : Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
+    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
     maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
     minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
   };
 }
 
-function applyCoworkAgenticUnboundedBudget(
+function applyCoworkResearchListExtendedBudget(
   budget: ChatExecutionBudget,
   input: ResolveChatExecutionBudgetInput,
 ): ChatExecutionBudget {
-  if (input.mode !== "cowork" || input.promptLabHarness) {
+  if (!shouldUseCoworkResearchListBudget(input) || input.promptLabHarness) {
     return budget;
   }
   return {
     ...budget,
-    boundedByTurnBudget: false,
-    boundedByToolRunBudget: false,
-    maxToolRunsPerTurn: Number.POSITIVE_INFINITY,
+    maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, COWORK_RESEARCH_LIST_EXTENDED_MAX_TOOL_RUNS_PER_TURN),
   };
 }
 

@@ -312,7 +312,7 @@ export async function prepareAgentChatTurn(
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
-  const citadelId = host.storage.workspaces.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+  const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
   const content = (options?.existingUserMessage?.content ?? input.content).trim();
   if (!content) {

@@ -659,6 +659,7 @@ export async function executePreparedModeOrchestration(
           failureGuidance:
             step.failureGuidance ?? (step.error ? buildDelegationFailureGuidance(step.error, step.role) : undefined),
           degradedHandoffStepIds: step.degradedHandoffStepIds,
+          durableRunId: step.durableRunId,
           childSessionId: step.childSessionId,
           childTurnId: step.childTurnId,
           citations: step.citations,

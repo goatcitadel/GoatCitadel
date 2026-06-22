@@ -258,6 +258,33 @@ describe("integrations control routes", () => {
     });
   });
 
+  it("rejects invalid external connector workspace ids before staging proposals", async () => {
+    const stageExternalConnectorAction = vi.fn();
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      stageExternalConnectorAction,
+    });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/external-connectors/services/mscr/notion/actions/append-block-children/stage",
+      payload: {
+        workspaceId: "bad/workspace",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(stageExternalConnectorAction).not.toHaveBeenCalled();
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          body: expect.any(Object),
+        }),
+      }),
+    );
+  });
+
   it("forwards the request idempotency key into integration operator actions", async () => {
     const invokeIntegrationConnectionAction = vi.fn(async () => ({
       connectionId: "11111111-1111-1111-1111-111111111111",

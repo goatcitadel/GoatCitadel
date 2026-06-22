@@ -361,6 +361,27 @@ const mocks = vi.hoisted(() => ({
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
   fetchExternalSideEffectRuns: vi.fn(async () => ({ items: [] })),
+  fetchExternalConnectorServices: vi.fn(async () => ({ items: [] })),
+  updateExternalConnectorServiceReviewState: vi.fn(async () => ({
+    sourceId: "source-1",
+    serviceId: "service-1",
+    reviewState: "reviewed",
+    reviewedAt: "2026-05-31T20:00:00.000Z",
+  })),
+  updateExternalConnectorActionReviewState: vi.fn(async () => ({
+    sourceId: "source-1",
+    serviceId: "service-1",
+    actionId: "action-1",
+    reviewState: "reviewed",
+    reviewedAt: "2026-05-31T20:00:00.000Z",
+  })),
+  stageExternalConnectorAction: vi.fn(async () => ({
+    sourceId: "source-1",
+    serviceId: "service-1",
+    actionId: "action-1",
+    status: "staged",
+    proposalId: "proposal-1",
+  })),
   createExternalSideEffectReplayAuditRun: vi.fn(async () => ({
     runId: "durable-replay-audit-1",
     workflowKey: "external_side_effect.replay",
@@ -1017,6 +1038,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
     fetchExternalSideEffectRuns: mocks.fetchExternalSideEffectRuns,
+    fetchExternalConnectorServices: mocks.fetchExternalConnectorServices,
+    updateExternalConnectorServiceReviewState: mocks.updateExternalConnectorServiceReviewState,
+    updateExternalConnectorActionReviewState: mocks.updateExternalConnectorActionReviewState,
+    stageExternalConnectorAction: mocks.stageExternalConnectorAction,
     createExternalSideEffectReplayAuditRun: mocks.createExternalSideEffectReplayAuditRun,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
     createIntegrationConnection: mocks.createIntegrationConnection,
@@ -4007,7 +4032,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const text = collectText(renderer!.root);
 
@@ -4077,7 +4102,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const text = collectText(renderer!.root);
     expect(text).toContain("External side effects");
@@ -4139,7 +4164,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations", navigate);
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     expect(collectText(renderer!.root)).toContain("Failed before boundary");
     expect(findButton(renderer!.root, "Start replay audit").props.disabled).toBe(false);
@@ -4147,7 +4172,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       findButton(renderer!.root, "Start replay audit").props.onClick();
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     expect(mocks.createExternalSideEffectReplayAuditRun).toHaveBeenCalledWith({
       workspaceId: "default",
@@ -4226,7 +4251,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const text = collectText(renderer!.root);
     expect(text).toContain("Completed · trigger_webhook");
@@ -4332,7 +4357,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const root = renderer!.root;
     const payloadInput = root.findAll(
@@ -4349,7 +4374,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       await runButton!.props.onClick();
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "trigger_webhook", {
       input: {
@@ -4437,7 +4462,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const root = renderer!.root;
     const runIdInput = root.findAll(
@@ -4454,7 +4479,7 @@ describe("SettingsNativePage integrations", () => {
       )[0];
       await operatorRunButton!.props.onClick();
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "check_run_status", {
       input: {
@@ -4476,7 +4501,7 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
-    await act(async () => undefined);
+    await flushAsyncUpdates();
 
     const schemaInput = renderer!.root.findAll(
       (node) => node.type === "input" && node.props?.id === "integration-field-tokenEnv",

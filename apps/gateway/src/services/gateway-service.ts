@@ -5230,7 +5230,7 @@ export class GatewayService {
     const workspaceId = this.normalizeWorkspaceId(
       input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
     );
-    const citadelId = input.citadelId ?? this.storage.workspaces.find(workspaceId)?.citadelId;
+    const citadelId = input.citadelId ?? this.storage.workspaces?.find(workspaceId)?.citadelId;
     return this.policyEngine.evaluateAccess(
       this.enrichToolPolicyContext(
         this.applyRuntimeBrowserBackendDefaults(

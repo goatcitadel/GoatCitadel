@@ -363,20 +363,33 @@ export class TaskLifecycleService {
       exhausted = tasks.length < pageLimit;
     }
     const page = matched.slice(0, limit);
-    const projectedRuns = this.listProjectedCoworkRuns({
-      workspaceId,
-      limit,
-      status: input.status,
-      surface: input.surface,
-      sessionId: input.sessionId,
-      boardId: input.boardId,
-      parentRunId: input.parentRunId,
-    });
-    const seenRunIds = new Set(page.map((task) => task.agenticContext?.runId).filter(Boolean));
+    const taskItems = page.map(mapAgenticRunListItem);
+    const projectedRuns = input.cursor
+      ? []
+      : this.listProjectedCoworkRuns({
+          workspaceId,
+          limit,
+          status: input.status,
+          surface: input.surface,
+          sessionId: input.sessionId,
+          boardId: input.boardId,
+          parentRunId: input.parentRunId,
+        });
+    const seenRunIds = new Set(taskItems.map((item) => item.runId).filter(Boolean));
     const projectedPage = projectedRuns.filter((item) => !seenRunIds.has(item.runId)).slice(0, limit);
+    const combinedPage = [...taskItems, ...projectedPage].sort(compareAgenticRunListItems).slice(0, limit);
+    const pageTaskIds = new Set(page.map((task) => task.taskId));
+    const lastReturnedTaskItem = [...combinedPage].reverse().find((item) => pageTaskIds.has(item.taskId));
+    const lastReturnedTask = lastReturnedTaskItem
+      ? page.find((task) => task.taskId === lastReturnedTaskItem.taskId)
+      : undefined;
+    const lastReturnedTaskIndex = lastReturnedTask
+      ? matched.findIndex((task) => task.taskId === lastReturnedTask.taskId)
+      : -1;
+    const hasMoreTaskMatches = lastReturnedTaskIndex >= 0 && lastReturnedTaskIndex < matched.length - 1;
     return {
-      items: [...page.map(mapAgenticRunListItem), ...projectedPage].slice(0, limit),
-      ...(matched.length > limit && page.length > 0 ? { nextCursor: buildTaskCursor(page[page.length - 1]!) } : {}),
+      items: combinedPage,
+      ...(hasMoreTaskMatches && lastReturnedTask ? { nextCursor: buildTaskCursor(lastReturnedTask) } : {}),
     };
   }
 
@@ -1148,6 +1161,17 @@ function mapAgenticRunListItem(task: TaskRecord): AgenticRunListItem {
     updatedAt: task.updatedAt,
     diagnostics: context?.diagnostics,
   };
+}
+
+function compareAgenticRunListItems(left: AgenticRunListItem, right: AgenticRunListItem): number {
+  const leftTime = Date.parse(left.updatedAt);
+  const rightTime = Date.parse(right.updatedAt);
+  const normalizedLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+  const normalizedRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+  if (normalizedLeftTime !== normalizedRightTime) {
+    return normalizedRightTime - normalizedLeftTime;
+  }
+  return right.runId.localeCompare(left.runId);
 }
 
 function buildTaskCursor(task: TaskRecord): string {

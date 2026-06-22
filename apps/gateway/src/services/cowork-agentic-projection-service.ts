@@ -47,11 +47,13 @@ export class CoworkAgenticProjectionService {
     if (!this.storage.chatDelegationRuns?.listRecent || !this.shouldProjectSurface(input.surface)) {
       return [];
     }
+    if (input.parentRunId?.trim()) {
+      return [];
+    }
     const workspaceId = normalizeWorkspaceId(input.workspaceId);
     const runs = this.storage.chatDelegationRuns.listRecent({
       workspaceId,
       sessionId: input.sessionId,
-      parentRunId: input.parentRunId,
       limit: Math.max(1, Math.min(input.limit ?? 100, 500)),
     });
     const items: AgenticRunListItem[] = [];
@@ -536,40 +538,38 @@ function buildProjectionDriftDiagnostic(input: {
   };
 }
 
-function buildProjectedControls(status: AgenticRunStatus, durableRunId?: string): AgenticControlDescriptor[] {
-  const active = status === "running" || status === "planning" || status === "approval_required" || status === "paused";
+function buildProjectedControls(_status: AgenticRunStatus, durableRunId?: string): AgenticControlDescriptor[] {
+  const reason = durableRunId
+    ? "Projected Cowork runs are view-only until projected durable-run controls are wired through TaskLifecycleService."
+    : "Projected Cowork runs are view-only until they have a task-backed control path.";
   return [
     {
       action: "pause",
       label: durableRunId ? "Pause durable run" : "Record pause intent",
-      enabled: status === "running",
-      runtimeEffect: durableRunId ? "runtime_pause" : "state_only",
-      reason: durableRunId
-        ? "Calls the attached durable run pause path and mirrors the result into Cowork state."
-        : "Records local Cowork intent only because no attached durable run is available.",
+      enabled: false,
+      runtimeEffect: "state_only",
+      reason,
     },
     {
       action: "cancel",
       label: durableRunId ? "Cancel durable run" : "Record cancel intent",
-      enabled: active,
-      runtimeEffect: durableRunId ? "runtime_cancel" : "state_only",
-      reason: durableRunId
-        ? "Calls the attached durable run cancel path and mirrors the result into Cowork state."
-        : "Records cancellation in Cowork projection state because no attached durable run is available.",
+      enabled: false,
+      runtimeEffect: "state_only",
+      reason,
     },
     {
       action: "retry",
       label: "Continue from gathered evidence",
-      enabled: status === "failed" || status === "cancelled" || status === "stopped_by_limit",
+      enabled: false,
       runtimeEffect: "state_only",
-      reason: "Creates a continuation using the evidence already gathered by this Cowork run.",
+      reason,
     },
     {
       action: "steer",
       label: "Steer run",
-      enabled: active,
+      enabled: false,
       runtimeEffect: "state_only",
-      reason: "Records steering guidance for the next attached worker turn.",
+      reason,
     },
   ];
 }

@@ -813,8 +813,24 @@ function collectExternalSideEffectReplayRuns(
   const missingRunIds: string[] = [];
   const skippedRunIds: string[] = [];
   if (requestedRunIds.length > 0) {
-    const scopedRuns: ExternalSideEffectRunRecord[] = [];
+    const uniqueRequestedRunIds: string[] = [];
+    const seenRequestedRunIds = new Set<string>();
     for (const runId of requestedRunIds) {
+      if (seenRequestedRunIds.has(runId)) {
+        skippedRunIds.push(runId);
+        auditResults.push({
+          runId,
+          status: "skipped",
+          reason: "duplicate_requested_run",
+          message: "Requested external side-effect run was already included in this replay workflow.",
+        });
+        continue;
+      }
+      seenRequestedRunIds.add(runId);
+      uniqueRequestedRunIds.push(runId);
+    }
+    const scopedRuns: ExternalSideEffectRunRecord[] = [];
+    for (const runId of uniqueRequestedRunIds) {
       const run = readExternalSideEffectRunMaybe(host, runId);
       if (!run) {
         missingRunIds.push(runId);

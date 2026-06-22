@@ -701,10 +701,7 @@ export class ChatAgentOrchestrator {
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
-    const boundedByTurnBudget = executionBudget.boundedByTurnBudget !== false;
-    let turnBudgetDeadline = boundedByTurnBudget
-      ? createTurnBudgetDeadline(effectiveTurnBudgetMs)
-      : Number.POSITIVE_INFINITY;
+    let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
     const markCompletionRepair = (
       kind: ChatTurnRepairKind,
       source: ChatTurnRepairSource,

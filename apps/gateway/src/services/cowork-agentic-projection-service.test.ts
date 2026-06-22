@@ -139,6 +139,24 @@ describe("CoworkAgenticProjectionService", () => {
     expect(storage.chatTurnTraces.get("parent-turn").durable?.status).toBe("completed");
     expect(storage.chatDelegationSteps.get("orch-91303:researcher").status).toBe("completed");
     expect(storage.chatDelegationRuns.get("orch-91303").status).toBe("completed");
+    expect(tree?.controls.every((control) => control.enabled === false)).toBe(true);
+  });
+
+  it("does not fake parent-filtered child runs until delegation parent links are persisted", () => {
+    const { storage, service } = createHarness();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatDelegationRuns.create({
+      runId: "orch-parent",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-turn",
+      objective: "Parent orchestration",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+
+    expect(service.listAgenticRuns({ workspaceId: "default", parentRunId: "orch-parent" })).toEqual([]);
   });
 
   it("reconciles missing durable rows from output or stale worker evidence", () => {

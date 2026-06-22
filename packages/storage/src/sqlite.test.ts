@@ -7,6 +7,99 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { __sqliteInternals, createDatabase } from "./sqlite.js";
 
+test("SQLite Citadel parent-scope migration uses runtime-style slug normalization for legacy charters", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`
+      CREATE TABLE workspaces (
+        workspace_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        lifecycle_status TEXT NOT NULL DEFAULT 'active',
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE citadel_charters (
+        citadel_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO workspaces (workspace_id, name, lifecycle_status, updated_at)
+      VALUES
+        ('team_alpha', 'Team Alpha', 'active', '2026-05-01T00:00:00.000Z'),
+        ('ws-legacy', 'Dash Legacy', 'active', '2026-05-01T00:00:00.000Z'),
+        ('ws_legacy', 'Underscore Legacy', 'active', '2026-05-01T00:00:00.000Z');
+      INSERT INTO citadel_charters (citadel_id, kind, created_at, updated_at)
+      VALUES
+        ('team_alpha', 'custom', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'),
+        ('ws-legacy', 'custom', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'),
+        ('ws_legacy', 'custom', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z');
+    `);
+
+    __sqliteInternals.applySchemaMigrationForTest(121, db);
+
+    const rows = (
+      db
+        .prepare(
+          `
+          SELECT citadel_id, slug
+          FROM citadel_records
+          WHERE citadel_id IN ('team_alpha', 'ws-legacy', 'ws_legacy')
+          ORDER BY citadel_id ASC
+        `,
+        )
+        .all() as Array<{ citadel_id: string; slug: string }>
+    ).map((row) => ({ citadel_id: row.citadel_id, slug: row.slug }));
+
+    assert.deepEqual(rows, [
+      { citadel_id: "team_alpha", slug: "team-alpha" },
+      { citadel_id: "ws-legacy", slug: "ws-legacy" },
+      { citadel_id: "ws_legacy", slug: "ws-legacy-2" },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("SQLite Citadel parent-scope migration tolerates legacy charters before workspaces exist", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`
+      CREATE TABLE citadel_charters (
+        citadel_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO citadel_charters (citadel_id, kind, created_at, updated_at)
+      VALUES
+        ('legacy_team', 'custom', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z');
+    `);
+
+    __sqliteInternals.applySchemaMigrationForTest(121, db);
+
+    const row = db
+      .prepare("SELECT citadel_id, name, slug, default_workspace_id FROM citadel_records WHERE citadel_id = ?")
+      .get("legacy_team") as {
+      citadel_id: string;
+      default_workspace_id: string | null;
+      name: string;
+      slug: string;
+    };
+
+    assert.deepEqual(
+      { ...row },
+      {
+        citadel_id: "legacy_team",
+        name: "legacy_team",
+        slug: "legacy-team",
+        default_workspace_id: null,
+      },
+    );
+  } finally {
+    db.close();
+  }
+});
+
 function makeBenchmarkRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     rowid: 1,
