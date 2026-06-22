@@ -671,6 +671,10 @@ export const AssistantConfigInputSchema = z
         codeModeV1Enabled: z.boolean().optional(),
         improvementLedgerV1Enabled: z.boolean().optional(),
         improvementActivationV1Enabled: z.boolean().optional(),
+        // Kill-switch flags for the agentic-runtime-overhaul. The underlying
+        // features ship ON by default; setting one of these to `true` disables
+        // that feature (default-on with a reversible operator kill switch).
+        coworkRuntimeQualityV1Disabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

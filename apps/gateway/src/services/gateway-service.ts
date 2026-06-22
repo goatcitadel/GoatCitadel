@@ -6954,7 +6954,7 @@ export class GatewayService {
   }
 
   public isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean {
-    return this.readFeatureFlags()[flag];
+    return this.readFeatureFlags()[flag] === true;
   }
 
   public requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void {
@@ -7014,6 +7014,8 @@ export class GatewayService {
       improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
       improvementActivationV1Enabled:
         stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
+      coworkRuntimeQualityV1Disabled:
+        stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
     };
   }
 

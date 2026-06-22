@@ -35,6 +35,7 @@ import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
+import { buildBaseAgentSystemPrompt, renderBaseAgentSystemPrompt } from "./base-agent-system-prompt.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -145,6 +146,7 @@ export interface ChatTurnPrepHost {
   ): Promise<ChatCompletionRequest["messages"]>;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
+  isFeatureEnabled(flag: string): boolean;
 }
 
 export interface PreparedAgentChatTurn {
@@ -417,9 +419,42 @@ export async function prepareAgentChatTurn(
     webMode: normalized.webMode ?? prefs.webMode,
     memoryMode: normalized.memoryMode ?? prefs.memoryMode,
   });
-  const personalityOverlay = prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  // Previously the personality overlay (and any base instruction) was applied
+  // only in chat mode, so cowork/code turns reached the model with no agent
+  // identity, tool doctrine, output bar, or runtime grounding (not even the
+  // date) — the single biggest cause of thin cowork responses. With the base
+  // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
+  // we apply a real layered prompt, and the personality overlay, to every mode.
+  const baseSystemPromptEnabled = !host.isFeatureEnabled("coworkRuntimeQualityV1Disabled");
+  const personalityOverlay =
+    baseSystemPromptEnabled || prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  let baseAgentInstruction: string | undefined;
+  if (baseSystemPromptEnabled) {
+    const now = new Date();
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    baseAgentInstruction = renderBaseAgentSystemPrompt(
+      buildBaseAgentSystemPrompt({
+        mode: prefs.mode,
+        runtimeInfo: {
+          date: now.toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+            timeZone: timezone,
+          }),
+          timezone,
+          model: input.model ?? prefs.model ?? "unknown",
+          providerId: input.providerId ?? prefs.providerId ?? "unknown",
+          channel: route.channel,
+          mode: prefs.mode,
+        },
+        toolset: { toolNames: [] },
+      }),
+    );
+  }
   const goalAdjustedBaseGuidance = applyGoalToGuidanceSystemInstruction({
-    baseInstruction: undefined,
+    baseInstruction: baseAgentInstruction,
     goal: sessionMeta.pinnedGoal ?? null,
   });
   const [rawResolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([
