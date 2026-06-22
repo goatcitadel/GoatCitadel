@@ -211,6 +211,7 @@ import type {
   MemoryMaintenanceStatusRecord,
   MemorySearchQuery,
   MemoryWriteInput,
+  CronAgentTurnConfig,
   CronJobRecord,
   DashboardState,
   ChatCompletionRequest,
@@ -428,6 +429,11 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
+import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
+import {
+  buildAutonomousTurnContext,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+} from "./gateway/autonomous-turn-policy.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -1079,20 +1085,10 @@ export class GatewayService {
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
         task: async (job, _context?) => {
-          const task = this.taskLifecycleService.createTask({
-            title: job.name,
-            description: [
-              job.description?.trim() || "Scheduled task created by cron job.",
-              "",
-              `Cron job: ${job.jobId}`,
-              `Triggered at: ${new Date().toISOString()}`,
-            ].join("\n"),
-            status: "inbox",
-            priority: "normal",
-            createdBy: "scheduler",
-          });
+          const task = this.createCronInboxTask(job);
           return { taskId: task.taskId };
         },
+        agentTurn: (input) => this.runCronAgentTurn(input),
         improvement: async () => {
           await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
         },
@@ -1790,6 +1786,7 @@ export class GatewayService {
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
       commsSend: (input) => this.commsSend(input),
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
+      enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
     };
   }
 
@@ -4764,6 +4761,173 @@ export class GatewayService {
     };
   }
 
+  /**
+   * File the legacy inert inbox record for a scheduled cron job. Shared by the
+   * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
+   * path so the fallback behavior stays byte-identical to today's `task` cron.
+   */
+  private createCronInboxTask(job: CronJobRecord): TaskRecord {
+    return this.taskLifecycleService.createTask({
+      title: job.name,
+      description: [
+        job.description?.trim() || "Scheduled task created by cron job.",
+        "",
+        `Cron job: ${job.jobId}`,
+        `Triggered at: ${new Date().toISOString()}`,
+      ].join("\n"),
+      status: "inbox",
+      priority: "normal",
+      createdBy: "scheduler",
+    });
+  }
+
+  /**
+   * Cron `agent_turn` handler. Wakes the model under the restricted
+   * `scheduled-restricted` profile via a durable `chat.turn.execute` run, unless
+   * the master autonomy kill switch is engaged (`autonomyV1Disabled`) or the job
+   * opted into `inertInboxFallback` — in which case it files the legacy inert
+   * inbox task. Safety: the scheduled turn carries `operatorId:"system-cron"`,
+   * `authActorSource:"none"`, and `permissionProfileId:"scheduled-restricted"`
+   * so dangerous tools become approvals rather than silent actions.
+   */
+  private async runCronAgentTurn(input: {
+    job: CronJobRecord;
+    runId: string;
+    config: CronAgentTurnConfig;
+  }): Promise<AgentTurnCronRunOutcome> {
+    const autonomyDisabled = this.isFeatureEnabled("autonomyV1Disabled");
+    if (autonomyDisabled || input.config.inertInboxFallback) {
+      const task = this.createCronInboxTask(input.job);
+      return { mode: "inbox", taskId: task.taskId };
+    }
+    const sessionId = this.ensureCronAgentSession(input.job.jobId, input.config.sessionId);
+    const run = await this.enqueueAutonomousChatTurn({
+      sessionId,
+      prompt: input.config.prompt,
+      runId: input.runId,
+      systemActorId: "system-cron",
+      reason: `cron agent_turn:${input.job.jobId}`,
+      deliveryChannel: input.config.deliveryChannel,
+      deliverMode: input.config.deliverMode ?? "always",
+    });
+    return {
+      mode: "agent_turn",
+      durableRunId: run?.runId,
+      sessionId,
+      turnId: run?.turnId,
+    };
+  }
+
+  /**
+   * Resolve a stable cron session for an `agent_turn` job. Reuses an explicitly
+   * configured session id when present, otherwise derives a deterministic
+   * per-job session and creates it (proactiveMode off, system origin) if it does
+   * not yet exist. Immutable: reuses existing rows; only creates when missing.
+   */
+  private ensureCronAgentSession(jobId: string, configuredSessionId?: string): string {
+    const explicit = configuredSessionId?.trim();
+    if (explicit && this.getSession(explicit)) {
+      return explicit;
+    }
+    const peer = `cron_${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}`;
+    const sessionKey = `mission:scheduler:${peer}`;
+    const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
+    if (this.getSession(sessionId)) {
+      return sessionId;
+    }
+    const now = new Date().toISOString();
+    const workspaceId = this.normalizeWorkspaceId(undefined);
+    this.storage.runImmediateTransaction(() => {
+      this.storage.sessions.upsert({
+        sessionId,
+        sessionKey,
+        kind: "dm",
+        channel: "mission",
+        account: "scheduler",
+        displayName: `Cron ${jobId}`,
+        timestamp: now,
+      });
+      this.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
+      this.storage.chatSessionPrefs.ensure(sessionId, now);
+      this.storage.chatSessionMeta.patch(
+        sessionId,
+        { workspaceId, title: `Cron ${jobId}`, origin: "system", includeInHistory: false },
+        now,
+      );
+      this.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
+    });
+    this.ensureChatSessionRuntimeGrants(sessionId);
+    this.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
+    return sessionId;
+  }
+
+  /**
+   * Prepare + enqueue a `chat.turn.execute` durable run for an autonomous
+   * (cron/heartbeat/proactive) turn. Persists the user message + trace via
+   * `prepareAgentChatTurn` (the durable payload's precondition), then creates
+   * the durable run tagged with `metadata.autonomous` so the post-turn delivery
+   * hook in `durable-execution-service.ts` can route the reply to a channel.
+   */
+  private async enqueueAutonomousChatTurn(input: {
+    sessionId: string;
+    prompt: string;
+    runId: string;
+    systemActorId: string;
+    reason: string;
+    deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
+    deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
+  }): Promise<{ runId: string; turnId: string } | undefined> {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
+    }
+    const autonomousContext = buildAutonomousTurnContext({
+      kind: "scheduled",
+      systemActorId: input.systemActorId,
+      runId: input.runId,
+      sessionId: input.sessionId,
+    });
+    const request: ChatSendMessageRequest = {
+      content: input.prompt,
+      operatorId: autonomousContext.policyContext.operatorId,
+      authActorId: autonomousContext.policyContext.authActorId,
+      authActorSource: autonomousContext.policyContext.authActorSource,
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    };
+    const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
+    const run = this.createDurableRun({
+      workflowKey: "chat.turn.execute",
+      payload: durableChatTurnPayloadToRecord(
+        this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
+      ),
+      metadata: {
+        surface: prepared.normalized.mode ?? prepared.prefs.mode,
+        objective: prepared.content,
+        autonomous: {
+          kind: "scheduled",
+          systemActorId: input.systemActorId,
+          reason: input.reason,
+          deliverMode: input.deliverMode,
+          ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
+        },
+      },
+    });
+    this.persistInitialDurableChatTurnTrace(prepared, request, run);
+    this.persistChatStreamChunk(
+      {
+        type: "message_start",
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        messageId: prepared.assistantMessageId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: prepared.branchKind,
+        sourceTurnId: prepared.sourceTurnId,
+      },
+      run.runId,
+    );
+    this.requestDurableRunProcessing(run.runId);
+    return { runId: run.runId, turnId: prepared.turnId };
+  }
+
   public beginDurableChatRun(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
@@ -5666,6 +5830,71 @@ export class GatewayService {
         tokenId: tokenRecord.tokenId,
       },
     });
+  }
+
+  /**
+   * Route an autonomous turn's assistant reply to a channel by enqueuing a
+   * durable `connector.delivery` run. Resolves the channel connector by key,
+   * falling back to the connector's default target when no explicit target is
+   * configured. Returns the delivery run id, or undefined when no active channel
+   * connector / target could be resolved (delivery is best-effort, never fatal
+   * to the turn). Carries `system-cron`-class governance so the channel send is
+   * attributed to the autonomous actor.
+   */
+  /** @internal */ public enqueueAutonomousChannelDelivery(
+    input: durableExecutionService.AutonomousChannelDeliveryRequest,
+  ): string | undefined {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return undefined;
+    }
+    const message = input.assistantText.trim();
+    if (!message) {
+      return undefined;
+    }
+    const channelKey = input.deliveryChannel.channelKey.trim();
+    const connector = this.listConnectorRecords("integration_connection").find(
+      (item) => item.status === "active" && item.metadata?.key === channelKey,
+    );
+    if (!connector) {
+      return undefined;
+    }
+    const target =
+      input.deliveryChannel.target?.trim() ||
+      (typeof connector.metadata?.approvalDeliveryTarget === "string"
+        ? connector.metadata.approvalDeliveryTarget.trim()
+        : undefined);
+    if (!target) {
+      return undefined;
+    }
+    const operatorId = input.systemActorId ?? "system-cron";
+    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const run = this.createDurableRun({
+      workflowKey: "connector.delivery",
+      payload: {
+        version: "connector.delivery.v1",
+        connectorId: connector.connectorId,
+        connectorType: connector.connectorType,
+        action: "channel.send",
+        workspaceId,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        operatorId,
+        authActorId: operatorId,
+        authActorSource: "none",
+        originSurface: "scheduler",
+        payload: { target, message },
+      },
+      metadata: {
+        deliveryKind: "autonomous.assistant_message",
+        connectorId: connector.connectorId,
+        connectorType: connector.connectorType,
+        autonomous: true,
+        sourceRunId: input.runId,
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    });
+    return run.runId;
   }
 
   /** @internal */ public getCurrentRequestAttribution(): {

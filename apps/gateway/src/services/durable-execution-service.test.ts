@@ -27,6 +27,8 @@ import {
   executeDurableWorkflowRun,
   isDurableWorkflowRecoverable,
   markDurableWorkflowUnrecoverable,
+  maybeEnqueueAutonomousDelivery,
+  parseAutonomousNotifySignal,
   parseApprovalWaitWorkflowPayload,
   parseCuratorTickWorkflowPayload,
   parseConnectorDeliveryWorkflowPayload,
@@ -1256,6 +1258,114 @@ function buildRunWithPayload(workflowKey: string, payload: Record<string, unknow
     payload,
   };
 }
+
+describe("parseAutonomousNotifySignal", () => {
+  it("detects structured notify markers and defaults to false", () => {
+    expect(parseAutonomousNotifySignal('{"notify": true}')).toBe(true);
+    expect(parseAutonomousNotifySignal("notify=true")).toBe(true);
+    expect(parseAutonomousNotifySignal('{"notify": false}')).toBe(false);
+    expect(parseAutonomousNotifySignal("nothing notable to report")).toBe(false);
+  });
+});
+
+describe("maybeEnqueueAutonomousDelivery", () => {
+  const chatTurnPayload = {
+    version: "chat.turn.execute.v1" as const,
+    sessionId: "session-cron",
+    turnId: "turn-cron",
+    userMessageId: "user-cron",
+    assistantMessageId: "assistant-cron",
+    branchKind: "new" as const,
+    threadEventType: "chat_thread_turn_appended" as const,
+    request: { content: "Summarize alerts" },
+  };
+
+  function buildDeliveryHost(assistantContent: string, enqueue = vi.fn(() => "delivery-run-1")) {
+    return {
+      storage: {
+        chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-cron", assistantMessageId: "assistant-cron" })) },
+        chatMessages: { get: vi.fn(() => ({ messageId: "assistant-cron", content: assistantContent })) },
+      },
+      enqueueAutonomousChannelDelivery: enqueue,
+    };
+  }
+
+  it("enqueues channel delivery for an autonomous turn with assistant output", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("Overnight summary ready.", enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          systemActorId: "system-cron",
+          reason: "cron agent_turn:job",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram", target: "42" },
+        },
+      },
+    };
+
+    const result = maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload);
+
+    expect(result).toBe("delivery-run-1");
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        sessionId: "session-cron",
+        turnId: "turn-cron",
+        assistantText: "Overnight summary ready.",
+        deliveryChannel: { channelKey: "telegram", target: "42" },
+        systemActorId: "system-cron",
+      }),
+    );
+  });
+
+  it("is a no-op for non-autonomous turns", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("ignored", enqueue);
+    const run = buildRunWithPayload("chat.turn.execute", chatTurnPayload);
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("suppresses delivery for on_notify turns that do not signal notify", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = buildDeliveryHost("Nothing actionable overnight.", enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "on_notify",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("delivers on_notify turns that emit a notify signal", () => {
+    const enqueue = vi.fn(() => "delivery-run-2");
+    const host = buildDeliveryHost('Urgent: disk full. {"notify": true}', enqueue);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "on_notify",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-2");
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+});
 
 function createApprovalWaitHost(run: DurableRunRecord, status: "pending" | "approved") {
   let storedRun = run;

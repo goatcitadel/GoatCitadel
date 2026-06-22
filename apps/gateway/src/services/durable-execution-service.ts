@@ -55,6 +55,36 @@ import {
 type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
   Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns">;
 
+/** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
+export interface AutonomousTurnDeliveryChannel {
+  channelKey: string;
+  target?: string;
+}
+
+/**
+ * The `metadata.autonomous` block written by the gateway when it enqueues an
+ * autonomous (cron/heartbeat/proactive) `chat.turn.execute` run. Drives the
+ * post-turn channel delivery.
+ */
+export interface AutonomousTurnMetadata {
+  kind: string;
+  systemActorId?: string;
+  reason?: string;
+  deliverMode?: "always" | "on_notify";
+  deliveryChannel?: AutonomousTurnDeliveryChannel;
+}
+
+/** Request passed to the gateway-backed autonomous channel delivery enqueue. */
+export interface AutonomousChannelDeliveryRequest {
+  runId: string;
+  sessionId: string;
+  turnId?: string;
+  assistantText: string;
+  deliveryChannel: AutonomousTurnDeliveryChannel;
+  systemActorId?: string;
+  reason?: string;
+}
+
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
   readonly gatewaySql: Storage["gatewaySql"];
@@ -89,6 +119,13 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     },
   ): Promise<PreparedAgentChatTurn>;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
+  /**
+   * Enqueue a `connector.delivery` durable run that routes an autonomous turn's
+   * assistant reply to a channel. Implemented by the gateway (which can resolve
+   * a connector from a channel key and call `createDurableRun`). Returns the
+   * delivery run id, or undefined when no connector/channel could be resolved.
+   */
+  enqueueAutonomousChannelDelivery?(input: AutonomousChannelDeliveryRequest): string | undefined;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -146,7 +183,11 @@ type DurableMemoryMaintenanceWorkflowHost = DurableWorkflowCompletionHost &
 export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispatchHost &
   Pick<
     DurableExecutionHost,
-    "storage" | "prepareAgentChatTurn" | "registerActiveChatTurnStream" | "persistChatStreamChunk"
+    | "storage"
+    | "prepareAgentChatTurn"
+    | "registerActiveChatTurnStream"
+    | "persistChatStreamChunk"
+    | "enqueueAutonomousChannelDelivery"
   >;
 
 type DurableProactiveTickWorkflowHost = Pick<
@@ -1029,6 +1070,76 @@ export async function executeDurableChatTurnRun(
       ...(context?.signal ? { abortSignal: context.signal } : {}),
     },
   );
+  maybeEnqueueAutonomousDelivery(host, run, payload);
+}
+
+/** Read the persisted assistant text for a completed durable chat turn, if any. */
+function readDurableChatTurnAssistantText(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  let trace: ChatTurnTraceRecord | undefined;
+  try {
+    trace = host.storage.chatTurnTraces.get(payload.turnId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  const assistantMessageId = trace?.assistantMessageId ?? payload.assistantMessageId;
+  if (!assistantMessageId) {
+    return undefined;
+  }
+  const content = host.storage.chatMessages.get(assistantMessageId)?.content?.trim();
+  return content ? content : undefined;
+}
+
+/**
+ * Detect a structured `{ notify: boolean }` signal in an autonomous turn's
+ * assistant output. Used by `deliverMode:"on_notify"` (cron) and — per the
+ * shared convention — the heartbeat path: a turn is "silent" unless it opts in
+ * by emitting `notify: true`. Absent/unparseable ⇒ no notify.
+ */
+export function parseAutonomousNotifySignal(text: string): boolean {
+  const match = /"notify"\s*:\s*(true|false)/i.exec(text) ?? /\bnotify\s*[:=]\s*(true|false)/i.exec(text);
+  return match ? match[1]?.toLowerCase() === "true" : false;
+}
+
+/**
+ * After an autonomous (`metadata.autonomous`) chat turn completes, route its
+ * assistant reply to the configured channel via a durable `connector.delivery`
+ * run. Honors `deliverMode:"on_notify"` (deliver only when the output signals
+ * `notify`). No-op for non-autonomous turns, missing channels, or empty output.
+ */
+export function maybeEnqueueAutonomousDelivery(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (!autonomous || typeof autonomous !== "object") {
+    return undefined;
+  }
+  const deliveryChannel = autonomous.deliveryChannel;
+  if (!deliveryChannel?.channelKey || typeof host.enqueueAutonomousChannelDelivery !== "function") {
+    return undefined;
+  }
+  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  if (!assistantText) {
+    return undefined;
+  }
+  if (autonomous.deliverMode === "on_notify" && !parseAutonomousNotifySignal(assistantText)) {
+    return undefined;
+  }
+  return host.enqueueAutonomousChannelDelivery({
+    runId: run.runId,
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    assistantText,
+    deliveryChannel,
+    systemActorId: autonomous.systemActorId,
+    reason: autonomous.reason,
+  });
 }
 
 function isDurableChatTurnRecoverable(

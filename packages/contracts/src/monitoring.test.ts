@@ -6,6 +6,11 @@ describe("CronJobAction", () => {
     const action: CronJobAction = "no_agent";
     expect(action).toBe("no_agent");
   });
+
+  it("includes agent_turn", () => {
+    const action: CronJobAction = "agent_turn";
+    expect(action).toBe("agent_turn");
+  });
 });
 
 describe("CronJobActionConfig", () => {
@@ -19,6 +24,20 @@ describe("CronJobActionConfig", () => {
       },
     };
     expect(config.noAgent?.command).toBe("echo");
+  });
+
+  it("accepts agentTurn configuration", () => {
+    const config: CronJobActionConfig = {
+      agentTurn: {
+        sessionId: "sess_cron",
+        prompt: "Summarize overnight alerts.",
+        deliveryChannel: { channelKey: "telegram", target: "123" },
+        deliverMode: "on_notify",
+        inertInboxFallback: false,
+      },
+    };
+    expect(config.agentTurn?.prompt).toBe("Summarize overnight alerts.");
+    expect(config.agentTurn?.deliverMode).toBe("on_notify");
   });
 });
 

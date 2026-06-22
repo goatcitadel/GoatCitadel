@@ -8,6 +8,11 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
+  type AgentTurnCronRunHandler,
+  normalizeAgentTurnCronActionConfig,
+  runAgentTurnCronJob,
+} from "./cron-agent-turn-support.js";
+import {
   assertCronActionMutationAllowed,
   isCronActionEnabledForScheduledRun,
   normalizeNoAgentCronActionConfig,
@@ -121,6 +126,7 @@ export interface CronAutomationServiceDeps {
       workdir?: string;
       timeoutMs?: number;
     }) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
+    agentTurn: AgentTurnCronRunHandler;
   };
 }
 
@@ -401,6 +407,19 @@ export class CronAutomationService {
           normalizedJobId,
           runId,
           runHandler: this.deps.runHandlers.noAgent,
+          upsertCronJob: (updatedJob: CronJobRecord, updatedAt: string) =>
+            this.deps.storage.cronJobs.upsert(updatedJob, updatedAt),
+          persistCronJobsConfig: this.deps.persistCronJobsConfig,
+          publishRealtime: this.deps.publishRealtime,
+          computeNextCronRunAt,
+        });
+        runSummary = { ...runSummary, force, reason: options.reason };
+      } else if (job.action === "agent_turn") {
+        runSummary = await runAgentTurnCronJob({
+          job,
+          normalizedJobId,
+          runId,
+          runHandler: this.deps.runHandlers.agentTurn,
           upsertCronJob: (updatedJob: CronJobRecord, updatedAt: string) =>
             this.deps.storage.cronJobs.upsert(updatedJob, updatedAt),
           persistCronJobsConfig: this.deps.persistCronJobsConfig,
@@ -834,6 +853,9 @@ function normalizeCronJobActionConfig(
   if (action === "no_agent") {
     return normalizeNoAgentCronActionConfig(rawValue);
   }
+  if (action === "agent_turn") {
+    return normalizeAgentTurnCronActionConfig(rawValue);
+  }
   return undefined;
 }
 
@@ -850,7 +872,13 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
 }
 
 function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
-  return action === "task" || action === "watchdog" || action === "curator" || action === "no_agent";
+  return (
+    action === "task" ||
+    action === "watchdog" ||
+    action === "curator" ||
+    action === "no_agent" ||
+    action === "agent_turn"
+  );
 }
 
 function shouldRecordWatchdogReview(job: CronJobRecord, result: CronWatchdogRunResult): boolean {
