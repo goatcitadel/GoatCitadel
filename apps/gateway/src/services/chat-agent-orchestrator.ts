@@ -68,6 +68,7 @@ import {
   type ToolCallProtocolIssue,
   toProviderToolFunctionName,
 } from "./chat-agent-completion-adapters.js";
+import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import {
   createLoopGuardTrace,
   detectToolLoopRisk,
@@ -2101,27 +2102,78 @@ export class ChatAgentOrchestrator {
           // The model's own tool calls are never silently filtered: on eval
           // turns every call must reach the policy layer so disallowed use is
           // denied visibly (and judged), not hidden from the trace.
-          const toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
+          let toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
           const toolCallProtocolIssues = inspectToolCallProtocolIssues(message, toolSchema.modelToCanonical);
+          // role:"tool" corrections queued by the P0-C repair pass for calls that
+          // could not be repaired; flushed right after the assistant tool-call
+          // message below so the API role-alternation contract holds.
+          let toolCallRepairFeedback: ToolCallRepairFeedback[] = [];
+          // True once a repair produced executable calls. The malformation that
+          // tripped classifyCompletionOutcome into "truncated" is then resolved,
+          // so the partial-tool-call abort below must NOT fire for this turn.
+          let toolCallsRepaired = false;
           if (toolCallProtocolIssues.length > 0) {
-            const repairableIncompleteToolCall =
-              completionOutcome.status !== "complete" &&
-              toolCallProtocolIssues.every((issue) => issue.kind === "malformed_arguments");
-            assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
-            completionState = {
-              ...completionState,
-              status: "interrupted",
-            };
-            finalFailure ??= buildChatTurnFailureRecord(
-              "unknown",
-              repairableIncompleteToolCall
-                ? "The provider stopped before tool calls were fully assembled, so the tool phase was not executed."
-                : assistantContent,
-              repairableIncompleteToolCall ? "continue_from_partial" : "retry_narrower",
-            );
-            break;
+            // P0-C tool-call repair. Local / open-weight models routinely emit
+            // near-miss calls (fuzzed names, fenced/array args, prose-encoded
+            // calls). Repair them deterministically instead of failing the turn —
+            // WITHOUT widening the tool surface (repair fails closed: every
+            // recovered name must resolve to an active-schema tool).
+            //
+            // Boundaries that deliberately skip repair:
+            //  - eval-integrity turns must score the model's RAW output, so a
+            //    malformed call there is the model's mistake to grade, not ours;
+            //  - a genuinely length-truncated stream (finish_reason === "length")
+            //    may have cut a tool call mid-write, so salvaging half-written
+            //    JSON could execute a call the model never finished — keep the
+            //    existing continue-from-partial path for that;
+            //  - a provider refusal / cancel (content_filter / cancelled ->
+            //    "interrupted") is not a formatting slip, so do not repair it.
+            // Crucially we DO repair when the outcome is "truncated" purely
+            // because the call itself is malformed (blank name, unparseable or
+            // fenced JSON): classifyCompletionOutcome flags those via
+            // hasIncompleteToolCalls even though the provider finished, and those
+            // formatting near-misses are exactly P0-C's target.
+            const canAttemptToolCallRepair =
+              !promptLabEvalIntegrityTurn &&
+              completionOutcome.finishReason !== "length" &&
+              completionOutcome.status !== "interrupted";
+            const repair = canAttemptToolCallRepair
+              ? repairToolCalls(message, toolCallProtocolIssues, {
+                  modelToCanonical: toolSchema.modelToCanonical,
+                  canonicalToModel: toolSchema.canonicalToModel,
+                })
+              : undefined;
+            if (repair && repair.repaired.length > 0) {
+              const preRepairContent = extractMessageContent(message);
+              toolCalls = repair.repaired;
+              toolCallRepairFeedback = repair.feedback;
+              toolCallsRepaired = true;
+              // Honest record of the repair without the degraded-answer footer:
+              // a turn that repairs its tool calls and then executes + answers
+              // normally is fully recovered, not degraded.
+              markCompletionRepair("tool_call_repair", "orchestrator", preRepairContent, preRepairContent);
+              // Fall through to the normal tool-execution branch using the
+              // repaired calls. Any unrepaired calls ride along as feedback.
+            } else {
+              const repairableIncompleteToolCall =
+                completionOutcome.status !== "complete" &&
+                toolCallProtocolIssues.every((issue) => issue.kind === "malformed_arguments");
+              assistantContent = buildToolCallProtocolFailureMessage(toolCallProtocolIssues);
+              completionState = {
+                ...completionState,
+                status: "interrupted",
+              };
+              finalFailure ??= buildChatTurnFailureRecord(
+                "unknown",
+                repairableIncompleteToolCall
+                  ? "The provider stopped before tool calls were fully assembled, so the tool phase was not executed."
+                  : assistantContent,
+                repairableIncompleteToolCall ? "continue_from_partial" : "retry_narrower",
+              );
+              break;
+            }
           }
-          if (completionOutcome.status !== "complete" && toolCalls.length > 0) {
+          if (completionOutcome.status !== "complete" && !toolCallsRepaired && toolCalls.length > 0) {
             if (
               !promptLabSynthesisOnly &&
               shouldSynthesizePromptLabFromGatheredEvidence({
@@ -2245,18 +2297,37 @@ export class ChatAgentOrchestrator {
             break;
           }
 
+          // Unrepaired near-miss calls ride along in the assistant message as the
+          // model's *attempted* calls, each answered by its repair feedback below.
+          // Embedding them keeps the API role-alternation valid (a role:"tool"
+          // message must answer a tool_call id present in the prior assistant
+          // turn) and lets the model see precisely what to correct next loop.
+          const repairFeedbackToolCalls = toolCallRepairFeedback.map((entry) => {
+            const issue = toolCallProtocolIssues.find((candidate) => candidate.id === entry.toolCallId);
+            return {
+              id: entry.toolCallId,
+              type: "function",
+              function: {
+                name: issue?.rawName ?? "unknown_tool",
+                arguments: "{}",
+              },
+            };
+          });
           conversationMessages.push(
             createAssistantToolCallMessage({
               content: extractMessageContent(message),
               providerNativeContent: extractProviderNativeContent(message),
-              toolCalls: toolCalls.map((toolCall) => ({
-                id: toolCall.id,
-                type: "function",
-                function: {
-                  name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
-                  arguments: toolCall.rawArguments,
-                },
-              })),
+              toolCalls: [
+                ...toolCalls.map((toolCall) => ({
+                  id: toolCall.id,
+                  type: "function",
+                  function: {
+                    name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
+                    arguments: toolCall.rawArguments,
+                  },
+                })),
+                ...repairFeedbackToolCalls,
+              ],
             }),
           );
           // Every tool_call id in the assistant message above must receive a role:"tool"
@@ -2264,6 +2335,20 @@ export class ChatAgentOrchestrator {
           // Branches that abandon the tool loop early flush synthetic "skipped" results
           // for the ids that never executed.
           const answeredToolCallIds = new Set<string>();
+          // Answer the unrepaired calls with their correction so the model can
+          // self-correct on the next loop (these ids are not in `toolCalls`, so
+          // the executor never touches them).
+          for (const entry of toolCallRepairFeedback) {
+            if (answeredToolCallIds.has(entry.toolCallId)) {
+              continue;
+            }
+            answeredToolCallIds.add(entry.toolCallId);
+            conversationMessages.push({
+              role: "tool",
+              tool_call_id: entry.toolCallId,
+              content: entry.content,
+            } as ChatCompletionMessage);
+          }
           const flushSkippedToolCallResults = (reason: string) => {
             for (const pendingToolCall of toolCalls) {
               if (answeredToolCallIds.has(pendingToolCall.id)) {

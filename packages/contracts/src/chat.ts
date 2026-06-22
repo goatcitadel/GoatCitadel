@@ -857,7 +857,8 @@ export type ChatTurnRepairKind =
   | "incomplete_truncated_completion"
   | "deterministic_empty_output_synthesis"
   | "cowork_contract_normalization"
-  | "prompt_pack_harness_normalization";
+  | "prompt_pack_harness_normalization"
+  | "tool_call_repair";
 
 export type ChatTurnRepairSource = "orchestrator" | "prompt_pack_harness" | "stream_layer";
 
