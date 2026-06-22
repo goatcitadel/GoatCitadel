@@ -64,6 +64,9 @@ function isManifest(value: unknown): value is LlmModelMetadataManifest {
       return false;
     }
     if (meta.retiresOn !== undefined && typeof meta.retiresOn !== "string") return false;
+    if (meta.tokenMultiplier !== undefined && (typeof meta.tokenMultiplier !== "number" || meta.tokenMultiplier <= 0)) {
+      return false;
+    }
   }
   return true;
 }

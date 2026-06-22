@@ -52,14 +52,15 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
 export function trimNewestContextMessagesForPromptCache(
   messages: ChatCompletionRequest["messages"],
   maxApproxTokens: number,
+  tokenMultiplier = 1,
 ): ChatCompletionRequest["messages"] {
-  if (maxApproxTokens <= 0 || estimateApproxMessageTokens(messages) <= maxApproxTokens) {
+  if (maxApproxTokens <= 0 || estimateApproxMessageTokens(messages, tokenMultiplier) <= maxApproxTokens) {
     return messages;
   }
 
   const trimmed = messages.map((message) => ({ ...message }));
   for (let index = trimmed.length - 1; index >= 0; index -= 1) {
-    if (estimateApproxMessageTokens(trimmed) <= maxApproxTokens) {
+    if (estimateApproxMessageTokens(trimmed, tokenMultiplier) <= maxApproxTokens) {
       break;
     }
     const candidate = trimmed[index];
@@ -187,16 +188,22 @@ function buildPromptCacheSnippet(content: ChatCompletionRequest["messages"][numb
   return `${normalized.slice(0, PROMPT_CACHE_TRIM_SNIPPET_LENGTH - 1).trimEnd()}…`;
 }
 
-function estimateApproxMessageTokens(messages: ChatCompletionRequest["messages"]): number {
-  return Math.ceil(messages.reduce((total, message) => total + estimateApproxContentTokens(message.content), 0));
+function estimateApproxMessageTokens(messages: ChatCompletionRequest["messages"], tokenMultiplier = 1): number {
+  return Math.ceil(
+    messages.reduce((total, message) => total + estimateApproxContentTokens(message.content, tokenMultiplier), 0),
+  );
 }
 
-function estimateApproxContentTokens(content: ChatCompletionRequest["messages"][number]["content"]): number {
+function estimateApproxContentTokens(
+  content: ChatCompletionRequest["messages"][number]["content"],
+  tokenMultiplier = 1,
+): number {
+  const multiplier = Number.isFinite(tokenMultiplier) && tokenMultiplier > 0 ? tokenMultiplier : 1;
   if (typeof content === "string") {
-    return Math.ceil(content.length / 4);
+    return Math.ceil((content.length / 4) * multiplier);
   }
   if (!Array.isArray(content)) {
     return 0;
   }
-  return Math.ceil(JSON.stringify(content).length / 4);
+  return Math.ceil((JSON.stringify(content).length / 4) * multiplier);
 }

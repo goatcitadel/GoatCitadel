@@ -79,4 +79,22 @@ describe("buildConversationCompactionSummary", () => {
     expect(trimmed[4]?.content).toContain("Role=system");
     expect(trimmed[4]?.content).toContain("Snippet=Policy");
   });
+
+  it("scales token estimates by the model multiplier when deciding what to trim", () => {
+    const messages = [
+      { role: "system", content: "Pinned instruction block." },
+      { role: "user", content: "Question." },
+      { role: "tool", name: "search", tool_call_id: "call-9", content: `Result ${"z".repeat(800)}` },
+    ] as const;
+
+    // ~212 estimated tokens at multiplier 1; budget sits above that but below 2x.
+    const budget = 320;
+    const atDefault = trimNewestContextMessagesForPromptCache(messages as never, budget);
+    expect(atDefault[2]?.content).toContain("Result");
+    expect(atDefault[2]?.content).not.toContain("cache-stable prompt prefix");
+
+    const atDoubled = trimNewestContextMessagesForPromptCache(messages as never, budget, 2);
+    expect(atDoubled[2]?.content).toContain("cache-stable prompt prefix");
+    expect(atDoubled[2]?.content).toContain("Snippet=Result");
+  });
 });

@@ -301,6 +301,15 @@ export class LlmService {
     });
   }
 
+  /** Resolve the per-model token-estimate multiplier from model metadata (default 1). */
+  public getModelTokenMultiplier(providerId: string | undefined, model: string | undefined): number {
+    if (!providerId || !model) {
+      return 1;
+    }
+    const multiplier = lookupModelMetadata(this.modelMetadata, providerId, model)?.tokenMultiplier;
+    return typeof multiplier === "number" && Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  }
+
   public getRuntimeConfig(
     options: { includeKeychainForActiveProvider?: boolean; useCache?: boolean } = {},
   ): LlmRuntimeConfig {

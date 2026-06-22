@@ -20,6 +20,11 @@ export interface ChatMessageHistoryDependencies {
     message: ChatMessageRecord,
     supportsVision: boolean,
   ): Promise<string | Array<Record<string, unknown>>>;
+  /**
+   * Resolves the per-model token-estimate multiplier (from model metadata) used
+   * to size prompt-cache compaction. Optional: absent implies 1 (no scaling).
+   */
+  getModelTokenMultiplier?(providerId: string | undefined, model: string | undefined): number;
 }
 
 export async function buildLlmMessagesFromTranscript(
@@ -35,6 +40,7 @@ export async function buildLlmMessagesFromTranscript(
   const providerId = options?.providerId ?? runtime.activeProviderId;
   const providerSummary = runtime.providers.find((item) => item.providerId === providerId);
   const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
+  const tokenMultiplier = deps.getModelTokenMultiplier?.(providerId, model) ?? 1;
   const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
   const transcript = await deps.readTranscriptOrEmpty(sessionId);
   const mapped = await Promise.all(
@@ -74,7 +80,7 @@ export async function buildLlmMessagesFromTranscript(
         };
       }),
   );
-  const messages = await compactTranscriptMessages(deps, sessionId, transcript, mapped);
+  const messages = await compactTranscriptMessages(deps, sessionId, transcript, mapped, tokenMultiplier);
   if (options?.guidanceSystemInstruction?.trim()) {
     return [
       {
@@ -192,6 +198,7 @@ async function buildLlmMessagesFromRecords(
   const providerId = options?.providerId ?? runtime.activeProviderId;
   const providerSummary = runtime.providers.find((item) => item.providerId === providerId);
   const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
+  const tokenMultiplier = deps.getModelTokenMultiplier?.(providerId, model) ?? 1;
   const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
   const mapped = await Promise.all(
     records.map(async (message) => {
@@ -221,6 +228,7 @@ async function buildLlmMessagesFromRecords(
           branchTurnIds: options.branchTurnIds,
           records,
           mapped,
+          tokenMultiplier,
         })
       : mapped;
   if (!options?.guidanceSystemInstruction?.trim()) {
@@ -240,6 +248,7 @@ async function compactTranscriptMessages(
   sessionId: string,
   transcript: TranscriptEvent[],
   mapped: ChatCompletionRequest["messages"],
+  tokenMultiplier = 1,
 ): Promise<ChatCompletionRequest["messages"]> {
   if (mapped.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT * 2) {
     return mapped;
@@ -267,7 +276,7 @@ async function compactTranscriptMessages(
   );
   const recentMessages = mapped.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
   if (!summary) {
-    return trimNewestContextMessagesForPromptCache(recentMessages, CHAT_COMPACTION_TRIGGER_TOKENS);
+    return trimNewestContextMessagesForPromptCache(recentMessages, CHAT_COMPACTION_TRIGGER_TOKENS, tokenMultiplier);
   }
   const summaryContent = truncateByTokenEstimate(summary, CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET);
   const recentMessageBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - estimateTokensFromText(summaryContent));
@@ -276,7 +285,7 @@ async function compactTranscriptMessages(
       role: "system",
       content: summaryContent,
     },
-    ...trimNewestContextMessagesForPromptCache(recentMessages, recentMessageBudget),
+    ...trimNewestContextMessagesForPromptCache(recentMessages, recentMessageBudget, tokenMultiplier),
   ];
 }
 
@@ -288,6 +297,7 @@ async function compactBranchMappedMessages(
     branchTurnIds: string[];
     records: ChatMessageRecord[];
     mapped: ChatCompletionRequest["messages"];
+    tokenMultiplier?: number;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const totalTokens = estimateTokensFromText(stringifyMessagesForTokenEstimate(input.mapped));
@@ -344,7 +354,10 @@ async function compactBranchMappedMessages(
   const summaryTokenBudget = estimateTokensFromText(stringifyMessagesForTokenEstimate(summaryMessages));
   const verbatimTokenBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - summaryTokenBudget);
 
-  return [...summaryMessages, ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget)];
+  return [
+    ...summaryMessages,
+    ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget, input.tokenMultiplier ?? 1),
+  ];
 }
 
 function getOrCreateConversationSummary(

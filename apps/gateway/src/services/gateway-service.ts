@@ -8002,6 +8002,7 @@ export class GatewayService {
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
       buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
+      getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
     };
   }
 
