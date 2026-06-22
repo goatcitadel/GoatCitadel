@@ -65,6 +65,8 @@ describe("provider templates", () => {
   it("marks Anthropic as a native messages provider", () => {
     expect(findProviderTemplate("anthropic")?.apiStyle).toBe("anthropic-messages");
     expect(findProviderTemplate("anthropic")?.knownModels).toEqual([
+      "claude-opus-4-8",
+      "claude-fable-5",
       "claude-sonnet-4-6",
       "claude-sonnet-4",
       "claude-opus-4",
@@ -74,7 +76,7 @@ describe("provider templates", () => {
       baseUrl: "https://api.anthropic.com/v1",
       defaultModel: "claude-sonnet-4-6",
       apiStyle: "anthropic-messages",
-      knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+      knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
     });
   });
 
