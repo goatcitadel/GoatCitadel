@@ -45,6 +45,7 @@ export function NativePageFrame({
   actions,
   lead,
   releaseStatus,
+  className,
 }: {
   icon?: React.ComponentType<{ className?: string }>;
   kicker: string;
@@ -64,6 +65,7 @@ export function NativePageFrame({
   lead?: ReactNode;
   /** F-M11: renders an on-surface "Experimental" badge for experimental routes. */
   releaseStatus?: ReleaseSurfaceStatus;
+  className?: string;
 }) {
   const pageRef = useRef<HTMLElement | null>(null);
 
@@ -110,7 +112,7 @@ export function NativePageFrame({
   const hasHeadRow = Boolean(metrics?.length) || Boolean(actions);
 
   return (
-    <section ref={pageRef} className="mc-next-directory-page">
+    <section ref={pageRef} className={["mc-next-directory-page", className ?? ""].filter(Boolean).join(" ")}>
       <header className="mc-next-directory-header" data-native-kicker={kicker} data-area={area}>
         {Icon ? (
           <div className="mc-next-directory-icon">

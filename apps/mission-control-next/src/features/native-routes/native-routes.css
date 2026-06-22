@@ -537,6 +537,34 @@
   text-align: left;
 }
 
+@media (max-width: 767px) {
+  .mc-next-quality-dashboard-page .mc-next-directory-head-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+    gap: 0.48rem;
+  }
+
+  .mc-next-quality-dashboard-page .mc-next-directory-head-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.34rem;
+    width: 100%;
+  }
+
+  .mc-next-quality-dashboard-page .mc-next-directory-head-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .mc-next-quality-dashboard-page .mc-next-directory-head-actions .mc-next-button,
+  .mc-next-quality-dashboard-page .mc-next-directory-head-actions .gc-button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 .mc-next-directory-card {
   display: grid;
   gap: 0.65rem;
