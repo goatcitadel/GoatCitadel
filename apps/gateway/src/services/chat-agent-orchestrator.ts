@@ -51,6 +51,14 @@ import {
   WEB_TOOL_NAMES,
 } from "./chat-tool-families.js";
 import {
+  buildAnswerRecoveryNudge,
+  buildDegradedAnswerFooter,
+  buildFailedFileMutationsFooter,
+  classifyAnswerGap,
+  collectFailedFileMutations,
+  type DegradedAnswerOutcome,
+} from "./chat-agent-answer-recovery.js";
+import {
   absorbCompletionStreamChunk,
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
@@ -224,6 +232,10 @@ export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js
 const FINAL_PASS_COMPLETION_TIMEOUT_MS = CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep;
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
+// P0-B: at most one tool-less re-ask when a terminal turn produced no
+// user-visible answer (empty or reasoning-only) but budget remains. Bounded so a
+// model that keeps emitting nothing cannot spin the loop.
+const MAX_ANSWER_RECOVERY_NUDGES = 1;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
@@ -685,6 +697,25 @@ export class ChatAgentOrchestrator {
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
+    // P0-B answer-recovery ladder state. `degradedOutcome` is set whenever a
+    // terminal turn fell back to a deterministic recovery path so the outcome can
+    // be marked honestly at finalize instead of silently riding `finalStatus`.
+    let answerRecoveryNudgeCount = 0;
+    let degradedOutcome: DegradedAnswerOutcome | undefined;
+    const noteDegradedOutcome = (reason: string): void => {
+      // Eval-integrity turns must persist the model's own outcome verbatim — the
+      // degraded footer/record machinery never engages for scored runs.
+      if (promptLabEvalIntegrityTurn) {
+        return;
+      }
+      // First reason wins: it is the closest cause to where recovery began.
+      degradedOutcome ??= { reason, recoveredByModel: false };
+    };
+    const markAnswerRecoveredByModel = (): void => {
+      if (degradedOutcome) {
+        degradedOutcome = { ...degradedOutcome, recoveredByModel: true };
+      }
+    };
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
     const executionBudget = resolveChatExecutionBudget({
       mode: input.mode,
@@ -2149,6 +2180,48 @@ export class ChatAgentOrchestrator {
               break;
             }
             assistantContent = extractMessageContent(message);
+            // P0-B: a terminal turn with no user-visible text (empty or
+            // reasoning-only) gets ONE tool-less re-ask before we give up, as
+            // long as turn budget remains. Scoped to turns with NO tool runs:
+            // when tool evidence exists the existing post-loop synthesis passes
+            // already re-ask the model, and adding a nudge here would strand that
+            // recovery if the retry fails. Eval-integrity turns are never
+            // re-asked — the model's own empty/thin output is the score.
+            if (
+              assistantContent.trim().length === 0 &&
+              toolRuns.length === 0 &&
+              !promptLabEvalIntegrityTurn &&
+              answerRecoveryNudgeCount < MAX_ANSWER_RECOVERY_NUDGES &&
+              turnBudgetDeadline - Date.now() > executionBudget.minSynthesisReserveMs
+            ) {
+              const gap = classifyAnswerGap({
+                hasVisibleText: false,
+                hasReasoningText: messageHasReasoningContent(message),
+                toolCallCount: 0,
+              });
+              const nudge = buildAnswerRecoveryNudge(gap);
+              if (nudge) {
+                answerRecoveryNudgeCount += 1;
+                noteDegradedOutcome(gap === "reasoning_only" ? "reasoning_only_answer" : "empty_answer");
+                // Record the (empty) assistant turn so the history stays valid,
+                // then prod the model to produce the user-visible answer.
+                conversationMessages.push({
+                  role: "assistant",
+                  content: assistantContent,
+                });
+                conversationMessages.push({
+                  role: "system",
+                  content: nudge,
+                } as ChatCompletionMessage);
+                continue;
+              }
+            }
+            // A prior recovery nudge produced a real user-visible answer on this
+            // pass: the turn was degraded but the model cleanly recovered, so no
+            // apology footer is warranted.
+            if (assistantContent.trim().length > 0 && answerRecoveryNudgeCount > 0) {
+              markAnswerRecoveredByModel();
+            }
             if (completionOutcome.status !== "complete") {
               completionState = {
                 ...completionState,
@@ -2245,6 +2318,7 @@ export class ChatAgentOrchestrator {
                 },
               });
               finalStatus = "completed";
+              noteDegradedOutcome("tool_run_budget_exceeded");
               shortCircuitedOnBudget = true;
               break;
             }
@@ -2302,6 +2376,7 @@ export class ChatAgentOrchestrator {
                 buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
                 input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
               );
+              noteDegradedOutcome("turn_budget_exceeded");
               shortCircuitedOnBudget = true;
               break;
             }
@@ -2509,6 +2584,7 @@ export class ChatAgentOrchestrator {
                 }),
               circuitBreakerReason,
             );
+            noteDegradedOutcome(circuitBreakerFailureClass ?? "tool_circuit_breaker");
             break;
           }
         }
@@ -2534,6 +2610,7 @@ export class ChatAgentOrchestrator {
             error.message,
             input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
           );
+          noteDegradedOutcome("turn_budget_exceeded");
         } else {
           finalStatus = "failed";
           const failureClass = classifyChatTurnFailure({
@@ -2698,6 +2775,8 @@ export class ChatAgentOrchestrator {
         const preRepairContent = assistantContent;
         assistantContent = repairedContent;
         markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+        // A model pass replaced the deterministic fallback with a real answer.
+        markAnswerRecoveredByModel();
         if (finalStatus === "failed") {
           finalStatus = "completed";
         }
@@ -2732,6 +2811,9 @@ export class ChatAgentOrchestrator {
         const preRepairContent = assistantContent;
         assistantContent = repairedCompletion.content.trim();
         markCompletionRepair("incomplete_truncated_completion", "orchestrator", preRepairContent, assistantContent);
+        if (!looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
+          markAnswerRecoveredByModel();
+        }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -2756,6 +2838,14 @@ export class ChatAgentOrchestrator {
           preRepairContent,
           assistantContent,
         );
+        // An empty terminal turn that needed synthesis at all is degraded. The
+        // pass only counts as a real recovery when the model actually produced
+        // text (not the deterministic template floor). noteDegradedOutcome is a
+        // no-op on eval-integrity turns, so this never touches scored runs.
+        noteDegradedOutcome(synthesizedFallback.deterministic ? "empty_answer" : "empty_answer");
+        if (!synthesizedFallback.deterministic && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
+          markAnswerRecoveredByModel();
+        }
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -2786,6 +2876,28 @@ export class ChatAgentOrchestrator {
     }
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
+    }
+    // P0-B honest-degradation surface. Eval-integrity turns are skipped entirely
+    // (noteDegradedOutcome is already inert there, so degradedOutcome is
+    // undefined). The failed-file-mutation disclosure is surfaced even when the
+    // answer was recovered, because lost writes are independent of answer quality.
+    const failedFileMutations =
+      finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn ? collectFailedFileMutations(toolRuns) : [];
+    if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn && assistantContent.trim().length > 0) {
+      const footerParts: string[] = [];
+      if (degradedOutcome) {
+        const degradedFooter = buildDegradedAnswerFooter(degradedOutcome);
+        if (degradedFooter && !assistantContent.toLowerCase().includes("may be incomplete")) {
+          footerParts.push(degradedFooter);
+        }
+      }
+      const mutationsFooter = buildFailedFileMutationsFooter(failedFileMutations);
+      if (mutationsFooter && !assistantContent.includes("did not complete:")) {
+        footerParts.push(mutationsFooter);
+      }
+      if (footerParts.length > 0) {
+        assistantContent = `${assistantContent.trim()}\n\n${footerParts.join("\n\n")}`;
+      }
     }
     if (
       finalFailure &&
@@ -2828,6 +2940,9 @@ export class ChatAgentOrchestrator {
         : {}),
       ...(completionLatencyObserved ? { latencyMs: completionLatencyMs } : {}),
       ...(providerCallCount > 0 ? { providerCallCount } : {}),
+      // P0-B sidecar: honest degraded/recovered marker plus lost file writes.
+      ...(degradedOutcome ? { degraded: degradedOutcome } : {}),
+      ...(failedFileMutations.length > 0 ? { failedFileMutations } : {}),
     };
     const updatedTrace = this.deps.storage.chatTurnTraces.patch(input.turnId, {
       status: finalStatus,
@@ -2882,6 +2997,9 @@ export class ChatAgentOrchestrator {
         content: assistantContent,
         repaired: Boolean(finalizedCompletionWithRuntime.repaired),
         repair: finalizedCompletionWithRuntime.repair,
+        ...(finalizedCompletionWithRuntime.degraded
+          ? { degraded: finalizedCompletionWithRuntime.degraded }
+          : {}),
       };
     }
 
@@ -5375,6 +5493,38 @@ function extractProviderNativeContent(message: Record<string, unknown> | undefin
         (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+}
+
+/**
+ * P0-B: detect whether a terminal assistant message carried reasoning/thinking
+ * content even though it produced no user-visible answer. Covers both the
+ * structured `provider_native_content` thinking blocks and the flat
+ * `reasoning` / `reasoning_content` fields some providers emit.
+ */
+function messageHasReasoningContent(message: Record<string, unknown> | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  const flatReasoning = message.reasoning ?? message.reasoning_content;
+  if (typeof flatReasoning === "string" && flatReasoning.trim().length > 0) {
+    return true;
+  }
+  for (const item of extractProviderNativeContent(message)) {
+    const type = typeof item.type === "string" ? item.type : "";
+    const reasoningLike = type === "thinking" || type === "redacted_thinking" || type === "reasoning";
+    if (!reasoningLike) {
+      continue;
+    }
+    const text = item.thinking ?? item.text ?? item.content ?? item.data;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return true;
+    }
+    // Redacted thinking carries no readable text but still proves the model reasoned.
+    if (type === "redacted_thinking") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {

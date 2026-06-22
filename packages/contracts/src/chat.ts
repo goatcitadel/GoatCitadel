@@ -886,6 +886,25 @@ export interface ChatTurnRepairRecord {
   postRepairContent?: string;
 }
 
+/**
+ * Honest sidecar for a turn that finished `completed`/`partial` but only after
+ * a recovery ladder ran (P0-B). Additive and optional so existing consumers and
+ * the `status` union are untouched: a turn that completed cleanly omits it.
+ */
+export interface ChatTurnDegradedRecord {
+  /** Short machine/audit reason the turn ended degraded (e.g. "turn_budget_exceeded"). */
+  reason: string;
+  /** True when a model pass recovered a real answer rather than a deterministic template. */
+  recoveredByModel: boolean;
+}
+
+/** A file-mutating tool call that failed and was not superseded by a later success. */
+export interface ChatTurnFailedFileMutationRecord {
+  toolName: string;
+  path?: string;
+  error: string;
+}
+
 export interface ChatTurnCompletionRecord {
   finishReason?: string;
   status: ChatTurnCompletionStatus;
@@ -903,6 +922,19 @@ export interface ChatTurnCompletionRecord {
     failureClass: ChatTurnFailureClass;
     message: string;
   };
+  /**
+   * Set when the answer-recovery ladder engaged: the turn did not complete
+   * cleanly on the first pass. Populated instead of silently relying on
+   * `status: "completed"` so consumers can distinguish a clean answer from a
+   * recovered/degraded one.
+   */
+  degraded?: ChatTurnDegradedRecord;
+  /**
+   * File-mutating tool calls (fs.write/move/delete/copy and artifact/document
+   * generators) that failed and were not superseded by a later successful write
+   * to the same path. Surfaced so a "completed" turn never hides lost writes.
+   */
+  failedFileMutations?: ChatTurnFailedFileMutationRecord[];
 }
 
 export type ChatUsageCostSource = "provider_reported" | "estimated" | "mixed" | "unknown";
@@ -1807,6 +1839,8 @@ export interface ChatStreamMessageDoneChunk extends ChatStreamChunkBase {
   content: string;
   repaired?: boolean;
   repair?: ChatTurnRepairRecord;
+  /** Present when the turn ended degraded (answer-recovery ladder engaged). */
+  degraded?: ChatTurnDegradedRecord;
 }
 
 export interface ChatStreamToolStartChunk extends ChatStreamChunkBase {

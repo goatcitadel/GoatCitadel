@@ -8950,6 +8950,10 @@ function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
   );
 }
 
+function isChatTurnDegradedRecord(value: unknown): boolean {
+  return isRecord(value) && typeof value.reason === "string" && typeof value.recoveredByModel === "boolean";
+}
+
 function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
   return (
     isRecord(value) &&
@@ -9097,6 +9101,9 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             content: value.content,
             ...(typeof value.repaired === "boolean" ? { repaired: value.repaired } : {}),
             ...(isChatTurnRepairRecord(value.repair) ? { repair: value.repair } : {}),
+            ...(isChatTurnDegradedRecord(value.degraded)
+              ? { degraded: value.degraded as { reason: string; recoveredByModel: boolean } }
+              : {}),
           }
         : undefined;
     case "tool_start":
