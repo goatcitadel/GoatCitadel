@@ -29,6 +29,7 @@ import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } fro
 import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
+import { CoworkAgenticProjectionService } from "./cowork-agentic-projection-service.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
@@ -44,7 +45,9 @@ export type BulkTaskAction = BulkTaskRevisionGuard &
     | { action: "close"; taskIds: string[] }
   );
 
-type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents">;
+type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents"> &
+  Partial<Pick<Storage, "chatDelegationRuns" | "chatDelegationSteps" | "chatExecutionPlans" | "chatSessionMeta">> &
+  Partial<Pick<Storage, "chatTurnTraces" | "durableRuns">>;
 
 type TaskRealtimeOptions = {
   eventAuthority: NonNullable<RealtimeEvent["eventAuthority"]>;
@@ -360,8 +363,19 @@ export class TaskLifecycleService {
       exhausted = tasks.length < pageLimit;
     }
     const page = matched.slice(0, limit);
+    const projectedRuns = this.listProjectedCoworkRuns({
+      workspaceId,
+      limit,
+      status: input.status,
+      surface: input.surface,
+      sessionId: input.sessionId,
+      boardId: input.boardId,
+      parentRunId: input.parentRunId,
+    });
+    const seenRunIds = new Set(page.map((task) => task.agenticContext?.runId).filter(Boolean));
+    const projectedPage = projectedRuns.filter((item) => !seenRunIds.has(item.runId)).slice(0, limit);
     return {
-      items: page.map(mapAgenticRunListItem),
+      items: [...page.map(mapAgenticRunListItem), ...projectedPage].slice(0, limit),
       ...(matched.length > limit && page.length > 0 ? { nextCursor: buildTaskCursor(page[page.length - 1]!) } : {}),
     };
   }
@@ -371,6 +385,10 @@ export class TaskLifecycleService {
     const workspaceOptions = this.normalizeWorkspaceAccessOptions(options);
     const tasks = this.listTasksInAgenticRun(normalizedRunId, workspaceOptions);
     if (tasks.length === 0) {
+      const projected = this.buildProjectedCoworkRunTree(normalizedRunId, workspaceOptions);
+      if (projected) {
+        return projected;
+      }
       throw new ValidationError({ message: `Agentic run not found: ${normalizedRunId}` });
     }
 
@@ -494,6 +512,50 @@ export class TaskLifecycleService {
       diagnostics,
       controls: buildAgenticControls(rootTask),
     };
+  }
+
+  private listProjectedCoworkRuns(input: {
+    workspaceId?: string;
+    limit?: number;
+    status?: AgenticTaskContext["status"];
+    surface?: AgenticSurface;
+    sessionId?: string;
+    boardId?: string;
+    parentRunId?: string;
+  }): AgenticRunListItem[] {
+    const projection = this.createCoworkProjectionService();
+    return (
+      projection?.listAgenticRuns({
+        ...input,
+        status: input.status,
+      }) ?? []
+    );
+  }
+
+  private buildProjectedCoworkRunTree(
+    runId: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): AgenticRunTreeResponse | undefined {
+    return this.createCoworkProjectionService()?.getAgenticRunTree(runId, { workspaceId: options?.workspaceId });
+  }
+
+  private createCoworkProjectionService(): CoworkAgenticProjectionService | undefined {
+    if (
+      !this.deps.storage.chatDelegationRuns ||
+      !this.deps.storage.chatDelegationSteps ||
+      !this.deps.storage.chatTurnTraces ||
+      !this.deps.storage.durableRuns
+    ) {
+      return undefined;
+    }
+    return new CoworkAgenticProjectionService({
+      chatDelegationRuns: this.deps.storage.chatDelegationRuns,
+      chatDelegationSteps: this.deps.storage.chatDelegationSteps,
+      chatExecutionPlans: this.deps.storage.chatExecutionPlans,
+      chatSessionMeta: this.deps.storage.chatSessionMeta,
+      chatTurnTraces: this.deps.storage.chatTurnTraces,
+      durableRuns: this.deps.storage.durableRuns,
+    });
   }
 
   public updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): TaskRecord {

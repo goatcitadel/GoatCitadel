@@ -43,7 +43,11 @@ import {
   SubagentBudgetError,
 } from "./subagent-budget-enforcer.js";
 
-const DEFAULT_SUBAGENT_DEFAULTS = { childTimeoutSeconds: 600, maxDepth: 4 } as const;
+const DEFAULT_SUBAGENT_DEFAULTS = {
+  childTimeoutSeconds: 600,
+  coworkChildTimeoutSeconds: null,
+  maxDepth: 4,
+} as const;
 
 interface ChatDelegationProgressStatusEvent {
   runId: string;
@@ -200,6 +204,7 @@ export interface ChatDelegationServiceHost {
    */
   subagentDefaults?: {
     childTimeoutSeconds: number;
+    coworkChildTimeoutSeconds?: number | null;
     maxDepth: number;
   };
 }
@@ -307,6 +312,10 @@ export class ChatDelegationService {
     const completedOutputs = new Map<string, { role: string; output: string }>();
     const stepResults = new Map<string, DelegationStepExecutionResult>();
     const subagentDefaults = deps.subagentDefaults ?? DEFAULT_SUBAGENT_DEFAULTS;
+    const childTimeoutSeconds =
+      executionMode === "cowork"
+        ? (subagentDefaults.coworkChildTimeoutSeconds ?? 0)
+        : subagentDefaults.childTimeoutSeconds;
     const inferredParentDepth = resolveInferredParentDepth(deps, sessionId);
     const parentDepth = input.parentSubagentDepth ?? inferredParentDepth;
     const childDepth = computeChildDepth(parentDepth);
@@ -431,7 +440,7 @@ export class ChatDelegationService {
           sharedContext: dependencyContext,
         });
         const response = await runWithChildTimeout<ChatSendMessageResponse>({
-          timeoutSeconds: subagentDefaults.childTimeoutSeconds,
+          timeoutSeconds: childTimeoutSeconds,
           onLateSettle: (event) => {
             const diagnostic = buildLateChildTimeoutDiagnostic({ event, role: step.role, stepId: step.stepId });
             subagentDiagnostics = [...subagentDiagnostics, diagnostic];

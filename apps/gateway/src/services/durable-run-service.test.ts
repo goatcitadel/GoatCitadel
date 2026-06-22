@@ -1,9 +1,39 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DurableRetryRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
-import { DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
+import {
+  DurableRunService,
+  resolveDurableWorkflowTimeoutMs,
+  type DurableRunServiceLogger,
+} from "./durable-run-service.js";
 
 describe("DurableRunService", () => {
+  it("does not apply the default workflow timeout to Cowork chat turn runs", () => {
+    const run = {
+      ...createRun("run-cowork", "queued", "chat.turn.execute"),
+      payload: {
+        version: "chat.turn.execute.v1",
+        request: { mode: "cowork" },
+      },
+    };
+
+    expect(resolveDurableWorkflowTimeoutMs(run, 300_000)).toBeUndefined();
+  });
+
+  it("keeps the default workflow timeout for non-Cowork durable runs", () => {
+    const chatRun = {
+      ...createRun("run-chat", "queued", "chat.turn.execute"),
+      payload: {
+        version: "chat.turn.execute.v1",
+        request: { mode: "chat" },
+      },
+    };
+    const connectorRun = createRun("run-connector", "queued", "connector.delivery");
+
+    expect(resolveDurableWorkflowTimeoutMs(chatRun, 300_000)).toBe(300_000);
+    expect(resolveDurableWorkflowTimeoutMs(connectorRun, 300_000)).toBe(300_000);
+  });
+
   it("preserves caller metadata when creating durable runs", () => {
     const runs = new Map<string, DurableRunRecord>();
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];

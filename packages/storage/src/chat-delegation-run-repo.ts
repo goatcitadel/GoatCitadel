@@ -38,6 +38,7 @@ export class ChatDelegationRunRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly listRecentStmt;
   private readonly activeStepCountStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -72,6 +73,16 @@ export class ChatDelegationRunRepository {
       SELECT * FROM chat_delegation_runs
       WHERE session_id = @sessionId
       ORDER BY started_at DESC
+      LIMIT @limit
+    `);
+    this.listRecentStmt = db.prepare(`
+      SELECT runs.*
+      FROM chat_delegation_runs runs
+      LEFT JOIN chat_session_meta meta ON meta.session_id = runs.session_id
+      WHERE (@workspaceId IS NULL OR meta.workspace_id = @workspaceId)
+        AND (@sessionId IS NULL OR runs.session_id = @sessionId)
+        AND (@parentRunId IS NULL OR runs.run_id = @parentRunId)
+      ORDER BY runs.started_at DESC, runs.run_id DESC
       LIMIT @limit
     `);
     this.activeStepCountStmt = db.prepare(`
@@ -183,6 +194,33 @@ export class ChatDelegationRunRepository {
       const mapped = toChatDelegationRunRow(row);
       if (!mapped) {
         throw new Error(`Delegation run list row ${index} for session ${sessionId} is corrupt`);
+      }
+      return mapped;
+    });
+    return rows.map(mapRow);
+  }
+
+  public listRecent(
+    input: {
+      workspaceId?: string;
+      sessionId?: string;
+      parentRunId?: string;
+      limit?: number;
+    } = {},
+  ): ChatDelegationRunRecord[] {
+    const rawRows = this.listRecentStmt.all({
+      workspaceId: input.workspaceId?.trim() || null,
+      sessionId: input.sessionId?.trim() || null,
+      parentRunId: input.parentRunId?.trim() || null,
+      limit: Math.max(1, Math.min(input.limit ?? 100, 1000)),
+    });
+    if (!Array.isArray(rawRows)) {
+      throw new Error("Recent delegation run list is corrupt");
+    }
+    const rows = rawRows.map((row, index) => {
+      const mapped = toChatDelegationRunRow(row);
+      if (!mapped) {
+        throw new Error(`Recent delegation run list row ${index} is corrupt`);
       }
       return mapped;
     });

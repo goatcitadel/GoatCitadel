@@ -28,6 +28,13 @@ describe("runWithChildTimeout", () => {
     });
     expect(result).toBe("ok");
   });
+  it("does not start a timeout timer when timeoutSeconds is non-positive", async () => {
+    const result = await runWithChildTimeout({
+      timeoutSeconds: 0,
+      run: async () => "unbounded",
+    });
+    expect(result).toBe("unbounded");
+  });
   it("rejects with timeout_exceeded when the operation runs past the timeout", async () => {
     await expect(
       runWithChildTimeout({

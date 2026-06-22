@@ -6,9 +6,14 @@ import type {
 } from "./agentic-runtime.js";
 
 describe("AgenticDiagnosticCode", () => {
-  it("includes max_depth_exceeded and timeout_exceeded", () => {
-    const codes: AgenticDiagnosticCode[] = ["max_depth_exceeded", "timeout_exceeded"];
-    expect(codes).toHaveLength(2);
+  it("includes runtime budget and projection reconciliation codes", () => {
+    const codes: AgenticDiagnosticCode[] = [
+      "max_depth_exceeded",
+      "timeout_exceeded",
+      "projection_status_drift",
+      "durable_missing_after_completion",
+    ];
+    expect(codes).toHaveLength(4);
   });
 });
 

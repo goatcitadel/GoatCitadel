@@ -1275,6 +1275,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       subagentDefaults: {
         childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
+        coworkChildTimeoutSeconds: subagentDefaults.coworkChildTimeoutSeconds,
         maxDepth: subagentDefaults.maxDepth,
       },
     });

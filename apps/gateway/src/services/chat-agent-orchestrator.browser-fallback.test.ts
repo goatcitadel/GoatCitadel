@@ -156,6 +156,98 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     );
   });
 
+  it("grounds local-business contact research from the original objective instead of delegation wrapper text", async () => {
+    const originalPrompt =
+      "Can you locate all the boardgame/tabletop game stores within a 10-mile radius of 91303 and find the email addresses and who I should address in them?";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: 'Delegated role: Researcher Parent objective: Execute the main workstream "Yelp boardgame stores"',
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I found partial, source-backed local business leads.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-local-business-search",
+      result: {
+        results: [
+          {
+            title: "Game N Grounds - Contact Us",
+            url: "https://gamengrounds.example/contact",
+            snippet: "Game N Grounds serves Canoga Park, CA 91303.",
+          },
+        ],
+      },
+    });
+    const storage = createMockStorage() as {
+      chatToolRuns: { listByTurn: (turnId: string) => ChatToolRunRecord[] };
+    };
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+    const turnId = randomUUID();
+
+    await orchestrator.run({
+      sessionId: "sess-local-business-91303",
+      turnId,
+      userMessageId: "msg-local-business-91303",
+      content: originalPrompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: originalPrompt }],
+    });
+
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
+    const query = String(firstInvokeCall?.args.query ?? "");
+    expect(firstInvokeCall?.toolName).toBe("browser.search");
+    expect(query).toBe(
+      "board game and tabletop game store 91303 Canoga Park Woodland Hills Winnetka 10 miles official contact email",
+    );
+    expect(query).not.toMatch(/Delegated role|Execute the main workstream|Yelp|"/i);
+    expect(storage.chatToolRuns.listByTurn(turnId)[0]?.result).toMatchObject({
+      localBusinessResearch: {
+        kind: "local_business_contact_research",
+        candidates: [
+          expect.objectContaining({
+            storeName: "Game N Grounds",
+            verificationStatus: "partial",
+            blockers: ["email_not_verified_from_search_result", "contact_name_not_verified_from_search_result"],
+          }),
+        ],
+      },
+    });
+  });
+
   it("recovers missing http.get url from the most recent visited page", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()

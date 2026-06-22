@@ -745,6 +745,7 @@ export type CronJobsConfigInput = z.input<typeof CronJobsConfigSchema>;
 export const AgentSubagentDefaultsSchema = z
   .object({
     childTimeoutSeconds: z.number().int().positive().default(600),
+    coworkChildTimeoutSeconds: z.number().int().positive().nullable().default(null),
     maxDepth: z.number().int().positive().default(4),
   })
   .passthrough();

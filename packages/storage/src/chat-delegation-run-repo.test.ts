@@ -8,6 +8,7 @@ import type { ChatOrchestrationRouteDecision, ChatTurnTraceRecord } from "@goatc
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -128,6 +129,57 @@ describe("ChatDelegationRunRepository", () => {
     );
     assert.throws(() => repo.get("missing-run"), /Delegation run missing-run not found/);
     assert.throws(() => repo.patch("missing-run", { status: "failed" }), /Delegation run missing-run not found/);
+  });
+
+  it("lists recent runs with workspace and session filters", () => {
+    const { db, repo } = createStore();
+    const sessionMeta = new ChatSessionMetaRepository(db);
+    sessionMeta.ensure("session-a", "2026-03-26T00:00:00.000Z", "default");
+    sessionMeta.ensure("session-b", "2026-03-26T00:00:00.000Z", "workspace-b");
+    repo.create({
+      runId: "run-a",
+      sessionId: "session-a",
+      taskId: "task-a",
+      objective: "Find stores near 91303",
+      roles: ["Researcher"],
+      mode: "sequential",
+      startedAt: "2026-03-26T00:00:01.000Z",
+    });
+    repo.create({
+      runId: "run-b",
+      sessionId: "session-a",
+      taskId: "task-b",
+      objective: "Verify contact pages",
+      roles: ["Verifier"],
+      mode: "sequential",
+      startedAt: "2026-03-26T00:00:02.000Z",
+    });
+    repo.create({
+      runId: "run-c",
+      sessionId: "session-b",
+      taskId: "task-c",
+      objective: "Other workspace",
+      roles: ["Researcher"],
+      mode: "sequential",
+      startedAt: "2026-03-26T00:00:03.000Z",
+    });
+
+    assert.deepEqual(
+      repo.listRecent({ workspaceId: "default" }).map((run) => run.runId),
+      ["run-b", "run-a"],
+    );
+    assert.deepEqual(
+      repo.listRecent({ workspaceId: "workspace-b" }).map((run) => run.runId),
+      ["run-c"],
+    );
+    assert.deepEqual(
+      repo.listRecent({ workspaceId: "default", sessionId: "session-a", limit: 1 }).map((run) => run.runId),
+      ["run-b"],
+    );
+    assert.deepEqual(
+      repo.listRecent({ parentRunId: "run-a" }).map((run) => run.runId),
+      ["run-a"],
+    );
   });
 
   it("filters malformed persisted rows and coerces malformed JSON payloads", () => {

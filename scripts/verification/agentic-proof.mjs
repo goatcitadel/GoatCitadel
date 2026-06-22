@@ -183,7 +183,16 @@ const CHECK_GROUPS = Object.freeze({
       commandCheck(
         "Storage delivery-attempt persistence behavior",
         "pnpm",
-        ["--filter", "@goatcitadel/storage", "test", "--", "--test-name-pattern", "CommsDeliveryRepository"],
+        [
+          "--filter",
+          "@goatcitadel/storage",
+          "exec",
+          "tsx",
+          "--test",
+          "--test-name-pattern",
+          "CommsDeliveryRepository",
+          "src/comms-delivery-repo.test.ts",
+        ],
         {
           timeoutMs: 180_000,
           expectedStdout: [

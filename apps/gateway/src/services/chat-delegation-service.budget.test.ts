@@ -133,7 +133,7 @@ function createHarness(
   options: {
     prefs?: ChatSessionPrefsRecord;
     projectId?: string;
-    subagentDefaults?: { childTimeoutSeconds: number; maxDepth: number };
+    subagentDefaults?: { childTimeoutSeconds: number; coworkChildTimeoutSeconds?: number | null; maxDepth: number };
     callerSubagentRecord?: TaskSubagentSession;
   } = {},
 ) {
@@ -307,8 +307,9 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     );
   });
 
-  it("kills a child that runs past childTimeoutSeconds and surfaces timeout_exceeded", async () => {
+  it("kills a non-Cowork child that runs past childTimeoutSeconds and surfaces timeout_exceeded", async () => {
     const { deps, service } = createHarness({
+      prefs: buildPrefs({ mode: "chat" }),
       subagentDefaults: { childTimeoutSeconds: 0.05, maxDepth: 4 },
     });
     deps.agentSendChatMessage = vi.fn(async (childSessionId: string) => {
@@ -334,6 +335,37 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
       expect.any(String),
       expect.objectContaining({ status: "failed" }),
+    );
+  });
+
+  it("lets Cowork children run without the default child timeout", async () => {
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 0.01, coworkChildTimeoutSeconds: null, maxDepth: 4 },
+    });
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return createChatResponse(childSessionId, {
+        assistantMessage: {
+          ...createChatResponse(childSessionId).assistantMessage!,
+          content: "slow cowork child completed",
+        },
+      });
+    }) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Run a slow Cowork delegate",
+      roles: ["researcher"],
+    });
+
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        output: "slow cowork child completed",
+      }),
+    );
+    expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: "completed" }),
     );
   });
 
@@ -391,6 +423,7 @@ describe("ChatDelegationService subagent budget enforcement", () => {
 
   it("forwards AbortSignal into agentSendChatMessage when the budget timer fires", async () => {
     const { deps, service } = createHarness({
+      prefs: buildPrefs({ mode: "chat" }),
       subagentDefaults: { childTimeoutSeconds: 0.02, maxDepth: 4 },
     });
     let observedSignal: AbortSignal | undefined;
@@ -476,6 +509,7 @@ describe("ChatDelegationService subagent budget enforcement", () => {
 
   it("records late child timeout success as diagnostics without promoting it to deliverable truth", async () => {
     const { deps, service } = createHarness({
+      prefs: buildPrefs({ mode: "chat" }),
       subagentDefaults: { childTimeoutSeconds: 0.01, maxDepth: 4 },
     });
     let resolveChild: (response: ChatSendMessageResponse) => void = () => undefined;
@@ -548,6 +582,7 @@ describe("ChatDelegationService subagent budget enforcement", () => {
 
   it("records late child timeout failure as diagnostics without replacing timeout truth", async () => {
     const { deps, service } = createHarness({
+      prefs: buildPrefs({ mode: "chat" }),
       subagentDefaults: { childTimeoutSeconds: 0.01, maxDepth: 4 },
     });
     let rejectChild: (error: Error) => void = () => undefined;

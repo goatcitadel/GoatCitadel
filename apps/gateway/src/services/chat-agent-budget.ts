@@ -63,6 +63,8 @@ export interface ChatExecutionBudget {
   readonly completionTimeoutMs: number;
   readonly maxToolLoops: number;
   readonly maxToolRunsPerTurn: number;
+  readonly boundedByTurnBudget?: boolean;
+  readonly boundedByToolRunBudget?: boolean;
   readonly searchMaxResults: number;
   readonly maxTokens?: number;
   readonly minSynthesisReserveMs: number;
@@ -199,15 +201,34 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     promptLabHarness: input.promptLabHarness,
     promptLabExplicitTools: input.promptLabExplicitTools,
   });
+  budget = applyCoworkAgenticUnboundedBudget(budget, input);
   if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
     return budget;
   }
   return {
     ...budget,
     maxToolLoops: Math.min(budget.maxToolLoops, input.promptLabExplicitTools ? 4 : 3),
-    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
+    maxToolRunsPerTurn:
+      budget.boundedByToolRunBudget === false
+        ? budget.maxToolRunsPerTurn
+        : Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
     maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
     minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
+  };
+}
+
+function applyCoworkAgenticUnboundedBudget(
+  budget: ChatExecutionBudget,
+  input: ResolveChatExecutionBudgetInput,
+): ChatExecutionBudget {
+  if (input.mode !== "cowork" || input.promptLabHarness) {
+    return budget;
+  }
+  return {
+    ...budget,
+    boundedByTurnBudget: false,
+    boundedByToolRunBudget: false,
+    maxToolRunsPerTurn: Number.POSITIVE_INFINITY,
   };
 }
 

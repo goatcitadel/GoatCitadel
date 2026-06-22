@@ -46,6 +46,8 @@ export const AGENTIC_DIAGNOSTIC_CODES = [
   "invalid_assignee_profile",
   "unsafe_status_transition",
   "provider_fallback_loop",
+  "projection_status_drift",
+  "durable_missing_after_completion",
   "dirty_worktree_without_artifact",
   "missing_claimed_artifact",
   "missing_claimed_file",

@@ -897,7 +897,6 @@ export class DurableRunService {
       return;
     }
     const deps = this.deps;
-    const timeoutMs = this.ctx.config.assistant.durable.workflowTimeoutMs;
     while (true) {
       if (this.isLeaseAcquisitionPaused()) {
         return;
@@ -915,13 +914,16 @@ export class DurableRunService {
         }
       }
       try {
+        const timeoutMs = resolveDurableWorkflowTimeoutMs(run, this.ctx.config.assistant.durable.workflowTimeoutMs);
         await this.executeWithLeaseHeartbeat(run, ({ signal, controller }) =>
-          this.executeWithTimeout(
-            () => deps.workflowRegistry.executeWorkflow(run, { signal }),
-            timeoutMs,
-            run.runId,
-            controller,
-          ),
+          timeoutMs === undefined
+            ? deps.workflowRegistry.executeWorkflow(run, { signal })
+            : this.executeWithTimeout(
+                () => deps.workflowRegistry.executeWorkflow(run, { signal }),
+                timeoutMs,
+                run.runId,
+                controller,
+              ),
         );
       } catch (error) {
         await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
@@ -1438,6 +1440,28 @@ export class DurableRunService {
     };
     scheduleNext();
   }
+}
+
+export function resolveDurableWorkflowTimeoutMs(run: DurableRunRecord, defaultTimeoutMs: number): number | undefined {
+  if (isCoworkDurableChatTurnRun(run)) {
+    return undefined;
+  }
+  return defaultTimeoutMs;
+}
+
+function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {
+  if (run.workflowKey !== "chat.turn.execute") {
+    return false;
+  }
+  const payload = run.payload as
+    | {
+        version?: unknown;
+        request?: {
+          mode?: unknown;
+        };
+      }
+    | undefined;
+  return payload?.version === "chat.turn.execute.v1" && payload.request?.mode === "cowork";
 }
 
 function isDurableRunUpdateConflict(error: unknown): boolean {

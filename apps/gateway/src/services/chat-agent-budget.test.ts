@@ -92,7 +92,9 @@ describe("chat-agent-budget", () => {
     ).toEqual(
       expect.objectContaining({
         maxToolLoops: 6,
-        maxToolRunsPerTurn: 16,
+        maxToolRunsPerTurn: Number.POSITIVE_INFINITY,
+        boundedByTurnBudget: false,
+        boundedByToolRunBudget: false,
         searchMaxResults: 8,
         maxTokens: 1600,
         minSynthesisReserveMs: 15000,

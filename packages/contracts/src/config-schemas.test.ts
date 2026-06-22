@@ -545,17 +545,24 @@ describe("AgentSubagentDefaultsSchema", () => {
   it("defaults childTimeoutSeconds to 600 and maxDepth to 4", () => {
     const parsed = AgentSubagentDefaultsSchema.parse({});
     expect(parsed.childTimeoutSeconds).toBe(600);
+    expect(parsed.coworkChildTimeoutSeconds).toBeNull();
     expect(parsed.maxDepth).toBe(4);
   });
 
   it("accepts overrides", () => {
-    const parsed = AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 900, maxDepth: 3 });
+    const parsed = AgentSubagentDefaultsSchema.parse({
+      childTimeoutSeconds: 900,
+      coworkChildTimeoutSeconds: 1200,
+      maxDepth: 3,
+    });
     expect(parsed.childTimeoutSeconds).toBe(900);
+    expect(parsed.coworkChildTimeoutSeconds).toBe(1200);
     expect(parsed.maxDepth).toBe(3);
   });
 
   it("rejects non-positive values", () => {
     expect(() => AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 0 })).toThrow();
+    expect(() => AgentSubagentDefaultsSchema.parse({ coworkChildTimeoutSeconds: 0 })).toThrow();
     expect(() => AgentSubagentDefaultsSchema.parse({ maxDepth: 0 })).toThrow();
   });
 });

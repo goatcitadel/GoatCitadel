@@ -145,6 +145,11 @@ import {
   promptLabContractRequiresWebTools,
 } from "./chat-agent-prompt-lab-contract.js";
 import {
+  annotateLocalBusinessBrowserResult,
+  buildLocalBusinessResearchPlan,
+  resolveLocalBusinessSearchQuery,
+} from "./local-business-research-service.js";
+import {
   collectPromptLabConcreteReadEvidence,
   collectPromptLabConcreteReadPaths,
   extractPromptLabCitationQuote,
@@ -696,7 +701,10 @@ export class ChatAgentOrchestrator {
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
-    let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+    const boundedByTurnBudget = executionBudget.boundedByTurnBudget !== false;
+    let turnBudgetDeadline = boundedByTurnBudget
+      ? createTurnBudgetDeadline(effectiveTurnBudgetMs)
+      : Number.POSITIVE_INFINITY;
     const markCompletionRepair = (
       kind: ChatTurnRepairKind,
       source: ChatTurnRepairSource,
@@ -3690,12 +3698,18 @@ export class ChatAgentOrchestrator {
       turnBudgetDeadline: input.turnBudgetDeadline,
     });
     if (alternateBuiltinResult) {
+      const annotatedAlternateBuiltinResult = this.annotateBrowserResultForTurn({
+        turnInput: input.turnInput,
+        toolName: input.toolName,
+        args: input.args,
+        result: alternateBuiltinResult,
+      });
       const persistedAlternateBuiltinResult = await this.persistToolArtifactsIfNeeded({
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
-        result: alternateBuiltinResult,
+        result: annotatedAlternateBuiltinResult,
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -3726,12 +3740,18 @@ export class ChatAgentOrchestrator {
         turnBudgetDeadline: input.turnBudgetDeadline,
       });
       if (fallback) {
+        const annotatedFallbackResult = this.annotateBrowserResultForTurn({
+          turnInput: input.turnInput,
+          toolName: input.toolName,
+          args: input.args,
+          result: fallback.result,
+        });
         const persistedFallbackResult = await this.persistToolArtifactsIfNeeded({
           sessionId: input.turnInput.sessionId,
           turnId: input.turnId,
           toolRunId: input.created.toolRunId,
           toolName: input.toolName,
-          result: fallback.result,
+          result: annotatedFallbackResult,
         });
         const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
           status: "executed",
@@ -3752,12 +3772,18 @@ export class ChatAgentOrchestrator {
 
     if (!classification.failureClass && normalizedResult) {
       const normalizedWithChain = withBrowserFallbackChain(normalizedResult, fallbackChain);
+      const annotatedNormalizedResult = this.annotateBrowserResultForTurn({
+        turnInput: input.turnInput,
+        toolName: input.toolName,
+        args: input.args,
+        result: normalizedWithChain,
+      });
       const persistedNormalizedResult = await this.persistToolArtifactsIfNeeded({
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
-        result: normalizedWithChain,
+        result: annotatedNormalizedResult,
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -3783,12 +3809,18 @@ export class ChatAgentOrchestrator {
         },
         fallbackChain,
       );
+      const annotatedNoResultsPayload = this.annotateBrowserResultForTurn({
+        turnInput: input.turnInput,
+        toolName: input.toolName,
+        args: input.args,
+        result: noResultsPayload,
+      });
       const persistedNoResultsPayload = await this.persistToolArtifactsIfNeeded({
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
-        result: noResultsPayload,
+        result: annotatedNoResultsPayload,
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -3825,12 +3857,18 @@ export class ChatAgentOrchestrator {
       },
       fallbackChain,
     );
+    const annotatedFailureResult = this.annotateBrowserResultForTurn({
+      turnInput: input.turnInput,
+      toolName: input.toolName,
+      args: input.args,
+      result: failureResult,
+    });
     const persistedFailureResult = await this.persistToolArtifactsIfNeeded({
       sessionId: input.turnInput.sessionId,
       turnId: input.turnId,
       toolRunId: input.created.toolRunId,
       toolName: input.toolName,
-      result: failureResult,
+      result: annotatedFailureResult,
     });
     const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
       status: "failed",
@@ -3854,6 +3892,20 @@ export class ChatAgentOrchestrator {
         toolRun: updated,
       },
     };
+  }
+
+  private annotateBrowserResultForTurn(input: {
+    turnInput: ChatAgentTurnInput;
+    toolName: string;
+    args: Record<string, unknown>;
+    result: Record<string, unknown>;
+  }): Record<string, unknown> {
+    return annotateLocalBusinessBrowserResult({
+      toolName: input.toolName,
+      args: input.args,
+      userContent: input.turnInput.content,
+      result: input.result,
+    });
   }
 
   private async tryAlternateBuiltinBrowserResult(input: {
@@ -5987,6 +6039,10 @@ function deriveLiveDataQuery(content: string): string {
   if (!normalized) {
     return content;
   }
+  const localBusinessPlan = buildLocalBusinessResearchPlan(content);
+  if (localBusinessPlan) {
+    return localBusinessPlan.primaryQuery;
+  }
   const promptSpecificQuery = derivePromptSpecificWebQuery(normalized);
   if (promptSpecificQuery) {
     return promptSpecificQuery;
@@ -6661,6 +6717,10 @@ function resolveGroundedBrowserSearchQuery(input: {
   const promptSpecificQuery = derivePromptSpecificWebQuery(input.userContent);
   const queryCandidates = readBrowserSearchQueryCandidatesFromArgs(input.rawArgs);
   const currentQuery = queryCandidates[0];
+  const localBusinessQuery = resolveLocalBusinessSearchQuery(input.userContent, currentQuery);
+  if (localBusinessQuery) {
+    return localBusinessQuery;
+  }
   if (
     currentQuery &&
     !looksLikeContinuationSearchPrompt(currentQuery) &&
@@ -7108,6 +7168,10 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
     .replace(/^["'`]+|["'`]+$/g, "");
   if (normalizedInput.length < 3) {
     return undefined;
+  }
+  const localBusinessQuery = resolveLocalBusinessSearchQuery(userContent);
+  if (localBusinessQuery) {
+    return localBusinessQuery;
   }
   const promptSpecificQuery = derivePromptSpecificWebQuery(normalizedInput);
   if (promptSpecificQuery) {

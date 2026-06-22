@@ -160,6 +160,102 @@ describe("TaskLifecycleService agentic runtime", () => {
     );
   });
 
+  it("resolves Cowork orchestration run IDs through projected delegation state", () => {
+    const { service, storage } = createService();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.durableRuns.createRun({
+      runId: "durable-parent",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:00:00.000Z",
+      finishedAt: "2026-06-22T00:04:00.000Z",
+    });
+    storage.durableRuns.createRun({
+      runId: "durable-child",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    storage.chatTurnTraces.create({
+      turnId: "parent-turn",
+      sessionId: "parent-session",
+      userMessageId: "parent-message",
+      status: "running",
+      mode: "cowork",
+      model: "gpt-5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      routing: {},
+      durable: {
+        runId: "durable-parent",
+        workflowKey: "chat.turn.execute",
+        status: "queued",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+    });
+    storage.chatTurnTraces.create({
+      turnId: "child-turn",
+      sessionId: "child-session",
+      userMessageId: "child-message",
+      status: "completed",
+      mode: "cowork",
+      model: "gpt-5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      routing: {},
+      durable: {
+        runId: "durable-child",
+        workflowKey: "chat.turn.execute",
+        status: "completed",
+        createdAt: "2026-06-22T00:01:00.000Z",
+        updatedAt: "2026-06-22T00:03:00.000Z",
+      },
+    });
+    storage.chatDelegationRuns.create({
+      runId: "orch-91303",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-turn",
+      objective: "Locate boardgame stores near 91303",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      workflowTemplate: "research_then_summarize",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+    storage.chatDelegationSteps.create({
+      stepId: "orch-91303:researcher",
+      runId: "orch-91303",
+      role: "Researcher",
+      index: 0,
+      status: "running",
+      durableRunId: "durable-child",
+      childSessionId: "child-session",
+      childTurnId: "child-turn",
+      startedAt: "2026-06-22T00:01:00.000Z",
+    });
+
+    const tree = service.getAgenticRunTree("orch-91303", { workspaceId: "default" });
+
+    expect(tree).toMatchObject({ runId: "orch-91303", boardId: "cowork:default" });
+    expect(tree.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "run:orch-91303", kind: "run", status: "completed" }),
+        expect.objectContaining({ id: "subagent:orch-91303:researcher", status: "completed" }),
+      ]),
+    );
+    expect(tree.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "projection_status_drift" })]),
+    );
+    expect(service.listAgenticRuns({ surface: "cowork" }).items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId: "orch-91303", status: "completed" })]),
+    );
+  });
+
   it("rejects unsafe terminal-state controls with a visible diagnostic", () => {
     const { service, storage } = createService();
     const task = service.createTask({

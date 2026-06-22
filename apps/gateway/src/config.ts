@@ -259,7 +259,7 @@ export interface DurableConfig {
   executionEnabled: boolean;
   chatAutoPromoteEnabled: boolean;
   maxAttemptsDefault: number;
-  /** Maximum wall-clock time (ms) for a single workflow execution before it is cancelled. Default: 5 minutes. */
+  /** Default wall-clock timeout (ms) for bounded workflows. Live Cowork chat-turn workflows opt out. */
   workflowTimeoutMs: number;
 }
 
