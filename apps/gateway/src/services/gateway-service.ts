@@ -1941,6 +1941,7 @@ export class GatewayService {
       commsSend: (input) => this.commsSend(input),
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
+      cleanupSilentHeartbeatTurn: (input) => this.cleanupSilentHeartbeatTurn(input),
     };
   }
 
@@ -2796,9 +2797,17 @@ export class GatewayService {
     userText: string;
     assistantText: string;
     parentTurnId?: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
   }): void {
     // Skip child turns (mirror the memory-maintenance sibling) and a closing gateway.
     if (this.closing || input.parentTurnId) {
+      return;
+    }
+    // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
+    // human session, but re-reviewing its output is a cost-amplifying loop (and
+    // a heartbeat `{notify:false}` carries no review value).
+    if (input.autonomous) {
       return;
     }
     // Master autonomy kill switch: halts the entire self-improvement loop.
@@ -3814,9 +3823,17 @@ export class GatewayService {
     workspaceId: string;
     userText: string;
     assistantText: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
   }): void {
     const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
     if (!autonomyEnabled) {
+      return;
+    }
+    // Skip autonomous turns: classifying a cron/heartbeat/commitment self-wake's
+    // own output (e.g. a heartbeat `{notify:false}`) is a redundant cheap-model
+    // call and a self-feeding loop — these turns are not user commitments.
+    if (input.autonomous) {
       return;
     }
     const origin = this.storage.chatSessionMeta.get(input.sessionId)?.origin;
@@ -5299,7 +5316,9 @@ export class GatewayService {
         const run = await this.enqueueAutonomousChatTurn({
           sessionId,
           prompt,
-          runId: `heartbeat_${sessionId}_${Date.now()}`,
+          // Collision-resistant: `Date.now()` could repeat within a tick across
+          // sessions/retries; a UUID guarantees a unique durable run id.
+          runId: `heartbeat_${randomUUID()}`,
           systemActorId: "system-heartbeat",
           reason: `heartbeat self-wake:${sessionId}`,
           kind: "heartbeat",
@@ -6567,6 +6586,66 @@ export class GatewayService {
       },
     });
     return run.runId;
+  }
+
+  /**
+   * Prune a silent heartbeat turn from a human transcript (P1-F4 invisibility).
+   * Removes the seed user message + `{notify:false}` assistant message and the
+   * turn trace, reverting the active branch leaf to the pre-heartbeat leaf, in a
+   * single transaction (mirroring the undo path). Best-effort: a heartbeat is a
+   * silent background tick, so cleanup failures must never surface — they are
+   * logged and swallowed. Only invoked for non-notifying heartbeat turns.
+   */
+  /** @internal */ public cleanupSilentHeartbeatTurn(
+    input: durableExecutionService.SilentHeartbeatCleanupRequest,
+  ): void {
+    try {
+      const messageIds = [input.userMessageId, input.assistantMessageId].filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      );
+      this.storage.runImmediateTransaction(() => {
+        this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
+        this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
+        if (input.parentTurnId) {
+          this.storage.chatSessionBranchState.setActiveLeaf(
+            input.sessionId,
+            input.parentTurnId,
+            new Date().toISOString(),
+          );
+        } else {
+          this.storage.chatSessionBranchState.clear(input.sessionId);
+        }
+      });
+      this.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: "chat_thread_undone",
+          sessionId: input.sessionId,
+          removedTurnIds: [input.turnId],
+          ...(input.parentTurnId ? { activeLeafTurnId: input.parentTurnId } : {}),
+          reason: "silent_heartbeat",
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: input.sessionId,
+            ...(input.parentTurnId ? { turnId: input.parentTurnId } : {}),
+          },
+        },
+      );
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.heartbeat.cleanup_failed",
+        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
   }
 
   /** @internal */ public getCurrentRequestAttribution(): {

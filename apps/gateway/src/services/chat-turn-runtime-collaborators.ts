@@ -128,6 +128,8 @@ export interface ChatTurnMemorySideEffects {
     workspaceId: string;
     userText: string;
     assistantText: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
   }): void;
   scheduleChatMemoryContextPrewarm(input: {
     sessionId: string;
@@ -149,6 +151,8 @@ export interface ChatTurnMemorySideEffects {
     userText: string;
     assistantText: string;
     parentTurnId?: string;
+    /** True when the completed turn is itself an autonomous self-wake (skip). */
+    autonomous?: boolean;
   }): void;
   recordCapabilityGapFromTrace(input: {
     sessionId: string;

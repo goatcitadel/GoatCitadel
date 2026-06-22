@@ -53,6 +53,7 @@ import {
 } from "./chat-turn-helpers.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { enqueueAgentEndHook, observeBeforeAssistantMessageWrite } from "./chat-turn-stream-events.js";
@@ -1491,12 +1492,15 @@ export async function* streamPreparedAgentChatTurn(
       });
       // P1-F3: infer future follow-up check-ins from a successful turn (streaming
       // path). Fire-and-forget beside learned-memory; host applies all guards.
+      // Autonomous self-wake turns are excluded (no self-feeding loop on output).
       if (hydratedTrace.status === "completed") {
+        const autonomousTurn = isAutonomousTurnRequest(input);
         host.recordTurnCommitments({
           sessionId,
           workspaceId: prepared.workspaceId,
           userText: prepared.content,
           assistantText: finalText,
+          autonomous: autonomousTurn,
         });
         // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
         // gates on master autonomy / eval-integrity / non-human + the turn counter.
@@ -1506,6 +1510,7 @@ export async function* streamPreparedAgentChatTurn(
           userText: prepared.content,
           assistantText: finalText,
           parentTurnId: prepared.parentTurnId,
+          autonomous: autonomousTurn,
         });
       }
       host.scheduleChatMemoryContextPrewarm({
@@ -1999,12 +2004,15 @@ export async function* streamPreparedAgentChatTurn(
       });
       // P1-F3: infer future follow-up check-ins from a successful turn (durable
       // streaming path). Fire-and-forget beside learned-memory; host guards apply.
+      // Autonomous self-wake turns are excluded (no self-feeding loop on output).
       if (hydratedTrace.status === "completed") {
+        const autonomousTurn = isAutonomousTurnRequest(input);
         host.recordTurnCommitments({
           sessionId,
           workspaceId: prepared.workspaceId,
           userText: prepared.content,
           assistantText: finalText,
+          autonomous: autonomousTurn,
         });
         // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
         // gates on master autonomy / eval-integrity / non-human + the turn counter.
@@ -2014,6 +2022,7 @@ export async function* streamPreparedAgentChatTurn(
           userText: prepared.content,
           assistantText: finalText,
           parentTurnId: prepared.parentTurnId,
+          autonomous: autonomousTurn,
         });
       }
       host.scheduleChatMemoryContextPrewarm({

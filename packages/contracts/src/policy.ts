@@ -66,6 +66,14 @@ const RESTRICTED_PROFILE_CREATED_AT = "2026-06-21T00:00:00.000Z";
  * Dangerous / side-effecting tool patterns denied on scheduled autonomous
  * turns. Denied tools fail closed in the engine (deny-wins): an autonomous turn
  * that needs one must raise an approval instead of acting silently.
+ *
+ * `schedule.*` is denied outright (anti-recursion): a scheduled/heartbeat turn
+ * runs unattended, so there is no operator to clear an approval. Approval-gating
+ * self-scheduling is therefore NOT a hard block for an autonomous turn — it
+ * would simply park forever (or, worse, auto-approve under a permissive policy).
+ * Denying the whole family means a scheduled turn can never self-schedule more
+ * work. Interactive surfaces still get `schedule.manage` (it is not denied on
+ * non-restricted profiles), so a human can always create/list/cancel schedules.
  */
 export const SCHEDULED_RESTRICTED_DENY: readonly string[] = [
   "shell.*",
@@ -78,6 +86,8 @@ export const SCHEDULED_RESTRICTED_DENY: readonly string[] = [
   "*.send",
   "mcp.invoke",
   "browser.interact",
+  // Anti-recursion: scheduled/heartbeat turns cannot create more scheduled work.
+  "schedule.*",
 ];
 
 /**
@@ -121,12 +131,12 @@ export const HEARTBEAT_RESTRICTED_DENY: readonly string[] = [
   "knowledge.*",
   "session.*",
   // Authoring / lifecycle / messaging families not needed for a silent read.
+  // (`schedule.*` is already denied via the inherited SCHEDULED_RESTRICTED_DENY.)
   "skills.*",
   "skill.*",
   "chat.*",
   "connector.*",
   "task.*",
-  "schedule.*",
   "http.*",
 ];
 

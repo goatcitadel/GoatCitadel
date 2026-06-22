@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { HEARTBEAT_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 import { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
@@ -502,6 +503,38 @@ describe("streamPreparedAgentChatTurn", () => {
     // completions (not silently deferred to an unconsumed realtime event).
     expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(true);
     expect(chunks.some((chunk) => chunk.type === "capability_upgrade_suggestion")).toBe(true);
+  });
+
+  it("flags post-turn hooks autonomous:false for an interactive (human) turn", async () => {
+    const host = createHost();
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "hello", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    )) {
+      // drain
+    }
+    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
+  });
+
+  it("flags post-turn hooks autonomous:true for a heartbeat-restricted turn (P1-F2/F3 loop guard)", async () => {
+    const host = createHost();
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "heartbeat", mode: "chat", permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    )) {
+      // drain
+    }
+    // The classifier + background review must be told this is an autonomous turn
+    // so the host short-circuits them (no self-feeding cost-amplifying loop).
+    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
   });
 
   it("persists advisory-only orchestration plans without delegated execution", async () => {

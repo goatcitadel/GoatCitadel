@@ -92,6 +92,12 @@ describe("autonomous restricted profiles via engine.evaluateAccess", () => {
     const mcp = evaluate("mcp.invoke", SCHEDULED_RESTRICTED_PROFILE);
     expect(mcp.allowed).toBe(false);
     expect(mcp.reasonCodes).toContain("policy_deny");
+
+    // Anti-recursion (P1-F2): self-scheduling is hard-denied on autonomous turns
+    // (deny-wins via the `schedule.*` deny), not merely approval-gated.
+    const schedule = evaluate("schedule.manage", SCHEDULED_RESTRICTED_PROFILE, { op: "list" });
+    expect(schedule.allowed).toBe(false);
+    expect(schedule.reasonCodes).toContain("policy_deny");
   });
 
   it("still allows non-denied read/query tools on scheduled-restricted (narrows, not closes)", () => {

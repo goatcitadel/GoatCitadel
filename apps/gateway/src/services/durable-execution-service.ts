@@ -85,6 +85,16 @@ export interface AutonomousChannelDeliveryRequest {
   reason?: string;
 }
 
+/** Request passed to the gateway-backed silent-heartbeat transcript cleanup. */
+export interface SilentHeartbeatCleanupRequest {
+  sessionId: string;
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  /** Active leaf to revert to (the leaf before the heartbeat seed turn). */
+  parentTurnId?: string;
+}
+
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
   readonly gatewaySql: Storage["gatewaySql"];
@@ -126,6 +136,14 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
    * delivery run id, or undefined when no connector/channel could be resolved.
    */
   enqueueAutonomousChannelDelivery?(input: AutonomousChannelDeliveryRequest): string | undefined;
+  /**
+   * Remove a silent heartbeat turn (seed user message + `{notify:false}`
+   * assistant message + its trace) from the human transcript, reverting the
+   * active branch leaf. Implemented by the gateway (which owns branch-state +
+   * transactional storage). Called only when a `kind:"heartbeat"` turn does not
+   * notify, so heartbeats stay invisible unless they surface to the user.
+   */
+  cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): void;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -188,6 +206,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "registerActiveChatTurnStream"
     | "persistChatStreamChunk"
     | "enqueueAutonomousChannelDelivery"
+    | "cleanupSilentHeartbeatTurn"
   >;
 
 type DurableProactiveTickWorkflowHost = Pick<
@@ -1071,6 +1090,7 @@ export async function executeDurableChatTurnRun(
     },
   );
   maybeEnqueueAutonomousDelivery(host, run, payload);
+  maybeCleanupSilentHeartbeatTurn(host, run, payload);
 }
 
 /** Read the persisted assistant text for a completed durable chat turn, if any. */
@@ -1099,10 +1119,32 @@ function readDurableChatTurnAssistantText(
  * assistant output. Used by `deliverMode:"on_notify"` (cron) and — per the
  * shared convention — the heartbeat path: a turn is "silent" unless it opts in
  * by emitting `notify: true`. Absent/unparseable ⇒ no notify.
+ *
+ * Parsing is deliberately strict to avoid false-positive delivery from the word
+ * "notify" appearing in prose or tool-call arguments:
+ *  1. Parse the (trimmed) assistant text as JSON; honor only a top-level
+ *     `notify === true` on an object.
+ *  2. If that fails (the model wrapped the JSON in prose), fall back to a strict
+ *     *quoted-key* match `"notify": true` — the JSON object shape, not bare
+ *     `notify: true` / `notify=true` in prose.
+ * The previous broad `\bnotify\s*[:=]\s*true` prose fallback is intentionally
+ * dropped: it matched arbitrary prose and tool args and could mis-trigger
+ * delivery of a silent turn.
  */
 export function parseAutonomousNotifySignal(text: string): boolean {
-  const match = /"notify"\s*:\s*(true|false)/i.exec(text) ?? /\bnotify\s*[:=]\s*(true|false)/i.exec(text);
-  return match ? match[1]?.toLowerCase() === "true" : false;
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return (parsed as Record<string, unknown>).notify === true;
+    }
+  } catch {
+    // Not pure JSON — fall through to the strict quoted-key fallback below.
+  }
+  return /"notify"\s*:\s*true\b/.test(trimmed);
 }
 
 /**
@@ -1139,6 +1181,39 @@ export function maybeEnqueueAutonomousDelivery(
     deliveryChannel,
     systemActorId: autonomous.systemActorId,
     reason: autonomous.reason,
+  });
+}
+
+/**
+ * After a heartbeat (`metadata.autonomous.kind:"heartbeat"`) chat turn completes,
+ * keep it invisible in the user's transcript unless it notified. A heartbeat
+ * runs inside the human session and persists a seed user message plus a
+ * `{notify:false}` assistant message every interval; without cleanup the user
+ * would see that noise on every tick. When the turn did NOT signal `notify`, the
+ * gateway prunes both messages + the trace and reverts the branch leaf. No-op
+ * for non-heartbeat turns, notifying heartbeats, or when no cleanup hook exists.
+ */
+export function maybeCleanupSilentHeartbeatTurn(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): void {
+  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (autonomous?.kind !== "heartbeat" || typeof host.cleanupSilentHeartbeatTurn !== "function") {
+    return;
+  }
+  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  // Notifying heartbeats stay visible (the user is meant to see them). Only a
+  // silent (no-notify / empty) heartbeat is pruned.
+  if (assistantText && parseAutonomousNotifySignal(assistantText)) {
+    return;
+  }
+  host.cleanupSilentHeartbeatTurn({
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    userMessageId: payload.userMessageId,
+    assistantMessageId: payload.assistantMessageId,
+    ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
   });
 }
 

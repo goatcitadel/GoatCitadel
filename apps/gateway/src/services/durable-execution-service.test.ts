@@ -27,6 +27,7 @@ import {
   executeDurableWorkflowRun,
   isDurableWorkflowRecoverable,
   markDurableWorkflowUnrecoverable,
+  maybeCleanupSilentHeartbeatTurn,
   maybeEnqueueAutonomousDelivery,
   parseAutonomousNotifySignal,
   parseApprovalWaitWorkflowPayload,
@@ -1260,11 +1261,117 @@ function buildRunWithPayload(workflowKey: string, payload: Record<string, unknow
 }
 
 describe("parseAutonomousNotifySignal", () => {
-  it("detects structured notify markers and defaults to false", () => {
+  it("detects a structured top-level notify:true (pure JSON)", () => {
     expect(parseAutonomousNotifySignal('{"notify": true}')).toBe(true);
-    expect(parseAutonomousNotifySignal("notify=true")).toBe(true);
+    expect(parseAutonomousNotifySignal('{"notify": true, "message": "disk full"}')).toBe(true);
+    expect(parseAutonomousNotifySignal('  {"notify":true}  ')).toBe(true);
+  });
+
+  it("treats notify:false / absent / empty as no-notify", () => {
     expect(parseAutonomousNotifySignal('{"notify": false}')).toBe(false);
+    expect(parseAutonomousNotifySignal('{"message": "fyi"}')).toBe(false);
     expect(parseAutonomousNotifySignal("nothing notable to report")).toBe(false);
+    expect(parseAutonomousNotifySignal("")).toBe(false);
+    expect(parseAutonomousNotifySignal("   ")).toBe(false);
+  });
+
+  it("matches a quoted notify key embedded in prose (model wrapped the JSON)", () => {
+    expect(parseAutonomousNotifySignal('Urgent: disk full. {"notify": true}')).toBe(true);
+  });
+
+  it("does NOT match bare prose / tool-arg mentions of notify (strict, no false positives)", () => {
+    // The dropped broad fallback used to match these and mis-trigger delivery.
+    expect(parseAutonomousNotifySignal("notify=true")).toBe(false);
+    expect(parseAutonomousNotifySignal("I will notify: true believers tomorrow")).toBe(false);
+    expect(parseAutonomousNotifySignal("Calling tool with notify: true in its args.")).toBe(false);
+    // Pure JSON with notify nested under another key is NOT a top-level signal:
+    // the JSON branch checks only top-level `notify`, so this is correctly false.
+    expect(parseAutonomousNotifySignal('{"args": {"notify": true}}')).toBe(false);
+  });
+});
+
+describe("maybeCleanupSilentHeartbeatTurn", () => {
+  const heartbeatPayload = {
+    version: "chat.turn.execute.v1" as const,
+    sessionId: "session-hb",
+    turnId: "turn-hb",
+    userMessageId: "user-hb",
+    assistantMessageId: "assistant-hb",
+    branchKind: "new" as const,
+    parentTurnId: "turn-prev",
+    threadEventType: "chat_thread_turn_appended" as const,
+    request: { content: "heartbeat self-check" },
+  };
+
+  function buildHeartbeatHost(assistantContent: string, cleanup = vi.fn()) {
+    return {
+      storage: {
+        chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-hb", assistantMessageId: "assistant-hb" })) },
+        chatMessages: { get: vi.fn(() => ({ messageId: "assistant-hb", content: assistantContent })) },
+      },
+      cleanupSilentHeartbeatTurn: cleanup,
+    };
+  }
+
+  function heartbeatRun(content: string, cleanup = vi.fn()) {
+    return {
+      run: {
+        ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
+        metadata: {
+          autonomous: {
+            kind: "heartbeat",
+            systemActorId: "system-heartbeat",
+            reason: "heartbeat self-wake:session-hb",
+            deliverMode: "on_notify",
+          },
+        },
+      },
+      host: buildHeartbeatHost(content, cleanup),
+      cleanup,
+    };
+  }
+
+  it("prunes a silent (notify:false) heartbeat turn from the transcript", () => {
+    const { run, host, cleanup } = heartbeatRun('{"notify": false}');
+
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+
+    expect(cleanup).toHaveBeenCalledWith({
+      sessionId: "session-hb",
+      turnId: "turn-hb",
+      userMessageId: "user-hb",
+      assistantMessageId: "assistant-hb",
+      parentTurnId: "turn-prev",
+    });
+  });
+
+  it("prunes a heartbeat turn that produced empty output", () => {
+    const { run, host, cleanup } = heartbeatRun("   ");
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a notifying heartbeat turn visible (no cleanup)", () => {
+    const { run, host, cleanup } = heartbeatRun('{"notify": true, "message": "Reminder: standup in 5"}');
+    maybeCleanupSilentHeartbeatTurn(host as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op for non-heartbeat autonomous turns (e.g. scheduled/cron)", () => {
+    const cleanup = vi.fn();
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", heartbeatPayload),
+      metadata: { autonomous: { kind: "scheduled", systemActorId: "system-cron", deliverMode: "always" } },
+    };
+    maybeCleanupSilentHeartbeatTurn(buildHeartbeatHost('{"notify": false}', cleanup) as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op for non-autonomous (human) turns", () => {
+    const cleanup = vi.fn();
+    const run = buildRunWithPayload("chat.turn.execute", heartbeatPayload);
+    maybeCleanupSilentHeartbeatTurn(buildHeartbeatHost('{"notify": false}', cleanup) as never, run, heartbeatPayload);
+    expect(cleanup).not.toHaveBeenCalled();
   });
 });
 

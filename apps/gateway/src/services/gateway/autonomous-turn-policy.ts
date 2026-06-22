@@ -63,6 +63,23 @@ export function autonomousTurnKindForProfileId(profileId: string): AutonomousTur
   return undefined;
 }
 
+/**
+ * True when a turn is an autonomous (cron / commitment / heartbeat) self-wake,
+ * detected via its restricted permission profile. Every autonomous turn is
+ * enqueued by `enqueueAutonomousChatTurn` under one of the two restricted
+ * profiles, so the `permissionProfileId` is the cleanest signal already carried
+ * on the turn request — no extra plumbing or session-origin lookup needed.
+ *
+ * Post-turn self-improvement hooks (commitment classifier, background review)
+ * use this to skip autonomous outputs: those turns run inside human sessions but
+ * must not feed the classifier/review loop (a heartbeat `{notify:false}` is not
+ * a user commitment, and re-reviewing autonomous output is a cost-amplifying
+ * feedback loop).
+ */
+export function isAutonomousTurnRequest(input: { permissionProfileId?: string }): boolean {
+  return autonomousTurnKindForProfileId(input.permissionProfileId ?? "") !== undefined;
+}
+
 export interface AutonomousTurnContextInput {
   /** Which restricted profile to run under. */
   kind: AutonomousTurnKind;

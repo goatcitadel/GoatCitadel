@@ -11,6 +11,7 @@ import {
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   autonomousTurnKindForProfileId,
   buildAutonomousTurnContext,
+  isAutonomousTurnRequest,
   resolveAutonomousPermissionProfile,
 } from "./autonomous-turn-policy.js";
 
@@ -86,6 +87,12 @@ describe("restricted permission profiles", () => {
     expect(isToolAllowed(policy, "memory.read")).toBe(true);
     // Risky-but-not-denied tools require approval rather than bypass.
     expect(policy.approvalMode).toBe("approve_risky");
+  });
+
+  it("scheduled-restricted hard-denies self-scheduling (schedule.* anti-recursion)", () => {
+    const policy = resolveWithProfile(SCHEDULED_RESTRICTED_PROFILE);
+    expect(isToolAllowed(policy, "schedule.manage")).toBe(false);
+    expect(SCHEDULED_RESTRICTED_PROFILE.deny).toContain("schedule.*");
   });
 
   it("heartbeat-restricted is read-only: only the allowlist is callable", () => {
@@ -177,5 +184,19 @@ describe("buildAutonomousTurnContext", () => {
     const snapshot = JSON.stringify(input);
     buildAutonomousTurnContext(input);
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+});
+
+describe("isAutonomousTurnRequest", () => {
+  it("is true for both restricted autonomous profiles (cron/commitment + heartbeat)", () => {
+    expect(isAutonomousTurnRequest({ permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID })).toBe(true);
+    expect(isAutonomousTurnRequest({ permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID })).toBe(true);
+  });
+
+  it("is false for interactive / unknown / absent profiles", () => {
+    expect(isAutonomousTurnRequest({ permissionProfileId: "trusted_local_power" })).toBe(false);
+    expect(isAutonomousTurnRequest({ permissionProfileId: "safe" })).toBe(false);
+    expect(isAutonomousTurnRequest({})).toBe(false);
+    expect(isAutonomousTurnRequest({ permissionProfileId: "" })).toBe(false);
   });
 });

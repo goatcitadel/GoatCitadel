@@ -38,6 +38,7 @@ import {
   inferDegradedAssistantTurnFailure,
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type {
@@ -540,13 +541,16 @@ async function runAgentSendChatMessageLlmPath(
     });
     // P1-F3: infer future follow-up check-ins from a successful turn's transcript
     // (fire-and-forget, beside learned-memory). The host applies the autonomy /
-    // eval-integrity / non-human guards and swallows errors.
+    // eval-integrity / non-human guards and swallows errors. Autonomous self-wake
+    // turns are excluded (no self-feeding classifier/review loop on their output).
     if (finalTraceStatus === "completed") {
+      const autonomousTurn = isAutonomousTurnRequest(input);
       host.recordTurnCommitments({
         sessionId,
         workspaceId: prepared.workspaceId,
         userText: prepared.content,
         assistantText,
+        autonomous: autonomousTurn,
       });
       // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
       // gates on master autonomy / eval-integrity / non-human + the turn counter.
@@ -556,6 +560,7 @@ async function runAgentSendChatMessageLlmPath(
         userText: prepared.content,
         assistantText,
         parentTurnId: prepared.parentTurnId,
+        autonomous: autonomousTurn,
       });
     }
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);

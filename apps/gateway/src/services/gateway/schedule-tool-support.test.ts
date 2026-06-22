@@ -62,6 +62,17 @@ describe("deriveScheduleCreator", () => {
       depth: 2,
     });
   });
+
+  it("marks depth 1 for a scheduled turn even without a resolvable parent job", () => {
+    // The off-by-one hole: a scheduled turn whose owning job can't be resolved
+    // still derives depth === MAX_SCHEDULE_CHAIN_DEPTH (1). The validator must
+    // reject this (see validateScheduleCreate test below) — `>` would let it pass.
+    const scheduledCtx: ToolPolicyActorContext = {
+      operatorId: "system-cron",
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    };
+    expect(deriveScheduleCreator(scheduledCtx, undefined)).toMatchObject({ depth: 1 });
+  });
 });
 
 describe("isScheduledTurnContext / resolveScheduleCreatorKey", () => {
@@ -146,6 +157,36 @@ describe("validateScheduleCreate", () => {
         createdByJobId: "parent-job",
       }),
     ).toThrow(/chain depth/i);
+  });
+
+  it("refuses a depth-1 scheduled turn with no resolvable parent job (off-by-one fix)", () => {
+    // A scheduled turn that calls schedule.manage but whose owning job can't be
+    // resolved lands at depth === MAX_SCHEDULE_CHAIN_DEPTH (1). With the `>=`
+    // bound this is refused; the old `>` bound let it self-schedule (1 > 1 false).
+    const scheduledCtx: ToolPolicyActorContext = {
+      operatorId: "system-cron",
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    };
+    expect(() =>
+      validateScheduleCreate({
+        args: parseScheduleManageArgs({ op: "create", schedule: "0 9 * * 1", prompt: "self-schedule" }),
+        policyContext: scheduledCtx,
+        existingJobs: [],
+        // No createdByJobId — the scheduled turn's owning job was not resolvable.
+      }),
+    ).toThrow(/chain depth/i);
+  });
+
+  it("still allows an interactive caller (depth 0) to create a schedule", () => {
+    // Guard against the `>=` change over-rejecting: interactive callers are depth
+    // 0 and must remain allowed.
+    const result = validateScheduleCreate({
+      args: parseScheduleManageArgs({ op: "create", schedule: "0 9 * * 1", prompt: "Morning brief" }),
+      policyContext: interactiveCtx,
+      existingJobs: [],
+    });
+    expect(result.createdBy.depth).toBe(0);
+    expect(result.schedule).toBe("0 9 * * 1");
   });
 
   it("enforces the per-creator job cap", () => {

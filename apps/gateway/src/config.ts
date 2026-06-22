@@ -1180,6 +1180,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
       coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
+      // Intentional: autonomy (proactive turns) is ON by default. This is a
+      // `*Disabled` master kill switch — `?? false` means "not disabled" unless
+      // an operator explicitly sets it. Do NOT flip this default.
       autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
     },
     budgets: {

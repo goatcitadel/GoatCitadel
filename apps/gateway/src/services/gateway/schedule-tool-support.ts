@@ -16,9 +16,9 @@ import { parseSimpleCronSchedule } from "./cron-automation-service.js";
  *    enabled `agent_turn` jobs.
  *  - Schedule-interval floor: schedules finer than {@link MIN_SCHEDULE_INTERVAL_MINUTES}
  *    are rejected (a "* * * * *" every-minute schedule cannot wake the agent).
- *  - Depth-1 chain cap: a job created from inside a scheduled turn would be at
- *    depth >= {@link MAX_SCHEDULE_CHAIN_DEPTH} + 1 and is refused, so scheduled
- *    work cannot recursively spawn deeper schedules.
+ *  - Depth chain cap: a job created from inside a scheduled turn is at depth
+ *    >= {@link MAX_SCHEDULE_CHAIN_DEPTH} and is refused, so scheduled work cannot
+ *    spawn further schedules. Only interactive callers (depth 0) may create.
  *  - Privilege bound: the creator's actor + permission profile are stamped onto
  *    the created job so F1 fires it bounded to <= the creator's privileges.
  */
@@ -171,9 +171,14 @@ export function validateScheduleCreate(input: ScheduleCreateValidationInput): Sc
   assertScheduleIntervalFloor(schedule);
 
   const createdBy = deriveScheduleCreator(policyContext, input.createdByJobId);
-  if (createdBy.depth > MAX_SCHEDULE_CHAIN_DEPTH) {
+  // Reject at-or-above the cap (`>=`, not `>`). A scheduled turn that owns a
+  // parent job lands at depth 2; one *without* a resolvable parent job still
+  // lands at depth === MAX_SCHEDULE_CHAIN_DEPTH (1) — `>` would let that case
+  // through (1 > 1 is false) and a scheduled turn could self-schedule. `>=`
+  // closes that hole while interactive callers (depth 0) remain allowed.
+  if (createdBy.depth >= MAX_SCHEDULE_CHAIN_DEPTH) {
     throw new Error(
-      `schedule.manage create refused: schedule chain depth ${createdBy.depth} exceeds the maximum of ${MAX_SCHEDULE_CHAIN_DEPTH} (a scheduled turn cannot create deeper schedules).`,
+      `schedule.manage create refused: schedule chain depth ${createdBy.depth} reaches the maximum of ${MAX_SCHEDULE_CHAIN_DEPTH} (a scheduled turn cannot create deeper schedules).`,
     );
   }
 

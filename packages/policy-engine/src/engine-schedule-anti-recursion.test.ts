@@ -5,16 +5,17 @@ import type { Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 
 /**
- * Anti-recursion invariant (P1-F2): under the `scheduled-restricted` profile a
- * scheduled turn's `schedule.manage` call must surface as `approval_required`
- * (never silently `executed`), so a scheduled turn cannot self-schedule more
- * work without an operator approving it. `schedule.manage` is `danger` +
- * `requiresApproval` and the restricted profile is `approve_risky`, so the
- * engine raises an approval rather than executing. This asserts the contract via
- * the real `engine.invoke` path.
+ * Anti-recursion invariant (P1-F2, hardened): under the `scheduled-restricted`
+ * profile a scheduled turn's `schedule.manage` call must be HARD-DENIED, never
+ * merely approval-gated. An autonomous turn runs unattended, so there is no
+ * operator to clear an approval — approval-gating would park forever (or
+ * auto-approve under a permissive base policy), which is not a real block. The
+ * `scheduled-restricted` deny list therefore includes `schedule.*` and deny-wins
+ * makes the engine block the call outright. This asserts the contract via the
+ * real `engine.invoke` path.
  */
 describe("engine — schedule.manage under scheduled-restricted (P1-F2 anti-recursion)", () => {
-  it("requires approval for schedule.manage when run under the scheduled-restricted profile", async () => {
+  it("hard-denies schedule.manage when run under the scheduled-restricted profile", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);
 
@@ -36,18 +37,18 @@ describe("engine — schedule.manage under scheduled-restricted (P1-F2 anti-recu
       },
     });
 
-    // Must require approval — NOT executed, NOT a hard block (deny).
-    expect(result.outcome).toBe("approval_required");
+    // Must be a hard block — NOT executed, NOT parked as an approval.
+    expect(result.outcome).toBe("blocked");
     expect(result.outcome).not.toBe("executed");
-    expect(result.outcome).not.toBe("blocked");
+    expect(result.outcome).not.toBe("approval_required");
+    // A scheduled turn must never silently create an approval row either.
+    expect(storage.approvals.create).not.toHaveBeenCalled();
   });
 
-  it("does not include schedule.manage in the scheduled-restricted deny set (it surfaces as approval, not a hard deny)", () => {
-    // The scheduled-restricted profile denies side-effecting tools outright but
-    // intentionally leaves schedule.manage approval-gated rather than denied, so
-    // an operator can still approve a scheduled self-schedule when they want it.
-    expect(SCHEDULED_RESTRICTED_PROFILE.deny).not.toContain("schedule.manage");
-    expect(SCHEDULED_RESTRICTED_PROFILE.deny).not.toContain("schedule.*");
+  it("includes schedule.* in the scheduled-restricted deny set (hard anti-recursion)", () => {
+    // The scheduled-restricted profile denies the whole schedule family so a
+    // scheduled/heartbeat turn can never self-schedule more work.
+    expect(SCHEDULED_RESTRICTED_PROFILE.deny).toContain("schedule.*");
   });
 });
 
