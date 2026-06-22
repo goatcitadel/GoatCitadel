@@ -1499,7 +1499,34 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 126,
+    name: "operator_profiles_schema",
+    // P2-S4b cross-session operator profile. A plain workspace-scoped table; this
+    // migration is the only definition (fresh DBs replay all migrations, so they
+    // gain it here, matching the agent_commitments v123 pattern). The Postgres
+    // canonical schema auto-derives it from the SQLite blueprint, so no targeted
+    // Postgres backfill is required for fresh installs.
+    up: createOperatorProfileSchema,
+  },
 ];
+
+function createOperatorProfileSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS operator_profiles (
+      operator_profile_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      summary TEXT NOT NULL DEFAULT '',
+      facts_json TEXT NOT NULL DEFAULT '[]',
+      revision INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_profiles_workspace
+      ON operator_profiles(workspace_id);
+  `);
+}
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
   const db = new DatabaseSync(":memory:");

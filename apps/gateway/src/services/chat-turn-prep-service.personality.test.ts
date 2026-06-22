@@ -37,6 +37,7 @@ function createHost(
   mode: ChatSessionPrefsRecord["mode"],
   prefsOverrides: Partial<ChatSessionPrefsRecord> = {},
   disabledFlags: string[] = [],
+  operatorProfileDigest: string | undefined = undefined,
 ) {
   let guidanceSystemInstruction = "";
   const prefs = createPrefs(mode, prefsOverrides);
@@ -118,6 +119,7 @@ function createHost(
     }),
     createChatCompletion: vi.fn(async () => ({ id: "completion-1", message: { role: "assistant", content: "" } })),
     isFeatureEnabled: vi.fn((flag: string) => disabledFlags.includes(flag)),
+    composeFrozenOperatorProfileDigest: vi.fn(() => operatorProfileDigest),
   } as unknown as ChatTurnPrepHost;
   return {
     host,
@@ -152,6 +154,31 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(chat.readGuidance()).not.toContain("You are GoatCitadel");
     // Legacy behavior: chat still received the personality overlay.
     expect(chat.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
+  });
+
+  it("injects the frozen operator-profile digest into the base prompt as the Memory section (P2-S4b)", async () => {
+    const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
+    const cowork = createHost("cowork", {}, [], digest);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+
+    expect(cowork.host.composeFrozenOperatorProfileDigest).toHaveBeenCalledWith("default");
+    // The base prompt surfaces the digest under its `## Memory` section.
+    expect(cowork.readGuidance()).toContain("## Memory");
+    expect(cowork.readGuidance()).toContain("Prefers metric units.");
+  });
+
+  it("omits the Memory section when there is no operator-profile digest", async () => {
+    const cowork = createHost("cowork", {}, [], undefined);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+    expect(cowork.readGuidance()).toContain("You are GoatCitadel");
+    expect(cowork.readGuidance()).not.toContain("## Memory");
+  });
+
+  it("does not consult the operator profile when the base prompt is disabled", async () => {
+    const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
+    const cowork = createHost("cowork", {}, ["coworkRuntimeQualityV1Disabled"], digest);
+    await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
+    expect(cowork.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
   });
 
   it("ingests attachment references, applies autonomy overrides, and keeps unbound Code mode manual", async () => {

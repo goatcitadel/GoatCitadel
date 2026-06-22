@@ -147,6 +147,13 @@ export interface ChatTurnPrepHost {
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): void;
   isFeatureEnabled(flag: string): boolean;
+  /**
+   * Frozen cross-session operator-profile digest (P2-S4b), composed once per
+   * session and byte-stable per workspace+revision (cached). Fed to the base
+   * prompt as `memoryDigest`. Optional + best-effort: returns `undefined` when
+   * there is nothing to inject, and is only consulted when the base prompt is on.
+   */
+  composeFrozenOperatorProfileDigest?(workspaceId: string): string | undefined;
 }
 
 export interface PreparedAgentChatTurn {
@@ -432,6 +439,16 @@ export async function prepareAgentChatTurn(
   if (baseSystemPromptEnabled) {
     const now = new Date();
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    // Frozen cross-session operator profile (P2-S4b). Cheap + cached
+    // (workspace+revision), so it stays byte-stable within a session and lands in
+    // the base prompt's volatile tail without busting the P0-A cache prefix.
+    // Best-effort: never let a profile read break turn preparation.
+    let memoryDigest: string | undefined;
+    try {
+      memoryDigest = host.composeFrozenOperatorProfileDigest?.(workspaceId);
+    } catch {
+      memoryDigest = undefined;
+    }
     baseAgentInstruction = renderBaseAgentSystemPrompt(
       buildBaseAgentSystemPrompt({
         mode: prefs.mode,
@@ -450,6 +467,7 @@ export async function prepareAgentChatTurn(
           mode: prefs.mode,
         },
         toolset: { toolNames: [] },
+        ...(memoryDigest ? { memoryDigest } : {}),
       }),
     );
   }

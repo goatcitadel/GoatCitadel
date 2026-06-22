@@ -508,6 +508,7 @@ import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
+import { OperatorProfileService } from "./operator-profile-service.js";
 import {
   ChatTurnExecutionRegistry,
   type ActiveChatTurnExecution,
@@ -813,6 +814,7 @@ export class GatewayService {
   private readonly continuationGateService: ContinuationGateService;
   private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
+  private readonly operatorProfileService: OperatorProfileService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
@@ -880,6 +882,13 @@ export class GatewayService {
       },
     });
     this.memoryWriteGateService = new MemoryWriteGateService();
+    // P2-S4b cross-session operator profile. Reuses the shared write gate (secrets
+    // always blocked) and the master autonomy switch for auto-apply.
+    this.operatorProfileService = new OperatorProfileService({
+      storage: this.storage,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      memoryWriteGate: this.memoryWriteGateService,
+    });
     this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
@@ -1679,6 +1688,7 @@ export class GatewayService {
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+      composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -6841,6 +6851,22 @@ export class GatewayService {
 
   public buildDefaultChatPersonalityOverlay() {
     return this.personalityCatalogService.buildDefaultChatPersonalityOverlay();
+  }
+
+  /**
+   * Frozen cross-session operator-profile digest for the base prompt (P2-S4b).
+   * Ensures the profile exists (stamping `WorkspacePrefs.operatorProfileId` on
+   * first use), then returns the cached, byte-stable-per-revision digest. Cheap:
+   * no model call on the hot path. Best-effort — a failure must not break a turn.
+   */
+  public composeFrozenOperatorProfileDigest(workspaceId: string): string | undefined {
+    try {
+      const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
+      this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
+      return this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
+    } catch {
+      return undefined;
+    }
   }
 
   public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {

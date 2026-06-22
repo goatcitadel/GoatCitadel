@@ -59,6 +59,7 @@ function composeSessionPreparation(
   ChatTurnRuntimeHost,
   | "buildDefaultChatPersonalityOverlay"
   | "buildLlmMessagesFromBranchPath"
+  | "composeFrozenOperatorProfileDigest"
   | "ensureChatSessionModelDefaults"
   | "ensureChatSessionRuntimeGrants"
   | "getSession"
@@ -81,6 +82,9 @@ function composeSessionPreparation(
     buildDefaultChatPersonalityOverlay: () => source.buildDefaultChatPersonalityOverlay(),
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+    composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
+      ? (workspaceId) => source.composeFrozenOperatorProfileDigest?.(workspaceId)
+      : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),
     getSession: (sessionId) => source.getSession(sessionId),
