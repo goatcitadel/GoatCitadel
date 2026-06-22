@@ -99,6 +99,8 @@ export class EventIngestService {
         taskId: options.payload.taskId,
         providerId: options.payload.usage?.providerId,
         modelId: options.payload.usage?.model,
+        credentialType: options.payload.usage?.credentialType,
+        usagePool: options.payload.usage?.usagePool,
         tokenInput: options.payload.usage?.inputTokens,
         tokenOutput: options.payload.usage?.outputTokens,
         tokenCachedInput: options.payload.usage?.cachedInputTokens,

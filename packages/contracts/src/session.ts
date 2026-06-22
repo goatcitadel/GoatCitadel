@@ -98,6 +98,10 @@ export interface GatewayEventInput {
     costUsd?: number;
     providerId?: string;
     model?: string;
+    /** Credential class billed against (Anthropic Jun-2026 pool split). */
+    credentialType?: "api_key" | "oauth" | "unknown";
+    /** Billing pool the usage drew from (subscription credit pool vs standard). */
+    usagePool?: "standard" | "subscription" | "unknown";
   };
 }
 

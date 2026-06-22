@@ -6,6 +6,8 @@ export interface UsageInput {
   taskId?: string;
   providerId?: string;
   modelId?: string;
+  credentialType?: "api_key" | "oauth" | "unknown";
+  usagePool?: "standard" | "subscription" | "unknown";
   tokenInput?: number;
   tokenOutput?: number;
   tokenCachedInput?: number;
@@ -23,6 +25,8 @@ export class TokenCostLedger {
       taskId: input.taskId,
       providerId: input.providerId,
       modelId: input.modelId,
+      credentialType: input.credentialType,
+      usagePool: input.usagePool,
       tokenInput: input.tokenInput ?? 0,
       tokenOutput: input.tokenOutput ?? 0,
       tokenCachedInput: input.tokenCachedInput ?? 0,
