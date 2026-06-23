@@ -48,7 +48,7 @@ export interface CitadelBlueprintValidationResult {
 
 // Conservative secret-shaped patterns. The scan is a safety net, not a guarantee.
 const SECRET_PATTERNS: RegExp[] = [
-  /\bsk-[a-z0-9]{8,}/i,
+  /\bsk-[a-z0-9-]{8,}/i,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   /\b(?:api[_-]?key|secret|password|access[_-]?token|refresh[_-]?token)\b\s*[:=]/i,
   /\bbearer\s+[a-z0-9._-]{12,}/i,

@@ -378,7 +378,10 @@ describe("useOpsRuntimeSnapshot", () => {
     // Start a reload whose dashboard fetch is deferred, then unmount before it resolves.
     const lateReload = createDeferred<Awaited<ReturnType<typeof apiMocks.fetchDashboardState>>>();
     apiMocks.fetchDashboardState.mockReturnValueOnce(lateReload.promise);
-    const reloadPromise = latest?.reload();
+    let reloadPromise: Promise<void> | undefined;
+    act(() => {
+      reloadPromise = latest?.reload();
+    });
     const observedBeforeUnmount = latest;
     act(() => {
       renderer?.unmount();

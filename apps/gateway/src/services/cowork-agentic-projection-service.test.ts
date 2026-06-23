@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,13 @@ import { CoworkAgenticProjectionService } from "./cowork-agentic-projection-serv
 const storages: Storage[] = [];
 const createdDirs: string[] = [];
 
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-22T08:00:00.000Z"));
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   for (const storage of storages.splice(0)) {
     storage.close();
   }

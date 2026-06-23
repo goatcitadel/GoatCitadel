@@ -48,7 +48,7 @@ export function applyMcpRedaction(
   }
   const serialized = JSON.stringify(payload);
   const redacted = serialized.replace(
-    /\b(sk-[a-z0-9]{16,}|ghp_[a-z0-9]{20,}|xox[baprs]-[a-z0-9-]{12,}|[A-Za-z0-9+/]{36,}={0,2})\b/gi,
+    /\b(sk-[a-z0-9-]{16,}|ghp_[a-z0-9]{20,}|xox[baprs]-[a-z0-9-]{12,}|[A-Za-z0-9+/]{36,}={0,2})\b/gi,
     "[REDACTED]",
   );
   const parsed = parseJsonWithFallback<Record<string, unknown>>(redacted, payload);

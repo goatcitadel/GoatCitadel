@@ -56,14 +56,6 @@ const MIN_EMBEDDINGS_TIMEOUT_MS = 250;
 const MAX_EMBEDDINGS_TIMEOUT_MS = 120_000;
 
 /**
- * The set of valid real-provider ids, used to map an arbitrary
- * `GOATCITADEL_EMBEDDINGS_PROVIDER` value onto a concrete provider. Anything
- * not recognised here is treated as an unsupported provider and falls back to
- * pseudo (preserving the historical `embedding-provider-unavailable` contract).
- */
-const REAL_PROVIDER_IDS: ReadonlySet<EmbeddingProviderId> = new Set<EmbeddingProviderId>(["llamacpp", "remote"]);
-
-/**
  * Generate an embedding for `text` using the configured provider, stamping the
  * resulting vector with the resolved profile (provider/modelId/version/
  * dimensions) so `isEmbeddingCurrent` validates correctly and the W1 store +
@@ -200,9 +192,7 @@ async function generateRealEmbedding(
     return undefined;
   }
   const rawVector =
-    providerId === "llamacpp"
-      ? await fetchLlamaCppEmbedding(config, text)
-      : await fetchRemoteEmbedding(config, text);
+    providerId === "llamacpp" ? await fetchLlamaCppEmbedding(config, text) : await fetchRemoteEmbedding(config, text);
   const embedding = sanitizeEmbeddingVector(rawVector);
   if (!embedding || embedding.length !== profile.dimensions) {
     // Dimension mismatch (or empty/invalid vector) would poison cosine
@@ -312,7 +302,10 @@ function resolveEmbeddingProviderId(request?: MemoryEmbeddingProfileRequest): Re
  * the configured embeddings URL under the guise of `remote`.
  */
 function normalizeProviderId(value: string): ResolvedProviderSelection {
-  const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
   if (normalized === "pseudo") {
     return "pseudo";
   }
@@ -368,7 +361,8 @@ function resolvePseudoProfile(
   request: MemoryEmbeddingProfileRequest | undefined,
   source: MemoryEmbeddingProfile["source"],
 ): MemoryEmbeddingProfile {
-  const modelId = optionalString(request?.modelId) ?? optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ?? PSEUDO_MODEL_ID;
+  const modelId =
+    optionalString(request?.modelId) ?? optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ?? PSEUDO_MODEL_ID;
   const dimensions = normalizePseudoDimensions(
     request?.dimensions ?? optionalNumberFromEnv(process.env.GOATCITADEL_EMBEDDINGS_DIMENSIONS),
   );
@@ -405,7 +399,8 @@ function resolveRealProviderProfile(
     optionalString(request?.modelId) ??
     optionalString(process.env.GOATCITADEL_EMBEDDINGS_MODEL) ??
     (providerId === "llamacpp" ? LLAMACPP_DEFAULT_MODEL_ID : REMOTE_DEFAULT_MODEL_ID);
-  const profileId = optionalString(request?.profileId) ?? `${providerId}:${modelId}:${resolvedDimensions}:${EMBEDDING_VERSION}`;
+  const profileId =
+    optionalString(request?.profileId) ?? `${providerId}:${modelId}:${resolvedDimensions}:${EMBEDDING_VERSION}`;
   return {
     provider: providerId,
     modelId,

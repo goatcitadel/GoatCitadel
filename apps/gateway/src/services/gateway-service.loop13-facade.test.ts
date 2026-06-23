@@ -161,6 +161,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     runtimeDecisionRecorder: { record: vi.fn() },
     backgroundTasks: new Set<Promise<unknown>>(),
     chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+    syntheticPermissionProfiles: new Map(),
     closing: false,
     config: {
       rootDir: "F:/code/personal-ai",

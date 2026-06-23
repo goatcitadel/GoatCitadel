@@ -3,7 +3,7 @@ import path from "node:path";
 import { getRequestAttribution } from "./request-attribution.js";
 
 const SECRET_PATTERNS: RegExp[] = [
-  /\bsk-[a-zA-Z0-9]{20,}\b/g,
+  /\bsk-[a-zA-Z0-9-]{20,}\b/g,
   /\bkey-[a-zA-Z0-9]{20,}\b/g,
   /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/g,
   /\b(?:Authorization|Proxy-Authorization):\s*(?:Bearer|Basic)\s+[^\s,;]+/gi,
@@ -169,7 +169,8 @@ async function acquireAuditFileLock(lockDir: string): Promise<void> {
       await writeAuditLockOwner(lockDir);
       return;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") {
         throw error;
       }
       if (await removeStaleAuditFileLock(lockDir)) {
@@ -208,8 +209,12 @@ async function removeStaleAuditFileLock(lockDir: string): Promise<boolean> {
   try {
     stat = await fs.stat(lockDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
       return true;
+    }
+    if (code === "EPERM" || code === "EACCES") {
+      return false;
     }
     throw error;
   }

@@ -183,17 +183,17 @@ function redactOutboundSecrets(message: string): { message: string; count: numbe
   let count = 0;
   const redacted = message
     .replace(
-      /\b(authorization|api[-_]?key|token|secret|password)\b\s*[:=]\s*(?:"[A-Za-z0-9._~+/=-]{8,}"|'[A-Za-z0-9._~+/=-]{8,}'|[A-Za-z0-9._~+/=-]{8,})(?=$|[\s,;)\]}])/gi,
-      (_match, label) => {
+      /(["']?)\b([A-Za-z0-9-_]*(?:authorization|api[-_]?key|token|secret|password)[A-Za-z0-9-_]*)\b\1(\s*)([:=])(\s*)(?:"[A-Za-z0-9._~+/=-]{8,}"|'[A-Za-z0-9._~+/=-]{8,}'|[A-Za-z0-9._~+/=-]{8,})(?=$|[\s,;)"'\]}])/gi,
+      (_match, quote, label, beforeSeparator, separator, afterSeparator) => {
         count += 1;
-        return `${label}=[REDACTED]`;
+        return `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}[REDACTED]`;
       },
     )
     .replace(/\bBearer[ \t]+[A-Za-z0-9\-._~+/]+={0,}(?=$|[\s"',;)\]}])/gi, () => {
       count += 1;
       return "Bearer [REDACTED]";
     })
-    .replace(/\bsk-[A-Za-z0-9]{20,}/g, () => {
+    .replace(/\bsk-[A-Za-z0-9-]{20,}/g, () => {
       count += 1;
       return "[REDACTED]";
     })

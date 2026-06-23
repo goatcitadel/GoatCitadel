@@ -959,12 +959,6 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; norm
     },
     effectiveToolAutonomy: "manual",
     retrievalTrace: undefined,
-    modelRouterDecision: {
-      route: "direct_answer",
-      requiresTools: false,
-      confidenceScore: 0.8,
-      orchestration: undefined,
-    },
     workspaceId: "default",
     resolvedGuidance: {
       globalFilesUsed: [],

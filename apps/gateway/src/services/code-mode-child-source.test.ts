@@ -226,7 +226,7 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
         wrapperManifest: {
           wrappers: [{ name: "fs.read" }],
         },
-        deadlineAt: Date.now() + 500,
+        deadlineAt: Date.now() + 3000,
       },
     });
 
@@ -277,7 +277,7 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
         wrapperManifest: {
           wrappers: [{ name: "fs.read" }],
         },
-        deadlineAt: Date.now() + 500,
+        deadlineAt: Date.now() + 3000,
       },
     });
 

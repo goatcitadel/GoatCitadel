@@ -167,18 +167,29 @@ function looksLikeCodeIdentifier(word: string): boolean {
   return /[_:.()-]/.test(word) || /[a-z][A-Z]/.test(word);
 }
 
+const WHITESPACE_CHARS = new Set(
+  " \n\r\t\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff",
+);
+const DENSE_PUNCT_CHARS = new Set("()[]{}<>=+*%,;!?'\"`|&");
+const WORD_LIKE_ASCII = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/\\:.-");
+const CJK_REGEX = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const UNICODE_WORD_REGEX = /[\p{L}\p{N}]/u;
+
 function isWhitespace(char: string): boolean {
-  return /\s/u.test(char);
+  return WHITESPACE_CHARS.has(char);
 }
 
 function isWordLike(char: string): boolean {
-  return /[\p{L}\p{N}_/\\:.-]/u.test(char);
+  if (WORD_LIKE_ASCII.has(char)) {
+    return true;
+  }
+  return UNICODE_WORD_REGEX.test(char);
 }
 
 function isDensePunctuation(char: string): boolean {
-  return /[()[\]{}<>=+*%,;!?'"`|&]/u.test(char);
+  return DENSE_PUNCT_CHARS.has(char);
 }
 
 function isCjk(char: string): boolean {
-  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(char);
+  return CJK_REGEX.test(char);
 }

@@ -344,7 +344,19 @@ describe("gateway request diagnostics", () => {
       }
     }
     for (const root of tempRoots.splice(0)) {
-      await fs.promises.rm(root, { recursive: true, force: true });
+      let attempts = 5;
+      while (attempts > 0) {
+        try {
+          await fs.promises.rm(root, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          attempts--;
+          if (attempts === 0) {
+            throw error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
     }
   });
 

@@ -16,7 +16,7 @@ function looksSensitive(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
     /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized) ||
-    /\bsk-[a-z0-9]{8,}\b/i.test(normalized) ||
+    /\bsk-[a-z0-9-]{8,}\b/i.test(normalized) ||
     /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
   );
 }

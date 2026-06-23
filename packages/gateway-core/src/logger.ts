@@ -36,7 +36,7 @@ const REDACTED_LOG_VALUE = "[redacted]";
  * on top of the key-based redaction, not a replacement for it.
  */
 const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
-  /sk-[A-Za-z0-9]{20,}/g, // OpenAI-style API keys
+  /sk-[A-Za-z0-9-]{20,}/g, // OpenAI-style API keys
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, // Authorization bearer tokens
 ];
 

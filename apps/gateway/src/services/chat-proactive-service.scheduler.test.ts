@@ -55,7 +55,7 @@ describe("chat-proactive-service scheduler fanout", () => {
         sessionAutonomyPrefs: { listBySessionIds: () => new Map() },
       },
       publishRealtime: () => undefined,
-      isFeatureEnabled: () => true,
+      isFeatureEnabled: (flag: string) => flag === "durableKernelV1Enabled",
     } as unknown as ChatProactiveServiceContext;
 
     const service = new ChatProactiveService(ctx, callbacks as ChatProactiveServiceCallbacks);
@@ -101,7 +101,7 @@ describe("chat-proactive-service scheduler fanout", () => {
         sessionAutonomyPrefs: { listBySessionIds: () => new Map() },
       },
       publishRealtime: () => undefined,
-      isFeatureEnabled: () => true,
+      isFeatureEnabled: (flag: string) => flag === "durableKernelV1Enabled",
     } as unknown as ChatProactiveServiceContext;
 
     const service = new ChatProactiveService(ctx, callbacks as ChatProactiveServiceCallbacks);
