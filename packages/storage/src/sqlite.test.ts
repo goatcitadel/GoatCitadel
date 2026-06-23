@@ -857,6 +857,26 @@ test("P2-S4a excludeFtsVirtualTables drops fts5 virtual + shadow tables but keep
   assert.deepEqual(__sqliteInternals.excludeFtsVirtualTables(noVirtual), noVirtual);
 });
 
+test("cost_ledger carries a created_at index for time-range cost summaries on a fresh DB", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    __sqliteInternals.migrate(db);
+    const indexes = new Set(
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'cost_ledger'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
+    );
+    assert.ok(
+      indexes.has("idx_cost_ledger_created_at"),
+      `expected idx_cost_ledger_created_at, found: ${[...indexes].join(", ")}`,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test("P2-S4a SQLite blueprint and Postgres mirror exclude the chat_messages FTS artifacts", () => {
   const blueprint = createSqliteSchemaBlueprint();
   const tableNames = blueprint.tables.map((table) => table.name);
