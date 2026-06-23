@@ -36,6 +36,7 @@ import type { ImprovementService } from "./improvement-service.js";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import type { LlmService } from "./llm-service.js";
+import type { McpElicitationService } from "./mcp-elicitation-service.js";
 import type { MediaVoiceService } from "./media-voice-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -84,6 +85,7 @@ export interface GatewayRouteCompositionPort {
   readonly autonomyControlService: AutonomyControlService;
   readonly llamaCppRuntime: LlamaCppRuntimeService;
   readonly llmService: LlmService;
+  readonly mcpElicitationService: McpElicitationService;
   readonly mediaVoiceService: MediaVoiceService;
   get memoryLifecycleService(): MemoryLifecycleService;
   readonly meshService: MeshService;
@@ -302,6 +304,7 @@ export function createGatewayRouteCompositionPort(
     hooksService: gateway.hooksService,
     llamaCppRuntime: gateway.llamaCppRuntime,
     llmService: gateway.llmService,
+    mcpElicitationService: gateway.mcpElicitationService,
     memoryLifecycleService: gateway.memoryLifecycleService,
     meshService: gateway.meshService,
     mutationIdempotencyStore: gateway.mutationIdempotencyStore,

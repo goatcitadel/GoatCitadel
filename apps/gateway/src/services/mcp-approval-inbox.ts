@@ -2,6 +2,9 @@ import type {
   ApprovalInboxItemRecord,
   ApprovalInboxItemState,
   ApprovalRequest,
+  McpElicitationRequest,
+  McpElicitationResponseAction,
+  McpElicitationStatus,
   McpInvokeRequest,
   McpInvokeResponse,
   McpServerRecord,
@@ -13,7 +16,28 @@ import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 export const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
 export const MCP_APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.list";
 export const MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
+export const MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME = "goatcitadel.approval.mcp_elicitation.list";
+export const MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME = "goatcitadel.approval.mcp_elicitation.respond";
 export const MCP_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
+
+/** Allowed MCP elicitation lifecycle statuses for inbox list filtering. */
+const MCP_ELICITATION_STATUSES = ["pending", "accepted", "declined", "cancelled", "expired"] as const;
+/** Allowed MCP elicitation response actions accepted by the inbox respond tool. */
+const MCP_ELICITATION_ACTIONS = ["accept", "decline", "cancel"] as const;
+
+/** Dependency that records an operator response to a server-initiated MCP elicitation. */
+export type RespondToMcpElicitation = (input: {
+  elicitationId: string;
+  action: McpElicitationResponseAction;
+  content?: Record<string, unknown>;
+}) => McpElicitationRequest;
+
+/** Dependency that lists server-initiated MCP elicitations awaiting an operator response. */
+export type ListMcpElicitations = (filter: {
+  status?: McpElicitationStatus;
+  serverId?: string;
+  sessionId?: string;
+}) => McpElicitationRequest[];
 
 /** Rate limiter: max resolve attempts per server per window. */
 const RESOLVE_RATE_LIMIT_MAX = 10;
@@ -111,6 +135,39 @@ export function createInternalMcpApprovalInboxTools(serverId: string): McpToolRe
         required: ["inboxItemId", "decision"],
       },
     },
+    {
+      serverId,
+      toolName: MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+      description:
+        "Lists MCP server-initiated elicitation requests (clarifying questions) surfaced through the approval inbox.",
+      enabled: true,
+      updatedAt,
+      inputSchema: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          serverId: { type: "string" },
+          sessionId: { type: "string" },
+        },
+      },
+    },
+    {
+      serverId,
+      toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+      description:
+        "Accepts, declines, or cancels an MCP server-initiated elicitation surfaced through the approval inbox.",
+      enabled: true,
+      updatedAt,
+      inputSchema: {
+        type: "object",
+        properties: {
+          elicitationId: { type: "string" },
+          action: { type: "string" },
+          content: { type: "object" },
+        },
+        required: ["elicitationId", "action"],
+      },
+    },
   ];
 }
 
@@ -125,6 +182,8 @@ export async function handleInternalMcpApprovalInboxInvoke(
       editedPayload?: Record<string, unknown>;
       resolutionNote?: string;
     }) => Promise<{ approval: ApprovalRequest }>;
+    respondToMcpElicitation: RespondToMcpElicitation;
+    listMcpElicitations: ListMcpElicitations;
   },
 ): Promise<McpInvokeResponse> {
   if (!isInternalMcpApprovalInboxServer(server)) {
@@ -158,6 +217,28 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: await resolveInboxItem(server.serverId, input.arguments, deps),
+        };
+
+      // Unlike remote-action deliveries (resolve), elicitations are not addressed to a receiver
+      // server — they live in one shared store and are authorized by owner scope (operator/agent/
+      // session), enforced by McpElicitationService. The approval inbox is a governed operator
+      // surface, so no per-caller serverId receiver check is applied here; this mirrors the HTTP
+      // POST /elicitations/:id/respond route. Tenant-level scoping, when introduced, belongs in the
+      // service/owner model so it applies uniformly across both surfaces.
+      case MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME:
+        return {
+          ok: true,
+          output: {
+            items: deps.listMcpElicitations(parseElicitationListArgs(input.arguments)),
+          },
+        };
+
+      case MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME:
+        return {
+          ok: true,
+          output: {
+            elicitation: deps.respondToMcpElicitation(parseElicitationRespondArgs(input.arguments)),
+          },
         };
 
       default:
@@ -224,6 +305,30 @@ function parseListArgs(args: Record<string, unknown> | undefined): {
   return {
     state,
     limit,
+  };
+}
+
+function parseElicitationListArgs(args: Record<string, unknown> | undefined): {
+  status?: McpElicitationStatus;
+  serverId?: string;
+  sessionId?: string;
+} {
+  return {
+    status: optionalEnumValue(args?.status, MCP_ELICITATION_STATUSES),
+    serverId: optionalString(args?.serverId),
+    sessionId: optionalString(args?.sessionId),
+  };
+}
+
+function parseElicitationRespondArgs(args: Record<string, unknown> | undefined): {
+  elicitationId: string;
+  action: McpElicitationResponseAction;
+  content?: Record<string, unknown>;
+} {
+  return {
+    elicitationId: requireNonEmptyString(args?.elicitationId, "elicitationId"),
+    action: requireEnumValue(args?.action, MCP_ELICITATION_ACTIONS, "action"),
+    content: normalizeOptionalObject(args?.content),
   };
 }
 
