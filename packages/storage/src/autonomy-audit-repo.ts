@@ -53,10 +53,13 @@ export class AutonomyAuditRepository {
     `);
     this.getStmt = db.prepare("SELECT * FROM autonomy_audit WHERE audit_id = ?");
     // Newest-first so the control service reverts most-recent changes first.
+    // LIMIT is pushed into SQL so a large unreverted backlog is bounded at the
+    // database, not loaded wholesale into memory for the caller to slice.
     this.listSinceStmt = db.prepare(`
       SELECT * FROM autonomy_audit
       WHERE occurred_at >= ? AND reverted = 0
       ORDER BY occurred_at DESC, audit_id DESC
+      LIMIT ?
     `);
     this.listRecentStmt = db.prepare(`
       SELECT * FROM autonomy_audit
@@ -110,9 +113,13 @@ export class AutonomyAuditRepository {
   /**
    * Un-reverted entries with `occurredAt >= sinceIso`, newest-first. This is the
    * exact set the control service walks for "revert autonomous changes since T".
+   * The result is bounded by `limit` (pushed into SQL) so an unbounded backlog
+   * never loads wholesale into memory; callers pass their own cap when they have
+   * one.
    */
-  public listUnrevertedSince(sinceIso: string): AutonomyAuditEntry[] {
-    return this.listSinceStmt.all(sinceIso).map(toRow).filter(isEntryRow).map(mapRow);
+  public listUnrevertedSince(sinceIso: string, limit = 10_000): AutonomyAuditEntry[] {
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 10_000;
+    return this.listSinceStmt.all(sinceIso, safeLimit).map(toRow).filter(isEntryRow).map(mapRow);
   }
 
   /** Most recent entries (newest first), capped by `limit`. */

@@ -85,6 +85,22 @@ describe("AutonomyAuditRepository", () => {
     );
   });
 
+  it("bounds listUnrevertedSince by the pushed-down limit, newest-first", () => {
+    const repo = createRepo();
+    for (let i = 0; i < 5; i += 1) {
+      repo.append(tuneEntry({ targetKey: `k${i}` }), `2026-06-22T0${i}:00:00.000Z`);
+    }
+    const capped = repo.listUnrevertedSince("2026-06-22T00:00:00.000Z", 2);
+    assert.equal(capped.length, 2);
+    assert.deepEqual(
+      capped.map((e) => e.targetKey),
+      ["k4", "k3"],
+    );
+    // A non-positive / non-finite limit falls back to the safe default (all 5 here).
+    assert.equal(repo.listUnrevertedSince("2026-06-22T00:00:00.000Z", 0).length, 5);
+    assert.equal(repo.listUnrevertedSince("2026-06-22T00:00:00.000Z", Number.NaN).length, 5);
+  });
+
   it("excludes already-reverted entries from listUnrevertedSince", () => {
     const repo = createRepo();
     const a = repo.append(tuneEntry({ targetKey: "a" }), "2026-06-22T00:00:00.000Z");
