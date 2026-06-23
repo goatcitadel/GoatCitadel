@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { RefreshCw } from "lucide-react";
 import type {
   AutomationRecipeDraftResponse,
+  CronReviewItem,
   ReviewReadinessSummary,
   WorkflowRecipeActivepiecesTemplateExportResponse,
   WorkflowRecipeN8nTemplateExportResponse,
@@ -709,11 +710,7 @@ export function RuntimeRoutePage({
               bodyMaxHeight="min(50vh, 28rem)"
             >
               <NativeList
-                items={(data.timeline?.scheduler.reviewQueue ?? []).map((item) => ({
-                  title: item.reason || item.itemId,
-                  meta: item.status ?? "queued",
-                  body: item.scheduledFor ? formatDateTime(item.scheduledFor) : "No schedule timestamp",
-                }))}
+                items={(data.timeline?.scheduler.reviewQueue ?? []).map(formatSchedulerReviewItem)}
                 emptyLabel="No scheduler review items."
                 density="compact"
                 maxHeight="min(38vh, 22rem)"
@@ -1804,6 +1801,37 @@ function formatWorkflowTemplateExportProofItems(
       body: exportResult.evidence.actionNeeded,
     },
   ];
+}
+
+function formatSchedulerReviewItem(item: CronReviewItem): { title: string; meta?: string; body?: string } {
+  const summary = item.summary ?? {};
+  const trigger = readSummaryString(summary.trigger);
+  const childDurableRunId = readSummaryString(summary.childDurableRunId) ?? readSummaryString(summary.durableRunId);
+  const childStatus = readSummaryString(summary.childDurableStatus);
+  const childTurnId = readSummaryString(summary.childTurnId) ?? readSummaryString(summary.turnId);
+  const profilePosture = readSummaryString(summary.profilePosture);
+  const warning = readSummaryString(summary.warning) ?? readSummaryString(summary.profileWarning);
+  const body = [
+    `Cron ${item.status} · ${formatDateTime(item.updatedAt)}`,
+    childDurableRunId
+      ? `Child ${childStatus ?? "accepted"} · ${formatShortRunId(childDurableRunId)}${
+          childTurnId ? ` · ${formatShortRunId(childTurnId)}` : ""
+        }`
+      : undefined,
+    profilePosture ? `Profile ${profilePosture.replace(/_/g, " ")}` : undefined,
+    warning,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  return {
+    title: trigger ? `${item.jobId} · ${trigger.replace(/_/g, " ")}` : item.jobId,
+    meta: `${item.severity} · cron ${formatShortRunId(item.runId)}`,
+    body,
+  };
+}
+
+function readSummaryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function DaemonControlHandoffPanel({ handoff }: { handoff: DaemonControlHandoff }) {

@@ -10,18 +10,19 @@ vi.mock("@goatcitadel/storage", () => ({
     reflectionMode: "off",
   },
 }));
-import type {
-  ApprovalRequest,
-  ApprovalWaitWorkflowPayload,
-  DurableCheckpointRecord,
-  DurableRunRecord,
-  DurableRunTimelineEvent,
-  PendingApprovalAction,
-  ProactiveActionRecord,
-  ProactiveRunRecord,
-  SessionMeta,
-  TaskRecord,
-  ToolInvokeResult,
+import {
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ApprovalRequest,
+  type ApprovalWaitWorkflowPayload,
+  type DurableCheckpointRecord,
+  type DurableRunRecord,
+  type DurableRunTimelineEvent,
+  type PendingApprovalAction,
+  type ProactiveActionRecord,
+  type ProactiveRunRecord,
+  type SessionMeta,
+  type TaskRecord,
+  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -117,6 +118,16 @@ describe("ChatProactiveService", () => {
     expect(triggerSpy).not.toHaveBeenCalled();
   });
 
+  it("skips scheduler ticks when the autonomy kill switch is engaged", async () => {
+    const harness = createHarness({ autonomyV1Disabled: true });
+    const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
+
+    await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(triggerSpy).not.toHaveBeenCalled();
+    expect(harness.state.durableRuns.size).toBe(0);
+  });
+
   it("does not schedule work while closing and uses default off prefs when none are stored", async () => {
     const closingHarness = createHarness({ callbacks: { closing: true } });
     const closingTriggerSpy = vi.spyOn(closingHarness.service, "triggerChatSessionProactive");
@@ -201,6 +212,13 @@ describe("ChatProactiveService", () => {
       expect.objectContaining({ source: "scheduler" }),
     );
     expect(harness.state.durableRuns.size).toBe(1);
+    const run = [...harness.state.proactiveRuns.values()][0];
+    expect(JSON.parse(run?.resume_metadata_json ?? "{}")).toMatchObject({
+      operatorId: "system-proactive",
+      authActorId: "system-proactive",
+      authActorSource: "none",
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    });
   });
 
   it("treats invalid proactive timestamps as eligible instead of stale", async () => {
@@ -819,6 +837,7 @@ describe("ChatProactiveService", () => {
 
 function createHarness(options?: {
   durableKernelV1Enabled?: boolean;
+  autonomyV1Disabled?: boolean;
   callbacks?: Partial<ChatProactiveServiceCallbacks>;
 }) {
   const session: SessionMeta = {
@@ -878,8 +897,12 @@ function createHarness(options?: {
     gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
     publishRealtime,
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) =>
-      flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false,
+    isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => {
+      if (flag === "autonomyV1Disabled") {
+        return options?.autonomyV1Disabled === true;
+      }
+      return flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false;
+    },
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
   } as unknown as ServiceContext;
   const durableRunService = new DurableRunService(ctx);

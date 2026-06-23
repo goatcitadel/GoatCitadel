@@ -347,7 +347,7 @@ function projectSkill(skill: unknown): Record<string, unknown> {
   const callable = record?.callable === true;
   const lifecycleState = readString(record?.lifecycleState);
   const state = readString(record?.state) ?? "enabled";
-  const declaredMetadata = readRecord(record?.declaredMetadata);
+  const declaredMetadata = readDeclaredSkillMetadata(record?.declaredMetadata);
   const bundleWarnings = readStringArray(record?.bundleWarnings);
   const missingRequiredEnv = readStringArray(record?.missingRequiredEnv);
   return compactRecord({
@@ -376,6 +376,51 @@ function projectSkill(skill: unknown): Record<string, unknown> {
     missingRequiredEnv,
     source: "skills.lifecycle",
   });
+}
+
+function readDeclaredSkillMetadata(value: unknown): Record<string, unknown> | undefined {
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const dependencies = readRecord(record.dependencies);
+  return {
+    requiredEnv: readGovernanceRecords(record.requiredEnv, (entry) => {
+      const name = readString(entry.name);
+      if (!name) {
+        return undefined;
+      }
+      return compactRecord({
+        name,
+        description: readString(entry.description),
+        required: typeof entry.required === "boolean" ? entry.required : undefined,
+        secret: typeof entry.secret === "boolean" ? entry.secret : undefined,
+      });
+    }),
+    stateDirs: readGovernanceRecords(record.stateDirs, (entry) => {
+      const path = readString(entry.path);
+      if (!path) {
+        return undefined;
+      }
+      return compactRecord({
+        path,
+        description: readString(entry.description),
+        writeable: typeof entry.writeable === "boolean" ? entry.writeable : undefined,
+      });
+    }),
+    dependencies: compactRecord({
+      tools: readStringArray(dependencies?.tools) ?? [],
+      skillIds: readStringArray(dependencies?.skillIds) ?? [],
+      capabilities: readStringArray(dependencies?.capabilities) ?? [],
+    }),
+  };
+}
+
+function readGovernanceRecords(
+  value: unknown,
+  project: (record: Record<string, unknown>) => Record<string, unknown> | undefined,
+): Array<Record<string, unknown>> {
+  return (Array.isArray(value) ? value : []).map(readRecord).filter(isRecord).map(project).filter(isRecord);
 }
 
 function projectAddons(catalog: unknown[], installed: unknown[]): Array<Record<string, unknown>> {
@@ -567,6 +612,9 @@ async function enrichSkillWithBundleMetadata(skill: unknown, env: NodeJS.Process
     declaredMetadata: meta.declaredMetadata,
     bundleWarnings: meta.warnings,
     missingRequiredEnv: computeMissingRequiredEnv(meta.declaredMetadata.requiredEnv, env),
+    reviewWarning: meta.errors.length
+      ? `Skill bundle governance metadata is invalid: ${meta.errors.join("; ")}`
+      : record.reviewWarning,
   };
 }
 
@@ -575,7 +623,9 @@ function computeMissingRequiredEnv(
   env: NodeJS.ProcessEnv,
 ): string[] {
   return requiredEnv
-    .filter((entry): entry is { name: string; required?: unknown } => Boolean(entry) && readString(entry?.name) !== undefined)
+    .filter(
+      (entry): entry is { name: string; required?: unknown } => Boolean(entry) && readString(entry?.name) !== undefined,
+    )
     .filter((entry) => entry.required !== false)
     .map((entry) => entry.name.trim())
     .filter((name) => !env[name]?.trim());

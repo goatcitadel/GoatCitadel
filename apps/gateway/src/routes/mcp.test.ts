@@ -344,6 +344,39 @@ describe("mcp routes", () => {
     });
   });
 
+  it("rejects MCP elicitation responses without caller owner scope", async () => {
+    await registerMcpService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/elicitations",
+      payload: {
+        prompt: "Pick a safe rollout track.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            track: { type: "string", enum: ["canary", "hold"] },
+          },
+        },
+        owner: { operatorId: "operator-1" },
+      },
+    });
+    const created = createResponse.json();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/api/v1/mcp/elicitations/${created.elicitationId}/respond`,
+      payload: {
+        action: "cancel",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: "MCP elicitation response requires caller owner scope.",
+    });
+  });
+
   it("maps MCP elicitation decline and cancel actions to terminal statuses without response content", async () => {
     await registerMcpService();
 

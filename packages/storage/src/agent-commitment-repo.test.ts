@@ -99,13 +99,39 @@ describe("AgentCommitmentRepository", () => {
     assert.equal(reupsert.suggestedText, "refined");
   });
 
+  it("dedup updates preserve lifecycle (a delivery-pending row is not reset to pending)", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1" }));
+    assert.equal(repo.markDeliveryPending("c1"), true);
+
+    const reupsert = repo.upsertByDedupe(baseInput({ commitmentId: "c1", suggestedText: "refined" }));
+    assert.equal(reupsert.status, "delivery_pending");
+    assert.equal(reupsert.sentAt, undefined);
+    assert.equal(reupsert.suggestedText, "refined");
+  });
+
+  it("dedup updates preserve lifecycle (a delivery-failed row is not reset to pending)", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1" }));
+    assert.equal(repo.markDeliveryFailed("c1"), true);
+
+    const reupsert = repo.upsertByDedupe(baseInput({ commitmentId: "c1", suggestedText: "refined" }));
+    assert.equal(reupsert.status, "delivery_failed");
+    assert.equal(reupsert.sentAt, undefined);
+    assert.equal(reupsert.suggestedText, "refined");
+  });
+
   it("listDue returns only pending + due rows, oldest-due first, bounded by limit", () => {
     const repo = createRepo();
     repo.upsertByDedupe(baseInput({ commitmentId: "due-late", dedupeKey: "k1", dueAt: "2026-06-22T08:00:00.000Z" }));
     repo.upsertByDedupe(baseInput({ commitmentId: "due-early", dedupeKey: "k2", dueAt: "2026-06-22T06:00:00.000Z" }));
     repo.upsertByDedupe(baseInput({ commitmentId: "future", dedupeKey: "k3", dueAt: "2026-12-31T00:00:00.000Z" }));
     repo.upsertByDedupe(baseInput({ commitmentId: "sent-due", dedupeKey: "k4", dueAt: "2026-06-22T05:00:00.000Z" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "queued-due", dedupeKey: "k5", dueAt: "2026-06-22T05:30:00.000Z" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "failed-due", dedupeKey: "k6", dueAt: "2026-06-22T05:45:00.000Z" }));
     repo.markSent("sent-due");
+    repo.markDeliveryPending("queued-due");
+    repo.markDeliveryFailed("failed-due");
 
     const due = repo.listDue("2026-06-22T09:00:00.000Z");
     assert.deepEqual(
@@ -130,6 +156,47 @@ describe("AgentCommitmentRepository", () => {
     // Second call no-ops (already sent) — returns false.
     assert.equal(repo.markSent("c1", "2026-06-22T11:00:00.000Z"), false);
     assert.equal(repo.get("c1")?.sentAt, "2026-06-22T10:00:00.000Z");
+  });
+
+  it("markDeliveryPending transitions pending rows without setting sentAt", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1", dueAt: "2026-06-22T05:00:00.000Z" }));
+
+    assert.equal(repo.markDeliveryPending("c1"), true);
+    const queued = repo.get("c1");
+    assert.equal(queued?.status, "delivery_pending");
+    assert.equal(queued?.sentAt, undefined);
+    assert.deepEqual(repo.listDue("2026-06-22T09:00:00.000Z"), []);
+
+    assert.equal(repo.markDeliveryPending("c1"), false);
+  });
+
+  it("markDeliveryFailed transitions pending and delivery-pending rows", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "pending-failure", dedupeKey: "k1" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "queued-failure", dedupeKey: "k2" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "sent-row", dedupeKey: "k3" }));
+    repo.markDeliveryPending("queued-failure");
+    repo.markSent("sent-row");
+
+    assert.equal(repo.markDeliveryFailed("pending-failure"), true);
+    assert.equal(repo.markDeliveryFailed("queued-failure"), true);
+    assert.equal(repo.get("pending-failure")?.status, "delivery_failed");
+    assert.equal(repo.get("queued-failure")?.status, "delivery_failed");
+    assert.equal(repo.markDeliveryFailed("pending-failure"), false);
+    assert.equal(repo.markDeliveryFailed("sent-row"), false);
+    assert.equal(repo.get("sent-row")?.status, "sent");
+  });
+
+  it("markSent can confirm a delivery-pending commitment", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1" }));
+    repo.markDeliveryPending("c1");
+
+    assert.equal(repo.markSent("c1", "2026-06-22T10:00:00.000Z"), true);
+    const sent = repo.get("c1");
+    assert.equal(sent?.status, "sent");
+    assert.equal(sent?.sentAt, "2026-06-22T10:00:00.000Z");
   });
 
   it("markSuperseded transitions only pending rows and excludes them from listDue", () => {

@@ -343,6 +343,49 @@ describe("trust routes", () => {
     expect(skill.missingRequiredEnv).toEqual(["GOVERNED_KEY"]);
   });
 
+  it("normalizes partial inline declared governance metadata", async () => {
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: { listCapabilityCatalog: vi.fn(() => []) },
+      mcp: { listMcpServers: vi.fn(() => []) },
+      skills: {
+        listSkills: vi.fn(() => [
+          {
+            skillId: "skill-partial-gov",
+            name: "Partial Governance Skill",
+            state: "enabled",
+            callable: true,
+            declaredMetadata: {
+              requiredEnv: [{ name: "  PARTIAL_KEY  " }, { required: true }],
+            },
+          },
+        ]),
+      },
+      addons: {
+        listAddonsCatalog: vi.fn(() => []),
+        listInstalledAddons: vi.fn(async () => []),
+      },
+    });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
+
+    expect(response.statusCode).toBe(200);
+    const skill = response.json().skills[0];
+    expect(skill.declaredMetadata).toEqual({
+      requiredEnv: [{ name: "PARTIAL_KEY" }],
+      stateDirs: [],
+      dependencies: {
+        tools: [],
+        skillIds: [],
+        capabilities: [],
+      },
+    });
+  });
+
   it("enriches skills from their bundle manifest and flags missing required env", async () => {
     const dir = writeSkillBundle({
       requiredEnv: [{ name: "GOATCITADEL_TRUST_TEST_ENV_DNE", required: true, secret: true }],
@@ -378,5 +421,40 @@ describe("trust routes", () => {
     expect(skill.missingRequiredEnv).toContain("GOATCITADEL_TRUST_TEST_ENV_DNE");
     expect(skill.bundleWarnings.some((warning: string) => warning.includes("secret env var"))).toBe(true);
     expect(skill.posture).toBe("medium_trust_unverified");
+  });
+
+  it("blocks skills whose bundle governance metadata is invalid", async () => {
+    const dir = writeSkillBundle({
+      stateDirs: [{ path: "../outside" }],
+      declaredDependencies: { capabilities: "network" },
+    });
+
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: { listCapabilityCatalog: vi.fn(() => []) },
+      mcp: { listMcpServers: vi.fn(() => []) },
+      skills: {
+        listSkills: vi.fn(() => [
+          { skillId: "skill-invalid-bundle", name: "Invalid Bundle Skill", state: "enabled", callable: true, dir },
+        ]),
+      },
+      addons: {
+        listAddonsCatalog: vi.fn(() => []),
+        listInstalledAddons: vi.fn(async () => []),
+      },
+    });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
+
+    expect(response.statusCode).toBe(200);
+    const skill = response.json().skills[0];
+    expect(skill.posture).toBe("blocked");
+    expect(skill.reviewWarning).toContain("Skill bundle governance metadata is invalid");
+    expect(skill.reviewWarning).toContain("../outside");
+    expect(skill.reviewWarning).toContain("declaredDependencies.capabilities");
   });
 });

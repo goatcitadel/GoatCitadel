@@ -140,6 +140,42 @@ describe("TrustPolicySection", () => {
     expect(text).toContain("secret env var");
   });
 
+  it("renders partial declared governance metadata without crashing", async () => {
+    trustApi.fetchTrustPolicySnapshot.mockResolvedValue({
+      generatedAt: "2026-06-22T12:00:00.000Z",
+      readOnly: true,
+      mutationSemantics: "none",
+      enforcementSources: ["skills.lifecycle"],
+      sources: [{ key: "skills", owner: "skills.lifecycle", status: "available", itemCount: 1 }],
+      permissionProfiles: [],
+      toolGrants: [],
+      localOperatorOverrides: [],
+      capabilities: { inspectable: [], callable: [] },
+      mcpServers: [],
+      skills: [
+        {
+          skillId: "skill-partial-gov",
+          name: "Partial Governance Skill",
+          sourceKind: "extra",
+          state: "enabled",
+          callable: true,
+          posture: "callable",
+          declaredMetadata: {
+            requiredEnv: [{ name: "  PARTIAL_KEY  " }],
+          },
+          source: "skills.lifecycle",
+        },
+      ],
+      addons: [],
+      lastUseEvidence: [],
+    });
+
+    const text = await renderText();
+
+    expect(text).toContain("Partial Governance Skill");
+    expect(text).toContain("PARTIAL_KEY");
+  });
+
   it("labels trust matrix cells for compact card layout", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {

@@ -172,6 +172,7 @@ async function dispatchIntegrationChannelAction(
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
+      commitmentId: optionalString(actionPayload.commitmentId),
       ...governance,
       signal: deps.signal,
     });
@@ -187,6 +188,7 @@ async function dispatchIntegrationChannelAction(
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
+      commitmentId: optionalString(actionPayload.commitmentId),
       ...governance,
       signal: deps.signal,
     });

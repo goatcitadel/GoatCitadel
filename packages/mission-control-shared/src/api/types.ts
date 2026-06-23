@@ -11,6 +11,7 @@ import type {
   ApprovalRequest,
   A2UIProofLaneDraft,
   BrowserProofLaneDraft,
+  CronReviewItem,
   FollowOnParityReport,
   FollowOnProofLaneArtifactRecord,
   GatewayAuthCredentialPlan,
@@ -229,13 +230,7 @@ export interface TimelineSummaryResponse {
   };
   scheduler: {
     jobs: CronJobsResponse["items"];
-    reviewQueue: Array<{
-      itemId: string;
-      jobId?: string;
-      scheduledFor?: string;
-      status?: string;
-      reason?: string;
-    }>;
+    reviewQueue: CronReviewItem[];
   };
   improvement: {
     reports: Array<{
@@ -377,7 +372,8 @@ export interface CronJobsResponse {
       | "cost_report"
       | "update_review"
       | "watchdog"
-      | "no_agent";
+      | "no_agent"
+      | "agent_turn";
     actionConfig?: Record<string, unknown>;
     description?: string;
     schedule: string;
@@ -418,6 +414,9 @@ export interface CronJobRecordResponse {
   contextFrom?: string;
   lastRunOutput?: string;
   lastRunId?: string;
+  lastRunStatus?: "ok" | "failed";
+  failureCount?: number;
+  backoffUntil?: string;
 }
 
 export interface OperatorsResponse {

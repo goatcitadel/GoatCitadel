@@ -3,6 +3,7 @@ import type {
   ApprovalInboxItemRecord,
   ApprovalInboxItemState,
   ApprovalRequest,
+  McpElicitationOwnerMetadata,
   McpElicitationResponseAction,
   McpElicitationStatus,
 } from "@goatcitadel/contracts";
@@ -361,6 +362,7 @@ describe("mcp approval inbox", () => {
       {
         serverId: server.serverId,
         toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        policyContext: { operatorId: "operator-1", sessionId: "session-response", surface: "mcp" },
         arguments: {
           elicitationId: elicitation.elicitationId,
           action: "accept",
@@ -379,6 +381,7 @@ describe("mcp approval inbox", () => {
       elicitationId: elicitation.elicitationId,
       action: "accept",
       content: { choice: "ship" },
+      owner: { operatorId: "operator-1", sessionId: "session-response", surface: "mcp" },
     });
     expect(responded.ok).toBe(true);
     expect(responded.output?.elicitation).toBe(elicitation);
@@ -388,6 +391,7 @@ describe("mcp approval inbox", () => {
       {
         serverId: server.serverId,
         toolName: MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        policyContext: { operatorId: "operator-1", sessionId: "session-response", surface: "mcp" },
         arguments: { status: "pending", serverId: "srv-9" },
       },
       {
@@ -402,6 +406,7 @@ describe("mcp approval inbox", () => {
       status: "pending",
       serverId: "srv-9",
       sessionId: undefined,
+      owner: { operatorId: "operator-1", sessionId: "session-response", surface: "mcp" },
     });
     expect(listed.ok).toBe(true);
     expect(listed.output?.items).toEqual([elicitation]);
@@ -444,6 +449,23 @@ describe("mcp approval inbox", () => {
     );
     expect(badAction.ok).toBe(false);
     expect(badAction.error).toMatch(/action/);
+
+    const missingOwner = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: { elicitationId: "mcp-elicit-1", action: "cancel" },
+      },
+      {
+        approvalInbox: createRepo(),
+        resolveApprovalWithRemoteTokenId: vi.fn(),
+        respondToMcpElicitation,
+        listMcpElicitations: vi.fn(() => []),
+      },
+    );
+    expect(missingOwner.ok).toBe(false);
+    expect(missingOwner.error).toMatch(/requires caller owner scope/);
     expect(respondToMcpElicitation).not.toHaveBeenCalled();
   });
 
@@ -454,6 +476,7 @@ describe("mcp approval inbox", () => {
       prompt: "Which environment should I deploy to?",
       requestedSchema: { type: "object", properties: { env: { type: "string" } } },
       serverId: "srv-1",
+      owner: { operatorId: "operator-1", sessionId: "session-1", surface: "mcp" },
     });
     const deps = {
       approvalInbox: createRepo(),
@@ -462,7 +485,13 @@ describe("mcp approval inbox", () => {
         elicitationId: string;
         action: McpElicitationResponseAction;
         content?: Record<string, unknown>;
-      }) => elicitations.respondToRequest(input.elicitationId, { action: input.action, content: input.content }),
+        owner?: McpElicitationOwnerMetadata;
+      }) =>
+        elicitations.respondToRequest(input.elicitationId, {
+          action: input.action,
+          content: input.content,
+          owner: input.owner,
+        }),
       listMcpElicitations: (filter: { status?: McpElicitationStatus; serverId?: string; sessionId?: string }) =>
         elicitations.listRequests(filter),
     };
@@ -472,6 +501,7 @@ describe("mcp approval inbox", () => {
       {
         serverId: server.serverId,
         toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        policyContext: { operatorId: "operator-1", sessionId: "session-1", surface: "mcp" },
         arguments: { elicitationId: created.elicitationId, action: "accept", content: { env: "prod" } },
       },
       deps,
@@ -488,6 +518,7 @@ describe("mcp approval inbox", () => {
       {
         serverId: server.serverId,
         toolName: MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        policyContext: { operatorId: "operator-1", sessionId: "session-1", surface: "mcp" },
         arguments: {},
       },
       deps,
@@ -500,6 +531,7 @@ describe("mcp approval inbox", () => {
       {
         serverId: server.serverId,
         toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        policyContext: { operatorId: "operator-1", sessionId: "session-1", surface: "mcp" },
         arguments: { elicitationId: created.elicitationId, action: "decline" },
       },
       deps,

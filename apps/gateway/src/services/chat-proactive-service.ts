@@ -1,6 +1,7 @@
 /* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import { SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 
 const log = logger.child("chat-proactive-service");
 import {
@@ -371,6 +372,9 @@ export class ChatProactiveService {
       return;
     }
     if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
+    if (this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
       return;
     }
     const sessions = this.callbacks.listChatSessions({
@@ -2243,6 +2247,12 @@ export class ChatProactiveService {
     const now = new Date().toISOString();
     const proactiveRunId = randomUUID();
     const policySnapshot = this.toProactivePolicy(sessionId, prefs);
+    const backgroundAutonomousTrigger = source !== "manual";
+    const permissionProfileId =
+      input.permissionProfileId ?? (backgroundAutonomousTrigger ? SCHEDULED_TURN_PERMISSION_PROFILE_ID : undefined);
+    const operatorId = input.operatorId ?? (backgroundAutonomousTrigger ? "system-proactive" : undefined);
+    const authActorId = input.authActorId ?? operatorId;
+    const authActorSource = input.authActorSource ?? (backgroundAutonomousTrigger ? "none" : undefined);
     const durableRun = this.callbacks.createDurableRun({
       workflowKey: "proactive.tick",
       payload: proactiveTickWorkflowPayloadToRecord(
@@ -2273,16 +2283,12 @@ export class ChatProactiveService {
       reasoningSummary: input.reason ?? `proactive tick (${source})`,
       executionClass: resolveProactiveExecutionClass(prefs.proactiveMode),
       resumeMetadata:
-        input.operatorId ||
-        input.authActorId ||
-        input.authActorSource ||
-        input.permissionProfileId ||
-        input.localOperatorOverrideId
+        operatorId || authActorId || authActorSource || permissionProfileId || input.localOperatorOverrideId
           ? {
-              operatorId: input.operatorId,
-              authActorId: input.authActorId,
-              authActorSource: input.authActorSource,
-              permissionProfileId: input.permissionProfileId,
+              operatorId,
+              authActorId,
+              authActorSource,
+              permissionProfileId,
               localOperatorOverrideId: input.localOperatorOverrideId,
             }
           : undefined,
@@ -2542,10 +2548,7 @@ function dedupeReferenceRoots(items: ProactiveReferenceRootRecord[]): ProactiveR
  * cadence has elapsed. This — together with the per-session cooldown and
  * active-hours — bounds de-novo so it never busy-loops on an idle session.
  */
-function getDeNovoCadenceRemainingSeconds(
-  prefs: Pick<SessionAutonomyPrefs, "lastProactiveAt">,
-  now: Date,
-): number {
+function getDeNovoCadenceRemainingSeconds(prefs: Pick<SessionAutonomyPrefs, "lastProactiveAt">, now: Date): number {
   if (!prefs.lastProactiveAt) {
     return 0;
   }

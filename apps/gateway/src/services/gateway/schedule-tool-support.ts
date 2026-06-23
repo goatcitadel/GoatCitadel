@@ -19,8 +19,10 @@ import { parseSimpleCronSchedule } from "./cron-automation-service.js";
  *  - Depth chain cap: a job created from inside a scheduled turn is at depth
  *    >= {@link MAX_SCHEDULE_CHAIN_DEPTH} and is refused, so scheduled work cannot
  *    spawn further schedules. Only interactive callers (depth 0) may create.
- *  - Privilege bound: the creator's actor + permission profile are stamped onto
- *    the created job so F1 fires it bounded to <= the creator's privileges.
+ *  - Creator provenance: the creator's actor + permission profile are stamped
+ *    onto the created job for ownership, anti-recursion, and audit. The fired
+ *    turn still uses the restricted scheduled profile until profile intersection
+ *    exists.
  */
 
 /** Max enabled `agent_turn` jobs a single creator may own. */
@@ -95,7 +97,8 @@ function normalizeDeliveryChannelArg(value: unknown): CronAgentTurnConfig["deliv
 
 /**
  * Derive the creator provenance to stamp on a created job from the calling
- * turn's policy context. The created job will fire bounded to this profile.
+ * turn's policy context. The created job uses this for ownership and audit; the
+ * fired autonomous turn remains on the restricted scheduled profile.
  * `createdByJobId`/`depth` describe the anti-recursion chain.
  */
 export function deriveScheduleCreator(

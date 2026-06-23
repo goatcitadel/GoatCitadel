@@ -51,6 +51,10 @@ export interface CronRunSnapshot {
   status: "ok" | "failed" | "unknown";
   finishedAt?: string;
   output?: string;
+  childDurableRunId?: string;
+  childDurableStatus?: string;
+  childTurnId?: string;
+  profilePosture?: string;
   failure?: CronJobRecord["lastFailure"];
   failureCount?: number;
   backoffUntil?: string;
@@ -86,6 +90,10 @@ export interface CronRunResult {
   runId: string;
   status: "ok";
   force?: boolean;
+  childDurableRunId?: string;
+  childDurableStatus?: string;
+  childTurnId?: string;
+  profilePosture?: string;
 }
 
 export interface CronDueRunItem {
@@ -350,7 +358,7 @@ export class CronAutomationService {
           ) {
             this.recordCronReviewItem({
               jobId: normalizedJobId,
-              runId: randomUUID(),
+              runId,
               severity: watchdogResult.status === "error" ? "high" : "medium",
               status: "open",
               summary: {
@@ -439,9 +447,31 @@ export class CronAutomationService {
         job.action !== "watchdog" &&
         !watchdogReviewRecorded
       ) {
+        const warning = readCronReviewWarning(runSummary);
+        if (warning) {
+          this.recordCronReviewItem({
+            jobId: normalizedJobId,
+            runId,
+            severity: "medium",
+            status: "open",
+            summary: {
+              trigger: "agent_turn_profile_warning",
+              ...runSummary,
+              warning,
+            },
+            diff: { type: "agent_turn_profile_warning", changed: false },
+          });
+          watchdogReviewRecorded = true;
+        }
+      }
+      if (
+        this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+        job.action !== "watchdog" &&
+        !watchdogReviewRecorded
+      ) {
         this.recordCronReviewItem({
           jobId: normalizedJobId,
-          runId: randomUUID(),
+          runId,
           severity: "low",
           status: "resolved",
           summary: {
@@ -451,11 +481,13 @@ export class CronAutomationService {
           diff: { type: "manual_run", changed: false },
         });
       }
+      const childRun = this.resolveCronChildRunSummary(runSummary);
       return {
         jobId: normalizedJobId,
         runId,
         status: "ok",
         ...(force ? { force: true } : {}),
+        ...childRun,
       };
     } catch (error) {
       const latest = this.deps.storage.cronJobs.get(normalizedJobId) ?? job;
@@ -532,15 +564,43 @@ export class CronAutomationService {
     if (!match) {
       return undefined;
     }
+    const summary = parseJsonRecord(match.lastRunOutput ?? "{}");
+    const childRun = this.resolveCronChildRunSummary(summary);
     return {
       runId: normalized,
       jobId: match.jobId,
       status: match.lastRunStatus ?? "unknown",
       finishedAt: match.lastRunAt,
       output: match.lastRunOutput,
+      ...childRun,
       failure: match.lastFailure,
       failureCount: match.failureCount,
       backoffUntil: match.backoffUntil,
+    };
+  }
+
+  private resolveCronChildRunSummary(summary: Record<string, unknown>): {
+    childDurableRunId?: string;
+    childDurableStatus?: string;
+    childTurnId?: string;
+    profilePosture?: string;
+  } {
+    const childDurableRunId = readString(summary.childDurableRunId) ?? readString(summary.durableRunId);
+    const childTurnId = readString(summary.childTurnId) ?? readString(summary.turnId);
+    const profilePosture = readString(summary.profilePosture);
+    let childDurableStatus: string | undefined;
+    if (childDurableRunId) {
+      try {
+        childDurableStatus = this.deps.storage.durableRuns.getRun(childDurableRunId)?.status;
+      } catch {
+        childDurableStatus = undefined;
+      }
+    }
+    return {
+      ...(childDurableRunId ? { childDurableRunId } : {}),
+      ...(childDurableStatus ? { childDurableStatus } : {}),
+      ...(childTurnId ? { childTurnId } : {}),
+      ...(profilePosture ? { profilePosture } : {}),
     };
   }
 
@@ -794,6 +854,17 @@ function parseJsonRecord(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readCronReviewWarning(summary: Record<string, unknown>): string | undefined {
+  if (summary.cronReviewWarning !== true) {
+    return undefined;
+  }
+  return readString(summary.profileWarning) ?? "Cron run accepted but recorded a scheduler review warning.";
 }
 
 export function normalizeCronJobId(value: string): string {

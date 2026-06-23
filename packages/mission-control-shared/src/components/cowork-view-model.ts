@@ -504,6 +504,9 @@ function resolveMissingContactFields(
   candidate: LocalBusinessCandidateView,
   plan: LocalBusinessResearchView["plan"],
 ): string[] {
+  if (candidate.verificationStatus === "verified" && candidate.blockers.length === 0) {
+    return [];
+  }
   const fields: string[] = [];
   if (!candidate.address && !candidateHasEvidenceKind(candidate, "address")) {
     fields.push("address");

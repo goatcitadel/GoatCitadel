@@ -9,6 +9,7 @@ import type {
   ChatThinkingLevel,
   ChatWebMode,
   ChatSessionPrefsRecord,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 
 interface BuildDelegatedChatSendRequestInput {
@@ -33,9 +34,12 @@ interface BuildDelegatedChatSendRequestInput {
   policyRunId?: string;
   policyTaskId?: string;
   fullWebAccess?: boolean;
+  policyContext?: ToolPolicyActorContext;
 }
 
-export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendRequestInput): ChatSendMessageRequest {
+export function buildDelegatedChatSendRequest(
+  input: BuildDelegatedChatSendRequestInput,
+): ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext } {
   const prefsOverride: ChatSessionPrefsPatch = {
     planningMode: "off",
     orchestrationEnabled: false,
@@ -71,5 +75,6 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     policyRunId: input.policyRunId,
     policyTaskId: input.policyTaskId,
     fullWebAccess: input.fullWebAccess,
+    policyContext: input.policyContext,
   };
 }

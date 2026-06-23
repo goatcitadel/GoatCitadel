@@ -27,6 +27,7 @@ export interface ChannelDeliveryRuntimeRecord {
   maxAttempts: number;
   nextAttemptAt?: string;
   staleReason?: string;
+  commitmentId?: string;
   providerMessageId?: string;
   error?: string;
   fallbackReason?: string;
@@ -158,6 +159,8 @@ export class ChannelDeliveryRuntimeService {
     private readonly deps: {
       repository: ChannelDeliveryRuntimeRepository;
       send: (input: ChannelDeliveryRuntimeSendInput) => Promise<ChannelDeliveryRuntimeSendResult>;
+      onDeliverySent?: (record: ChannelDeliveryRuntimeRecord) => void;
+      onDeliveryFailed?: (record: ChannelDeliveryRuntimeRecord) => void;
       now?: () => Date;
     },
   ) {}
@@ -211,6 +214,7 @@ export class ChannelDeliveryRuntimeService {
       attempts: queued.attempts ?? 0,
       maxAttempts: Math.max(1, input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
       nextAttemptAt: queued.nextAttemptAt,
+      commitmentId: readOptionalPayloadString(plannedPayload.commitmentId),
       deliveryDiagnostics: queued.deliveryDiagnostics ?? readDeliveryDiagnostics(plannedPayload.deliveryDiagnostics),
       createdAt: queued.createdAt,
       updatedAt: queued.updatedAt,
@@ -308,6 +312,7 @@ export class ChannelDeliveryRuntimeService {
       maxAttempts: Math.max(1, persisted.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
       nextAttemptAt: persisted.nextAttemptAt,
       staleReason: persisted.staleReason,
+      commitmentId: readOptionalPayloadString(payload.commitmentId),
       providerMessageId: persisted.providerMessageId,
       error: persisted.error,
       fallbackReason: persisted.fallbackReason,
@@ -352,6 +357,9 @@ export class ChannelDeliveryRuntimeService {
       delivery.record.nextAttemptAt = undefined;
       delivery.record.updatedAt = completedAt;
       this.deps.repository.markSent(delivery.record.deliveryId, result.providerMessageId, completedAt);
+      if (delivery.record.commitmentId) {
+        this.deps.onDeliverySent?.(copyRecord(delivery.record));
+      }
     } catch (error) {
       this.handleDeliveryFailure(delivery, error);
     }
@@ -407,6 +415,9 @@ export class ChannelDeliveryRuntimeService {
       delivery.record.deliveryStatus,
       delivery.record.staleReason,
     );
+    if (delivery.record.commitmentId) {
+      this.deps.onDeliveryFailed?.(copyRecord(delivery.record));
+    }
   }
 
   private now(): string {

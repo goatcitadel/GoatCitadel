@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
+import {
+  MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+  MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+  MCP_APPROVAL_INBOX_URL,
+} from "./mcp-approval-inbox.js";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { isAllowedMcpDefinitionForCreate, isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 
 describe("mcp template visibility", () => {
@@ -19,6 +24,18 @@ describe("mcp template visibility", () => {
         url: MCP_APPROVAL_INBOX_URL,
       }),
     ).toBe(true);
+  });
+
+  it("allows all default internal approval inbox tools it advertises", () => {
+    const template = MCP_SERVER_TEMPLATES.find((item) => item.templateId === "approval-inbox");
+
+    expect(template?.policy.allowedToolPatterns).toEqual(
+      expect.arrayContaining([
+        "goatcitadel.approval.remote_action_inbox.*",
+        MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+      ]),
+    );
   });
 
   it("shows remote MCP definitions when the runtime bridge can invoke them", () => {

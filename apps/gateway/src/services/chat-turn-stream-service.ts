@@ -76,6 +76,10 @@ type ChatTurnStreamStorage = Pick<
   | "chatTurnTraces"
 >;
 
+type ChatSendMessageRequestWithPolicyContext = ChatSendMessageRequest & {
+  policyContext?: ToolPolicyActorContext;
+};
+
 const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";
 const LOCAL_BUSINESS_CONTACT_TASK_PATTERN =
   /\b(?:board\s*game|boardgame|tabletop|game store|hobby store|local business|businesses|stores?|shops?|contact|email|address(?:es)?|who I should address)\b/i;
@@ -325,6 +329,8 @@ export async function executePreparedModeOrchestration(
     throw new Error("Prepared chat turn is not eligible for orchestration");
   }
   const runId = randomUUID();
+  const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
+  const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const runMode = orchestration.orchestrationPlan.routeDecision.parallelism === "parallel" ? "parallel" : "sequential";
   const persistedExecutionPlan = host.storage.chatExecutionPlans.create({
     sessionId: prepared.session.sessionId,
@@ -592,7 +598,8 @@ export async function executePreparedModeOrchestration(
           operatorId: input.operatorId,
           authActorId: input.authActorId,
           authActorSource: input.authActorSource,
-          permissionProfileId: input.permissionProfileId,
+          permissionProfileId: effectivePermissionProfileId,
+          policyContext: inputPolicyContext,
           localOperatorOverrideId: input.localOperatorOverrideId,
           fullWebAccess: input.fullWebAccess,
         }),
@@ -835,6 +842,7 @@ export async function executeDelegatedPlanStep(
     authActorSource?: ChatSendMessageRequest["authActorSource"];
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
+    policyContext?: ToolPolicyActorContext;
     fullWebAccess?: boolean;
   },
 ): Promise<OrchestrationStepExecutionResult> {
@@ -952,7 +960,7 @@ export async function executeDelegatedPlanStep(
       taskId: orchestrationTaskId,
       runId: input.runId,
       surface: input.task.mode,
-      permissionProfileId: input.permissionProfileId,
+      permissionProfileId: input.policyContext?.permissionProfileId ?? input.permissionProfileId,
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
     delegatedDispatchStarted = true;
@@ -988,6 +996,7 @@ export async function executeDelegatedPlanStep(
         policyTaskId: orchestrationTaskId,
         fullWebAccess: input.fullWebAccess,
         parentDelegationStepId: `${input.runId}:${input.step.stepId}`,
+        policyContext: inheritedPolicyContext,
       }),
       input.signal ? { abortSignal: input.signal } : undefined,
     );
@@ -1281,6 +1290,8 @@ export async function* streamPreparedAgentChatTurn(
     abortSignal?: AbortSignal;
   },
 ): AsyncGenerator<ChatStreamChunkDraft> {
+  const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
+  const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
@@ -1718,7 +1729,8 @@ export async function* streamPreparedAgentChatTurn(
       operatorId: input.operatorId,
       authActorId: input.authActorId,
       authActorSource: input.authActorSource,
-      permissionProfileId: input.permissionProfileId,
+      permissionProfileId: effectivePermissionProfileId,
+      policyContext: inputPolicyContext,
       localOperatorOverrideId: input.localOperatorOverrideId,
       policyRunId: input.policyRunId,
       policyTaskId: input.policyTaskId,

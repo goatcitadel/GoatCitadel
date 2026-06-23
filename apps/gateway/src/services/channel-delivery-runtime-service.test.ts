@@ -246,6 +246,64 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.markSent).toHaveBeenCalledWith(queued.deliveryId, "provider-2", "2026-05-05T00:00:01.000Z");
   });
 
+  it("notifies linked commitments only after channel delivery is sent", async () => {
+    const repository = createRepository();
+    const onDeliverySent = vi.fn();
+    const onDeliveryFailed = vi.fn();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(async () => ({ providerMessageId: "provider-commitment" })),
+      onDeliverySent,
+      onDeliveryFailed,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "hello", commitmentId: "commitment-1" },
+    });
+
+    expect(queued.commitmentId).toBe("commitment-1");
+    expect(onDeliverySent).not.toHaveBeenCalled();
+
+    await service.drainDue();
+
+    expect(onDeliverySent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryId: queued.deliveryId,
+        commitmentId: "commitment-1",
+        status: "sent",
+        providerMessageId: "provider-commitment",
+      }),
+    );
+    expect(onDeliveryFailed).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke commitment callbacks for unlinked deliveries", async () => {
+    const repository = createRepository();
+    const onDeliverySent = vi.fn();
+    const onDeliveryFailed = vi.fn();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(async () => ({ providerMessageId: "provider-unlinked" })),
+      onDeliverySent,
+      onDeliveryFailed,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "hello" },
+    });
+
+    await service.drainDue();
+
+    expect(onDeliverySent).not.toHaveBeenCalled();
+    expect(onDeliveryFailed).not.toHaveBeenCalled();
+  });
+
   it("hydrates due persisted deliveries for restart drains", async () => {
     const repository = createRepository();
     const send = vi.fn(async () => ({ providerMessageId: "provider-after-restart" }));
@@ -433,6 +491,37 @@ describe("ChannelDeliveryRuntimeService", () => {
       "2026-05-05T00:00:00.500Z",
       "degraded",
       "Delivery became stale before it could be sent.",
+    );
+  });
+
+  it("notifies linked commitments when delivery becomes stale", async () => {
+    const repository = createRepository();
+    const onDeliveryFailed = vi.fn();
+    let now = new Date("2026-05-05T00:00:00.000Z");
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      onDeliveryFailed,
+      now: () => now,
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "discord",
+      target: "channel-1",
+      payload: { message: "hello", commitmentId: "commitment-2" },
+      staleAfterMs: 500,
+    });
+
+    now = new Date("2026-05-05T00:00:00.500Z");
+    service.markStaleDeliveries();
+
+    expect(onDeliveryFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryId: queued.deliveryId,
+        commitmentId: "commitment-2",
+        status: "stale",
+        fallbackReason: "Delivery became stale before it could be sent.",
+      }),
     );
   });
 

@@ -11,6 +11,7 @@ describe("McpElicitationService", () => {
       prompt: "Which environment should I deploy to?",
       requestedSchema: { type: "object", properties: { env: { type: "string" } } },
       serverId: "srv-1",
+      owner: { operatorId: "operator-test" },
       ...overrides,
     });
   }
@@ -77,10 +78,16 @@ describe("McpElicitationService", () => {
         serverId: "srv-b",
         owner: { sessionId: "sess-2" },
       });
-      service.respondToRequest(a.elicitationId, { action: "accept", content: { ok: true } });
+      service.respondToRequest(a.elicitationId, {
+        action: "accept",
+        content: { ok: true },
+        owner: { sessionId: "sess-1" },
+      });
 
       expect(service.listRequests({ serverId: "srv-a" }).map((r) => r.elicitationId)).toEqual([a.elicitationId]);
       expect(service.listRequests({ sessionId: "sess-2" })).toHaveLength(1);
+      expect(service.listRequests({ owner: { sessionId: "sess-2" } })).toHaveLength(1);
+      expect(service.listRequests({ owner: { sessionId: "sess-missing" } })).toHaveLength(0);
       expect(service.listRequests({ status: "accepted" }).map((r) => r.elicitationId)).toEqual([a.elicitationId]);
       expect(service.listRequests({ status: "pending" })).toHaveLength(1);
     });
@@ -94,6 +101,7 @@ describe("McpElicitationService", () => {
       const updated = service.respondToRequest(request.elicitationId, {
         action: "accept",
         content: { env: "prod" },
+        owner: { operatorId: "operator-test" },
       });
 
       expect(updated.status).toBe("accepted");
@@ -104,8 +112,14 @@ describe("McpElicitationService", () => {
 
     it("declines and cancels without content", () => {
       const service = createService();
-      const declined = service.respondToRequest(createPending(service).elicitationId, { action: "decline" });
-      const cancelled = service.respondToRequest(createPending(service).elicitationId, { action: "cancel" });
+      const declined = service.respondToRequest(createPending(service).elicitationId, {
+        action: "decline",
+        owner: { operatorId: "operator-test" },
+      });
+      const cancelled = service.respondToRequest(createPending(service).elicitationId, {
+        action: "cancel",
+        owner: { operatorId: "operator-test" },
+      });
 
       expect(declined.status).toBe("declined");
       expect(declined.response?.content).toBeUndefined();
@@ -123,7 +137,11 @@ describe("McpElicitationService", () => {
     it("accepts an empty content object without throwing", () => {
       const service = createService();
       const request = createPending(service);
-      const updated = service.respondToRequest(request.elicitationId, { action: "accept", content: {} });
+      const updated = service.respondToRequest(request.elicitationId, {
+        action: "accept",
+        content: {},
+        owner: { operatorId: "operator-test" },
+      });
       expect(updated.status).toBe("accepted");
       expect(updated.response?.content?.value).toEqual({});
     });
@@ -153,14 +171,27 @@ describe("McpElicitationService", () => {
     it("throws 409 when the request has already been resolved", () => {
       const service = createService();
       const request = createPending(service);
-      service.respondToRequest(request.elicitationId, { action: "cancel" });
+      service.respondToRequest(request.elicitationId, { action: "cancel", owner: { operatorId: "operator-test" } });
+
+      try {
+        service.respondToRequest(request.elicitationId, { action: "cancel", owner: { operatorId: "operator-test" } });
+        expect.unreachable("expected respondToRequest to throw");
+      } catch (error) {
+        expect((error as McpElicitationServiceError).statusCode).toBe(409);
+        expect((error as Error).message).toMatch(/already been resolved/i);
+      }
+    });
+
+    it("requires caller owner scope before resolving a pending request", () => {
+      const service = createService();
+      const request = createPending(service, { owner: { operatorId: "op-1" } });
 
       try {
         service.respondToRequest(request.elicitationId, { action: "cancel" });
         expect.unreachable("expected respondToRequest to throw");
       } catch (error) {
-        expect((error as McpElicitationServiceError).statusCode).toBe(409);
-        expect((error as Error).message).toMatch(/already been resolved/i);
+        expect((error as McpElicitationServiceError).statusCode).toBe(403);
+        expect((error as Error).message).toMatch(/requires caller owner scope/i);
       }
     });
 

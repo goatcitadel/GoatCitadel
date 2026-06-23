@@ -63,6 +63,16 @@ interface TrustPolicyMatrixRow {
   } | null;
 }
 
+interface TrustPolicyDeclaredGovernanceView {
+  requiredEnv: Array<{ name: string; secret?: boolean }>;
+  stateDirs: Array<{ path: string; writeable?: boolean }>;
+  dependencies: {
+    tools: string[];
+    skillIds: string[];
+    capabilities: string[];
+  };
+}
+
 const STATUS_ORDER: TrustPolicyDashboardStatus[] = [
   "ready",
   "not_callable",
@@ -122,9 +132,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             { label: "Ready", value: String(summary.ready) },
             {
               label: "Needs review",
-              value: String(
-                summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust,
-              ),
+              value: String(summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust),
             },
           ]}
         >
@@ -354,7 +362,7 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
 }
 
 function renderDeclaredGovernance(row: TrustPolicyMatrixRow): ReactNode {
-  const meta = row.declaredMetadata;
+  const meta = normalizeDeclaredGovernance(row.declaredMetadata);
   const warnings = row.bundleWarnings?.map((item) => item.trim()).filter(Boolean) ?? [];
   const missingEnv = row.missingRequiredEnv?.map((item) => item.trim()).filter(Boolean) ?? [];
   const hasMeta = Boolean(
@@ -400,7 +408,7 @@ function renderDeclaredGovernance(row: TrustPolicyMatrixRow): ReactNode {
   );
 }
 
-function hasDeclaredDependencies(deps: TrustPolicySkillDeclaredMetadata["dependencies"]): boolean {
+function hasDeclaredDependencies(deps: TrustPolicyDeclaredGovernanceView["dependencies"]): boolean {
   return Boolean((deps.tools?.length ?? 0) || (deps.skillIds?.length ?? 0) || (deps.capabilities?.length ?? 0));
 }
 
@@ -534,8 +542,7 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
   }
   for (const skill of snapshot.skills) {
     const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "skill", skill.skillId);
-    const elevatedDeclarations =
-      skill.posture === "medium_trust_unverified" || Boolean(skill.bundleWarnings?.length);
+    const elevatedDeclarations = skill.posture === "medium_trust_unverified" || Boolean(skill.bundleWarnings?.length);
     rows.push({
       id: `skill:${skill.skillId ?? skill.name ?? rows.length}`,
       kind: "source",
@@ -800,17 +807,64 @@ function trustPolicyRowSearchText(row: TrustPolicyMatrixRow): string {
 }
 
 function declaredGovernanceSearchText(meta: TrustPolicySkillDeclaredMetadata | undefined): string | undefined {
-  if (!meta) {
+  const normalized = normalizeDeclaredGovernance(meta);
+  if (!normalized) {
     return undefined;
   }
   const parts = [
-    ...meta.requiredEnv.map((env) => env.name),
-    ...meta.stateDirs.map((dir) => dir.path),
-    ...(meta.dependencies.tools ?? []),
-    ...(meta.dependencies.skillIds ?? []),
-    ...(meta.dependencies.capabilities ?? []),
+    ...normalized.requiredEnv.map((env) => env.name),
+    ...normalized.stateDirs.map((dir) => dir.path),
+    ...normalized.dependencies.tools,
+    ...normalized.dependencies.skillIds,
+    ...normalized.dependencies.capabilities,
   ].filter((value): value is string => Boolean(value?.trim()));
   return parts.length ? parts.join(" ") : undefined;
+}
+
+function normalizeDeclaredGovernance(
+  meta: TrustPolicySkillDeclaredMetadata | undefined,
+): TrustPolicyDeclaredGovernanceView | undefined {
+  if (!isRecord(meta)) {
+    return undefined;
+  }
+  const dependencies = isRecord(meta.dependencies) ? meta.dependencies : {};
+  return {
+    requiredEnv: readObjectArray(meta.requiredEnv)
+      .map((env) => ({
+        name: readString(env.name),
+        secret: env.secret === true,
+      }))
+      .filter((env): env is { name: string; secret: boolean } => Boolean(env.name)),
+    stateDirs: readObjectArray(meta.stateDirs)
+      .map((dir) => ({
+        path: readString(dir.path),
+        writeable: dir.writeable === true,
+      }))
+      .filter((dir): dir is { path: string; writeable: boolean } => Boolean(dir.path)),
+    dependencies: {
+      tools: readStringArray(dependencies.tools),
+      skillIds: readStringArray(dependencies.skillIds),
+      capabilities: readStringArray(dependencies.capabilities),
+    },
+  };
+}
+
+function readObjectArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => readString(item)).filter((item): item is string => Boolean(item))
+    : [];
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeTrustPolicyStatus(status: TrustPolicyDashboardStatus | undefined): TrustPolicyDashboardStatus {

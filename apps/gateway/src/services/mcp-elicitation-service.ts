@@ -40,6 +40,7 @@ export interface McpElicitationListFilter {
   status?: McpElicitationStatus;
   serverId?: string;
   sessionId?: string;
+  owner?: McpElicitationOwnerMetadata;
 }
 
 export class McpElicitationServiceError extends Error {
@@ -116,6 +117,7 @@ export class McpElicitationService {
       .filter((request) => (filter.status ? request.status === filter.status : true))
       .filter((request) => (filter.serverId ? request.source.serverId === filter.serverId : true))
       .filter((request) => (filter.sessionId ? request.owner.sessionId === filter.sessionId : true))
+      .filter((request) => (filter.owner ? ownerMatchesCaller(request.owner, normalizeOwner(filter.owner)) : true))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, MCP_ROUTE_ELICITATION_LIMITS.listMaxItems);
   }
@@ -145,7 +147,9 @@ export class McpElicitationService {
             "responseContent",
           )
         : undefined;
-    const owner = normalizeResponseOwner(existing.owner, input.owner);
+    const responderOwner = normalizeOwner(input.owner);
+    const owner = normalizeResponseOwner(existing.owner, responderOwner);
+    const responderActor = responderOwner.operatorId ?? responderOwner.agentId ?? owner.operatorId ?? owner.agentId;
     const auditEventId = buildAuditEventId(elicitationId, input.action);
     const responseEvidence = buildStatusEvidence({
       status: nextStatus,
@@ -163,7 +167,7 @@ export class McpElicitationService {
         auditEventIds: [...existing.audit.auditEventIds, auditEventId],
         createdAt: existing.audit.createdAt,
         updatedAt: now,
-        actor: owner.operatorId ?? owner.agentId,
+        actor: responderActor,
         reasonCodes: ["mcp_elicitation_responded", `mcp_elicitation_${input.action}`],
       }),
       evidence: responseEvidence,
@@ -175,7 +179,7 @@ export class McpElicitationService {
       audit: {
         ...existing.audit,
         auditEventIds: [...existing.audit.auditEventIds, auditEventId],
-        updatedBy: owner.operatorId ?? owner.agentId ?? existing.audit.updatedBy,
+        updatedBy: responderActor ?? existing.audit.updatedBy,
         updatedAt: now,
         reasonCodes: [...existing.audit.reasonCodes, "mcp_elicitation_responded", `mcp_elicitation_${input.action}`],
       },
@@ -195,13 +199,16 @@ export class McpElicitationService {
 
 function normalizeResponseOwner(
   existingOwner: McpElicitationOwnerMetadata,
-  responseOwner: McpElicitationOwnerMetadata | undefined,
+  normalized: McpElicitationOwnerMetadata,
 ): McpElicitationOwnerMetadata {
-  const normalized = normalizeOwner(responseOwner);
   const ownerKeys = ["operatorId", "agentId", "workspaceId", "sessionId", "taskId", "runId", "surface"] as const;
+  if (!hasOwnerScope(normalized)) {
+    throw new McpElicitationServiceError("MCP elicitation response requires caller owner scope.", 403);
+  }
   for (const key of ownerKeys) {
     const responseValue = normalized[key];
-    if (responseValue !== undefined && responseValue !== existingOwner[key]) {
+    const existingValue = existingOwner[key];
+    if (existingValue !== undefined && responseValue !== existingValue) {
       throw new McpElicitationServiceError(
         `MCP elicitation response owner ${key} must match the original request owner scope.`,
         403,
@@ -209,6 +216,30 @@ function normalizeResponseOwner(
     }
   }
   return existingOwner;
+}
+
+function ownerMatchesCaller(
+  existingOwner: McpElicitationOwnerMetadata,
+  callerOwner: McpElicitationOwnerMetadata,
+): boolean {
+  const ownerKeys = ["operatorId", "agentId", "workspaceId", "sessionId", "taskId", "runId", "surface"] as const;
+  if (!hasOwnerScope(callerOwner)) {
+    return false;
+  }
+  const comparableKeys = ownerKeys.filter((key) => existingOwner[key] !== undefined && callerOwner[key] !== undefined);
+  return comparableKeys.length > 0 && comparableKeys.every((key) => existingOwner[key] === callerOwner[key]);
+}
+
+function hasOwnerScope(owner: McpElicitationOwnerMetadata): boolean {
+  return Boolean(
+    owner.operatorId ??
+    owner.agentId ??
+    owner.workspaceId ??
+    owner.sessionId ??
+    owner.taskId ??
+    owner.runId ??
+    owner.surface,
+  );
 }
 
 function buildBoundedPrompt(prompt: string): McpElicitationBoundedTextBody {

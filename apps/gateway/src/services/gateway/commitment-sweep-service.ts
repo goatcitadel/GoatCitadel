@@ -6,7 +6,8 @@ import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
  *
  * Runs inside the maintenance scheduler tick. Lists due + pending check-ins,
  * delivers each (via F1's autonomous-turn / channel-delivery convention)
- * respecting a per-session cooldown + active-hours window, then marks them sent.
+ * respecting a per-session cooldown + active-hours window, then marks them
+ * delivery-pending. Channel delivery itself completes asynchronously.
  * Superseded/dismissed/sent rows are already excluded by `listDue` (pending-only).
  * The whole sweep is a no-op while the master autonomy switch is off.
  */
@@ -35,8 +36,10 @@ export interface CommitmentSweepDeps {
    * Resolves to true when delivery was enqueued.
    */
   deliverCommitment(commitment: AgentCommitmentRecord): Promise<boolean> | boolean;
-  /** Transition a delivered commitment to `sent`. */
-  markSent(commitmentId: string): boolean;
+  /** Transition an enqueued commitment to `delivery_pending`. */
+  markDeliveryPending(commitmentId: string): boolean;
+  /** Transition a commitment whose enqueue or async delivery failed to `delivery_failed`. */
+  markDeliveryFailed?(commitmentId: string): boolean;
   now?: () => Date;
   /** Optional per-session active-hours override (defaults to 08:00–22:00 local). */
   resolveActiveHours?: (sessionId: string) => ActiveHoursWindow | undefined;
@@ -53,9 +56,9 @@ export interface CommitmentSweepResult {
 
 /**
  * Deliver due check-ins. Per-session: skip if within cooldown or outside active
- * hours; otherwise deliver, then `markSent`. A delivery within the sweep applies
- * the session cooldown to *subsequent* due commitments in the same tick so a
- * backlog cannot fire as a burst.
+ * hours; otherwise enqueue delivery, then mark `delivery_pending`. An enqueue
+ * within the sweep applies the session cooldown to *subsequent* due commitments
+ * in the same tick so a backlog cannot fire as a burst.
  */
 export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<CommitmentSweepResult> {
   const result: CommitmentSweepResult = {
@@ -95,13 +98,15 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
     try {
       const delivered = await deps.deliverCommitment(commitment);
       if (!delivered) {
+        deps.markDeliveryFailed?.(commitment.commitmentId);
         result.failed += 1;
         continue;
       }
-      deps.markSent(commitment.commitmentId);
+      deps.markDeliveryPending(commitment.commitmentId);
       deliveredSessionsThisTick.add(commitment.sessionId);
       result.delivered += 1;
     } catch {
+      deps.markDeliveryFailed?.(commitment.commitmentId);
       result.failed += 1;
     }
   }

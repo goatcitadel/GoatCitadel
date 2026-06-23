@@ -34,6 +34,7 @@ export interface TurnRuntimeRequest {
   authActorId?: string;
   authActorSource?: ToolPolicyActorContext["authActorSource"];
   permissionProfileId?: string;
+  policyContext?: ToolPolicyActorContext;
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;

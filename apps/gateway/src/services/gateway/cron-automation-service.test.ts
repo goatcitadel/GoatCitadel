@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJobRecord } from "@goatcitadel/contracts";
+import type { CronJobRecord, DurableRunStatus } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
@@ -253,11 +253,21 @@ function createService(
     cronJobs?: FakeCronJobs;
     isFeatureEnabled?: boolean;
     handlers?: Partial<CronAutomationServiceDeps["runHandlers"]>;
+    durableStatuses?: Record<string, DurableRunStatus>;
   } = {},
 ): CronAutomationService {
   const cronJobs = options.cronJobs ?? new FakeCronJobs();
   return new CronAutomationService({
-    storage: { db, cronJobs } as unknown as Storage,
+    storage: {
+      db,
+      cronJobs,
+      durableRuns: {
+        getRun: (runId: string) => {
+          const status = options.durableStatuses?.[runId];
+          return status ? { runId, status } : undefined;
+        },
+      },
+    } as unknown as Storage,
     persistCronJobsConfig: () => {},
     publishRealtime,
     requireFeatureEnabled: () => {},
@@ -627,8 +637,11 @@ describe("CronAutomationService job behavior", () => {
       cronJobs.upsert(buildTaskJob({ jobId: `${action.replace("_", "-")}-job`, action }));
     }
 
+    const runIdsByJob = new Map<string, string>();
     for (const job of cronJobs.list()) {
-      await expect(service.runCronJobNow(job.jobId)).resolves.toMatchObject({ jobId: job.jobId, status: "ok" });
+      const result = await service.runCronJobNow(job.jobId);
+      expect(result).toMatchObject({ jobId: job.jobId, status: "ok" });
+      runIdsByJob.set(job.jobId, result.runId);
     }
 
     expect(handlers.improvement).toHaveBeenCalledTimes(1);
@@ -645,6 +658,9 @@ describe("CronAutomationService job behavior", () => {
       "resolved",
       "resolved",
     ]);
+    for (const row of db.review.values()) {
+      expect(row.run_id).toBe(runIdsByJob.get(row.job_id));
+    }
   });
 
   it("keeps no_agent cron jobs behind the explicit experimental env gate", async () => {
@@ -765,10 +781,11 @@ describe("CronAutomationService job behavior", () => {
           },
         },
       });
-      await service.runCronJobNow("watchdog-job");
+      const warningResult = await service.runCronJobNow("watchdog-job");
       expect(recordSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           jobId: "watchdog-job",
+          runId: warningResult.runId,
           severity: "medium",
           status: "open",
         }),
@@ -806,10 +823,15 @@ describe("CronAutomationService job behavior", () => {
       }),
     );
 
-    await service.runCronJobNow("watchdog-details");
+    const result = await service.runCronJobNow("watchdog-details");
 
     const [row] = [...db.review.values()];
-    expect(row).toMatchObject({ job_id: "watchdog-details", severity: "high", status: "open" });
+    expect(row).toMatchObject({
+      job_id: "watchdog-details",
+      run_id: result.runId,
+      severity: "high",
+      status: "open",
+    });
     expect(JSON.parse(row?.summary_json ?? "{}")).toMatchObject({
       trigger: "watchdog",
       checkId: "durable_dead_letters",
@@ -1059,8 +1081,13 @@ describe("agent_turn cron action", () => {
       durableRunId: "durable-99",
       sessionId: "sess-cron",
       turnId: "turn-99",
+      profilePosture: "creator_intersection" as const,
     }));
-    const service = createService(db, publishRealtime, { cronJobs, handlers: { agentTurn } });
+    const service = createService(db, publishRealtime, {
+      cronJobs,
+      handlers: { agentTurn },
+      durableStatuses: { "durable-99": "running" },
+    });
 
     const created = service.createCronJob({
       jobId: "agent-turn-job",
@@ -1078,7 +1105,14 @@ describe("agent_turn cron action", () => {
     });
 
     const result = await service.runCronJobNow("agent-turn-job");
-    expect(result).toMatchObject({ jobId: "agent-turn-job", status: "ok" });
+    expect(result).toMatchObject({
+      jobId: "agent-turn-job",
+      status: "ok",
+      childDurableRunId: "durable-99",
+      childDurableStatus: "running",
+      childTurnId: "turn-99",
+      profilePosture: "creator_intersection",
+    });
     expect(agentTurn).toHaveBeenCalledTimes(1);
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({
       runId: result.runId,
@@ -1091,11 +1125,31 @@ describe("agent_turn cron action", () => {
         type: "cron_agent_turn_enqueued",
         jobId: "agent-turn-job",
         durableRunId: "durable-99",
+        childDurableRunId: "durable-99",
         sessionId: "sess-cron",
         turnId: "turn-99",
+        childTurnId: "turn-99",
+        profilePosture: "creator_intersection",
       }),
     );
     expect(cronJobs.get("agent-turn-job")?.lastRunStatus).toBe("ok");
+    const lookup = service.findCronRunById(result.runId);
+    expect(lookup).toMatchObject({
+      childDurableRunId: "durable-99",
+      childDurableStatus: "running",
+      childTurnId: "turn-99",
+      profilePosture: "creator_intersection",
+    });
+    expect(service.listCronReviewQueue()[0]).toMatchObject({
+      jobId: "agent-turn-job",
+      runId: result.runId,
+      summary: expect.objectContaining({
+        trigger: "manual_run",
+        childDurableRunId: "durable-99",
+        childTurnId: "turn-99",
+        profilePosture: "creator_intersection",
+      }),
+    });
   });
 
   it("rejects creating an agent_turn job with an empty prompt", () => {
@@ -1136,6 +1190,44 @@ describe("agent_turn cron action", () => {
     expect(summary).toMatchObject({ dueCount: 1, ranCount: 1 });
     expect(agentTurn).toHaveBeenCalledTimes(1);
     expect(cronJobs.get("agent-turn-due")?.lastRunStatus).toBe("ok");
+  });
+
+  it("records a review warning when an agent_turn run fails closed to inbox", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const agentTurn = vi.fn(async () => ({
+      mode: "inbox" as const,
+      taskId: "task-fallback",
+      profilePosture: "creator_profile_missing" as const,
+      profileWarning: "creator profile missing",
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, handlers: { agentTurn } });
+    service.createCronJob({
+      jobId: "agent-turn-fail-closed",
+      name: "Agent turn fail closed",
+      action: "agent_turn",
+      schedule: "0 12 * * * UTC",
+      actionConfig: { agentTurn: { prompt: "Run safely" } },
+    });
+
+    const result = await service.runCronJobNow("agent-turn-fail-closed");
+    const [review] = service.listCronReviewQueue();
+
+    expect(result).toMatchObject({ jobId: "agent-turn-fail-closed", status: "ok" });
+    expect(review).toMatchObject({
+      jobId: "agent-turn-fail-closed",
+      runId: result.runId,
+      severity: "medium",
+      status: "open",
+      summary: expect.objectContaining({
+        trigger: "agent_turn_profile_warning",
+        mode: "inbox",
+        taskId: "task-fallback",
+        profilePosture: "creator_profile_missing",
+        warning: "creator profile missing",
+      }),
+      diff: { type: "agent_turn_profile_warning", changed: false },
+    });
   });
 });
 

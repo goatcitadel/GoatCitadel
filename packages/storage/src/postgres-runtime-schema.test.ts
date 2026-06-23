@@ -52,6 +52,22 @@ describe("Postgres runtime schema generation", () => {
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
 
+  it("keeps incremental Postgres migrations aligned with recent SQLite runtime tables", () => {
+    const autonomyMigration = POSTGRES_MIGRATIONS.find((migration) => migration.name === "autonomy_audit_schema");
+    const delegationParentMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "chat_delegation_parent_run_id",
+    );
+
+    assert.ok(autonomyMigration, "expected Postgres migration for autonomy_audit");
+    assert.match(autonomyMigration.sql, /CREATE TABLE IF NOT EXISTS autonomy_audit/);
+    assert.match(autonomyMigration.sql, /restore_ref_json TEXT NOT NULL DEFAULT '\{\}'/);
+    assert.match(autonomyMigration.sql, /idx_autonomy_audit_unreverted/);
+
+    assert.ok(delegationParentMigration, "expected Postgres migration for chat_delegation_runs.parent_run_id");
+    assert.match(delegationParentMigration.sql, /ADD COLUMN IF NOT EXISTS parent_run_id TEXT/);
+    assert.match(delegationParentMigration.sql, /idx_chat_delegation_runs_parent/);
+  });
+
   it("preserves SQLite partial-index WHERE predicates on the generated Postgres schema", () => {
     const sql = buildPostgresRuntimeSchemaSql();
 

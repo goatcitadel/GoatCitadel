@@ -24,12 +24,20 @@ export type AgentCommitmentKind =
 
 /**
  * Lifecycle status of a commitment record.
- * - `pending`  — inferred + persisted, not yet delivered.
+ * - `pending`  — inferred + persisted, not yet queued for delivery.
+ * - `delivery_pending` — accepted into the autonomous delivery path; final channel send is still async.
+ * - `delivery_failed` — autonomous delivery failed or went stale before a channel send was confirmed.
  * - `sent`     — the due check-in was delivered.
  * - `dismissed`— operator/curator suppressed it (never deliver).
  * - `superseded` — a newer commitment (or user action) replaced it.
  */
-export type AgentCommitmentStatus = "pending" | "sent" | "dismissed" | "superseded";
+export type AgentCommitmentStatus =
+  | "pending"
+  | "delivery_pending"
+  | "delivery_failed"
+  | "sent"
+  | "dismissed"
+  | "superseded";
 
 /** Provenance of a commitment row — who/what created it. */
 export type AgentCommitmentCreatedBy = "classifier" | "operator" | "system";
@@ -76,7 +84,7 @@ export interface AgentCommitmentRecord {
   status: AgentCommitmentStatus;
   createdBy: AgentCommitmentCreatedBy;
   createdAt: string;
-  /** Set when the due check-in is delivered (`status === "sent"`). */
+  /** Set when the due check-in is confirmed delivered (`status === "sent"`). */
   sentAt?: string;
 }
 

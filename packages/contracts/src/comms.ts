@@ -37,6 +37,8 @@ export interface ChannelSendInput extends ChannelGovernanceInput {
   replyToPartIndex?: number;
   effectId?: string;
   subject?: string;
+  /** Optional autonomous commitment linkage used to update delivery lifecycle truth. */
+  commitmentId?: string;
   signal?: AbortSignal;
 }
 

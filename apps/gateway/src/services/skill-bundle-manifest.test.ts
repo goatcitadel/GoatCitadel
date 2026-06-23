@@ -62,6 +62,23 @@ describe("validateSkillBundleManifestDirectory declared governance metadata", ()
     expect(result.errors.some((e) => e.includes("../../etc"))).toBe(true);
   });
 
+  it("keeps malformed declared dependencies from crashing validation", async () => {
+    const dir = makeSkillDir({
+      declaredDependencies: { capabilities: "network", tools: ["fs.read", 123] },
+    });
+
+    const result = await validateSkillBundleManifestDirectory(dir);
+
+    expect(result.status).toBe("invalid");
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        "declaredDependencies.capabilities must be an array when provided",
+        "declaredDependencies.tools[1] must be a non-empty string",
+      ]),
+    );
+    expect(result.declaredMetadata?.dependencies.tools).toEqual(["fs.read"]);
+  });
+
   it("omits declaredMetadata when the manifest declares none", async () => {
     const dir = makeSkillDir({});
     const result = await validateSkillBundleManifestDirectory(dir);
@@ -89,6 +106,23 @@ describe("readSkillBundleDeclaredMetadata", () => {
     expect(result?.warnings.some((w) => w.includes("secret env var"))).toBe(true);
     expect(result?.warnings.some((w) => w.includes("writeable state directory"))).toBe(true);
     expect(result?.warnings.some((w) => w.includes("elevated capabilities"))).toBe(true);
+  });
+
+  it("returns validation errors with declared metadata instead of throwing", async () => {
+    const dir = makeSkillDir({
+      requiredEnv: [{ name: "  OK_KEY  " }, { required: true }],
+      declaredDependencies: { capabilities: "network" },
+    });
+
+    const result = await readSkillBundleDeclaredMetadata(dir);
+
+    expect(result?.declaredMetadata.requiredEnv).toEqual([{ name: "OK_KEY" }]);
+    expect(result?.errors).toEqual(
+      expect.arrayContaining([
+        "requiredEnv entries must declare a name",
+        "declaredDependencies.capabilities must be an array when provided",
+      ]),
+    );
   });
 
   it("returns undefined when no manifest is present", async () => {

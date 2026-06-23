@@ -415,6 +415,7 @@ export interface ChatAgentTurnInput {
   authActorSource?: ToolPolicyActorContext["authActorSource"];
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
+  policyContext?: ToolPolicyActorContext;
   policyRunId?: string;
   policyTaskId?: string;
   fullWebAccess?: boolean;
@@ -480,6 +481,25 @@ export interface ChatAgentOrchestratorDeps {
   };
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
+}
+
+function buildTurnToolPolicyContext(
+  input: Partial<ChatAgentTurnInput>,
+  overrides: Partial<ToolPolicyActorContext> = {},
+): ToolPolicyActorContext {
+  return {
+    ...(input.policyContext ?? {}),
+    operatorId: input.operatorId ?? input.policyContext?.operatorId,
+    authActorId: input.authActorId ?? input.policyContext?.authActorId,
+    authActorSource: input.authActorSource ?? input.policyContext?.authActorSource,
+    taskId: input.policyTaskId ?? input.policyContext?.taskId,
+    runId: input.policyRunId ?? input.policyContext?.runId,
+    surface: input.mode ?? input.policyContext?.surface,
+    permissionProfileId: input.permissionProfileId ?? input.policyContext?.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId ?? input.policyContext?.localOperatorOverrideId,
+    fullWebAccess: input.fullWebAccess ?? input.policyContext?.fullWebAccess,
+    ...overrides,
+  };
 }
 
 type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>[number];
@@ -3282,9 +3302,7 @@ export class ChatAgentOrchestrator {
         content: assistantContent,
         repaired: Boolean(finalizedCompletionWithRuntime.repaired),
         repair: finalizedCompletionWithRuntime.repair,
-        ...(finalizedCompletionWithRuntime.degraded
-          ? { degraded: finalizedCompletionWithRuntime.degraded }
-          : {}),
+        ...(finalizedCompletionWithRuntime.degraded ? { degraded: finalizedCompletionWithRuntime.degraded } : {}),
       };
     }
 
@@ -3482,16 +3500,7 @@ export class ChatAgentOrchestrator {
           permissionProfileId: input.permissionProfileId,
           localOperatorOverrideId: input.localOperatorOverrideId,
           surface: input.mode,
-          policyContext: {
-            operatorId: input.operatorId,
-            authActorId: input.authActorId,
-            authActorSource: input.authActorSource,
-            taskId: input.policyTaskId,
-            runId: input.policyRunId,
-            surface: input.mode,
-            permissionProfileId: input.permissionProfileId,
-            localOperatorOverrideId: input.localOperatorOverrideId,
-          },
+          policyContext: buildTurnToolPolicyContext(input),
         });
         if (!access.allowed) {
           continue;
@@ -3785,17 +3794,7 @@ export class ChatAgentOrchestrator {
           source: "agent",
           reason: `chat mode ${input.input.mode}`,
         },
-        policyContext: {
-          operatorId: input.input.operatorId,
-          authActorId: input.input.authActorId,
-          authActorSource: input.input.authActorSource,
-          taskId: input.input.policyTaskId,
-          runId: input.input.policyRunId,
-          surface: input.input.mode,
-          permissionProfileId: input.input.permissionProfileId,
-          localOperatorOverrideId: input.input.localOperatorOverrideId,
-          fullWebAccess: input.input.fullWebAccess,
-        },
+        policyContext: buildTurnToolPolicyContext(input.input),
       });
       const persistedToolResult = await this.persistToolArtifactsIfNeeded({
         sessionId: input.input.sessionId,
@@ -4452,17 +4451,7 @@ export class ChatAgentOrchestrator {
             source: "agent",
             reason: `chat mode ${input.turnInput.mode}`,
           },
-          policyContext: {
-            operatorId: input.turnInput.operatorId,
-            authActorId: input.turnInput.authActorId,
-            authActorSource: input.turnInput.authActorSource,
-            taskId: input.turnInput.policyTaskId,
-            runId: input.turnInput.policyRunId,
-            surface: input.turnInput.mode,
-            permissionProfileId: input.turnInput.permissionProfileId,
-            localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
-            fullWebAccess: input.turnInput.fullWebAccess,
-          },
+          policyContext: buildTurnToolPolicyContext(input.turnInput),
         });
         if (result.outcome !== "executed") {
           input.fallbackChain.push(
@@ -4585,17 +4574,7 @@ export class ChatAgentOrchestrator {
             source: "agent",
             reason: `search engine fallback (${engine}) after ${input.classification.failureClass}`,
           },
-          policyContext: {
-            operatorId: input.turnInput.operatorId,
-            authActorId: input.turnInput.authActorId,
-            authActorSource: input.turnInput.authActorSource,
-            taskId: input.turnInput.policyTaskId,
-            runId: input.turnInput.policyRunId,
-            surface: input.turnInput.mode,
-            permissionProfileId: input.turnInput.permissionProfileId,
-            localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
-            fullWebAccess: input.turnInput.fullWebAccess,
-          },
+          policyContext: buildTurnToolPolicyContext(input.turnInput),
         });
         if (result.outcome !== "executed") {
           input.fallbackChain.push(
@@ -4994,16 +4973,7 @@ export class ChatAgentOrchestrator {
         source: "agent",
         reason: `chat mode ${input.input.mode}; safe write fallback`,
       },
-      policyContext: {
-        operatorId: input.input.operatorId,
-        authActorId: input.input.authActorId,
-        authActorSource: input.input.authActorSource,
-        taskId: input.input.policyTaskId,
-        runId: input.input.policyRunId,
-        surface: input.input.mode,
-        permissionProfileId: input.input.permissionProfileId,
-        localOperatorOverrideId: input.input.localOperatorOverrideId,
-      },
+      policyContext: buildTurnToolPolicyContext(input.input),
     });
 
     return {
@@ -5738,7 +5708,9 @@ function applyBlockerTemplateStrictness(input: {
   const detail = [
     `${formatToolLabel(input.toolName)} was blocked${reason ? `: ${reason}` : " by policy"}.`,
     "State the exact blocker, the specific approval or capability needed to proceed, and a concrete alternative the operator can take now.",
-    input.host ? `If a host is involved (${input.host}), name it and request allowlist approval rather than retrying it.` : undefined,
+    input.host
+      ? `If a host is involved (${input.host}), name it and request allowlist approval rather than retrying it.`
+      : undefined,
     "Do not silently retry the same blocked action or imply it succeeded.",
   ]
     .filter((part): part is string => Boolean(part))

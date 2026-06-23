@@ -2050,4 +2050,36 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON runtime_evidence_envelopes(workspace_id, created_at DESC);
     `,
   },
+  {
+    version: 69,
+    name: "autonomy_audit_schema",
+    sql: `
+      CREATE TABLE IF NOT EXISTS autonomy_audit (
+        audit_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        target_key TEXT NOT NULL DEFAULT '',
+        occurred_at TEXT NOT NULL,
+        restore_ref_json TEXT NOT NULL DEFAULT '{}',
+        reverted INTEGER NOT NULL DEFAULT 0,
+        reverted_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_autonomy_audit_since
+        ON autonomy_audit(occurred_at);
+
+      CREATE INDEX IF NOT EXISTS idx_autonomy_audit_unreverted
+        ON autonomy_audit(reverted, occurred_at);
+    `,
+  },
+  {
+    version: 70,
+    name: "chat_delegation_parent_run_id",
+    sql: `
+      ALTER TABLE chat_delegation_runs
+        ADD COLUMN IF NOT EXISTS parent_run_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_chat_delegation_runs_parent
+        ON chat_delegation_runs(parent_run_id, started_at DESC);
+    `,
+  },
 ];

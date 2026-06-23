@@ -124,7 +124,6 @@ import type {
   CompanionSessionRefreshResponse,
   CompanionSessionRevokeResponse,
   AuthSettingsUpdateInput,
-  FilesystemReadAccessMode,
   ToolApprovalMode,
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
@@ -441,6 +440,10 @@ import {
 import { BackgroundReviewService } from "./background-review-service.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
+import {
+  buildScheduledCreatorIntersectionProfile,
+  permissionProfileAppliesToCreator,
+} from "./gateway/scheduled-profile-intersection.js";
 import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
 import {
   buildScheduleCreateActionConfig,
@@ -860,6 +863,7 @@ export class GatewayService {
   public readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
+  private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
   public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
@@ -883,6 +887,8 @@ export class GatewayService {
     this.channelDeliveryRuntimeService = new ChannelDeliveryRuntimeService({
       repository: this.storage.commsDeliveries,
       send: (input) => this.sendQueuedChannelDelivery(input),
+      onDeliverySent: (record) => this.markLinkedCommitmentDeliverySent(record),
+      onDeliveryFailed: (record) => this.markLinkedCommitmentDeliveryFailed(record),
     });
     this.personalityCatalogService = new PersonalityCatalogService(this.storage.systemSettings);
     this.realtimeEventService = new RealtimeEventService({
@@ -1396,6 +1402,7 @@ export class GatewayService {
         this.mcpElicitationService.respondToRequest(input.elicitationId, {
           action: input.action,
           content: input.content,
+          owner: input.owner,
         }),
       listMcpElicitations: (filter) => this.mcpElicitationService.listRequests(filter),
       policyEngine: this.policyEngine,
@@ -5280,20 +5287,41 @@ export class GatewayService {
       return { mode: "inbox", taskId: task.taskId };
     }
     const sessionId = this.ensureCronAgentSession(input.job.jobId, input.config.sessionId);
+    const createdBy = input.config.createdBy;
+    const systemActorId = createdBy?.operatorId?.trim() || createdBy?.authActorId?.trim() || "system-cron";
+    const scheduledPolicy = this.resolveScheduledAgentTurnPolicy({
+      config: input.config,
+      jobId: input.job.jobId,
+      runId: input.runId,
+      sessionId,
+      systemActorId,
+    });
+    if ("failClosedReason" in scheduledPolicy) {
+      const task = this.createCronInboxTask(input.job);
+      return {
+        mode: "inbox",
+        taskId: task.taskId,
+        profilePosture: scheduledPolicy.profilePosture,
+        profileWarning: scheduledPolicy.failClosedReason,
+      };
+    }
     const run = await this.enqueueAutonomousChatTurn({
       sessionId,
       prompt: input.config.prompt,
       runId: input.runId,
-      systemActorId: "system-cron",
+      systemActorId,
       reason: `cron agent_turn:${input.job.jobId}`,
       deliveryChannel: input.config.deliveryChannel,
       deliverMode: input.config.deliverMode ?? "always",
+      policyContext: scheduledPolicy.policyContext,
+      profilePosture: scheduledPolicy.profilePosture,
     });
     return {
       mode: "agent_turn",
       durableRunId: run?.runId,
       sessionId,
       turnId: run?.turnId,
+      profilePosture: scheduledPolicy.profilePosture,
     };
   }
 
@@ -5301,9 +5329,10 @@ export class GatewayService {
    * Maintenance-tick commitment sweep (P1-F3). Delivers due + pending inferred
    * check-ins (oldest-due first) as autonomous (restricted-profile) turns seeded
    * with the suggested text, respecting per-session cooldown + active-hours, then
-   * marks them sent. No-op while the master autonomy switch is off or durable
-   * execution is disabled (the delivery path requires a durable run). Superseded /
-   * dismissed / already-sent rows are excluded by `listDue` (pending-only).
+   * marks them delivery-pending. No-op while the master autonomy switch is off
+   * or durable execution is disabled (the delivery path requires a durable run).
+   * Superseded / dismissed / already-queued rows are excluded by `listDue`
+   * (pending-only).
    */
   private async runCommitmentSweep(): Promise<void> {
     if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
@@ -5314,18 +5343,47 @@ export class GatewayService {
       listDueCommitments: (nowIso, limit) => this.storage.agentCommitments.listDue(nowIso, limit),
       getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
       deliverCommitment: async (commitment) => {
+        const deliveryChannel = this.resolveCommitmentDeliveryChannel(commitment.sessionId);
+        if (!deliveryChannel) {
+          return false;
+        }
         const run = await this.enqueueAutonomousChatTurn({
           sessionId: commitment.sessionId,
           prompt: buildCommitmentCheckInPrompt(commitment.suggestedText),
           runId: `commitment_${commitment.commitmentId}`,
           systemActorId: "system-commitment",
           reason: `commitment check-in:${commitment.commitmentId}`,
+          deliveryChannel,
           deliverMode: "always",
+          commitmentId: commitment.commitmentId,
         });
         return Boolean(run?.runId);
       },
-      markSent: (commitmentId) => this.storage.agentCommitments.markSent(commitmentId),
+      markDeliveryPending: (commitmentId) => this.storage.agentCommitments.markDeliveryPending(commitmentId),
+      markDeliveryFailed: (commitmentId) => this.storage.agentCommitments.markDeliveryFailed(commitmentId),
     });
+  }
+
+  private resolveCommitmentDeliveryChannel(sessionId: string): CronAgentTurnConfig["deliveryChannel"] | undefined {
+    const binding = this.storage.chatSessionBindings.get(sessionId);
+    if (
+      !binding ||
+      binding.transport !== "integration" ||
+      !binding.writable ||
+      !binding.connectionId ||
+      !binding.target
+    ) {
+      return undefined;
+    }
+    const connector = this.listConnectorRecords("integration_connection").find(
+      (item) => item.status === "active" && item.sourceId === binding.connectionId,
+    );
+    const channelKey = typeof connector?.metadata?.key === "string" ? connector.metadata.key.trim() : "";
+    const target = binding.target.trim();
+    if (!channelKey || !target) {
+      return undefined;
+    }
+    return { channelKey, target };
   }
 
   /**
@@ -5456,6 +5514,89 @@ export class GatewayService {
     return sessionId;
   }
 
+  private resolveScheduledAgentTurnPolicy(input: {
+    config: CronAgentTurnConfig;
+    jobId: string;
+    runId: string;
+    sessionId: string;
+    systemActorId: string;
+  }):
+    | { policyContext: ToolPolicyActorContext; profilePosture: "scheduled_restricted" | "creator_intersection" }
+    | {
+        profilePosture:
+          | "creator_profile_missing"
+          | "creator_profile_archived"
+          | "creator_profile_scope_mismatch"
+          | "creator_profile_invalid";
+        failClosedReason: string;
+      } {
+    const base = buildAutonomousTurnContext({
+      kind: "scheduled",
+      systemActorId: input.systemActorId,
+      runId: input.runId,
+      sessionId: input.sessionId,
+    });
+    const createdBy = input.config.createdBy;
+    if (!createdBy) {
+      return { policyContext: base.policyContext, profilePosture: "scheduled_restricted" };
+    }
+    const creatorProfileId = createdBy.permissionProfileId?.trim();
+    if (!creatorProfileId) {
+      return {
+        profilePosture: "creator_profile_missing",
+        failClosedReason: `Scheduled agent_turn ${input.jobId} was created by a model/tool call without permission profile provenance.`,
+      };
+    }
+
+    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    let creatorProfile: PermissionProfileRecord;
+    try {
+      creatorProfile = this.storage.permissionProfiles.getProfile(creatorProfileId);
+    } catch (error) {
+      return {
+        profilePosture: "creator_profile_missing",
+        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (creatorProfile.status !== "active") {
+      return {
+        profilePosture: "creator_profile_archived",
+        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is not active.`,
+      };
+    }
+    const creatorActorId = createdBy.operatorId?.trim() || createdBy.authActorId?.trim();
+    if (!permissionProfileAppliesToCreator({ profile: creatorProfile, creatorActorId, workspaceId })) {
+      return {
+        profilePosture: "creator_profile_scope_mismatch",
+        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is no longer active for the creator/workspace scope.`,
+      };
+    }
+
+    const profile = buildScheduledCreatorIntersectionProfile({
+      creatorProfile,
+      runId: input.runId,
+      knownToolNames: this.listToolCatalog().map((tool) => tool.toolName),
+    });
+    return {
+      profilePosture: "creator_intersection",
+      policyContext: {
+        ...base.policyContext,
+        permissionProfileId: profile.profileId,
+        permissionProfile: profile,
+        workspaceId,
+      },
+    };
+  }
+
+  private registerSyntheticPermissionProfile(profile: PermissionProfileRecord): void {
+    if (!profile.profileId.startsWith("scheduled-intersection:")) {
+      return;
+    }
+    this.syntheticPermissionProfiles.set(profile.profileId, profile);
+  }
+
   /**
    * Prepare + enqueue a `chat.turn.execute` durable run for an autonomous
    * (cron/heartbeat/proactive) turn. Persists the user message + trace via
@@ -5473,6 +5614,9 @@ export class GatewayService {
     kind?: AutonomousTurnKind;
     deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
     deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
+    policyContext?: ToolPolicyActorContext;
+    profilePosture?: AgentTurnCronRunOutcome["profilePosture"];
+    commitmentId?: string;
   }): Promise<{ runId: string; turnId: string } | undefined> {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
@@ -5486,12 +5630,14 @@ export class GatewayService {
       runId: input.runId,
       sessionId: input.sessionId,
     });
-    const request: ChatSendMessageRequest = {
+    const policyContext = input.policyContext ?? autonomousContext.policyContext;
+    const request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext } = {
       content: input.prompt,
       operatorId: autonomousContext.policyContext.operatorId,
       authActorId: autonomousContext.policyContext.authActorId,
       authActorSource: autonomousContext.policyContext.authActorSource,
       permissionProfileId,
+      policyContext,
     };
     const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
     const run = this.createDurableRun({
@@ -5508,9 +5654,14 @@ export class GatewayService {
           reason: input.reason,
           deliverMode: input.deliverMode,
           ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
+          ...(input.profilePosture ? { profilePosture: input.profilePosture } : {}),
+          ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
         },
       },
     });
+    if (policyContext.permissionProfile && policyContext.permissionProfileId) {
+      this.registerSyntheticPermissionProfile(policyContext.permissionProfile);
+    }
     this.persistInitialDurableChatTurnTrace(prepared, request, run);
     this.persistChatStreamChunk(
       {
@@ -5539,7 +5690,8 @@ export class GatewayService {
    *  - maps `op` to the existing `cronAutomationService` create/list/delete,
    *  - forces `action:"agent_turn"` for created jobs,
    *  - stamps the creator actor + permission profile from `policyContext` onto the
-   *    job so F1 fires it bounded to <= the creator's privileges, and
+   *    job for ownership, anti-recursion, and audit while fired turns stay on the
+   *    restricted scheduled profile, and
    *  - enforces the per-creator cap, the >=15min interval floor, and the depth-1
    *    chain cap (all in the pure `schedule-tool-support` validator).
    *
@@ -6200,17 +6352,27 @@ export class GatewayService {
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
-    const resolved = this.storage.permissionProfiles.resolveContext({
-      operatorId: input.operatorId,
-      workspaceId: input.workspaceId,
-      sessionId: input.sessionId,
-      taskId: input.taskId,
-      runId: input.runId,
-      surface: input.surface,
-      profileId: input.permissionProfileId,
-      overrideId: input.localOperatorOverrideId,
-      disableLocalOperatorOverrides: this.config.assistant.deploymentProfile === "remote_hardened",
-    });
+    const syntheticPermissionProfile = input.permissionProfileId
+      ? this.syntheticPermissionProfiles.get(input.permissionProfileId)
+      : undefined;
+    if (input.permissionProfileId?.startsWith("scheduled-intersection:") && !syntheticPermissionProfile) {
+      throw new ConflictError({
+        message: `Non-persisted permission profile ${input.permissionProfileId} is unavailable for this runtime.`,
+      });
+    }
+    const resolved = syntheticPermissionProfile
+      ? { permissionProfile: syntheticPermissionProfile, localOperatorOverride: undefined }
+      : this.storage.permissionProfiles.resolveContext({
+          operatorId: input.operatorId,
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          runId: input.runId,
+          surface: input.surface,
+          profileId: input.permissionProfileId,
+          overrideId: input.localOperatorOverrideId,
+          disableLocalOperatorOverrides: this.config.assistant.deploymentProfile === "remote_hardened",
+        });
     if (
       this.config.assistant.deploymentProfile === "remote_hardened" &&
       resolved.permissionProfile.approvalMode === "bypass"
@@ -6613,7 +6775,7 @@ export class GatewayService {
         authActorId: operatorId,
         authActorSource: "none",
         originSurface: "scheduler",
-        payload: { target, message },
+        payload: { target, message, ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}) },
       },
       metadata: {
         deliveryKind: "autonomous.assistant_message",
@@ -6623,6 +6785,7 @@ export class GatewayService {
         sourceRunId: input.runId,
         ...(input.turnId ? { turnId: input.turnId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
+        ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
       },
     });
     return run.runId;
@@ -7689,6 +7852,20 @@ export class GatewayService {
     return this.channelDeliveryRuntimeService.drainDue(limit);
   }
 
+  private markLinkedCommitmentDeliverySent(record: ChannelDeliveryRuntimeRecord): void {
+    if (!record.commitmentId) {
+      return;
+    }
+    this.storage.agentCommitments.markSent(record.commitmentId, record.updatedAt);
+  }
+
+  private markLinkedCommitmentDeliveryFailed(record: ChannelDeliveryRuntimeRecord): void {
+    if (!record.commitmentId) {
+      return;
+    }
+    this.storage.agentCommitments.markDeliveryFailed(record.commitmentId);
+  }
+
   public listChannelDeliveryRuntime(): ChannelDeliveryRuntimeRecord[] {
     const recordsById = new Map<string, ChannelDeliveryRuntimeRecord>();
     for (const record of this.storage.commsDeliveries.list(undefined, 200)) {
@@ -7705,6 +7882,8 @@ export class GatewayService {
         maxAttempts: record.maxAttempts,
         nextAttemptAt: record.nextAttemptAt,
         staleReason: record.staleReason,
+        commitmentId:
+          record.payload && typeof record.payload.commitmentId === "string" ? record.payload.commitmentId : undefined,
         providerMessageId: record.providerMessageId,
         error: record.error,
         fallbackReason: record.fallbackReason,
@@ -10335,6 +10514,7 @@ function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string
     replyToPartIndex: input.replyToPartIndex,
     effectId: input.effectId,
     subject: input.subject,
+    commitmentId: input.commitmentId,
     workspaceId: input.workspaceId,
     sessionId: input.sessionId,
     agentId: input.agentId,
@@ -10426,6 +10606,7 @@ function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInpu
     replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
     effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,
     subject: typeof payload.subject === "string" ? payload.subject : undefined,
+    commitmentId: typeof payload.commitmentId === "string" ? payload.commitmentId : undefined,
     workspaceId: typeof payload.workspaceId === "string" ? payload.workspaceId : undefined,
     sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
     agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,

@@ -4,6 +4,17 @@ import { request } from "./client-core.js";
 
 type CronJobAction = CronJobRecordResponse["action"];
 
+export interface CronRunNowResponse {
+  jobId: string;
+  runId: string;
+  status: "ok";
+  force?: boolean;
+  childDurableRunId?: string;
+  childDurableStatus?: string;
+  childTurnId?: string;
+  profilePosture?: string;
+}
+
 export async function fetchCronJobs(): Promise<CronJobsResponse> {
   return request<CronJobsResponse>("/api/v1/cron/jobs");
 }
@@ -68,8 +79,8 @@ export async function pauseCronJob(jobId: string): Promise<CronJobRecordResponse
   });
 }
 
-export async function runCronJobNow(jobId: string): Promise<{ jobId: string; status: "ok" }> {
-  return request<{ jobId: string; status: "ok" }>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/run`, {
+export async function runCronJobNow(jobId: string): Promise<CronRunNowResponse> {
+  return request<CronRunNowResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/run`, {
     method: "POST",
     body: JSON.stringify({}),
   });

@@ -621,6 +621,58 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.contactEvidence?.partial.items.map((item) => item.title)).not.toContain("BGE's Tabletop");
   });
 
+  it("does not downgrade runtime-verified local-business candidates with no blockers", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      activeTurn: makeTurn({
+        status: "completed",
+        toolRuns: [
+          {
+            toolRunId: "tool-verified-local-business",
+            status: "executed",
+            result: {
+              localBusinessResearch: {
+                kind: "local_business_contact_research",
+                plan: {
+                  location: "91303",
+                  radiusMiles: 10,
+                  categories: ["board game and tabletop game store"],
+                  requireEmail: false,
+                  requireContactName: false,
+                },
+                candidates: [
+                  {
+                    storeName: "Source Verified Games",
+                    address: "Canoga Park, CA",
+                    sourceUrls: ["https://locator.example/source-verified-games"],
+                    verificationStatus: "verified",
+                    blockers: [],
+                    evidence: [
+                      { url: "https://locator.example/source-verified-games", evidenceKind: "identity" },
+                      { url: "https://locator.example/source-verified-games", evidenceKind: "address" },
+                    ],
+                  },
+                ],
+                excluded: [],
+                blockers: [],
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(viewModel.contactEvidence?.verified.items[0]).toMatchObject({
+      title: "Source Verified Games",
+      evidenceStatus: "verified",
+      missingFields: [],
+    });
+    expect(viewModel.contactEvidence?.missing.items.map((item) => item.title)).not.toContain(
+      "Source Verified Games: official website missing",
+    );
+    expect(viewModel.stateGaps).not.toContain("Local contact evidence incomplete");
+  });
+
   it("surfaces source-backed local-business blockers and research diagnostics", () => {
     const viewModel = deriveCoworkRunViewModel({
       items: [],

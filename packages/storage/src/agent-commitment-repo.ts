@@ -49,6 +49,8 @@ export class AgentCommitmentRepository {
   private readonly getByDedupeStmt;
   private readonly listDueStmt;
   private readonly listBySessionStmt;
+  private readonly markDeliveryPendingStmt;
+  private readonly markDeliveryFailedStmt;
   private readonly markSentStmt;
   private readonly markSupersededStmt;
 
@@ -91,7 +93,17 @@ export class AgentCommitmentRepository {
     this.markSentStmt = db.prepare(`
       UPDATE agent_commitments
       SET status = 'sent', sent_at = @sentAt
+      WHERE commitment_id = @commitmentId AND status IN ('pending', 'delivery_pending')
+    `);
+    this.markDeliveryPendingStmt = db.prepare(`
+      UPDATE agent_commitments
+      SET status = 'delivery_pending'
       WHERE commitment_id = @commitmentId AND status = 'pending'
+    `);
+    this.markDeliveryFailedStmt = db.prepare(`
+      UPDATE agent_commitments
+      SET status = 'delivery_failed'
+      WHERE commitment_id = @commitmentId AND status IN ('pending', 'delivery_pending')
     `);
     this.markSupersededStmt = db.prepare(`
       UPDATE agent_commitments
@@ -105,10 +117,7 @@ export class AgentCommitmentRepository {
    * `(session_id, dedupe_key)`. Returns the resulting record. Dedup updates only
    * refresh inferred fields; lifecycle (`status`/`sent_at`) is preserved.
    */
-  public upsertByDedupe(
-    input: AgentCommitmentUpsertInput,
-    now = new Date().toISOString(),
-  ): AgentCommitmentRecord {
+  public upsertByDedupe(input: AgentCommitmentUpsertInput, now = new Date().toISOString()): AgentCommitmentRecord {
     this.upsertStmt.run({
       commitmentId: input.commitmentId,
       sessionId: input.sessionId,
@@ -154,6 +163,18 @@ export class AgentCommitmentRepository {
   public listBySession(sessionId: string, limit = 100): AgentCommitmentRecord[] {
     const rows = toRows(this.listBySessionStmt.all({ sessionId, limit: clampLimit(limit) }));
     return rows.map(mapRow);
+  }
+
+  /** Transition a still-pending commitment to async delivery-pending. Returns true if updated. */
+  public markDeliveryPending(commitmentId: string): boolean {
+    const result = this.markDeliveryPendingStmt.run({ commitmentId });
+    return changed(result);
+  }
+
+  /** Transition a pending or async delivery-pending commitment to `delivery_failed`. Returns true if updated. */
+  public markDeliveryFailed(commitmentId: string): boolean {
+    const result = this.markDeliveryFailedStmt.run({ commitmentId });
+    return changed(result);
   }
 
   /** Transition a still-pending commitment to `sent`. Returns true if updated. */

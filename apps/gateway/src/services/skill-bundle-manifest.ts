@@ -6,6 +6,9 @@ import type {
   SkillBundleManifest,
   SkillBundleManifestAsset,
   SkillBundleManifestValidation,
+  SkillDeclaredDependencies,
+  SkillRequiredEnvVar,
+  SkillStateDir,
 } from "@goatcitadel/contracts";
 
 export const SKILL_BUNDLE_MANIFEST_FILENAME = "goatcitadel.skill-bundle.json";
@@ -154,6 +157,7 @@ export async function readSkillBundleDeclaredMetadata(skillDir: string): Promise
   | {
       declaredMetadata: NonNullable<SkillBundleManifestValidation["declaredMetadata"]>;
       warnings: string[];
+      errors: string[];
     }
   | undefined
 > {
@@ -178,7 +182,7 @@ export async function readSkillBundleDeclaredMetadata(skillDir: string): Promise
   if (!declaredMetadata) {
     return undefined;
   }
-  return { declaredMetadata, warnings };
+  return { declaredMetadata, warnings, errors };
 }
 
 /**
@@ -192,9 +196,9 @@ function validateSkillBundleDeclaredMetadata(
   warnings: string[],
   errors: string[],
 ): SkillBundleManifestValidation["declaredMetadata"] {
-  const requiredEnv = Array.isArray(manifest.requiredEnv) ? manifest.requiredEnv : [];
-  const stateDirs = Array.isArray(manifest.stateDirs) ? manifest.stateDirs : [];
-  const dependencies = manifest.declaredDependencies ?? {};
+  const requiredEnv = normalizeRequiredEnv(manifest.requiredEnv, errors);
+  const stateDirs = normalizeStateDirs(manifest.stateDirs, errors);
+  const dependencies = normalizeDeclaredDependencies(manifest.declaredDependencies, errors);
   if (requiredEnv.length === 0 && stateDirs.length === 0 && !manifest.declaredDependencies) {
     return undefined;
   }
@@ -235,6 +239,128 @@ function validateSkillBundleDeclaredMetadata(
   }
 
   return { requiredEnv, stateDirs, dependencies };
+}
+
+function normalizeRequiredEnv(value: SkillBundleManifest["requiredEnv"], errors: string[]): SkillRequiredEnvVar[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    errors.push("requiredEnv must be an array when provided");
+    return [];
+  }
+  const entries: SkillRequiredEnvVar[] = [];
+  value.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`requiredEnv[${index}] must be an object`);
+      return;
+    }
+    const name = readNonEmptyString(entry.name);
+    if (!name) {
+      errors.push("requiredEnv entries must declare a name");
+      return;
+    }
+    const normalized: SkillRequiredEnvVar = { name };
+    const description = readNonEmptyString(entry.description);
+    if (description) {
+      normalized.description = description;
+    }
+    if (typeof entry.required === "boolean") {
+      normalized.required = entry.required;
+    }
+    if (typeof entry.secret === "boolean") {
+      normalized.secret = entry.secret;
+    }
+    entries.push(normalized);
+  });
+  return entries;
+}
+
+function normalizeStateDirs(value: SkillBundleManifest["stateDirs"], errors: string[]): SkillStateDir[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    errors.push("stateDirs must be an array when provided");
+    return [];
+  }
+  const entries: SkillStateDir[] = [];
+  value.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`stateDirs[${index}] must be an object`);
+      return;
+    }
+    const pathValue = readNonEmptyString(entry.path);
+    if (!pathValue) {
+      errors.push("stateDirs entries must declare a non-empty path");
+      return;
+    }
+    const normalized: SkillStateDir = { path: pathValue };
+    const description = readNonEmptyString(entry.description);
+    if (description) {
+      normalized.description = description;
+    }
+    if (typeof entry.writeable === "boolean") {
+      normalized.writeable = entry.writeable;
+    }
+    entries.push(normalized);
+  });
+  return entries;
+}
+
+function normalizeDeclaredDependencies(
+  value: SkillBundleManifest["declaredDependencies"],
+  errors: string[],
+): SkillDeclaredDependencies {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    errors.push("declaredDependencies must be an object when provided");
+    return {};
+  }
+  const dependencies: SkillDeclaredDependencies = {};
+  const tools = normalizeStringArrayProperty(value.tools, "declaredDependencies.tools", errors);
+  const skillIds = normalizeStringArrayProperty(value.skillIds, "declaredDependencies.skillIds", errors);
+  const capabilities = normalizeStringArrayProperty(value.capabilities, "declaredDependencies.capabilities", errors);
+  if (tools) {
+    dependencies.tools = tools;
+  }
+  if (skillIds) {
+    dependencies.skillIds = skillIds;
+  }
+  if (capabilities) {
+    dependencies.capabilities = capabilities;
+  }
+  return dependencies;
+}
+
+function normalizeStringArrayProperty(value: unknown, label: string, errors: string[]): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push(`${label} must be an array when provided`);
+    return undefined;
+  }
+  const items: string[] = [];
+  value.forEach((item, index) => {
+    const normalized = readNonEmptyString(item);
+    if (!normalized) {
+      errors.push(`${label}[${index}] must be a non-empty string`);
+      return;
+    }
+    items.push(normalized);
+  });
+  return items;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function validateManifestShape(value: unknown): string[] {

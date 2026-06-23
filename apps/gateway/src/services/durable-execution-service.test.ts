@@ -1416,10 +1416,30 @@ describe("maybeEnqueueAutonomousDelivery", () => {
     request: { content: "Summarize alerts" },
   };
 
-  function buildDeliveryHost(assistantContent: string, enqueue = vi.fn(() => "delivery-run-1")) {
+  function buildDeliveryHost(
+    assistantContent: string,
+    enqueue = vi.fn(() => "delivery-run-1"),
+    options: {
+      traceStatus?: "completed" | "failed" | "cancelled" | "partial";
+      runStatus?: DurableRunRecord["status"];
+    } = {},
+  ) {
     return {
       storage: {
-        chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-cron", assistantMessageId: "assistant-cron" })) },
+        durableRuns: {
+          getRun: vi.fn((runId: string) => ({
+            ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+            runId,
+            status: options.runStatus ?? "completed",
+          })),
+        },
+        chatTurnTraces: {
+          get: vi.fn(() => ({
+            turnId: "turn-cron",
+            assistantMessageId: "assistant-cron",
+            status: options.traceStatus ?? "completed",
+          })),
+        },
         chatMessages: { get: vi.fn(() => ({ messageId: "assistant-cron", content: assistantContent })) },
       },
       enqueueAutonomousChannelDelivery: enqueue,
@@ -1500,6 +1520,46 @@ describe("maybeEnqueueAutonomousDelivery", () => {
 
     expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBe("delivery-run-2");
     expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enqueue autonomous delivery for failed or non-completed terminal turns", () => {
+    const failedTraceEnqueue = vi.fn(() => "delivery-run-failed-trace");
+    const failedTraceHost = buildDeliveryHost("Partial answer before failure.", failedTraceEnqueue, {
+      traceStatus: "failed",
+      runStatus: "failed",
+    });
+    const failedTraceRun = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(failedTraceHost as never, failedTraceRun, chatTurnPayload)).toBeUndefined();
+    expect(failedTraceEnqueue).not.toHaveBeenCalled();
+
+    const failedRunEnqueue = vi.fn(() => "delivery-run-failed-run");
+    const failedRunHost = buildDeliveryHost("Looks complete but durable run failed.", failedRunEnqueue, {
+      traceStatus: "completed",
+      runStatus: "failed",
+    });
+    const failedRun = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(failedRunHost as never, failedRun, chatTurnPayload)).toBeUndefined();
+    expect(failedRunEnqueue).not.toHaveBeenCalled();
   });
 });
 

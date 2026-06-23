@@ -1,5 +1,10 @@
 import type { McpServerTemplateRecord } from "@goatcitadel/contracts";
-import { MCP_APPROVAL_DELIVERY_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
+import {
+  MCP_APPROVAL_DELIVERY_TOOL_NAME,
+  MCP_APPROVAL_INBOX_URL,
+  MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+  MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+} from "./mcp-approval-inbox.js";
 import { MCP_DURABLE_TASKS_URL } from "./mcp-durable-tasks.js";
 
 export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
@@ -17,7 +22,12 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     policy: {
       requireFirstToolApproval: false,
       redactionMode: "basic",
-      allowedToolPatterns: [MCP_APPROVAL_DELIVERY_TOOL_NAME, "goatcitadel.approval.remote_action_inbox.*"],
+      allowedToolPatterns: [
+        MCP_APPROVAL_DELIVERY_TOOL_NAME,
+        "goatcitadel.approval.remote_action_inbox.*",
+        MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+      ],
       blockedToolPatterns: [],
     },
     enabledByDefault: false,

@@ -53,18 +53,20 @@ interface HarnessOptions {
 
 function createHarness(options: HarnessOptions = {}) {
   const deliverCommitment = vi.fn(options.deliver ?? (() => true));
-  const markSent = vi.fn(() => true);
+  const markDeliveryPending = vi.fn(() => true);
+  const markDeliveryFailed = vi.fn(() => true);
   const deps: CommitmentSweepDeps = {
     isAutonomyEnabled: () => options.autonomyEnabled ?? true,
     listDueCommitments: () => options.due ?? [],
     getSessionAutonomyPrefs: (sessionId) => options.prefsBySession?.[sessionId] ?? prefs({ sessionId }),
     deliverCommitment,
-    markSent,
+    markDeliveryPending,
+    markDeliveryFailed,
     // Use a fixed local-noon Date so active-hours defaults pass deterministically.
     now: () => makeLocalNoon(options.now),
     resolveActiveHours: options.activeHours,
   };
-  return { deps, deliverCommitment, markSent };
+  return { deps, deliverCommitment, markDeliveryPending, markDeliveryFailed };
 }
 
 function makeLocalNoon(iso?: string): Date {
@@ -77,8 +79,8 @@ function makeLocalNoon(iso?: string): Date {
 }
 
 describe("runCommitmentSweep", () => {
-  it("delivers due+pending commitments and marks them sent", async () => {
-    const { deps, deliverCommitment, markSent } = createHarness({
+  it("delivers due+pending commitments and marks them delivery-pending", async () => {
+    const { deps, deliverCommitment, markDeliveryPending } = createHarness({
       due: [commitment({ commitmentId: "a", sessionId: "s1", dedupeKey: "k1" })],
     });
     const result = await runCommitmentSweep(deps);
@@ -86,11 +88,11 @@ describe("runCommitmentSweep", () => {
     expect(result.scanned).toBe(1);
     expect(result.delivered).toBe(1);
     expect(deliverCommitment).toHaveBeenCalledTimes(1);
-    expect(markSent).toHaveBeenCalledWith("a");
+    expect(markDeliveryPending).toHaveBeenCalledWith("a");
   });
 
   it("no-ops entirely when the master autonomy switch is off", async () => {
-    const { deps, deliverCommitment, markSent } = createHarness({
+    const { deps, deliverCommitment, markDeliveryPending } = createHarness({
       autonomyEnabled: false,
       due: [commitment()],
     });
@@ -98,7 +100,7 @@ describe("runCommitmentSweep", () => {
 
     expect(result).toEqual({ scanned: 0, delivered: 0, skippedCooldown: 0, skippedActiveHours: 0, failed: 0 });
     expect(deliverCommitment).not.toHaveBeenCalled();
-    expect(markSent).not.toHaveBeenCalled();
+    expect(markDeliveryPending).not.toHaveBeenCalled();
   });
 
   it("skips a session still within cooldown", async () => {
@@ -130,7 +132,7 @@ describe("runCommitmentSweep", () => {
   });
 
   it("delivers at most one check-in per session per sweep (backlog respects cooldown)", async () => {
-    const { deps, deliverCommitment, markSent } = createHarness({
+    const { deps, deliverCommitment, markDeliveryPending } = createHarness({
       due: [
         commitment({ commitmentId: "a", sessionId: "s1", dedupeKey: "k1", dueAt: "2026-06-22T06:00:00.000Z" }),
         commitment({ commitmentId: "b", sessionId: "s1", dedupeKey: "k2", dueAt: "2026-06-22T07:00:00.000Z" }),
@@ -143,13 +145,13 @@ describe("runCommitmentSweep", () => {
     expect(result.delivered).toBe(2);
     expect(result.skippedCooldown).toBe(1);
     expect(deliverCommitment).toHaveBeenCalledTimes(2);
-    expect(markSent).toHaveBeenCalledWith("a");
-    expect(markSent).toHaveBeenCalledWith("c");
-    expect(markSent).not.toHaveBeenCalledWith("b");
+    expect(markDeliveryPending).toHaveBeenCalledWith("a");
+    expect(markDeliveryPending).toHaveBeenCalledWith("c");
+    expect(markDeliveryPending).not.toHaveBeenCalledWith("b");
   });
 
-  it("does not mark sent when delivery reports failure", async () => {
-    const { deps, markSent } = createHarness({
+  it("marks failed when delivery enqueue reports failure", async () => {
+    const { deps, markDeliveryPending, markDeliveryFailed } = createHarness({
       due: [commitment({ commitmentId: "a" })],
       deliver: () => false,
     });
@@ -157,11 +159,12 @@ describe("runCommitmentSweep", () => {
 
     expect(result.delivered).toBe(0);
     expect(result.failed).toBe(1);
-    expect(markSent).not.toHaveBeenCalled();
+    expect(markDeliveryPending).not.toHaveBeenCalled();
+    expect(markDeliveryFailed).toHaveBeenCalledWith("a");
   });
 
-  it("counts a thrown delivery as failed without marking sent", async () => {
-    const { deps, markSent } = createHarness({
+  it("marks failed when delivery enqueue throws", async () => {
+    const { deps, markDeliveryPending, markDeliveryFailed } = createHarness({
       due: [commitment({ commitmentId: "a" })],
       deliver: () => {
         throw new Error("delivery boom");
@@ -170,7 +173,8 @@ describe("runCommitmentSweep", () => {
     const result = await runCommitmentSweep(deps);
 
     expect(result.failed).toBe(1);
-    expect(markSent).not.toHaveBeenCalled();
+    expect(markDeliveryPending).not.toHaveBeenCalled();
+    expect(markDeliveryFailed).toHaveBeenCalledWith("a");
   });
 });
 

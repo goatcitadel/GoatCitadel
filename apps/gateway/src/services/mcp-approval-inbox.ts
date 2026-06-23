@@ -3,6 +3,7 @@ import type {
   ApprovalInboxItemState,
   ApprovalRequest,
   McpElicitationRequest,
+  McpElicitationOwnerMetadata,
   McpElicitationResponseAction,
   McpElicitationStatus,
   McpInvokeRequest,
@@ -30,6 +31,7 @@ export type RespondToMcpElicitation = (input: {
   elicitationId: string;
   action: McpElicitationResponseAction;
   content?: Record<string, unknown>;
+  owner?: McpElicitationOwnerMetadata;
 }) => McpElicitationRequest;
 
 /** Dependency that lists server-initiated MCP elicitations awaiting an operator response. */
@@ -37,6 +39,7 @@ export type ListMcpElicitations = (filter: {
   status?: McpElicitationStatus;
   serverId?: string;
   sessionId?: string;
+  owner?: McpElicitationOwnerMetadata;
 }) => McpElicitationRequest[];
 
 /** Rate limiter: max resolve attempts per server per window. */
@@ -229,17 +232,29 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            items: deps.listMcpElicitations(parseElicitationListArgs(input.arguments)),
+            items: deps.listMcpElicitations({
+              ...parseElicitationListArgs(input.arguments),
+              owner: resolveElicitationInvokeOwner(input),
+            }),
           },
         };
 
-      case MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME:
+      case MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME: {
+        const args = parseElicitationRespondArgs(input.arguments);
+        const owner = resolveElicitationInvokeOwner(input);
+        if (!owner) {
+          throw new ValidationError({ message: "MCP elicitation response requires caller owner scope." });
+        }
         return {
           ok: true,
           output: {
-            elicitation: deps.respondToMcpElicitation(parseElicitationRespondArgs(input.arguments)),
+            elicitation: deps.respondToMcpElicitation({
+              ...args,
+              owner,
+            }),
           },
         };
+      }
 
       default:
         return {
@@ -330,6 +345,38 @@ function parseElicitationRespondArgs(args: Record<string, unknown> | undefined):
     action: requireEnumValue(args?.action, MCP_ELICITATION_ACTIONS, "action"),
     content: normalizeOptionalObject(args?.content),
   };
+}
+
+function resolveElicitationInvokeOwner(input: McpInvokeRequest): McpElicitationOwnerMetadata | undefined {
+  const policyContext = normalizeOptionalObject(input.policyContext);
+  const owner: McpElicitationOwnerMetadata = {
+    operatorId: optionalString(policyContext?.operatorId) ?? optionalString(input.consentContext?.operatorId),
+    agentId: optionalString(policyContext?.agentId) ?? optionalString(input.agentId),
+    workspaceId: optionalString(policyContext?.workspaceId) ?? optionalString(input.workspaceId),
+    sessionId: optionalString(policyContext?.sessionId) ?? optionalString(input.sessionId),
+    taskId: optionalString(policyContext?.taskId) ?? optionalString(input.taskId),
+    runId: optionalString(policyContext?.runId) ?? optionalString(input.runId),
+    surface: normalizePermissionSurface(policyContext?.surface ?? input.surface),
+  };
+  return hasElicitationOwnerScope(owner) ? owner : undefined;
+}
+
+function normalizePermissionSurface(value: unknown): McpElicitationOwnerMetadata["surface"] | undefined {
+  return typeof value === "string" && ["chat", "cowork", "code", "tools", "mcp", "all"].includes(value)
+    ? (value as McpElicitationOwnerMetadata["surface"])
+    : undefined;
+}
+
+function hasElicitationOwnerScope(owner: McpElicitationOwnerMetadata): boolean {
+  return Boolean(
+    owner.operatorId ??
+    owner.agentId ??
+    owner.workspaceId ??
+    owner.sessionId ??
+    owner.taskId ??
+    owner.runId ??
+    owner.surface,
+  );
 }
 
 async function resolveInboxItem(

@@ -73,6 +73,7 @@ export interface AutonomousTurnMetadata {
   reason?: string;
   deliverMode?: "always" | "on_notify";
   deliveryChannel?: AutonomousTurnDeliveryChannel;
+  commitmentId?: string;
 }
 
 /** Request passed to the gateway-backed autonomous channel delivery enqueue. */
@@ -84,6 +85,7 @@ export interface AutonomousChannelDeliveryRequest {
   deliveryChannel: AutonomousTurnDeliveryChannel;
   systemActorId?: string;
   reason?: string;
+  commitmentId?: string;
 }
 
 /** Request passed to the gateway-backed silent-heartbeat transcript cleanup. */
@@ -1164,6 +1166,7 @@ export async function executeDurableChatTurnRun(
   const request = {
     ...payload.request,
     content: resumedContent,
+    policyRunId: payload.request.policyRunId ?? run.runId,
     signal: context?.signal,
   };
   const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
@@ -1199,6 +1202,13 @@ function readDurableChatTurnAssistantText(
   host: DurableChatTurnWorkflowHost,
   payload: DurableChatTurnExecutionPayload,
 ): string | undefined {
+  return readDurableChatTurnAssistantOutput(host, payload).assistantText;
+}
+
+function readDurableChatTurnAssistantOutput(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+): { assistantText?: string; trace?: ChatTurnTraceRecord } {
   let trace: ChatTurnTraceRecord | undefined;
   try {
     trace = host.storage.chatTurnTraces.get(payload.turnId);
@@ -1209,10 +1219,10 @@ function readDurableChatTurnAssistantText(
   }
   const assistantMessageId = trace?.assistantMessageId ?? payload.assistantMessageId;
   if (!assistantMessageId) {
-    return undefined;
+    return { trace };
   }
   const content = host.storage.chatMessages.get(assistantMessageId)?.content?.trim();
-  return content ? content : undefined;
+  return { assistantText: content ? content : undefined, trace };
 }
 
 /**
@@ -1267,7 +1277,13 @@ export function maybeEnqueueAutonomousDelivery(
   if (!deliveryChannel?.channelKey || typeof host.enqueueAutonomousChannelDelivery !== "function") {
     return undefined;
   }
-  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  const { assistantText, trace } = readDurableChatTurnAssistantOutput(host, payload);
+  if (trace?.status !== "completed") {
+    return undefined;
+  }
+  if (isFailedAutonomousDeliveryRunStatus(readCurrentDurableRunStatus(host, run))) {
+    return undefined;
+  }
   if (!assistantText) {
     return undefined;
   }
@@ -1282,7 +1298,26 @@ export function maybeEnqueueAutonomousDelivery(
     deliveryChannel,
     systemActorId: autonomous.systemActorId,
     reason: autonomous.reason,
+    commitmentId: autonomous.commitmentId,
   });
+}
+
+function readCurrentDurableRunStatus(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+): DurableRunRecord["status"] {
+  try {
+    return host.storage.durableRuns.getRun(run.runId).status;
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  return run.status;
+}
+
+function isFailedAutonomousDeliveryRunStatus(status: DurableRunRecord["status"]): boolean {
+  return status === "failed" || status === "cancelled" || status === "dead_lettered";
 }
 
 /**

@@ -15,6 +15,16 @@ export interface AgentTurnCronRunOutcome {
   sessionId?: string;
   /** Turn id of the scheduled turn (agent_turn mode). */
   turnId?: string;
+  /** Effective scheduled profile posture used for this run. */
+  profilePosture?:
+    | "scheduled_restricted"
+    | "creator_intersection"
+    | "creator_profile_missing"
+    | "creator_profile_archived"
+    | "creator_profile_scope_mismatch"
+    | "creator_profile_invalid";
+  /** Warning recorded when profile provenance fails closed into the inert inbox fallback. */
+  profileWarning?: string;
   /** Task id of the inert inbox record (inbox fallback mode). */
   taskId?: string;
 }
@@ -30,9 +40,7 @@ export type AgentTurnCronRunHandler = (input: {
  * so a scheduled turn never wakes the model with nothing to do. Mirrors the
  * shape and immutability of `normalizeNoAgentCronActionConfig`.
  */
-export function normalizeAgentTurnCronActionConfig(
-  rawValue: Record<string, unknown>,
-): CronJobRecord["actionConfig"] {
+export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unknown>): CronJobRecord["actionConfig"] {
   const rawAgentTurn =
     rawValue.agentTurn && typeof rawValue.agentTurn === "object" && !Array.isArray(rawValue.agentTurn)
       ? (rawValue.agentTurn as Record<string, unknown>)
@@ -77,13 +85,12 @@ export function normalizeAgentTurnCronActionConfig(
 /**
  * Normalize the creator-provenance block stamped by `schedule.manage` (P1-F2).
  * Preserves only string actor/profile/job ids and a clamped non-negative depth,
- * so the scheduled turn can be fired bounded to ≤ the creator's privileges and
- * the depth-1 anti-recursion cap can be enforced. Returns undefined when the
- * block carries nothing useful. Immutable: builds a fresh object.
+ * so ownership/audit and the depth-1 anti-recursion cap can be enforced. Fired
+ * scheduled turns still use the restricted autonomous profile until explicit
+ * profile intersection exists. Returns undefined when the block carries nothing
+ * useful. Immutable: builds a fresh object.
  */
-function normalizeAgentTurnCreatedBy(
-  value: unknown,
-): NonNullable<CronAgentTurnConfig["createdBy"]> | undefined {
+function normalizeAgentTurnCreatedBy(value: unknown): NonNullable<CronAgentTurnConfig["createdBy"]> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -137,12 +144,24 @@ export async function runAgentTurnCronJob(input: {
     config: agentTurnConfig,
   });
   const finishedAt = new Date().toISOString();
+  const summary = {
+    action: input.job.action,
+    runId: input.runId,
+    mode: outcome.mode,
+    ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId, childDurableRunId: outcome.durableRunId } : {}),
+    ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+    ...(outcome.turnId ? { turnId: outcome.turnId, childTurnId: outcome.turnId } : {}),
+    ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
+    ...(outcome.profilePosture ? { profilePosture: outcome.profilePosture } : {}),
+    ...(outcome.profileWarning ? { profileWarning: outcome.profileWarning, cronReviewWarning: true } : {}),
+  };
   const saved = input.upsertCronJob(
     {
       ...input.job,
       lastRunAt: finishedAt,
       lastRunId: input.runId,
       lastRunStatus: "ok",
+      lastRunOutput: JSON.stringify(summary),
       lastFailureAt: undefined,
       lastFailure: undefined,
       failureCount: 0,
@@ -157,20 +176,16 @@ export async function runAgentTurnCronJob(input: {
     jobId: saved.jobId,
     name: saved.name,
     runId: input.runId,
-    ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId } : {}),
+    ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId, childDurableRunId: outcome.durableRunId } : {}),
     ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-    ...(outcome.turnId ? { turnId: outcome.turnId } : {}),
+    ...(outcome.turnId ? { turnId: outcome.turnId, childTurnId: outcome.turnId } : {}),
     ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
+    ...(outcome.profilePosture ? { profilePosture: outcome.profilePosture } : {}),
+    ...(outcome.profileWarning ? { profileWarning: outcome.profileWarning } : {}),
     ...(agentTurnConfig.deliveryChannel ? { deliveryChannel: agentTurnConfig.deliveryChannel } : {}),
   });
   return {
-    action: input.job.action,
-    runId: input.runId,
-    mode: outcome.mode,
-    ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId } : {}),
-    ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-    ...(outcome.turnId ? { turnId: outcome.turnId } : {}),
-    ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
+    ...summary,
     nextRunAt: saved.nextRunAt,
   };
 }
