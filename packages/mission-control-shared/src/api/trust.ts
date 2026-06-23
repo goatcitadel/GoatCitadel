@@ -12,8 +12,11 @@ import type {
   McpTrustTier,
   PermissionProfileRecord,
   PermissionSurface,
+  SkillDeclaredDependencies,
   SkillLifecycleState,
+  SkillRequiredEnvVar,
   SkillRuntimeState,
+  SkillStateDir,
   ToolApprovalMode,
   ToolGrantConstraints,
   ToolGrantDecision,
@@ -29,7 +32,20 @@ export type TrustPolicyPosture =
   | "quarantined"
   | "disabled"
   | "not_installed"
-  | "unavailable";
+  | "unavailable"
+  /** Usable, but declares elevated governance metadata an operator should review before trusting. */
+  | "medium_trust_unverified";
+
+/**
+ * Declared governance metadata a skill surfaces for operator review: the env
+ * vars it needs, the state directories it reads/writes, and the tool/skill/
+ * capability dependencies it declares. Populated from the skill bundle manifest.
+ */
+export interface TrustPolicySkillDeclaredMetadata {
+  requiredEnv: SkillRequiredEnvVar[];
+  stateDirs: SkillStateDir[];
+  dependencies: SkillDeclaredDependencies;
+}
 
 export interface TrustPolicySourceStatus {
   key: string;
@@ -156,6 +172,12 @@ export interface TrustPolicySkill {
   lastUsedAt?: string;
   declaredTools?: string[];
   requires?: string[];
+  /** Declared governance metadata (env/state dirs/dependencies) for operator review. */
+  declaredMetadata?: TrustPolicySkillDeclaredMetadata;
+  /** Medium-risk graduated-trust warnings raised by the skill's declared metadata. */
+  bundleWarnings?: string[];
+  /** Names of required env vars the skill declares that are not configured in the runtime. */
+  missingRequiredEnv?: string[];
   source: "skills.lifecycle";
 }
 

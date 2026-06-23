@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   fetchTrustPolicySnapshot,
   type TrustPolicyLastUseEvidence,
   type TrustPolicyPosture,
+  type TrustPolicySkillDeclaredMetadata,
   type TrustPolicySnapshot,
 } from "@goatcitadel/mission-control-shared/api/trust";
 import { StatusChip, type StatusChipTone } from "../../primitives";
@@ -29,6 +30,7 @@ type TrustPolicyDashboardStatus =
   | "blocked"
   | "quarantined"
   | "approval_required"
+  | "medium_trust"
   | "experimental"
   | "unknown";
 type TrustPolicyEntryKind = "capability" | "tool" | "source";
@@ -48,6 +50,9 @@ interface TrustPolicyMatrixRow {
   callable?: boolean;
   grants?: string[];
   blockers?: string[];
+  declaredMetadata?: TrustPolicySkillDeclaredMetadata;
+  bundleWarnings?: string[];
+  missingRequiredEnv?: string[];
   actionNeeded?: string;
   lastUse?: {
     at?: string;
@@ -64,6 +69,7 @@ const STATUS_ORDER: TrustPolicyDashboardStatus[] = [
   "blocked",
   "quarantined",
   "approval_required",
+  "medium_trust",
   "experimental",
   "unknown",
 ];
@@ -114,7 +120,12 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             { label: "Rows", value: String(rows.length) },
             { label: "Visible", value: String(visibleRows.length) },
             { label: "Ready", value: String(summary.ready) },
-            { label: "Needs review", value: String(summary.blocked + summary.quarantined + summary.approval_required) },
+            {
+              label: "Needs review",
+              value: String(
+                summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust,
+              ),
+            },
           ]}
         >
           <NativeMetricGrid
@@ -124,6 +135,11 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
               { label: "Blocked", value: String(summary.blocked), meta: "Denied or missing required state" },
               { label: "Quarantined", value: String(summary.quarantined), meta: "Held out of runtime use" },
               { label: "Approval required", value: String(summary.approval_required), meta: "Human gate expected" },
+              {
+                label: "Medium trust",
+                value: String(summary.medium_trust),
+                meta: "Elevated declarations to review",
+              },
               { label: "Experimental", value: String(summary.experimental), meta: "Visible with release caveats" },
               { label: "Unknown", value: String(summary.unknown), meta: "Snapshot lacks enough evidence" },
             ]}
@@ -301,6 +317,7 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
             <th scope="col">Callable state</th>
             <th scope="col">Grants</th>
             <th scope="col">Blockers</th>
+            <th scope="col">Declared governance</th>
             <th scope="col">Owner action</th>
             <th scope="col">Last-use evidence</th>
           </tr>
@@ -322,6 +339,7 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
               <td data-label="Callable state">{labelForCallableState(row)}</td>
               <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
               <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
+              <td data-label="Declared governance">{renderDeclaredGovernance(row)}</td>
               <td data-label="Owner action">
                 <strong>{row.owner ?? "Unknown owner"}</strong>
                 <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
@@ -333,6 +351,57 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
       </table>
     </div>
   );
+}
+
+function renderDeclaredGovernance(row: TrustPolicyMatrixRow): ReactNode {
+  const meta = row.declaredMetadata;
+  const warnings = row.bundleWarnings?.map((item) => item.trim()).filter(Boolean) ?? [];
+  const missingEnv = row.missingRequiredEnv?.map((item) => item.trim()).filter(Boolean) ?? [];
+  const hasMeta = Boolean(
+    meta && (meta.requiredEnv.length > 0 || meta.stateDirs.length > 0 || hasDeclaredDependencies(meta.dependencies)),
+  );
+  if (!hasMeta && warnings.length === 0 && missingEnv.length === 0) {
+    return <span className="mc-next-trust-gov-empty">No declared governance metadata</span>;
+  }
+  const envText = meta?.requiredEnv.length
+    ? meta.requiredEnv.map((env) => `${env.name}${env.secret ? " (secret)" : ""}`).join(", ")
+    : undefined;
+  const dirText = meta?.stateDirs.length
+    ? meta.stateDirs.map((dir) => `${dir.path}${dir.writeable ? " (writeable)" : ""}`).join(", ")
+    : undefined;
+  const depParts = meta
+    ? [
+        meta.dependencies.tools?.length ? `tools: ${meta.dependencies.tools.join(", ")}` : undefined,
+        meta.dependencies.skillIds?.length ? `skills: ${meta.dependencies.skillIds.join(", ")}` : undefined,
+        meta.dependencies.capabilities?.length
+          ? `capabilities: ${meta.dependencies.capabilities.join(", ")}`
+          : undefined,
+      ].filter((part): part is string => Boolean(part))
+    : [];
+  return (
+    <div className="mc-next-trust-gov">
+      {missingEnv.length > 0 ? (
+        <span className="mc-next-trust-gov-setup">
+          <StatusChip tone="warning" size="sm">
+            Setup required
+          </StatusChip>
+        </span>
+      ) : null}
+      {missingEnv.length > 0 ? <span>{`Missing env: ${missingEnv.join(", ")}`}</span> : null}
+      {envText ? <span>{`Env: ${envText}`}</span> : null}
+      {dirText ? <span>{`State dirs: ${dirText}`}</span> : null}
+      {depParts.length > 0 ? <span>{`Deps: ${depParts.join(" · ")}`}</span> : null}
+      {warnings.map((warning, index) => (
+        <span key={`warn-${index}`} className="mc-next-trust-gov-warning">
+          {warning}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function hasDeclaredDependencies(deps: TrustPolicySkillDeclaredMetadata["dependencies"]): boolean {
+  return Boolean((deps.tools?.length ?? 0) || (deps.skillIds?.length ?? 0) || (deps.capabilities?.length ?? 0));
 }
 
 function TrustPolicyEmptyState({ hasIssues }: { hasIssues: boolean }) {
@@ -361,6 +430,7 @@ function toneForTrustPolicyStatus(status: TrustPolicyDashboardStatus): StatusChi
     case "quarantined":
       return "critical";
     case "approval_required":
+    case "medium_trust":
       return "warning";
     case "experimental":
       return "default";
@@ -464,6 +534,8 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
   }
   for (const skill of snapshot.skills) {
     const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "skill", skill.skillId);
+    const elevatedDeclarations =
+      skill.posture === "medium_trust_unverified" || Boolean(skill.bundleWarnings?.length);
     rows.push({
       id: `skill:${skill.skillId ?? skill.name ?? rows.length}`,
       kind: "source",
@@ -471,11 +543,13 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
       source: skill.source,
       status: skill.reviewWarning
         ? "blocked"
-        : skill.callable
-          ? statusForPosture(skill.posture)
-          : skill.lifecycleState === "candidate"
-            ? "experimental"
-            : "not_callable",
+        : elevatedDeclarations
+          ? "medium_trust"
+          : skill.callable
+            ? statusForPosture(skill.posture)
+            : skill.lifecycleState === "candidate"
+              ? "experimental"
+              : "not_callable",
       trustState: skill.trustLabel ?? skill.lifecycleState ?? skill.state,
       callable: skill.callable,
       callableState: skill.callable ? "callable" : "not_callable",
@@ -483,6 +557,9 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
       blockers: [skill.reviewWarning, ...(skill.requires ?? []).map((item) => `Requires ${item}`)].filter(
         (item): item is string => Boolean(item?.trim()),
       ),
+      declaredMetadata: skill.declaredMetadata,
+      bundleWarnings: skill.bundleWarnings,
+      missingRequiredEnv: skill.missingRequiredEnv,
       lastUse: evidenceToLastUse(evidence) ?? {
         at: skill.lastUsedAt,
         label: skill.usageCount ? `${skill.usageCount} uses` : undefined,
@@ -562,18 +639,23 @@ function withTrustPolicyOwnerAction(row: TrustPolicyMatrixRow): TrustPolicyMatri
   const status = normalizeTrustPolicyStatus(row.status);
   const owner = ownerForTrustPolicyRow(row);
   const blockers = row.blockers?.map((item) => item.trim()).filter(Boolean) ?? [];
+  const missingEnv = row.missingRequiredEnv?.map((item) => item.trim()).filter(Boolean) ?? [];
   const actionNeeded =
-    status === "ready"
-      ? "No action needed; monitor last-use evidence and grants."
-      : status === "approval_required"
-        ? "Review the approval or grant before allowing runtime use."
-        : status === "blocked" || status === "quarantined"
-          ? (blockers[0] ?? "Resolve the blocker in the owner surface before runtime use.")
-          : status === "not_callable"
-            ? "Use as inspectable context only until an owner promotes it."
-            : status === "experimental"
-              ? "Evaluate and approve through the owner lifecycle before promotion."
-              : "Refresh the snapshot or inspect the owner source for missing evidence.";
+    missingEnv.length > 0
+      ? `Set required env before runtime use: ${missingEnv.join(", ")}.`
+      : status === "medium_trust"
+        ? "Review the declared env, state directories, and dependencies before trusting this skill."
+        : status === "ready"
+          ? "No action needed; monitor last-use evidence and grants."
+          : status === "approval_required"
+            ? "Review the approval or grant before allowing runtime use."
+            : status === "blocked" || status === "quarantined"
+              ? (blockers[0] ?? "Resolve the blocker in the owner surface before runtime use.")
+              : status === "not_callable"
+                ? "Use as inspectable context only until an owner promotes it."
+                : status === "experimental"
+                  ? "Evaluate and approve through the owner lifecycle before promotion."
+                  : "Refresh the snapshot or inspect the owner source for missing evidence.";
   return {
     ...row,
     owner,
@@ -617,6 +699,8 @@ function statusForPosture(posture: TrustPolicyPosture | string): TrustPolicyDash
       return "not_callable";
     case "quarantined":
       return "quarantined";
+    case "medium_trust_unverified":
+      return "medium_trust";
     case "blocked":
     case "disabled":
     case "unavailable":
@@ -672,7 +756,12 @@ function filterTrustPolicyRows(
       return false;
     }
     if (filters.statusFilter === "needs_review") {
-      if (status !== "blocked" && status !== "quarantined" && status !== "approval_required") {
+      if (
+        status !== "blocked" &&
+        status !== "quarantined" &&
+        status !== "approval_required" &&
+        status !== "medium_trust"
+      ) {
         return false;
       }
     } else if (filters.statusFilter !== "all" && status !== filters.statusFilter) {
@@ -697,6 +786,9 @@ function trustPolicyRowSearchText(row: TrustPolicyMatrixRow): string {
     row.grants?.join(" "),
     row.blockers?.join(" "),
     row.actionNeeded,
+    row.bundleWarnings?.join(" "),
+    row.missingRequiredEnv?.join(" "),
+    declaredGovernanceSearchText(row.declaredMetadata),
     row.lastUse?.label,
     row.lastUse?.runId,
     row.lastUse?.approvalId,
@@ -705,6 +797,20 @@ function trustPolicyRowSearchText(row: TrustPolicyMatrixRow): string {
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLowerCase();
+}
+
+function declaredGovernanceSearchText(meta: TrustPolicySkillDeclaredMetadata | undefined): string | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  const parts = [
+    ...meta.requiredEnv.map((env) => env.name),
+    ...meta.stateDirs.map((dir) => dir.path),
+    ...(meta.dependencies.tools ?? []),
+    ...(meta.dependencies.skillIds ?? []),
+    ...(meta.dependencies.capabilities ?? []),
+  ].filter((value): value is string => Boolean(value?.trim()));
+  return parts.length ? parts.join(" ") : undefined;
 }
 
 function normalizeTrustPolicyStatus(status: TrustPolicyDashboardStatus | undefined): TrustPolicyDashboardStatus {
@@ -725,6 +831,8 @@ function labelForTrustPolicyStatus(status: TrustPolicyDashboardStatus): string {
       return "Quarantined";
     case "approval_required":
       return "Approval required";
+    case "medium_trust":
+      return "Medium trust";
     case "experimental":
       return "Experimental";
     default:

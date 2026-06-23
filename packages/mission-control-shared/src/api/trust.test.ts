@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrustPolicySnapshot } from "./trust";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -134,5 +135,51 @@ describe("trust API", () => {
     expect(result.capabilities.callable[0]?.posture).toBe("callable");
     expect(result.mcpServers[0]?.posture).toBe("quarantined");
     expect(result.sources.find((source) => source.key === "addons.installed")?.status).toBe("unavailable");
+  });
+
+  it("carries declared governance metadata and medium-trust posture through the snapshot", async () => {
+    const snapshot: TrustPolicySnapshot = {
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      readOnly: true,
+      mutationSemantics: "none",
+      enforcementSources: ["skills.lifecycle"],
+      sources: [],
+      permissionProfiles: [],
+      toolGrants: [],
+      localOperatorOverrides: [],
+      capabilities: { inspectable: [], callable: [] },
+      mcpServers: [],
+      skills: [
+        {
+          skillId: "skill-gov",
+          name: "Governed Skill",
+          state: "enabled",
+          callable: true,
+          posture: "medium_trust_unverified",
+          declaredMetadata: {
+            requiredEnv: [{ name: "GOVERNED_KEY", secret: true }],
+            stateDirs: [{ path: "state/cache", writeable: true }],
+            dependencies: { capabilities: ["network"] },
+          },
+          bundleWarnings: ["Skill requires a secret env var: GOVERNED_KEY (needs an operator-provided secret)."],
+          missingRequiredEnv: ["GOVERNED_KEY"],
+          source: "skills.lifecycle",
+        },
+      ],
+      addons: [],
+      lastUseEvidence: [],
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(snapshot));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchTrustPolicySnapshot } = await import("./trust");
+
+    const result = await fetchTrustPolicySnapshot();
+    const skill = result.skills[0];
+
+    expect(skill?.posture).toBe("medium_trust_unverified");
+    expect(skill?.declaredMetadata?.requiredEnv[0]?.name).toBe("GOVERNED_KEY");
+    expect(skill?.declaredMetadata?.stateDirs[0]?.writeable).toBe(true);
+    expect(skill?.bundleWarnings?.[0]).toContain("secret env var");
+    expect(skill?.missingRequiredEnv).toEqual(["GOVERNED_KEY"]);
   });
 });

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { readSkillBundleDeclaredMetadata } from "../services/skill-bundle-manifest.js";
 
 type TrustPolicyPosture =
   | "callable"
@@ -7,7 +8,8 @@ type TrustPolicyPosture =
   | "quarantined"
   | "disabled"
   | "not_installed"
-  | "unavailable";
+  | "unavailable"
+  | "medium_trust_unverified";
 
 interface TrustPolicySourceStatus {
   key: string;
@@ -92,6 +94,12 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
       ),
     );
 
+    // Surface each skill's declared governance metadata (env/state/deps) and
+    // medium-risk warnings so operators can review them before trusting a skill.
+    const enrichedSkills = await Promise.all(
+      skillsSource.items.map((skill) => enrichSkillWithBundleMetadata(skill, process.env)),
+    );
+
     const snapshot: TrustPolicySnapshot = {
       generatedAt: new Date().toISOString(),
       readOnly: true,
@@ -127,10 +135,10 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
         callable: callableCapabilities.items.map(projectCapability),
       },
       mcpServers: mcpToolSources.map(({ server, tools }) => projectMcpServer(server, tools)),
-      skills: skillsSource.items.map(projectSkill),
+      skills: enrichedSkills.map(projectSkill),
       addons: projectAddons(addonsCatalog.items, installedAddons.items),
       lastUseEvidence: [
-        ...skillsSource.items.map(projectSkillLastUseEvidence).filter(isRecord),
+        ...enrichedSkills.map(projectSkillLastUseEvidence).filter(isRecord),
         ...mcpToolSources.map(({ server, tools }) => projectMcpLastUseEvidence(server, tools)).filter(isRecord),
         ...installedAddons.items.map(projectAddonLastUseEvidence).filter(isRecord),
       ],
@@ -339,6 +347,9 @@ function projectSkill(skill: unknown): Record<string, unknown> {
   const callable = record?.callable === true;
   const lifecycleState = readString(record?.lifecycleState);
   const state = readString(record?.state) ?? "enabled";
+  const declaredMetadata = readRecord(record?.declaredMetadata);
+  const bundleWarnings = readStringArray(record?.bundleWarnings);
+  const missingRequiredEnv = readStringArray(record?.missingRequiredEnv);
   return compactRecord({
     skillId: readString(record?.skillId),
     name: readString(record?.name),
@@ -346,7 +357,13 @@ function projectSkill(skill: unknown): Record<string, unknown> {
     state,
     lifecycleState,
     callable,
-    posture: readSkillPosture({ callable, state, lifecycleState, reviewWarning: readString(record?.reviewWarning) }),
+    posture: readSkillPosture({
+      callable,
+      state,
+      lifecycleState,
+      reviewWarning: readString(record?.reviewWarning),
+      hasElevatedDeclarations: Boolean(bundleWarnings && bundleWarnings.length > 0),
+    }),
     capabilityCategory: readString(record?.capabilityCategory),
     trustLabel: readString(record?.trustLabel),
     reviewWarning: readString(record?.reviewWarning),
@@ -354,6 +371,9 @@ function projectSkill(skill: unknown): Record<string, unknown> {
     lastUsedAt: readString(record?.lastUsedAt),
     declaredTools: readStringArray(record?.declaredTools),
     requires: readStringArray(record?.requires),
+    declaredMetadata,
+    bundleWarnings,
+    missingRequiredEnv,
     source: "skills.lifecycle",
   });
 }
@@ -507,6 +527,7 @@ function readSkillPosture(input: {
   state?: string;
   lifecycleState?: string;
   reviewWarning?: string;
+  hasElevatedDeclarations?: boolean;
 }): TrustPolicyPosture {
   if (input.state === "disabled" || input.state === "sleep") {
     return "disabled";
@@ -514,7 +535,50 @@ function readSkillPosture(input: {
   if (input.lifecycleState === "revoked" || input.lifecycleState === "deprecated" || input.reviewWarning) {
     return "blocked";
   }
+  // A skill that would otherwise be usable but declares elevated governance
+  // metadata (writeable state dirs, secret env, elevated capabilities) is held
+  // at "medium trust" so an operator reviews the declarations before trusting it.
+  if (input.hasElevatedDeclarations) {
+    return "medium_trust_unverified";
+  }
   return input.callable ? "callable" : "non_callable";
+}
+
+async function enrichSkillWithBundleMetadata(skill: unknown, env: NodeJS.ProcessEnv): Promise<unknown> {
+  const record = readRecord(skill);
+  if (!record) {
+    return skill;
+  }
+  // Honor inline-provided governance metadata (already-resolved callers, tests)
+  // without re-reading the bundle from disk.
+  if (record.declaredMetadata !== undefined || record.bundleWarnings !== undefined) {
+    return skill;
+  }
+  const dir = readString(record.dir);
+  if (!dir) {
+    return skill;
+  }
+  const meta = await readSkillBundleDeclaredMetadata(dir);
+  if (!meta) {
+    return skill;
+  }
+  return {
+    ...record,
+    declaredMetadata: meta.declaredMetadata,
+    bundleWarnings: meta.warnings,
+    missingRequiredEnv: computeMissingRequiredEnv(meta.declaredMetadata.requiredEnv, env),
+  };
+}
+
+function computeMissingRequiredEnv(
+  requiredEnv: Array<{ name?: unknown; required?: unknown }>,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  return requiredEnv
+    .filter((entry): entry is { name: string; required?: unknown } => Boolean(entry) && readString(entry?.name) !== undefined)
+    .filter((entry) => entry.required !== false)
+    .map((entry) => entry.name.trim())
+    .filter((name) => !env[name]?.trim());
 }
 
 function readAddonPosture(installed: Record<string, unknown> | undefined): TrustPolicyPosture {

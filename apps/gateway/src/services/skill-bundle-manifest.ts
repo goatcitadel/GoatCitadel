@@ -143,6 +143,45 @@ export async function validateSkillBundleManifestDirectory(skillDir: string): Pr
 }
 
 /**
+ * Lightweight read of a skill's declared governance metadata for operator review
+ * surfaces (e.g. the Trust & Policy snapshot). Unlike
+ * {@link validateSkillBundleManifestDirectory}, this does NOT re-hash bundle
+ * assets — it only parses the manifest and extracts the declared env/state/deps
+ * plus the graduated-trust medium-risk warnings. Returns `undefined` when there
+ * is no manifest, it cannot be parsed, or it declares no governance metadata.
+ */
+export async function readSkillBundleDeclaredMetadata(skillDir: string): Promise<
+  | {
+      declaredMetadata: NonNullable<SkillBundleManifestValidation["declaredMetadata"]>;
+      warnings: string[];
+    }
+  | undefined
+> {
+  const manifestPath = path.join(skillDir, SKILL_BUNDLE_MANIFEST_FILENAME);
+  let raw: string;
+  try {
+    raw = await fs.readFile(manifestPath, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  let manifest: SkillBundleManifest;
+  try {
+    manifest = parseSkillBundleManifest(raw);
+  } catch {
+    return undefined;
+  }
+
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const declaredMetadata = validateSkillBundleDeclaredMetadata(manifest, warnings, errors);
+  if (!declaredMetadata) {
+    return undefined;
+  }
+  return { declaredMetadata, warnings };
+}
+
+/**
  * Validate a skill's declared governance metadata (env/state/deps). Graduated trust:
  * hard-block only on unsafe state-dir paths (traversal); surface medium-risk
  * declarations (writeable dirs, secret env, elevated capabilities) as warnings so an

@@ -3172,7 +3172,7 @@
 
 .mc-next-trust-policy-table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1200px;
   border-collapse: collapse;
   font-size: var(--text-2xs);
   line-height: 1.35;
@@ -3236,6 +3236,28 @@
 .mc-next-trust-policy-table td span {
   margin-top: 0.14rem;
   color: var(--text-muted);
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  max-width: 20rem;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov span {
+  margin-top: 0;
+  max-width: 20rem;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov .mc-next-status-chip {
+  display: inline-flex;
+  align-self: flex-start;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov-warning {
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 @media (max-width: 1023px) {
