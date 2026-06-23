@@ -1514,7 +1514,22 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 130,
+    name: "chat_delegation_parent_run_id",
+    up: ensureChatDelegationParentRunIdSchema,
+  },
 ];
+
+function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "parent_run_id", "TEXT");
+  if (tableExists(db, "chat_delegation_runs")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_chat_delegation_runs_parent
+        ON chat_delegation_runs(parent_run_id, started_at DESC);
+    `);
+  }
+}
 
 function createAutonomyAuditSchema(db: DatabaseSync): void {
   db.exec(`
@@ -2364,6 +2379,7 @@ function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_session_prefs", "code_auto_apply", "TEXT NOT NULL DEFAULT 'aggressive_auto'");
   addColumnIfMissing(db, "chat_turn_traces", "orchestration_json", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "visibility", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "parent_run_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "workflow_template", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "route_decision_json", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "final_summary", "TEXT");
@@ -3375,6 +3391,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_delegation_runs (
       run_id TEXT PRIMARY KEY,
+      parent_run_id TEXT,
       session_id TEXT NOT NULL,
       task_id TEXT NOT NULL,
       objective TEXT NOT NULL,
@@ -3398,6 +3415,8 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       ON chat_delegation_runs(session_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_delegation_runs_task
       ON chat_delegation_runs(task_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_delegation_runs_parent
+      ON chat_delegation_runs(parent_run_id, started_at DESC);
 
     CREATE TABLE IF NOT EXISTS chat_delegation_steps (
       step_id TEXT PRIMARY KEY,

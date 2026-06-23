@@ -991,6 +991,47 @@ describe("DurableRunService", () => {
     }
   });
 
+  it("fails timed-out prompt-pack Cowork chat turns instead of waiting for an operator resume", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = {
+        ...createRun("run-cowork-harness-timeout", "queued", "chat.turn.execute"),
+        payload: {
+          version: "chat.turn.execute.v1",
+          request: { mode: "cowork", normalizationProfile: "prompt_pack_harness" },
+        },
+      };
+      const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      const context = createContext(runs, checkpoints, timeline);
+      context.config.assistant.durable.workflowTimeoutMs = 50;
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow: vi.fn(() => new Promise<void>(() => undefined)),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      const tasks = [...backgroundTasks];
+      await vi.advanceTimersByTimeAsync(60);
+      await Promise.allSettled(tasks);
+
+      expect(runs.get(run.runId)).toMatchObject({
+        status: "failed",
+      });
+      expect(runs.get(run.runId)?.metadata).not.toHaveProperty("waitForEvent");
+      expect(timeline.map((item) => item.eventType)).toContain("run_failed");
+      expect(timeline.map((item) => item.eventType)).not.toContain("run_waiting");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clobber a run after lease ownership moves to another worker", async () => {
     const run = createRun("run-lease-steal", "queued");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

@@ -40,6 +40,31 @@ describe("local-business-research-service", () => {
     }
   });
 
+  it("builds reusable local-business plans outside the 91303 boardgame case", () => {
+    const plan = buildLocalBusinessResearchPlan(
+      "Find restaurants near 77001 and get contact email addresses for the manager.",
+    );
+
+    expect(plan).toMatchObject({
+      location: "77001",
+      categories: expect.arrayContaining(["restaurant"]),
+      requireEmail: true,
+      requireContactName: true,
+    });
+    const allQueries = [plan?.primaryQuery, ...(plan?.alternateQueries ?? [])].filter(Boolean).join(" ");
+    expect(allQueries).toContain("77001");
+    expect(allQueries).not.toContain("CA");
+  });
+
+  it("accepts useful raw queries grounded to arbitrary ZIP codes", () => {
+    const query = resolveLocalBusinessSearchQuery(
+      "Find coffee shops near 90210 and collect official contact email addresses.",
+      "90210 official cafe contact",
+    );
+
+    expect(query).toBe("90210 official cafe contact");
+  });
+
   it("strips delegation wrapper text and malformed quotes from Cowork search queries", () => {
     const wrappedPrompt = [
       "Delegated role: Researcher",

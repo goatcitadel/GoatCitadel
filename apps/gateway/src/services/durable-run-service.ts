@@ -1579,10 +1579,15 @@ function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {
         version?: unknown;
         request?: {
           mode?: unknown;
+          normalizationProfile?: unknown;
         };
       }
     | undefined;
-  return payload?.version === "chat.turn.execute.v1" && payload.request?.mode === "cowork";
+  return (
+    payload?.version === "chat.turn.execute.v1" &&
+    payload.request?.mode === "cowork" &&
+    payload.request?.normalizationProfile !== "prompt_pack_harness"
+  );
 }
 
 function isDurableRunUpdateConflict(error: unknown): boolean {

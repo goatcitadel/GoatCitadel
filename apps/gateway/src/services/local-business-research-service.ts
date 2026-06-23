@@ -102,6 +102,12 @@ const ZIP_AREA_HINTS: Record<string, string[]> = {
   "91303": ["Canoga Park", "Woodland Hills", "Winnetka"],
 };
 
+const ZIP_REGION_HINTS: Record<string, string[]> = {
+  "91303": ["CA", "California"],
+};
+
+const MAX_LOCAL_BUSINESS_SEARCH_QUERY_LENGTH = 240;
+
 const LOCAL_BUSINESS_CATEGORY_HINTS = [
   {
     category: "board game and tabletop game store",
@@ -114,12 +120,23 @@ const LOCAL_BUSINESS_CATEGORY_HINTS = [
     terms: ["restaurant"],
   },
   {
+    category: "coffee shop",
+    pattern: /\b(?:coffee\s*shops?|cafes?)\b/i,
+    terms: ["coffee shop", "cafe"],
+  },
+  {
+    category: "grocery store",
+    pattern: /\b(?:grocery|grocer|supermarket)s?\b/i,
+    terms: ["grocery store", "supermarket"],
+  },
+  {
     category: "local business",
     pattern: /\b(stores?|shops?|business(?:es)?|vendors?)\b/i,
     terms: ["local business"],
   },
 ];
 
+// These consumer/social listings often hide details or require login; keep them as blockers/secondary leads.
 const BLOCKED_SOURCE_HOSTS = [/(\.|^)yelp\.com$/i, /(\.|^)facebook\.com$/i, /(\.|^)instagram\.com$/i];
 const LISTING_SOURCE_HOSTS = [
   /(\.|^)google\.com$/i,
@@ -141,7 +158,9 @@ export function buildLocalBusinessResearchPlan(content: string): LocalBusinessRe
   const normalized = task.toLowerCase();
   const hasLocalBusinessSignal =
     /\b(within|radius|near|nearby|local|around|in)\b/.test(normalized) &&
-    /\b(stores?|shops?|business(?:es)?|vendors?)\b/.test(normalized);
+    /\b(stores?|shops?|business(?:es)?|vendors?|restaurants?|coffee\s*shops?|cafes?|grocery|grocer|supermarkets?)\b/.test(
+      normalized,
+    );
   const wantsContact =
     /\b(email(?:s| addresses?)?|contact|owner|manager|address(?:ed)?|who\s+(?:can|should)\s+i\s+address)\b/i.test(task);
   const zip = task.match(/\b\d{5}(?:-\d{4})?\b/)?.[0]?.slice(0, 5);
@@ -155,6 +174,7 @@ export function buildLocalBusinessResearchPlan(content: string): LocalBusinessRe
   const requireContactName =
     /\b(owner|manager|contact name|who\s+(?:can|should)\s+i\s+address|address\s+in\s+them)\b/i.test(task);
   const areaHints = ZIP_AREA_HINTS[zip] ?? [];
+  const regionHints = ZIP_REGION_HINTS[zip] ?? [];
   const primaryCity = areaHints[0] ?? zip;
   const secondaryCity = areaHints[1] ?? primaryCity;
   const tertiaryCity = areaHints[2] ?? primaryCity;
@@ -169,19 +189,24 @@ export function buildLocalBusinessResearchPlan(content: string): LocalBusinessRe
       : [
           `"${primarySearchTerm}"`,
           `"${primaryCity}"`,
-          "CA",
+          regionHints[0],
           zip,
           radiusText,
           requireEmail ? "official contact email" : "official website contact",
         ];
   const primaryQuery = sanitizeLocalBusinessQuery(primaryQueryParts.filter(Boolean).join(" "));
-  const groundedLocationTerms = [zip, ...areaHints, radiusText].filter(Boolean).join(" ");
+  const groundedLocationTerms = [zip, ...areaHints, ...regionHints, radiusText].filter(Boolean).join(" ");
+  const localQueryLocation = [primaryCity, secondaryCity, tertiaryCity, ...regionHints, zip, radiusText]
+    .filter((term, index, terms): term is string => Boolean(term) && terms.indexOf(term) === index)
+    .join(" ");
+  const secondaryCategoryTerm = categoryTerms[1] ?? categoryTerms[0] ?? primaryCategory;
+  const tertiaryCategoryTerm = categoryTerms[2] ?? secondaryCategoryTerm;
   const alternateQueries = [
-    `"${categoryTerms[1] ?? categoryTerms[0] ?? primaryCategory}" "${secondaryCity}" CA ${zip} ${radiusText ?? ""} official contact email`,
-    `"game store" "${tertiaryCity}" "${primaryCity}" CA ${zip} ${radiusText ?? ""} contact email`,
-    `Wizards Store Locator ${groundedLocationTerms} tabletop game store`,
-    `Warhammer store locator ${groundedLocationTerms} game store`,
-    `"Magic the Gathering" store ${primaryCity} ${secondaryCity} ${zip} ${radiusText ?? ""} contact email`,
+    `"${secondaryCategoryTerm}" ${localQueryLocation} official contact email`,
+    `"${tertiaryCategoryTerm}" ${localQueryLocation} store locator contact`,
+    `${primaryCategory} ${groundedLocationTerms} owner manager email`,
+    `${primarySearchTerm} ${groundedLocationTerms} public email contact page`,
+    `${primaryCategory} ${localQueryLocation} official website`,
   ]
     .map(sanitizeLocalBusinessQuery)
     .filter((query, index, items) => query.length > 0 && items.indexOf(query) === index)
@@ -211,7 +236,7 @@ export function resolveLocalBusinessSearchQuery(content: string, rawQuery?: stri
   }
   const sanitizedRaw = rawQuery ? sanitizeLocalBusinessQuery(rawQuery) : "";
   const rawLooksLikeDelegationWrapper = rawQuery ? looksLikeDelegationWrapperQuery(rawQuery) : false;
-  if (!sanitizedRaw || rawLooksLikeDelegationWrapper || !hasUsefulLocalBusinessQueryTerms(sanitizedRaw)) {
+  if (!sanitizedRaw || rawLooksLikeDelegationWrapper || !hasUsefulLocalBusinessQueryTerms(plan, sanitizedRaw)) {
     return plan.primaryQuery;
   }
   const quoteBalanced = balanceLooseQuotes(sanitizedRaw);
@@ -219,7 +244,7 @@ export function resolveLocalBusinessSearchQuery(content: string, rawQuery?: stri
     return plan.primaryQuery;
   }
   return isGroundedLocalBusinessRawQuery(plan, quoteBalanced)
-    ? quoteBalanced.slice(0, 240)
+    ? quoteBalanced.slice(0, MAX_LOCAL_BUSINESS_SEARCH_QUERY_LENGTH)
     : mergeLocalBusinessSearchQuery(plan, quoteBalanced);
 }
 
@@ -752,8 +777,8 @@ function classifyLocalBusinessSource(
 }
 
 function hasLocalBusinessLocationSignal(plan: LocalBusinessResearchPlan, value: string): boolean {
-  return [plan.location, ...(ZIP_AREA_HINTS[plan.location] ?? []), "CA", "California"].some((term) =>
-    containsSearchTerm(value, term),
+  return [plan.location, ...(ZIP_AREA_HINTS[plan.location] ?? []), ...(ZIP_REGION_HINTS[plan.location] ?? [])].some(
+    (term) => containsSearchTerm(value, term),
   );
 }
 
@@ -1110,9 +1135,16 @@ function looksLikeDelegationWrapperQuery(value: string): boolean {
   );
 }
 
-function hasUsefulLocalBusinessQueryTerms(value: string): boolean {
-  return /\b(?:store|shop|business|board\s*game|tabletop|contact|email|official|locator|91303|canoga|woodland|winnetka)\b/i.test(
-    value,
+function hasUsefulLocalBusinessQueryTerms(plan: LocalBusinessResearchPlan, value: string): boolean {
+  if (
+    /\b(?:store|shop|business|restaurant|coffee|cafe|grocery|supermarket|board\s*game|tabletop|contact|email|official|locator)\b/i.test(
+      value,
+    )
+  ) {
+    return true;
+  }
+  return [plan.location, ...(ZIP_AREA_HINTS[plan.location] ?? []), ...(ZIP_REGION_HINTS[plan.location] ?? [])].some(
+    (term) => containsSearchTerm(value, term),
   );
 }
 
@@ -1137,7 +1169,10 @@ function mergeLocalBusinessSearchQuery(plan: LocalBusinessResearchPlan, rawQuery
   const normalizedPlan = normalizeSearchQueryForComparison(plan.primaryQuery);
   const normalizedRaw = normalizeSearchQueryForComparison(rawQuery);
   const supplemental = normalizedRaw && !normalizedPlan.includes(normalizedRaw) ? rawQuery : undefined;
-  return balanceLooseQuotes([plan.primaryQuery, supplemental].filter(Boolean).join(" ")).slice(0, 240);
+  return balanceLooseQuotes([plan.primaryQuery, supplemental].filter(Boolean).join(" ")).slice(
+    0,
+    MAX_LOCAL_BUSINESS_SEARCH_QUERY_LENGTH,
+  );
 }
 
 function containsSearchTerm(value: string, term: string): boolean {
@@ -1161,11 +1196,14 @@ function balanceLooseQuotes(value: string): string {
   const withoutCurly = value.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
   const doubleCount = (withoutCurly.match(/"/g) ?? []).length;
   const singleCount = (withoutCurly.match(/'/g) ?? []).length;
-  return withoutCurly
-    .replace(doubleCount % 2 === 1 ? /"/g : /a^/, "")
-    .replace(singleCount % 2 === 1 ? /'/g : /a^/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let balanced = withoutCurly;
+  if (doubleCount % 2 === 1) {
+    balanced = balanced.replace(/"/g, "");
+  }
+  if (singleCount % 2 === 1) {
+    balanced = balanced.replace(/'/g, "");
+  }
+  return balanced.replace(/\s+/g, " ").trim();
 }
 
 function inferStoreName(title?: string, snippet?: string): string | undefined {

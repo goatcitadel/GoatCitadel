@@ -13,6 +13,7 @@ import { safeJsonParse } from "./safe-json.js";
 
 interface ChatDelegationRunRow {
   run_id: string;
+  parent_run_id: string | null;
   session_id: string;
   task_id: string;
   objective: string;
@@ -45,11 +46,11 @@ export class ChatDelegationRunRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_runs WHERE run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_runs (
-        run_id, session_id, task_id, objective, roles_json, mode, provider_id, model, status, visibility,
+        run_id, parent_run_id, session_id, task_id, objective, roles_json, mode, provider_id, model, status, visibility,
         workflow_template, execution_plan_id, route_decision_json, final_summary,
         stitched_output, citations_json, trace_json, started_at, finished_at
       ) VALUES (
-        @runId, @sessionId, @taskId, @objective, @rolesJson, @mode, @providerId, @model, @status, @visibility,
+        @runId, @parentRunId, @sessionId, @taskId, @objective, @rolesJson, @mode, @providerId, @model, @status, @visibility,
         @workflowTemplate, @executionPlanId, @routeDecisionJson, @finalSummary,
         @stitchedOutput, @citationsJson, @traceJson, @startedAt, @finishedAt
       )
@@ -81,6 +82,7 @@ export class ChatDelegationRunRepository {
       LEFT JOIN chat_session_meta meta ON meta.session_id = runs.session_id
       WHERE (@workspaceId IS NULL OR meta.workspace_id = @workspaceId)
         AND (@sessionId IS NULL OR runs.session_id = @sessionId)
+        AND (@parentRunId IS NULL OR runs.parent_run_id = @parentRunId)
       ORDER BY runs.started_at DESC, runs.run_id DESC
       LIMIT @limit
     `);
@@ -105,6 +107,7 @@ export class ChatDelegationRunRepository {
 
   public create(input: {
     runId: string;
+    parentRunId?: string;
     sessionId: string;
     taskId: string;
     objective: string;
@@ -126,6 +129,7 @@ export class ChatDelegationRunRepository {
   }): ChatDelegationRunRecord {
     this.insertStmt.run({
       runId: input.runId,
+      parentRunId: input.parentRunId?.trim() || null,
       sessionId: input.sessionId,
       taskId: input.taskId,
       objective: input.objective,
@@ -207,12 +211,10 @@ export class ChatDelegationRunRepository {
       limit?: number;
     } = {},
   ): ChatDelegationRunRecord[] {
-    if (input.parentRunId?.trim()) {
-      return [];
-    }
     const rawRows = this.listRecentStmt.all({
       workspaceId: input.workspaceId?.trim() || null,
       sessionId: input.sessionId?.trim() || null,
+      parentRunId: input.parentRunId?.trim() || null,
       limit: Math.max(1, Math.min(input.limit ?? 100, 1000)),
     });
     if (!Array.isArray(rawRows)) {
@@ -296,6 +298,7 @@ function isChatDelegationRunRow(value: unknown): value is ChatDelegationRunRow {
   }
   return (
     typeof value.run_id === "string" &&
+    (typeof value.parent_run_id === "string" || value.parent_run_id === null) &&
     typeof value.session_id === "string" &&
     typeof value.task_id === "string" &&
     typeof value.objective === "string" &&
@@ -344,6 +347,7 @@ function toChatDelegationRunRow(value: unknown): ChatDelegationRunRow | undefine
 function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
   return {
     runId: row.run_id,
+    parentRunId: row.parent_run_id ?? undefined,
     sessionId: row.session_id,
     taskId: row.task_id,
     objective: row.objective,

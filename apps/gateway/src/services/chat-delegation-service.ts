@@ -94,6 +94,7 @@ export interface ChatDelegationServiceHost {
     chatDelegationRuns: {
       create(input: {
         runId: string;
+        parentRunId?: string;
         sessionId: string;
         taskId: string;
         objective: string;
@@ -286,6 +287,7 @@ export class ChatDelegationService {
 
     deps.storage.chatDelegationRuns.create({
       runId,
+      parentRunId: input.policyRunId,
       sessionId,
       taskId: task.taskId,
       objective,

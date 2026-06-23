@@ -84,6 +84,7 @@ describe("ChatDelegationRunRepository", () => {
     });
     repo.create({
       runId: "run-b",
+      parentRunId: "run-a",
       sessionId: "session-a",
       taskId: "task-b",
       objective: "Summarize",
@@ -147,6 +148,7 @@ describe("ChatDelegationRunRepository", () => {
     });
     repo.create({
       runId: "run-b",
+      parentRunId: "run-a",
       sessionId: "session-a",
       taskId: "task-b",
       objective: "Verify contact pages",
@@ -178,7 +180,7 @@ describe("ChatDelegationRunRepository", () => {
     );
     assert.deepEqual(
       repo.listRecent({ parentRunId: "run-a" }).map((run) => run.runId),
-      [],
+      ["run-b"],
     );
   });
 

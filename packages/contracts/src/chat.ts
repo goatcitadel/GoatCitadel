@@ -1375,6 +1375,7 @@ export interface ChatDelegationStepRecord {
 
 export interface ChatDelegationRunRecord {
   runId: string;
+  parentRunId?: string;
   sessionId: string;
   taskId: string;
   objective: string;

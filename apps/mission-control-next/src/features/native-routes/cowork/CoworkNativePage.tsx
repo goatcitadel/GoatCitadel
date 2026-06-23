@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Save, Undo2, Workflow } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Save, Trash2, Undo2, Workflow } from "lucide-react";
 import {
   addTaskDeliverable,
   createTask,
@@ -280,7 +280,7 @@ export function CoworkNativePage({
     revealDetail();
     const settledRevealId = globalThis.setTimeout(revealDetail, 200);
     return () => globalThis.clearTimeout(settledRevealId);
-  }, [deliverables.loading, detailFocusRequest, selectedTask?.taskId]);
+  }, [detailFocusRequest, selectedTask?.taskId]);
 
   const refreshCowork = async () => {
     try {
@@ -802,7 +802,7 @@ export function CoworkNativePage({
                       </NativeButton>
                     ) : (
                       <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
-                        <Undo2 className="h-4 w-4" />
+                        <Trash2 className="h-4 w-4" />
                         Move to trash
                       </NativeButton>
                     )}

@@ -61,6 +61,7 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
     expect(parsedManifest.entries["anthropic/claude-opus-4-7"]).toEqual({
       contextWindow: 1000000,
       outputTokenLimit: 32000,
+      tokenMultiplier: 1.3,
     });
   });
 
