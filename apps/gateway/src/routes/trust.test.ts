@@ -1,11 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { trustRoutes } from "./trust.js";
 
 describe("trust routes", () => {
   let app: FastifyInstance | null = null;
+  const tmpRoots: string[] = [];
+
+  function writeSkillBundle(manifestExtra: Record<string, unknown>): string {
+    const dir = mkdtempSync(join(tmpdir(), "trust-gov-"));
+    tmpRoots.push(dir);
+    writeFileSync(
+      join(dir, "goatcitadel.skill-bundle.json"),
+      JSON.stringify({
+        manifestVersion: "goatcitadel.skill-bundle.v1",
+        scriptDisposition: "review_only_non_callable",
+        assets: [{ path: "SKILL.md", sha256: "0".repeat(64), kind: "skill" }],
+        ...manifestExtra,
+      }),
+    );
+    return dir;
+  }
 
   afterEach(async () => {
+    for (const dir of tmpRoots.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     if (!app) {
       return;
     }
@@ -277,5 +299,84 @@ describe("trust routes", () => {
         evidenceRef: "evidence-skill-1",
       }),
     ]);
+  });
+
+  it("projects inline declared governance metadata and marks elevated skills medium trust", async () => {
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: { listCapabilityCatalog: vi.fn(() => []) },
+      mcp: { listMcpServers: vi.fn(() => []) },
+      skills: {
+        listSkills: vi.fn(() => [
+          {
+            skillId: "skill-gov",
+            name: "Governed Skill",
+            state: "enabled",
+            callable: true,
+            declaredMetadata: {
+              requiredEnv: [{ name: "GOVERNED_KEY" }],
+              stateDirs: [{ path: "state/cache", writeable: true }],
+              dependencies: { capabilities: ["network"] },
+            },
+            bundleWarnings: ["Skill declares a writeable state directory: state/cache (review before trusting)."],
+            missingRequiredEnv: ["GOVERNED_KEY"],
+          },
+        ]),
+      },
+      addons: {
+        listAddonsCatalog: vi.fn(() => []),
+        listInstalledAddons: vi.fn(async () => []),
+      },
+    });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
+
+    expect(response.statusCode).toBe(200);
+    const skill = response.json().skills[0];
+    expect(skill.posture).toBe("medium_trust_unverified");
+    expect(skill.declaredMetadata.stateDirs[0].path).toBe("state/cache");
+    expect(skill.bundleWarnings[0]).toContain("writeable state directory");
+    expect(skill.missingRequiredEnv).toEqual(["GOVERNED_KEY"]);
+  });
+
+  it("enriches skills from their bundle manifest and flags missing required env", async () => {
+    const dir = writeSkillBundle({
+      requiredEnv: [{ name: "GOATCITADEL_TRUST_TEST_ENV_DNE", required: true, secret: true }],
+      stateDirs: [{ path: "cache", writeable: true }],
+      declaredDependencies: { capabilities: ["network"] },
+    });
+    delete process.env.GOATCITADEL_TRUST_TEST_ENV_DNE;
+
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: { listCapabilityCatalog: vi.fn(() => []) },
+      mcp: { listMcpServers: vi.fn(() => []) },
+      skills: {
+        listSkills: vi.fn(() => [
+          { skillId: "skill-bundle", name: "Bundle Skill", state: "enabled", callable: true, dir },
+        ]),
+      },
+      addons: {
+        listAddonsCatalog: vi.fn(() => []),
+        listInstalledAddons: vi.fn(async () => []),
+      },
+    });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
+
+    expect(response.statusCode).toBe(200);
+    const skill = response.json().skills[0];
+    expect(skill.declaredMetadata.requiredEnv[0].name).toBe("GOATCITADEL_TRUST_TEST_ENV_DNE");
+    expect(skill.missingRequiredEnv).toContain("GOATCITADEL_TRUST_TEST_ENV_DNE");
+    expect(skill.bundleWarnings.some((warning: string) => warning.includes("secret env var"))).toBe(true);
+    expect(skill.posture).toBe("medium_trust_unverified");
   });
 });

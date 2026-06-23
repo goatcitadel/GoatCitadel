@@ -95,6 +95,51 @@ describe("TrustPolicySection", () => {
     expect(text).toContain("No last-use evidence");
   });
 
+  it("surfaces declared governance metadata and setup-required state for elevated skills", async () => {
+    trustApi.fetchTrustPolicySnapshot.mockResolvedValue({
+      generatedAt: "2026-06-22T12:00:00.000Z",
+      readOnly: true,
+      mutationSemantics: "none",
+      enforcementSources: ["skills.lifecycle"],
+      sources: [{ key: "skills", owner: "skills.lifecycle", status: "available", itemCount: 1 }],
+      permissionProfiles: [],
+      toolGrants: [],
+      localOperatorOverrides: [],
+      capabilities: { inspectable: [], callable: [] },
+      mcpServers: [],
+      skills: [
+        {
+          skillId: "skill-gov",
+          name: "Governed Skill",
+          sourceKind: "extra",
+          state: "enabled",
+          callable: true,
+          posture: "medium_trust_unverified",
+          declaredMetadata: {
+            requiredEnv: [{ name: "GOVERNED_KEY", secret: true }],
+            stateDirs: [{ path: "state/cache", writeable: true }],
+            dependencies: { capabilities: ["network"], tools: ["fs.read"] },
+          },
+          bundleWarnings: ["Skill requires a secret env var: GOVERNED_KEY (needs an operator-provided secret)."],
+          missingRequiredEnv: ["GOVERNED_KEY"],
+          source: "skills.lifecycle",
+        },
+      ],
+      addons: [],
+      lastUseEvidence: [],
+    });
+
+    const text = await renderText();
+
+    expect(text).toContain("Declared governance");
+    expect(text).toContain("Medium trust");
+    expect(text).toContain("Setup required");
+    expect(text).toContain("GOVERNED_KEY");
+    expect(text).toContain("state/cache");
+    expect(text).toContain("network");
+    expect(text).toContain("secret env var");
+  });
+
   it("labels trust matrix cells for compact card layout", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {

@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SKILL_BUNDLE_MANIFEST_FILENAME, validateSkillBundleManifestDirectory } from "./skill-bundle-manifest.js";
+import {
+  readSkillBundleDeclaredMetadata,
+  SKILL_BUNDLE_MANIFEST_FILENAME,
+  validateSkillBundleManifestDirectory,
+} from "./skill-bundle-manifest.js";
 
 const tmpRoots: string[] = [];
 
@@ -63,5 +67,38 @@ describe("validateSkillBundleManifestDirectory declared governance metadata", ()
     const result = await validateSkillBundleManifestDirectory(dir);
     expect(result.status).toBe("valid");
     expect(result.declaredMetadata).toBeUndefined();
+  });
+});
+
+describe("readSkillBundleDeclaredMetadata", () => {
+  it("surfaces declared metadata and medium-risk warnings without verifying assets", async () => {
+    // A bogus asset hash would fail full verification, but the lightweight reader
+    // must surface governance metadata without hashing files.
+    const dir = makeSkillDir({
+      assets: [{ path: "SKILL.md", sha256: "0".repeat(64), kind: "skill" }],
+      requiredEnv: [{ name: "AWS_SECRET", secret: true }],
+      stateDirs: [{ path: "state/cache", writeable: true }],
+      declaredDependencies: { tools: ["fs.read"], capabilities: ["network"] },
+    });
+
+    const result = await readSkillBundleDeclaredMetadata(dir);
+
+    expect(result?.declaredMetadata?.requiredEnv).toHaveLength(1);
+    expect(result?.declaredMetadata?.stateDirs[0]?.path).toBe("state/cache");
+    expect(result?.declaredMetadata?.dependencies.capabilities).toContain("network");
+    expect(result?.warnings.some((w) => w.includes("secret env var"))).toBe(true);
+    expect(result?.warnings.some((w) => w.includes("writeable state directory"))).toBe(true);
+    expect(result?.warnings.some((w) => w.includes("elevated capabilities"))).toBe(true);
+  });
+
+  it("returns undefined when no manifest is present", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "skill-gov-empty-"));
+    tmpRoots.push(dir);
+    expect(await readSkillBundleDeclaredMetadata(dir)).toBeUndefined();
+  });
+
+  it("returns undefined when the manifest declares no governance metadata", async () => {
+    const dir = makeSkillDir({});
+    expect(await readSkillBundleDeclaredMetadata(dir)).toBeUndefined();
   });
 });
