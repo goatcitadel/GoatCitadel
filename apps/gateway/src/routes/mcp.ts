@@ -29,7 +29,7 @@ import {
   findServersExposingTool,
   parseNamespacedMcpToolName,
 } from "../services/mcp-tool-namespace.js";
-import { McpElicitationService, McpElicitationServiceError } from "../services/mcp-elicitation-service.js";
+import { McpElicitationServiceError } from "../services/mcp-elicitation-service.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -195,7 +195,8 @@ const MUTATION_ROUTE_OPTIONS = {
 };
 
 export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
-  const mcpElicitations = new McpElicitationService();
+  // Shared elicitation store (also backs the approval-inbox respond/list tools) so either surface answers the other's requests.
+  const mcpElicitations = fastify.services.mcp.elicitations;
 
   fastify.get("/api/v1/mcp/servers", READ_ROUTE_OPTIONS, async (_request, reply) => {
     return reply.send({ items: fastify.services.mcp.listMcpServers() });

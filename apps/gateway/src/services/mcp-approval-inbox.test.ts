@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApprovalInboxItemRecord, ApprovalInboxItemState, ApprovalRequest } from "@goatcitadel/contracts";
+import type {
+  ApprovalInboxItemRecord,
+  ApprovalInboxItemState,
+  ApprovalRequest,
+  McpElicitationResponseAction,
+  McpElicitationStatus,
+} from "@goatcitadel/contracts";
 import {
   MCP_APPROVAL_DELIVERY_TOOL_NAME,
+  MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+  MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
   MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
   MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
   MCP_APPROVAL_INBOX_URL,
@@ -9,6 +17,7 @@ import {
   handleInternalMcpApprovalInboxInvoke,
   isInternalMcpApprovalInboxServer,
 } from "./mcp-approval-inbox.js";
+import { McpElicitationService } from "./mcp-elicitation-service.js";
 
 describe("mcp approval inbox", () => {
   afterEach(() => {
@@ -22,10 +31,15 @@ describe("mcp approval inbox", () => {
       MCP_APPROVAL_DELIVERY_TOOL_NAME,
       MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
       MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+      MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+      MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
     ]);
     expect(
       tools.find((tool) => tool.toolName === MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME)?.inputSchema.properties,
     ).not.toHaveProperty("resolvedBy");
+    const respondTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME);
+    expect(respondTool?.inputSchema.required).toEqual(["elicitationId", "action"]);
+    expect(respondTool?.inputSchema.properties).toHaveProperty("content");
   });
 
   it("receives, lists, and returns pending inbox state until follow-up effects finalize it", async () => {
@@ -66,6 +80,7 @@ describe("mcp approval inbox", () => {
       {
         approvalInbox,
         resolveApprovalWithRemoteTokenId,
+        ...stubElicitationDeps(),
       },
     );
 
@@ -88,6 +103,7 @@ describe("mcp approval inbox", () => {
       {
         approvalInbox,
         resolveApprovalWithRemoteTokenId,
+        ...stubElicitationDeps(),
       },
     );
 
@@ -107,6 +123,7 @@ describe("mcp approval inbox", () => {
       {
         approvalInbox,
         resolveApprovalWithRemoteTokenId,
+        ...stubElicitationDeps(),
       },
     );
 
@@ -267,6 +284,7 @@ describe("mcp approval inbox", () => {
       {
         approvalInbox,
         resolveApprovalWithRemoteTokenId,
+        ...stubElicitationDeps(),
       },
     );
     const second = await handleInternalMcpApprovalInboxInvoke(
@@ -282,6 +300,7 @@ describe("mcp approval inbox", () => {
       {
         approvalInbox,
         resolveApprovalWithRemoteTokenId,
+        ...stubElicitationDeps(),
       },
     );
 
@@ -323,12 +342,186 @@ describe("mcp approval inbox", () => {
         resolveApprovalWithRemoteTokenId: vi
           .fn()
           .mockRejectedValue(new Error("Remote action token has already been consumed.")),
+        ...stubElicitationDeps(),
       },
     );
 
     expect(resolved.ok).toBe(true);
     expect(resolved.output?.item).toMatchObject({ state: "pending" });
   });
+
+  it("exposes elicitation respond and list tools that route to the injected elicitation deps", async () => {
+    const server = createServer();
+    const elicitation = sampleElicitation();
+    const respondToMcpElicitation = vi.fn(() => elicitation);
+    const listMcpElicitations = vi.fn(() => [elicitation]);
+
+    const responded = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: {
+          elicitationId: elicitation.elicitationId,
+          action: "accept",
+          content: { choice: "ship" },
+        },
+      },
+      {
+        approvalInbox: createRepo(),
+        resolveApprovalWithRemoteTokenId: vi.fn(),
+        respondToMcpElicitation,
+        listMcpElicitations,
+      },
+    );
+
+    expect(respondToMcpElicitation).toHaveBeenCalledWith({
+      elicitationId: elicitation.elicitationId,
+      action: "accept",
+      content: { choice: "ship" },
+    });
+    expect(responded.ok).toBe(true);
+    expect(responded.output?.elicitation).toBe(elicitation);
+
+    const listed = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        arguments: { status: "pending", serverId: "srv-9" },
+      },
+      {
+        approvalInbox: createRepo(),
+        resolveApprovalWithRemoteTokenId: vi.fn(),
+        respondToMcpElicitation,
+        listMcpElicitations,
+      },
+    );
+
+    expect(listMcpElicitations).toHaveBeenCalledWith({
+      status: "pending",
+      serverId: "srv-9",
+      sessionId: undefined,
+    });
+    expect(listed.ok).toBe(true);
+    expect(listed.output?.items).toEqual([elicitation]);
+  });
+
+  it("validates elicitation respond arguments before routing to the elicitation dep", async () => {
+    const server = createServer();
+    const respondToMcpElicitation = vi.fn();
+
+    const missingId = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: { action: "accept", content: {} },
+      },
+      {
+        approvalInbox: createRepo(),
+        resolveApprovalWithRemoteTokenId: vi.fn(),
+        respondToMcpElicitation,
+        listMcpElicitations: vi.fn(() => []),
+      },
+    );
+    expect(missingId.ok).toBe(false);
+    expect(missingId.error).toMatch(/elicitationId/);
+
+    const badAction = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: { elicitationId: "mcp-elicit-1", action: "approve" },
+      },
+      {
+        approvalInbox: createRepo(),
+        resolveApprovalWithRemoteTokenId: vi.fn(),
+        respondToMcpElicitation,
+        listMcpElicitations: vi.fn(() => []),
+      },
+    );
+    expect(badAction.ok).toBe(false);
+    expect(badAction.error).toMatch(/action/);
+    expect(respondToMcpElicitation).not.toHaveBeenCalled();
+  });
+
+  it("responds to a real pending elicitation end-to-end through the inbox tool", async () => {
+    const server = createServer();
+    const elicitations = new McpElicitationService();
+    const created = elicitations.createRequest({
+      prompt: "Which environment should I deploy to?",
+      requestedSchema: { type: "object", properties: { env: { type: "string" } } },
+      serverId: "srv-1",
+    });
+    const deps = {
+      approvalInbox: createRepo(),
+      resolveApprovalWithRemoteTokenId: vi.fn(),
+      respondToMcpElicitation: (input: {
+        elicitationId: string;
+        action: McpElicitationResponseAction;
+        content?: Record<string, unknown>;
+      }) => elicitations.respondToRequest(input.elicitationId, { action: input.action, content: input.content }),
+      listMcpElicitations: (filter: { status?: McpElicitationStatus; serverId?: string; sessionId?: string }) =>
+        elicitations.listRequests(filter),
+    };
+
+    const responded = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: { elicitationId: created.elicitationId, action: "accept", content: { env: "prod" } },
+      },
+      deps,
+    );
+
+    expect(responded.ok).toBe(true);
+    expect(responded.output?.elicitation).toMatchObject({
+      elicitationId: created.elicitationId,
+      status: "accepted",
+    });
+
+    const listed = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_LIST_TOOL_NAME,
+        arguments: {},
+      },
+      deps,
+    );
+    expect(listed.ok).toBe(true);
+    expect((listed.output?.items as Array<{ elicitationId: string }>)[0]?.elicitationId).toBe(created.elicitationId);
+
+    const conflict = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME,
+        arguments: { elicitationId: created.elicitationId, action: "decline" },
+      },
+      deps,
+    );
+    expect(conflict.ok).toBe(false);
+    expect(conflict.error).toMatch(/already been resolved/);
+  });
+
+  function stubElicitationDeps() {
+    return {
+      respondToMcpElicitation: vi.fn(),
+      listMcpElicitations: vi.fn(() => []),
+    };
+  }
+
+  function sampleElicitation() {
+    return new McpElicitationService().createRequest({
+      prompt: "Need operator input",
+      requestedSchema: { type: "object" },
+      serverId: "srv-1",
+    });
+  }
 
   function createRepo() {
     const items = new Map<string, ApprovalInboxItemRecord>();

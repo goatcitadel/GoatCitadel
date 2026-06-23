@@ -476,6 +476,7 @@ import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { buildPublicMcpAuthState, McpOAuthTokenService } from "./mcp-oauth-token-service.js";
+import { McpElicitationService } from "./mcp-elicitation-service.js";
 import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
@@ -838,6 +839,12 @@ export class GatewayService {
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
   public readonly mcpOAuth: GatewayMcpOAuthService;
+  /**
+   * Single shared store for MCP server-initiated elicitations. Used by both the
+   * HTTP elicitation route and the approval-inbox respond/list tools so an operator
+   * can answer an elicitation through either surface against the same state.
+   */
+  public readonly mcpElicitationService = new McpElicitationService();
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
   private readonly guidanceService: GuidanceService;
@@ -1385,6 +1392,12 @@ export class GatewayService {
         },
         cancelRun: (runId) => this.durableOperatorService.cancelRun(runId),
       },
+      respondToMcpElicitation: (input) =>
+        this.mcpElicitationService.respondToRequest(input.elicitationId, {
+          action: input.action,
+          content: input.content,
+        }),
+      listMcpElicitations: (filter) => this.mcpElicitationService.listRequests(filter),
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       normalizeToolInvokeRequest: (request) =>

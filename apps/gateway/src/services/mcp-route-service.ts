@@ -11,8 +11,11 @@ import type {
   McpTemplateDiscoveryResult,
   McpToolRecord,
 } from "@goatcitadel/contracts";
+import type { McpElicitationService } from "./mcp-elicitation-service.js";
 
 export interface McpRoutePort {
+  /** Shared MCP elicitation store, also consumed by the approval-inbox respond/list tools. */
+  readonly elicitations: McpElicitationService;
   completeMcpOAuth(serverId: string, code: string, state?: string): Promise<McpServerRecord>;
   connectMcpServer(serverId: string): Promise<McpServerRecord>;
   createMcpServer(input: McpServerCreateInput): McpServerRecord;
@@ -33,6 +36,11 @@ export type McpAdminPort = McpRoutePort;
 
 export class McpRouteService {
   public constructor(private readonly mcp: McpRoutePort) {}
+
+  /** Shared MCP elicitation store, consumed by both the HTTP route and approval-inbox tools. */
+  public get elicitations() {
+    return this.mcp.elicitations;
+  }
 
   public listMcpServers() {
     return this.mcp.listMcpServers();

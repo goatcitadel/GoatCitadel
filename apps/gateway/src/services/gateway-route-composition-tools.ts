@@ -79,6 +79,7 @@ export function composeToolsMcpRouteDependencies(
       },
     },
     mcp: {
+      elicitations: gateway.mcpElicitationService,
       completeMcpOAuth: (serverId: string, code: string, state?: string) =>
         mcpServerAdminService.completeMcpOAuth(mcpAdminDeps, serverId, code, state),
       connectMcpServer: (serverId: string) => mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId),

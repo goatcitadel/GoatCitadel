@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MCP_APPROVAL_INBOX_URL } from "../services/mcp-approval-inbox.js";
-import { MCP_ROUTE_ELICITATION_LIMITS } from "../services/mcp-elicitation-service.js";
+import { MCP_ROUTE_ELICITATION_LIMITS, McpElicitationService } from "../services/mcp-elicitation-service.js";
 import { mcpRoutes } from "./mcp.js";
 
 describe("mcp routes", () => {
@@ -17,6 +17,7 @@ describe("mcp routes", () => {
 
   function createMcpService(overrides: Record<string, unknown> = {}) {
     return {
+      elicitations: new McpElicitationService(),
       invokeMcpTool: vi.fn(async (input: Record<string, unknown>) => ({
         ok: true,
         ...input,

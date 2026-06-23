@@ -18,7 +18,12 @@ import type {
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
-import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
+import {
+  handleInternalMcpApprovalInboxInvoke,
+  isInternalMcpApprovalInboxServer,
+  type ListMcpElicitations,
+  type RespondToMcpElicitation,
+} from "./mcp-approval-inbox.js";
 import {
   handleInternalMcpDurableTasksInvoke,
   isInternalMcpDurableTasksServer,
@@ -161,6 +166,8 @@ export interface ToolInvocationCoordinatorHost {
     "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
   >;
   readonly durableTasks: McpDurableTasksPort;
+  readonly respondToMcpElicitation: RespondToMcpElicitation;
+  readonly listMcpElicitations: ListMcpElicitations;
   readonly policyEngine: {
     invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
     invoke(request: {
@@ -913,6 +920,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
           approvalInbox: this.host.approvalInbox,
           resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
+          respondToMcpElicitation: (request) => this.host.respondToMcpElicitation(request),
+          listMcpElicitations: (filter) => this.host.listMcpElicitations(filter),
         })
       : isInternalMcpDurableTasksServer(server)
         ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
