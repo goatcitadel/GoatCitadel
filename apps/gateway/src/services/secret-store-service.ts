@@ -296,7 +296,9 @@ interface RunOptions {
   stdin?: string;
 }
 
-function runCommand(
+// Exported for testability: lets tests assert the exact child-process env without
+// reaching through every platform-specific keychain method.
+export function runCommand(
   command: string,
   args: string[],
   envOverrides?: Record<string, string>,
@@ -304,8 +306,16 @@ function runCommand(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    // SECURITY: do NOT spread `process.env` into these OS keychain-helper child
+    // processes. The parent env carries provider API keys, GOATCITADEL_AUTH_TOKEN,
+    // mesh join tokens, etc.; spreading it would expose every secret to the helper
+    // subprocess (visible via same-user `ps` / OS process-environment logging) —
+    // a leak in the secret-management layer itself. Instead pass only a minimal
+    // allowlist of locator/runtime vars the helpers genuinely need to be found and
+    // run (PowerShell on Windows, `security` on macOS, `secret-tool` on Linux),
+    // plus the explicit per-call overrides that carry the service/account/value.
     env: {
-      ...process.env,
+      ...minimalHelperEnv(),
       ...(envOverrides ?? {}),
     },
     input: options.stdin,
@@ -323,6 +333,39 @@ function runCommand(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+// Minimal allowlist of OS environment variables the keychain helpers need to be
+// located and to run. Windows resolves `powershell` via PATH/PATHEXT and needs
+// SystemRoot/windir/ComSpec; macOS `security` and Linux `secret-tool` need
+// PATH/HOME. Anything not on this list (provider keys, auth/mesh tokens, …) is
+// deliberately withheld so it never reaches the helper subprocess.
+const HELPER_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "windir",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "ComSpec",
+];
+
+function minimalHelperEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of HELPER_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return env;
 }
 
 function isSecretStoreExplicitlyDisabled(): boolean {

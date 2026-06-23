@@ -4,6 +4,7 @@ import {
   SecretStoreService,
   SecretStoreUnavailableError,
   isSecretStoreUnavailableLikeError,
+  runCommand,
 } from "./secret-store-service.js";
 
 vi.mock("node:child_process", () => ({
@@ -176,6 +177,40 @@ describe("SecretStoreService", () => {
     expect(thrown).toBeDefined();
     expect(thrown?.message).not.toContain("sk-leak-me");
     expect(thrown?.message).toContain("[redacted]");
+  });
+});
+
+describe("runCommand env allowlist", () => {
+  it("does not leak unrelated process.env secrets into keychain-helper subprocesses", () => {
+    const hadPath = process.env.PATH !== undefined;
+    process.env.UNRELATED_FAKE_SECRET = "sk-should-not-leak";
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: "ok",
+      stderr: "",
+      pid: 1,
+      output: [],
+      signal: null,
+    } as never);
+
+    try {
+      runCommand("noop", [], { GOATCITADEL_SECRET_VALUE: "x" });
+
+      expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+      const env = (spawnSyncMock.mock.calls[0]?.[2] as { env?: Record<string, string> }).env;
+      expect(env).toBeDefined();
+      // The parent process.env (which carries provider API keys, auth/mesh tokens,
+      // etc.) must NOT be spread into the keychain-helper child process.
+      expect(env).not.toHaveProperty("UNRELATED_FAKE_SECRET");
+      // The explicit per-call override (service/account/value) must still pass through.
+      expect(env?.GOATCITADEL_SECRET_VALUE).toBe("x");
+      // A genuinely-needed locator var must survive the allowlist when present on the host.
+      if (hadPath) {
+        expect(env?.PATH).toBe(process.env.PATH);
+      }
+    } finally {
+      delete process.env.UNRELATED_FAKE_SECRET;
+    }
   });
 });
 
