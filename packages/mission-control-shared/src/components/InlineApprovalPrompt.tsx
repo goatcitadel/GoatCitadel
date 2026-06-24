@@ -114,25 +114,38 @@ export function InlineApprovalPrompt({
       : "Allow once resumes only this approval. Persistent grants are not available for governed Code Mode runs.";
 
   return (
-    <div
-      className={`chat-approval-card${expiryState.expired ? " is-expired" : ""}${isLowTime ? " is-low-time" : ""}`}
-      role="alert"
-    >
+    <div className={`chat-approval-card${expiryState.expired ? " is-expired" : ""}${isLowTime ? " is-low-time" : ""}`}>
       <div className="chat-approval-header">
         <p className="chat-approval-title">Approval required</p>
+        {/*
+         * a11y: the countdown ticks once per second. Keep it out of an assertive
+         * live region (`aria-live="off"`) so screen readers do not re-read the
+         * whole approval prompt every second. The static decision summary below
+         * carries `role="alert"` to announce the prompt exactly once.
+         */}
         {typeof remainingCount === "number" && remainingCount > 0 ? (
-          <span className="chat-approval-countdown">+{remainingCount} more waiting</span>
+          <span className="chat-approval-countdown" aria-live="off">
+            +{remainingCount} more waiting
+          </span>
         ) : null}
         {isUrgent && !expiryState.expired ? (
-          <span className={`chat-approval-countdown${isLowTime ? " is-low-time" : ""}`}>{expiryState.label}</span>
+          <span className={`chat-approval-countdown${isLowTime ? " is-low-time" : ""}`} aria-live="off">
+            {expiryState.label}
+          </span>
         ) : null}
-        {expiryState.expired ? <span className="chat-approval-countdown is-expired">{expiryState.label}</span> : null}
+        {expiryState.expired ? (
+          <span className="chat-approval-countdown is-expired" aria-live="off">
+            {expiryState.label}
+          </span>
+        ) : null}
       </div>
       {toolName ? <p className="chat-approval-tool">{toolName}</p> : null}
       {riskSummary ? <p className="chat-approval-reason">{riskSummary}</p> : null}
       {!compact && kind ? <p className="chat-approval-reason">Action type: {kind}</p> : null}
       {reason ? <p className="chat-approval-reason">{reason}</p> : null}
-      <p className="chat-approval-reason">{decisionSummary}</p>
+      <p className="chat-approval-reason" role="alert">
+        {decisionSummary}
+      </p>
       {!compact && requestedOutputIntent ? (
         <p className="chat-approval-reason">Expected result: {requestedOutputIntent}</p>
       ) : null}
