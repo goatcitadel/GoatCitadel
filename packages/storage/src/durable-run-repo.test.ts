@@ -753,6 +753,20 @@ describe("DurableRunRepository sanitization", () => {
     assert.equal(entry.store, "durable_checkpoint.state");
     assert.equal(entry.rowId, checkpoint.checkpointId);
   });
+
+  it("bulk-fetches runs by id, ignoring blanks and unknown ids", () => {
+    const repo = createRepo();
+    const first = repo.createRun({ runId: "bulk-a", workflowKey: "chat.turn.execute", status: "completed" });
+    const second = repo.createRun({ runId: "bulk-b", workflowKey: "chat.turn.execute", status: "waiting" });
+
+    const map = repo.getRunsByIds(["bulk-a", undefined, " bulk-b ", "missing", "bulk-a", ""]);
+
+    assert.equal(map.size, 2);
+    assert.equal(map.get("bulk-a")?.status, first.status);
+    assert.equal(map.get("bulk-b")?.status, second.status);
+    assert.equal(map.get("missing"), undefined);
+    assert.deepEqual(repo.getRunsByIds([]).size, 0);
+  });
 });
 
 function leaseInput(runId: string, workerId: string) {

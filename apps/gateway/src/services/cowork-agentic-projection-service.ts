@@ -62,13 +62,16 @@ export class CoworkAgenticProjectionService {
       sessionId: input.sessionId,
       limit: Math.max(1, Math.min(input.limit ?? 100, 500)),
     });
+    const parentTurnIds = runs.map((run) => parseTurnIdFromChatOrchestrationTaskId(run.taskId));
+    const traceMap = readOptional(() => this.storage.chatTurnTraces.getByTurnIds(parentTurnIds)) ?? new Map();
+    const ctx = new ProjectionReadContext(this.storage, traceMap);
     const items: AgenticRunListItem[] = [];
     for (const run of runs) {
-      const surface = this.resolveRunSurface(run);
+      const surface = this.resolveRunSurface(run, ctx);
       if (input.surface && surface !== input.surface) {
         continue;
       }
-      const parentTrace = this.resolveParentTurnTrace(run);
+      const parentTrace = this.resolveParentTurnTrace(run, ctx);
       const status = mapDelegationRunStatus(run.status, run, parentTrace);
       if (input.status && status !== input.status) {
         continue;
@@ -88,7 +91,7 @@ export class CoworkAgenticProjectionService {
         surface,
         parentSessionId: run.sessionId,
         updatedAt: run.finishedAt ?? run.startedAt,
-        diagnostics: this.deriveStoredRunDiagnostics(run, [], parentTrace),
+        diagnostics: this.deriveStoredRunDiagnostics(run, [], parentTrace, ctx),
       });
     }
     return items;
@@ -102,7 +105,13 @@ export class CoworkAgenticProjectionService {
     if (!run) {
       return undefined;
     }
-    const ownerWorkspaceId = this.resolveRunWorkspaceId(run);
+
+    // Bulk-fetch every related row ONCE so neither workspace resolution, reconciliation,
+    // nor projection re-issues per-step trace/durable/tool-run queries.
+    const initialSteps = readOptional(() => this.storage.chatDelegationSteps!.listByRun(runId)) ?? [];
+    const ctx = this.buildReadContext(run, initialSteps);
+
+    const ownerWorkspaceId = this.resolveRunWorkspaceId(run, initialSteps, ctx);
     if (!ownerWorkspaceId) {
       return undefined;
     }
@@ -112,10 +121,10 @@ export class CoworkAgenticProjectionService {
     }
 
     const diagnostics: AgenticDiagnosticSignal[] = [];
-    diagnostics.push(...this.reconcileParentDurableTrace(run));
-    const steps = this.reconcileRunSteps(run, diagnostics);
-    const currentRun = readOptional(() => this.storage.chatDelegationRuns!.get(runId)) ?? run;
-    const parentTrace = this.resolveParentTurnTrace(currentRun);
+    diagnostics.push(...this.reconcileParentDurableTrace(run, ctx));
+    const steps = this.reconcileRunSteps(run, initialSteps, diagnostics, ctx);
+    const currentRun = ctx.runChanged ? (readOptional(() => this.storage.chatDelegationRuns!.get(runId)) ?? run) : run;
+    const parentTrace = this.resolveParentTurnTrace(currentRun, ctx);
     const status = mapDelegationRunStatus(currentRun.status, currentRun, parentTrace, steps);
     const rootNodeId = `run:${currentRun.runId}`;
     const nodes: AgenticRunTreeNode[] = [
@@ -142,7 +151,7 @@ export class CoworkAgenticProjectionService {
     ];
     const edges: AgenticRunTreeEdge[] = [];
 
-    const parentDurableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
+    const parentDurableRun = ctx.getDurableRun(parentTrace?.durable?.runId);
     if (parentDurableRun) {
       const durableNodeId = `durable:${parentDurableRun.runId}`;
       nodes.push({
@@ -167,11 +176,9 @@ export class CoworkAgenticProjectionService {
     let blockedByOperatorGate = false;
     for (const step of steps) {
       const stepNodeId = `subagent:${step.stepId}`;
-      const childTrace = step.childTurnId
-        ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
-        : undefined;
-      const childDurableRun = readDurableRun(this.storage, step.durableRunId);
-      const childToolRuns = this.readTraceToolRuns(childTrace);
+      const childTrace = ctx.getTrace(step.childTurnId);
+      const childDurableRun = ctx.getDurableRun(step.durableRunId);
+      const childToolRuns = this.readTraceToolRuns(childTrace, ctx);
       const childLocalBusinessResearch = collectProjectedLocalBusinessResearchForStep(currentRun, step, childToolRuns);
       const stepNodeStatus = projectStepNodeStatus(step, childTrace, childDurableRun, blockedByOperatorGate);
       const stepBlockedByOperatorGate = blockedByOperatorGate && step.status === "pending";
@@ -235,7 +242,7 @@ export class CoworkAgenticProjectionService {
       }
     }
 
-    diagnostics.push(...this.deriveStoredRunDiagnostics(currentRun, steps, parentTrace));
+    diagnostics.push(...this.deriveStoredRunDiagnostics(currentRun, steps, parentTrace, ctx));
     const renderedDiagnosticIds = new Set<string>();
     for (const diagnostic of diagnostics) {
       if (renderedDiagnosticIds.has(diagnostic.signalId)) {
@@ -270,7 +277,7 @@ export class CoworkAgenticProjectionService {
     return !surface || surface === "cowork";
   }
 
-  private resolveRunSurface(run: ChatDelegationRunRecord): ChatMode {
+  private resolveRunSurface(run: ChatDelegationRunRecord, ctx: ProjectionReadContext): ChatMode {
     const plan = readOptional(() =>
       run.executionPlanId && this.storage.chatExecutionPlans
         ? this.storage.chatExecutionPlans.get(run.executionPlanId)
@@ -279,11 +286,15 @@ export class CoworkAgenticProjectionService {
     if (plan?.mode) {
       return plan.mode;
     }
-    const trace = this.resolveParentTurnTrace(run);
+    const trace = this.resolveParentTurnTrace(run, ctx);
     return trace?.mode ?? "cowork";
   }
 
-  private resolveRunWorkspaceId(run: ChatDelegationRunRecord): string | undefined {
+  private resolveRunWorkspaceId(
+    run: ChatDelegationRunRecord,
+    steps: ChatDelegationStepRecord[],
+    ctx: ProjectionReadContext,
+  ): string | undefined {
     const sessionWorkspaceId = this.resolveSessionWorkspaceId(run.sessionId);
     if (sessionWorkspaceId) {
       return sessionWorkspaceId;
@@ -295,7 +306,7 @@ export class CoworkAgenticProjectionService {
     }
 
     const parentTurnId = parseTurnIdFromChatOrchestrationTaskId(run.taskId);
-    const parentTrace = this.resolveParentTurnTrace(run);
+    const parentTrace = this.resolveParentTurnTrace(run, ctx);
     const parentTraceWorkspaceId = this.resolveTraceWorkspaceId(parentTrace, {
       sessionId: run.sessionId,
       turnId: parentTurnId,
@@ -304,7 +315,7 @@ export class CoworkAgenticProjectionService {
       return parentTraceWorkspaceId;
     }
 
-    const parentDurableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
+    const parentDurableRun = ctx.getDurableRun(parentTrace?.durable?.runId);
     const parentDurableWorkspaceId = resolveLinkedDurableWorkspaceId(parentDurableRun, {
       sessionId: run.sessionId,
       turnId: parentTurnId,
@@ -315,15 +326,13 @@ export class CoworkAgenticProjectionService {
     }
 
     const linkedWorkspaceIds = new Set<string>();
-    for (const step of this.storage.chatDelegationSteps?.listByRun(run.runId) ?? []) {
+    for (const step of steps) {
       const childSessionWorkspaceId = this.resolveSessionWorkspaceId(step.childSessionId);
       if (childSessionWorkspaceId) {
         linkedWorkspaceIds.add(childSessionWorkspaceId);
       }
 
-      const childTrace = step.childTurnId
-        ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
-        : undefined;
+      const childTrace = ctx.getTrace(step.childTurnId);
       const childTraceWorkspaceId = this.resolveTraceWorkspaceId(childTrace, {
         sessionId: step.childSessionId,
         turnId: step.childTurnId,
@@ -332,7 +341,7 @@ export class CoworkAgenticProjectionService {
         linkedWorkspaceIds.add(childTraceWorkspaceId);
       }
 
-      const childDurableWorkspaceId = resolveLinkedDurableWorkspaceId(readDurableRun(this.storage, step.durableRunId), {
+      const childDurableWorkspaceId = resolveLinkedDurableWorkspaceId(ctx.getDurableRun(step.durableRunId), {
         sessionId: step.childSessionId,
         turnId: step.childTurnId,
       });
@@ -368,27 +377,35 @@ export class CoworkAgenticProjectionService {
     return normalizeOptionalWorkspaceId(trace.guidance?.workspaceId) ?? this.resolveSessionWorkspaceId(trace.sessionId);
   }
 
-  private resolveParentTurnTrace(run: ChatDelegationRunRecord): ChatTurnTraceRecord | undefined {
+  private resolveParentTurnTrace(
+    run: ChatDelegationRunRecord,
+    ctx: ProjectionReadContext,
+  ): ChatTurnTraceRecord | undefined {
     const turnId = parseTurnIdFromChatOrchestrationTaskId(run.taskId);
     if (!turnId) {
       return undefined;
     }
-    return readOptional(() => this.storage.chatTurnTraces.get(turnId));
+    return ctx.getTrace(turnId);
   }
 
-  private reconcileParentDurableTrace(run: ChatDelegationRunRecord): AgenticDiagnosticSignal[] {
-    const trace = this.resolveParentTurnTrace(run);
-    const durableRun = readDurableRun(this.storage, trace?.durable?.runId);
+  private reconcileParentDurableTrace(
+    run: ChatDelegationRunRecord,
+    ctx: ProjectionReadContext,
+  ): AgenticDiagnosticSignal[] {
+    const trace = this.resolveParentTurnTrace(run, ctx);
+    const durableRun = ctx.getDurableRun(trace?.durable?.runId);
+    // Idempotency guard: skip the write entirely when the stored status already matches.
     if (!trace?.durable?.runId || !durableRun || trace.durable.status === durableRun.status) {
       return [];
     }
     const now = new Date().toISOString();
-    this.storage.chatTurnTraces.patch(trace.turnId, {
+    const patched = this.storage.chatTurnTraces.patch(trace.turnId, {
       durable: {
         ...trace.durable,
         status: durableRun.status,
       },
     });
+    ctx.recordTraceWrite(patched);
     return [
       {
         signalId: `projection-status-drift-${run.runId}-${durableRun.runId}`,
@@ -404,29 +421,38 @@ export class CoworkAgenticProjectionService {
 
   private reconcileRunSteps(
     run: ChatDelegationRunRecord,
+    steps: ChatDelegationStepRecord[],
     diagnostics: AgenticDiagnosticSignal[],
+    ctx: ProjectionReadContext,
   ): ChatDelegationStepRecord[] {
-    const steps = this.storage.chatDelegationSteps?.listByRun(run.runId) ?? [];
-    const reconciled = steps.map((step) => this.reconcileStep(step, diagnostics));
+    const reconciled = steps.map((step) => this.reconcileStep(step, diagnostics, ctx));
     const activeCount = reconciled.filter((step) => step.status === "running" || step.status === "pending").length;
     if (run.status === "running" && activeCount === 0 && reconciled.length > 0 && this.storage.chatDelegationRuns) {
       const completedCount = reconciled.filter((step) => step.status === "completed").length;
       const nextStatus: ChatDelegationRunStatus =
         completedCount === reconciled.length ? "completed" : completedCount > 0 ? "partial" : "failed";
-      return readOptional(() =>
+      // P3-T4b: reload the run immediately before patching so an orchestrator-set summary written
+      // since this GET began is not clobbered, and only supply the reconciler's fallback summary
+      // when the run has none. The "running"-only gate already keeps this a one-time transition.
+      const fresh = readOptional(() => this.storage.chatDelegationRuns!.get(run.runId)) ?? run;
+      if (fresh.status !== "running") {
+        return reconciled;
+      }
+      const patched = readOptional(() =>
         this.storage.chatDelegationRuns!.patch(run.runId, {
           status: nextStatus,
           finalSummary:
-            run.finalSummary ??
+            fresh.finalSummary ??
             (nextStatus === "completed"
               ? "All delegated steps completed after projection reconciliation."
               : "Delegation reconciled from child runtime state."),
-          stitchedOutput: run.stitchedOutput ?? buildStitchedOutputFromSteps(reconciled),
+          stitchedOutput: fresh.stitchedOutput ?? buildStitchedOutputFromSteps(reconciled),
           finishedAt: new Date().toISOString(),
         }),
-      )
-        ? this.storage.chatDelegationSteps!.listByRun(run.runId)
-        : reconciled;
+      );
+      if (patched) {
+        ctx.runChanged = true;
+      }
     }
     return reconciled;
   }
@@ -434,12 +460,13 @@ export class CoworkAgenticProjectionService {
   private reconcileStep(
     step: ChatDelegationStepRecord,
     diagnostics: AgenticDiagnosticSignal[],
+    ctx: ProjectionReadContext,
   ): ChatDelegationStepRecord {
     if (step.status !== "running" && step.status !== "pending") {
       return step;
     }
     const now = new Date().toISOString();
-    const childDurableRun = readDurableRun(this.storage, step.durableRunId);
+    const childDurableRun = ctx.getDurableRun(step.durableRunId);
     if (childDurableRun && isTerminalDurableStatus(childDurableRun.status)) {
       diagnostics.push(
         buildProjectionDriftDiagnostic({
@@ -473,9 +500,7 @@ export class CoworkAgenticProjectionService {
       return step;
     }
 
-    const childTrace = step.childTurnId
-      ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
-      : undefined;
+    const childTrace = ctx.getTrace(step.childTurnId);
     if (childTrace && isWaitingTraceStatus(childTrace.status)) {
       return step;
     }
@@ -542,12 +567,13 @@ export class CoworkAgenticProjectionService {
 
   private deriveStoredRunDiagnostics(
     run: ChatDelegationRunRecord,
-    steps: ChatDelegationStepRecord[] = [],
-    parentTrace = this.resolveParentTurnTrace(run),
+    steps: ChatDelegationStepRecord[],
+    parentTrace: ChatTurnTraceRecord | undefined,
+    ctx: ProjectionReadContext,
   ): AgenticDiagnosticSignal[] {
     const diagnostics: AgenticDiagnosticSignal[] = [];
     const now = new Date().toISOString();
-    const durableRun = readDurableRun(this.storage, parentTrace?.durable?.runId);
+    const durableRun = ctx.getDurableRun(parentTrace?.durable?.runId);
     if (parentTrace?.durable?.runId && durableRun && parentTrace.durable.status !== durableRun.status) {
       diagnostics.push(
         buildProjectionDriftDiagnostic({
@@ -558,7 +584,7 @@ export class CoworkAgenticProjectionService {
         }),
       );
     }
-    const parentToolRuns = this.readTraceToolRuns(parentTrace);
+    const parentToolRuns = this.readTraceToolRuns(parentTrace, ctx);
     diagnostics.push(
       ...deriveCoworkResearchDiagnostics({
         runId: run.runId,
@@ -570,9 +596,7 @@ export class CoworkAgenticProjectionService {
       }),
     );
     for (const step of steps) {
-      const childTrace = step.childTurnId
-        ? readOptional(() => this.storage.chatTurnTraces.get(step.childTurnId!))
-        : undefined;
+      const childTrace = ctx.getTrace(step.childTurnId);
       if (shouldDeriveResearchDiagnosticsForStep(step)) {
         diagnostics.push(
           ...deriveCoworkResearchDiagnostics({
@@ -587,7 +611,7 @@ export class CoworkAgenticProjectionService {
               childTrace?.failure?.message,
               childTrace?.routing?.fallbackReason,
             ),
-            toolRuns: this.readTraceToolRuns(childTrace),
+            toolRuns: this.readTraceToolRuns(childTrace, ctx),
             now,
           }),
         );
@@ -596,14 +620,70 @@ export class CoworkAgenticProjectionService {
     return dedupeDiagnostics(diagnostics);
   }
 
-  private readTraceToolRuns(trace: ChatTurnTraceRecord | undefined): ChatToolRunRecord[] {
+  private readTraceToolRuns(trace: ChatTurnTraceRecord | undefined, ctx: ProjectionReadContext): ChatToolRunRecord[] {
     if (!trace) {
       return [];
     }
     if (trace.toolRuns.length > 0) {
       return trace.toolRuns;
     }
-    return readOptional(() => this.storage.chatToolRuns?.listByTurn(trace.turnId)) ?? [];
+    return ctx.getToolRuns(trace.turnId);
+  }
+
+  private buildReadContext(
+    run: ChatDelegationRunRecord,
+    steps: ChatDelegationStepRecord[],
+  ): ProjectionReadContext {
+    const turnIds: Array<string | undefined> = [parseTurnIdFromChatOrchestrationTaskId(run.taskId)];
+    const durableRunIds: Array<string | undefined> = [];
+    for (const step of steps) {
+      turnIds.push(step.childTurnId);
+      durableRunIds.push(step.durableRunId);
+    }
+    const traceMap = readOptional(() => this.storage.chatTurnTraces.getByTurnIds(turnIds)) ?? new Map();
+    // The parent durable run is linked through the parent trace, which is only known once traces load.
+    for (const trace of traceMap.values()) {
+      if (trace.durable?.runId) {
+        durableRunIds.push(trace.durable.runId);
+      }
+    }
+    const durableMap = readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds)) ?? new Map();
+    return new ProjectionReadContext(this.storage, traceMap, durableMap);
+  }
+}
+
+class ProjectionReadContext {
+  public runChanged = false;
+  private readonly toolRunCache = new Map<string, ChatToolRunRecord[]>();
+
+  public constructor(
+    private readonly storage: CoworkAgenticProjectionStorage,
+    private readonly traceMap: Map<string, ChatTurnTraceRecord>,
+    private readonly durableMap: Map<string, DurableRunRecord> = new Map(),
+  ) {}
+
+  public getTrace(turnId: string | undefined): ChatTurnTraceRecord | undefined {
+    const key = turnId?.trim();
+    return key ? this.traceMap.get(key) : undefined;
+  }
+
+  public recordTraceWrite(trace: ChatTurnTraceRecord): void {
+    this.traceMap.set(trace.turnId, trace);
+  }
+
+  public getDurableRun(runId: string | undefined): DurableRunRecord | undefined {
+    const key = runId?.trim();
+    return key ? this.durableMap.get(key) : undefined;
+  }
+
+  public getToolRuns(turnId: string): ChatToolRunRecord[] {
+    const cached = this.toolRunCache.get(turnId);
+    if (cached) {
+      return cached;
+    }
+    const records = readOptional(() => this.storage.chatToolRuns?.listByTurn(turnId)) ?? [];
+    this.toolRunCache.set(turnId, records);
+    return records;
   }
 }
 
@@ -1135,16 +1215,6 @@ function isTerminalTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
 
 function isWaitingTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
   return status === "waiting_for_approval" || status === "waiting_for_user_input" || status === "waiting_for_tool";
-}
-
-function readDurableRun(
-  storage: CoworkAgenticProjectionStorage,
-  runId: string | undefined,
-): DurableRunRecord | undefined {
-  if (!runId) {
-    return undefined;
-  }
-  return readOptional(() => storage.durableRuns.getRun(runId));
 }
 
 function resolveLinkedDurableWorkspaceId(

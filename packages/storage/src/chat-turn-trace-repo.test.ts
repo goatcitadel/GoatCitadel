@@ -742,4 +742,20 @@ describe("ChatTurnTraceRepository", () => {
     assert.deepEqual(completed.citations, []);
     assert.equal(completed.finishedAt, "2026-03-27T00:01:00.000Z");
   });
+
+  it("bulk-fetches traces by turn id, ignoring blanks and unknown ids", () => {
+    const { repo } = createStore();
+    repo.create(baseTrace({ turnId: "turn-bulk-a", sessionId: "session-bulk", userMessageId: "msg-a" }));
+    repo.create(
+      baseTrace({ turnId: "turn-bulk-b", sessionId: "session-bulk", userMessageId: "msg-b", status: "completed" }),
+    );
+
+    const map = repo.getByTurnIds(["turn-bulk-a", undefined, " turn-bulk-b ", "missing", "turn-bulk-a", ""]);
+
+    assert.equal(map.size, 2);
+    assert.equal(map.get("turn-bulk-a")?.sessionId, "session-bulk");
+    assert.equal(map.get("turn-bulk-b")?.status, "completed");
+    assert.equal(map.get("missing"), undefined);
+    assert.equal(repo.getByTurnIds([]).size, 0);
+  });
 });

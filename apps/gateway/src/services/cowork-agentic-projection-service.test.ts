@@ -862,4 +862,197 @@ describe("CoworkAgenticProjectionService", () => {
       ],
     });
   });
+
+  it("bulk-fetches per-run traces and durable runs instead of fanning out per step", () => {
+    const { storage, service } = createHarness();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatSessionMeta.ensure("child-session-1", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatSessionMeta.ensure("child-session-2", "2026-06-22T00:00:00.000Z", "default");
+    storage.durableRuns.createRun({
+      runId: "durable-child-1",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    storage.durableRuns.createRun({
+      runId: "durable-child-2",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    createTrace(storage, { turnId: "parent-turn", sessionId: "parent-session" });
+    createTrace(storage, {
+      turnId: "child-turn-1",
+      sessionId: "child-session-1",
+      status: "completed",
+      durableRunId: "durable-child-1",
+      durableStatus: "completed",
+    });
+    createTrace(storage, {
+      turnId: "child-turn-2",
+      sessionId: "child-session-2",
+      status: "completed",
+      durableRunId: "durable-child-2",
+      durableStatus: "completed",
+    });
+    storage.chatDelegationRuns.create({
+      runId: "orch-bulk",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-turn",
+      objective: "Bulk fetch multi-step run",
+      roles: ["Researcher", "Verifier"],
+      mode: "parallel",
+      status: "running",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+    for (const [index, suffix] of [1, 2].entries()) {
+      storage.chatDelegationSteps.create({
+        stepId: `orch-bulk:step-${suffix}`,
+        runId: "orch-bulk",
+        role: `Role ${suffix}`,
+        index,
+        status: "running",
+        durableRunId: `durable-child-${suffix}`,
+        childSessionId: `child-session-${suffix}`,
+        childTurnId: `child-turn-${suffix}`,
+        startedAt: "2026-06-22T00:01:00.000Z",
+      });
+    }
+
+    const getByTurnIds = vi.spyOn(storage.chatTurnTraces, "getByTurnIds");
+    const getRunsByIds = vi.spyOn(storage.durableRuns, "getRunsByIds");
+    const traceGet = vi.spyOn(storage.chatTurnTraces, "get");
+    const durableGetRun = vi.spyOn(storage.durableRuns, "getRun");
+    const listByRun = vi.spyOn(storage.chatDelegationSteps, "listByRun");
+
+    const tree = service.getAgenticRunTree("orch-bulk", { workspaceId: "default" });
+
+    expect(tree?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "subagent:orch-bulk:step-1", status: "completed" }),
+        expect.objectContaining({ id: "subagent:orch-bulk:step-2", status: "completed" }),
+        expect.objectContaining({ id: "durable:durable-child-1", status: "completed" }),
+        expect.objectContaining({ id: "durable:durable-child-2", status: "completed" }),
+      ]),
+    );
+    // The bulk readers are used, and neither traces nor durable runs are fetched one-row-at-a-time.
+    expect(getByTurnIds).toHaveBeenCalled();
+    expect(getRunsByIds).toHaveBeenCalled();
+    expect(traceGet).not.toHaveBeenCalled();
+    expect(durableGetRun).not.toHaveBeenCalled();
+    // Steps are loaded once at entry and threaded through workspace-resolution + reconciliation.
+    expect(listByRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("performs zero reconciliation writes on an already-settled run GET", () => {
+    const { storage, service } = createHarness();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.durableRuns.createRun({
+      runId: "durable-child-settled",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    createTrace(storage, {
+      turnId: "parent-turn",
+      sessionId: "parent-session",
+      status: "completed",
+      durableRunId: "durable-child-settled",
+      durableStatus: "completed",
+    });
+    storage.chatDelegationRuns.create({
+      runId: "orch-settled",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-turn",
+      objective: "Already settled run",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "completed",
+      finalSummary: "Operator-authored final summary.",
+      startedAt: "2026-06-22T00:00:00.000Z",
+      finishedAt: "2026-06-22T00:01:00.000Z",
+    });
+    storage.chatDelegationSteps.create({
+      stepId: "orch-settled:researcher",
+      runId: "orch-settled",
+      role: "Researcher",
+      index: 0,
+      status: "completed",
+      durableRunId: "durable-child-settled",
+      childSessionId: "child-session",
+      childTurnId: "parent-turn",
+      summary: "Done.",
+      startedAt: "2026-06-22T00:00:30.000Z",
+      finishedAt: "2026-06-22T00:01:00.000Z",
+    });
+
+    const runPatch = vi.spyOn(storage.chatDelegationRuns, "patch");
+    const stepPatch = vi.spyOn(storage.chatDelegationSteps, "patch");
+    const tracePatch = vi.spyOn(storage.chatTurnTraces, "patch");
+
+    const tree = service.getAgenticRunTree("orch-settled", { workspaceId: "default" });
+
+    expect(tree?.nodes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "run:orch-settled", status: "completed" })]),
+    );
+    expect(runPatch).not.toHaveBeenCalled();
+    expect(stepPatch).not.toHaveBeenCalled();
+    expect(tracePatch).not.toHaveBeenCalled();
+  });
+
+  it("never overwrites an orchestrator-set final summary during reconciliation", () => {
+    const { storage, service } = createHarness();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.durableRuns.createRun({
+      runId: "durable-child-finishing",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:01:00.000Z",
+      finishedAt: "2026-06-22T00:03:00.000Z",
+    });
+    createTrace(storage, { turnId: "parent-turn", sessionId: "parent-session" });
+    // Run is still "running" (so the run-reconciler will fire) but already carries an authored summary.
+    storage.chatDelegationRuns.create({
+      runId: "orch-summary-guard",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-turn",
+      objective: "Guard the authored summary",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      finalSummary: "Authored by orchestrator; must survive reconciliation.",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+    storage.chatDelegationSteps.create({
+      stepId: "orch-summary-guard:researcher",
+      runId: "orch-summary-guard",
+      role: "Researcher",
+      index: 0,
+      status: "running",
+      durableRunId: "durable-child-finishing",
+      childSessionId: "child-session",
+      childTurnId: "parent-turn",
+      startedAt: "2026-06-22T00:01:00.000Z",
+    });
+
+    const tree = service.getAgenticRunTree("orch-summary-guard", { workspaceId: "default" });
+
+    // The run is reconciled to completed, but the orchestrator-authored summary is preserved verbatim.
+    const reconciledRun = storage.chatDelegationRuns.get("orch-summary-guard");
+    expect(reconciledRun.status).toBe("completed");
+    expect(reconciledRun.finalSummary).toBe("Authored by orchestrator; must survive reconciliation.");
+    expect(tree?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "run:orch-summary-guard",
+          summary: "Authored by orchestrator; must survive reconciliation.",
+        }),
+      ]),
+    );
+  });
 });

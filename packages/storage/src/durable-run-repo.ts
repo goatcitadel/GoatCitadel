@@ -73,6 +73,7 @@ export interface DurableRunRepositoryOptions {
 export class DurableRunRepository {
   private readonly insertRunStmt;
   private readonly getRunStmt;
+  private readonly getRunsByIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly updateRunStmt;
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
@@ -281,6 +282,37 @@ export class DurableRunRepository {
       throw new NotFoundError({ entity: "Durable run", id: runId });
     }
     return this.mapRunRow(row);
+  }
+
+  public getRunsByIds(runIds: Array<string | undefined>): Map<string, DurableRunRecord> {
+    const uniqueRunIds = [...new Set(runIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+    const byRunId = new Map<string, DurableRunRecord>();
+    if (uniqueRunIds.length === 0) {
+      return byRunId;
+    }
+
+    for (let index = 0; index < uniqueRunIds.length; index += 400) {
+      const batch = uniqueRunIds.slice(index, index + 400);
+      const stmt = this.getGetRunsByIdsStmt(batch.length);
+      const rows = toDurableRunRows(stmt.all(...batch));
+      for (const row of rows) {
+        const record = this.mapRunRow(row);
+        byRunId.set(record.runId, record);
+      }
+    }
+
+    return byRunId;
+  }
+
+  private getGetRunsByIdsStmt(size: number) {
+    const cached = this.getRunsByIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`SELECT * FROM durable_runs WHERE run_id IN (${placeholders})`);
+    this.getRunsByIdsStmtCache.set(size, stmt);
+    return stmt;
   }
 
   public updateRun(input: {
