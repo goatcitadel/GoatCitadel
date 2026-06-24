@@ -823,6 +823,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
               content={assistantContent}
               running={isStreamingTurn}
               streamPresentationMode={visualStreamMode}
+              streamTurnId={turn.turnId}
             />
           ) : isStreamingTurn ? (
             <StreamingAssistantSkeleton label={assistantPendingLabel} />
