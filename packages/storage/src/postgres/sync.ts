@@ -1,5 +1,6 @@
-import { MessageChannel, Worker, receiveMessageOnPort } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { MessageChannel, Worker, receiveMessageOnPort } from "node:worker_threads";
 import type { DatabaseClient, DbRunResult, DbStatement, DbTransactionMode } from "../db.js";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse, SerializedWorkerError } from "./protocol.js";
@@ -211,10 +212,17 @@ function translateSql(sql: string, params: unknown[]): { sql: string; params: un
   };
 }
 
-function resolveWorkerUrl(): URL {
-  const current = new URL(import.meta.url);
-  const useTsSource = current.pathname.endsWith(".ts");
-  return new URL(useTsSource ? "./sync-worker.ts" : "./sync-worker.js", import.meta.url);
+function resolveWorkerUrl(current = new URL(import.meta.url), fileExists = fileUrlExists): URL {
+  if (!current.pathname.endsWith(".ts")) {
+    return new URL("./sync-worker.js", current);
+  }
+
+  const compiledWorker = new URL("../../dist/postgres/sync-worker.js", current);
+  return fileExists(compiledWorker) ? compiledWorker : new URL("./sync-worker.ts", current);
+}
+
+function fileUrlExists(url: URL): boolean {
+  return url.protocol === "file:" && existsSync(url);
 }
 
 function resolveWorkerExecArgv(workerUrl: URL, execArgv = process.execArgv): string[] | undefined {
