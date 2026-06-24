@@ -15,8 +15,11 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
   private closed = false;
 
   public constructor(private readonly options: PostgresConnectionOptions) {
-    this.worker = new Worker(resolveWorkerUrl(), {
+    const workerUrl = resolveWorkerUrl();
+    const workerExecArgv = resolveWorkerExecArgv(workerUrl);
+    this.worker = new Worker(workerUrl, {
       workerData: options,
+      ...(workerExecArgv ? { execArgv: workerExecArgv } : {}),
     });
     this.worker.on("error", (error) => {
       this.fatalError = error;
@@ -214,6 +217,39 @@ function resolveWorkerUrl(): URL {
   return new URL(useTsSource ? "./sync-worker.ts" : "./sync-worker.js", import.meta.url);
 }
 
+function resolveWorkerExecArgv(workerUrl: URL, execArgv = process.execArgv): string[] | undefined {
+  if (!workerUrl.pathname.endsWith(".ts")) {
+    return undefined;
+  }
+
+  const workerExecArgv: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const arg = execArgv[index];
+    const nextArg = execArgv[index + 1];
+    if ((arg === "--require" || arg === "-r" || arg === "--import") && isTsxLoaderArg(nextArg)) {
+      workerExecArgv.push(arg, nextArg);
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--require=") && isTsxLoaderArg(arg.slice("--require=".length))) {
+      workerExecArgv.push(arg);
+      continue;
+    }
+    if (arg?.startsWith("--import=") && isTsxLoaderArg(arg.slice("--import=".length))) {
+      workerExecArgv.push(arg);
+    }
+  }
+
+  return workerExecArgv.length > 0 ? workerExecArgv : undefined;
+}
+
+function isTsxLoaderArg(value: string | undefined): value is string {
+  const normalized = value?.replaceAll("\\", "/");
+  return (
+    normalized?.endsWith("/tsx/dist/preflight.cjs") === true || normalized?.endsWith("/tsx/dist/loader.mjs") === true
+  );
+}
+
 function deserializeWorkerError(error: SerializedWorkerError): Error {
   const next = new Error(error.message);
   next.name = error.name;
@@ -232,6 +268,7 @@ function isCloseTimeoutError(error: unknown): boolean {
 export const __postgresSyncInternals = {
   translateSql,
   resolveWorkerUrl,
+  resolveWorkerExecArgv,
   deserializeWorkerError,
   isRecord,
   isCloseTimeoutError,
