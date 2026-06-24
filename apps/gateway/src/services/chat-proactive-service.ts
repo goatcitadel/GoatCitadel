@@ -37,6 +37,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { buildAutonomousTurnContext } from "./gateway/autonomous-turn-policy.js";
 import { isWithinActiveHours } from "./gateway/commitment-sweep-service.js";
 import {
   type DeNovoPlanContext,
@@ -1445,18 +1446,35 @@ export class ChatProactiveService {
       const workspaceId = this.getSessionWorkspaceId(action.sessionId);
       const surface = action.originSurface ?? this.getSessionOriginSurface(action.sessionId);
       const actor = this.readProactiveRunActor(action.runId);
-      const policyContext = this.callbacks.resolveToolPolicyContext?.({
-        operatorId: actor.operatorId,
-        authActorId: actor.authActorId,
-        authActorSource: actor.authActorSource,
-        workspaceId,
-        sessionId: action.sessionId,
-        taskId: action.linkedTaskId,
-        runId: durableRunId,
-        surface,
-        permissionProfileId: actor.permissionProfileId,
-        localOperatorOverrideId: actor.localOperatorOverrideId,
-      });
+      // Safety invariant: every proactive/autonomous tool invocation must run under
+      // a restricted permission profile (see autonomous-turn-policy.ts). When the
+      // host wires `resolveToolPolicyContext`, use it. When it is NOT wired, fail
+      // CLOSED to the scheduled-restricted profile rather than passing an undefined
+      // `permissionProfileId` — an undefined id would let the gateway resolve to
+      // whatever interactive profile is active for the session (potentially a bypass
+      // profile), silently widening the autonomous surface.
+      const policyContext =
+        this.callbacks.resolveToolPolicyContext?.({
+          operatorId: actor.operatorId,
+          authActorId: actor.authActorId,
+          authActorSource: actor.authActorSource,
+          workspaceId,
+          sessionId: action.sessionId,
+          taskId: action.linkedTaskId,
+          runId: durableRunId,
+          surface,
+          permissionProfileId: actor.permissionProfileId,
+          localOperatorOverrideId: actor.localOperatorOverrideId,
+        }) ??
+        buildAutonomousTurnContext({
+          kind: "scheduled",
+          systemActorId: actor.operatorId,
+          runId: durableRunId,
+          workspaceId,
+          sessionId: action.sessionId,
+          taskId: action.linkedTaskId,
+          surface,
+        }).policyContext;
       const result = await this.callbacks.invokeTool({
         toolName: action.toolName,
         args: action.args ?? {},
