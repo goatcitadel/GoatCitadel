@@ -252,6 +252,27 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     });
 
     assert.match(workerUrl.pathname, /sync-worker\.(ts|js)$/);
+    assert.equal(
+      __postgresSyncInternals.resolveWorkerUrl(
+        new URL("file:///repo/packages/storage/src/postgres/sync.ts"),
+        () => true,
+      ).href,
+      "file:///repo/packages/storage/dist/postgres/sync-worker.js",
+    );
+    assert.equal(
+      __postgresSyncInternals.resolveWorkerUrl(
+        new URL("file:///repo/packages/storage/src/postgres/sync.ts"),
+        () => false,
+      ).href,
+      "file:///repo/packages/storage/src/postgres/sync-worker.ts",
+    );
+    assert.equal(
+      __postgresSyncInternals.resolveWorkerUrl(
+        new URL("file:///repo/packages/storage/dist/postgres/sync.js"),
+        () => true,
+      ).href,
+      "file:///repo/packages/storage/dist/postgres/sync-worker.js",
+    );
     assert.deepEqual(
       __postgresSyncInternals.resolveWorkerExecArgv(new URL("file:///repo/src/postgres/sync-worker.ts"), [
         "--test",
