@@ -46,6 +46,11 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     }
     try {
       this.requestSync({ kind: "close" });
+    } catch (error) {
+      if (!isCloseTimeoutError(error)) {
+        throw error;
+      }
+      this.fatalError = error instanceof Error ? error : new Error(String(error));
     } finally {
       this.closed = true;
       void this.worker.terminate();
@@ -220,9 +225,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isCloseTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message === "Timed out waiting for Postgres response (close).";
+}
+
 export const __postgresSyncInternals = {
   translateSql,
   resolveWorkerUrl,
   deserializeWorkerError,
   isRecord,
+  isCloseTimeoutError,
 };
