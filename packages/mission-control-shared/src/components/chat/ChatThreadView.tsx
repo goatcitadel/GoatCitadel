@@ -137,6 +137,17 @@ export function ChatThreadView({
     selectedTurnId ?? "none",
     streamError ?? "none",
   ].join(":");
+  // Stream-follow is owned solely by Virtuoso's followOutput="auto" (it auto-pins to
+  // the bottom on every new token). The manual scrollToIndex below exists only to nudge
+  // a *genuinely new turn* (and the initial mount) into view — so it must key on a value
+  // that changes once per message, NOT on per-token signals like visibleText.length.
+  // Driving it off threadSignalsKey re-fired it on every streamed delta, fighting
+  // followOutput and yanking a user who had scrolled up mid-stream.
+  const turnIdentityKey = [thread?.sessionId ?? "none", threadTurnCount, latestTurnId ?? "none"].join(":");
+  // streamStatus is read through a ref so the behavior choice stays fresh without making
+  // streamStatus a dependency (which would re-fire the nudge on the idle<->streaming flip).
+  const streamStatusRef = useRef(streamStatus);
+  streamStatusRef.current = streamStatus;
   useEffect(() => {
     if (!followOutput || threadTurnCount <= 0) {
       return;
@@ -144,9 +155,11 @@ export function ChatThreadView({
     virtuosoRef.current?.scrollToIndex({
       index: threadTurnCount - 1,
       align: "end",
-      behavior: streamStatus === "streaming" ? "auto" : "smooth",
+      behavior: streamStatusRef.current === "streaming" ? "auto" : "smooth",
     });
-  }, [followOutput, streamStatus, threadSignalsKey, threadTurnCount]);
+    // turnIdentityKey changes once per turn; followOutput re-arms the nudge when the
+    // user re-pins to the bottom. Intentionally excludes streamStatus / streaming text.
+  }, [followOutput, turnIdentityKey, threadTurnCount]);
 
   if (loading) {
     return <div className="chat-v11-thread-loading mc-next-thread-empty">Loading thread...</div>;
