@@ -51,19 +51,22 @@ export function applyPostgresMigrationsSync(
 ): void {
   const migrationsTable = input?.migrationsTable ?? "schema_migrations";
   const migrations = input?.migrations ?? POSTGRES_MIGRATIONS;
+  // Quote the table name as a Postgres identifier (double-quote, doubling any
+  // embedded quotes) so it is splice-safe even though it is interpolated into DDL.
+  const quotedMigrationsTable = `"${migrationsTable.replace(/"/g, '""')}"`;
   db.exec(`
-    CREATE TABLE IF NOT EXISTS ${migrationsTable} (
+    CREATE TABLE IF NOT EXISTS ${quotedMigrationsTable} (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  const appliedRows = db.prepare(`SELECT version FROM ${migrationsTable} ORDER BY version ASC`).all() as Array<{
+  const appliedRows = db.prepare(`SELECT version FROM ${quotedMigrationsTable} ORDER BY version ASC`).all() as Array<{
     version: number;
   }>;
   const applied = new Set(appliedRows.map((row) => row.version));
   const markAppliedStmt = db.prepare(`
-    INSERT INTO ${migrationsTable} (version, name, applied_at)
+    INSERT INTO ${quotedMigrationsTable} (version, name, applied_at)
     VALUES (@version, @name, CURRENT_TIMESTAMP)
     ON CONFLICT (version) DO NOTHING
   `);

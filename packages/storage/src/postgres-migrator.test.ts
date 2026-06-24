@@ -165,4 +165,28 @@ describe("Postgres migrator", () => {
       | undefined;
     assert.equal(tableRow?.name, "new_table");
   });
+
+  it("quotes a reserved-word migrations table so the sync migrator does not emit invalid DDL", () => {
+    const db = createDatabase({ dbPath: createTempDatabasePath("goatcitadel-postgres-migrator-reserved") });
+
+    // `order` is a reserved word; without identifier quoting the CREATE TABLE /
+    // SELECT / INSERT statements would be syntax errors.
+    assert.doesNotThrow(() =>
+      applyPostgresMigrationsSync(db, {
+        migrationsTable: "order",
+        migrations: migrations(),
+      }),
+    );
+
+    const migrationRows = db
+      .prepare(`SELECT version, name FROM "order" ORDER BY version ASC`)
+      .all() as Array<{ version: number; name: string }>;
+    assert.deepEqual(
+      migrationRows.map((row) => ({ version: row.version, name: row.name })),
+      [
+        { version: 1, name: "create_existing" },
+        { version: 2, name: "create_new" },
+      ],
+    );
+  });
 });
