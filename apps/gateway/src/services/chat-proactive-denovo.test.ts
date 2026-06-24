@@ -271,6 +271,9 @@ function createHarness(options: HarnessOptions = {}) {
     storage: {
       agentCommitments: {
         listBySession: (id: string) => commitments.filter((c) => c.sessionId === id),
+        // Mirror the real repo: existence of ≥1 pending commitment for the session,
+        // equivalent to listBySession(id).some(status === "pending").
+        hasOpenBySession: (id: string) => commitments.some((c) => c.sessionId === id && c.status === "pending"),
       },
       sessionAutonomyPrefs: {
         ensure: () => prefs,
@@ -308,8 +311,9 @@ function createHarness(options: HarnessOptions = {}) {
   const service = new ChatProactiveService(ctx, callbacks);
   // Capture which sessions/sources the tick dispatches without exercising the
   // whole durable pipeline.
-  (service as unknown as { triggerChatSessionProactive: (id: string, input: { source: string }) => Promise<unknown> })
-    .triggerChatSessionProactive = async (id, input) => {
+  (
+    service as unknown as { triggerChatSessionProactive: (id: string, input: { source: string }) => Promise<unknown> }
+  ).triggerChatSessionProactive = async (id, input) => {
     triggered.push({ sessionId: id, source: input.source });
     return undefined;
   };

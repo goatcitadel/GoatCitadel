@@ -220,4 +220,90 @@ describe("AgentCommitmentRepository", () => {
     assert.equal(s1.length, 1);
     assert.equal(s1[0]?.commitmentId, "a");
   });
+
+  it("hasOpenBySession is false when the session has no commitments at all", () => {
+    const repo = createRepo();
+    assert.equal(repo.hasOpenBySession("session-1"), false);
+  });
+
+  it("hasOpenBySession is true when at least one pending commitment exists for the session", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1", sessionId: "session-1", dedupeKey: "k1" }));
+    assert.equal(repo.hasOpenBySession("session-1"), true);
+  });
+
+  it("hasOpenBySession is false when the session's only commitment is non-pending", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "c1", sessionId: "session-1", dedupeKey: "k1" }));
+    repo.markSent("c1");
+    assert.equal(repo.hasOpenBySession("session-1"), false);
+  });
+
+  it("hasOpenBySession scopes by session (a pending row in another session does not leak)", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "other", sessionId: "session-2", dedupeKey: "k1" }));
+    assert.equal(repo.hasOpenBySession("session-1"), false);
+    assert.equal(repo.hasOpenBySession("session-2"), true);
+  });
+
+  it("hasOpenBySession is true when a pending row coexists with sent/superseded/failed rows", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "sent", sessionId: "session-1", dedupeKey: "k1" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "superseded", sessionId: "session-1", dedupeKey: "k2" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "failed", sessionId: "session-1", dedupeKey: "k3" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "pending", sessionId: "session-1", dedupeKey: "k4" }));
+    repo.markSent("sent");
+    repo.markSuperseded("superseded");
+    repo.markDeliveryFailed("failed");
+    assert.equal(repo.hasOpenBySession("session-1"), true);
+  });
+
+  it("hasOpenBySession is false once every pending row is transitioned away", () => {
+    const repo = createRepo();
+    repo.upsertByDedupe(baseInput({ commitmentId: "a", sessionId: "session-1", dedupeKey: "k1" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "b", sessionId: "session-1", dedupeKey: "k2" }));
+    assert.equal(repo.hasOpenBySession("session-1"), true);
+    repo.markSent("a");
+    repo.markDeliveryPending("b");
+    // delivery_pending is NOT "pending" — gate must agree with listBySession(...).some(pending).
+    assert.equal(repo.hasOpenBySession("session-1"), false);
+  });
+
+  it("hasOpenBySession matches listBySession(...).some(status === pending) across fixtures", () => {
+    // Equivalence proof: the existence query must return the IDENTICAL boolean the
+    // hot-path predicate used to compute via listBySession(sessionId, limit).some(...).
+    const repo = createRepo();
+    const isOpen = (status: string): boolean => status === "pending";
+    const sessionsUnderTest = ["s-empty", "s-pending", "s-sent", "s-mixed", "s-all-closed"];
+
+    // s-empty: nothing inserted.
+    // s-pending: one pending row.
+    repo.upsertByDedupe(baseInput({ commitmentId: "p1", sessionId: "s-pending", dedupeKey: "k1" }));
+    // s-sent: one row, sent.
+    repo.upsertByDedupe(baseInput({ commitmentId: "s1", sessionId: "s-sent", dedupeKey: "k1" }));
+    repo.markSent("s1");
+    // s-mixed: sent + delivery_pending + pending.
+    repo.upsertByDedupe(baseInput({ commitmentId: "m1", sessionId: "s-mixed", dedupeKey: "k1" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "m2", sessionId: "s-mixed", dedupeKey: "k2" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "m3", sessionId: "s-mixed", dedupeKey: "k3" }));
+    repo.markSent("m1");
+    repo.markDeliveryPending("m2");
+    // m3 stays pending.
+    // s-all-closed: sent + superseded + delivery_failed (no pending).
+    repo.upsertByDedupe(baseInput({ commitmentId: "a1", sessionId: "s-all-closed", dedupeKey: "k1" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "a2", sessionId: "s-all-closed", dedupeKey: "k2" }));
+    repo.upsertByDedupe(baseInput({ commitmentId: "a3", sessionId: "s-all-closed", dedupeKey: "k3" }));
+    repo.markSent("a1");
+    repo.markSuperseded("a2");
+    repo.markDeliveryFailed("a3");
+
+    for (const sessionId of sessionsUnderTest) {
+      const viaList = repo.listBySession(sessionId).some((c) => isOpen(c.status));
+      assert.equal(
+        repo.hasOpenBySession(sessionId),
+        viaList,
+        `hasOpenBySession disagrees with listBySession(...).some(pending) for ${sessionId}`,
+      );
+    }
+  });
 });
