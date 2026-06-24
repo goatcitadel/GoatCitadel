@@ -49,6 +49,7 @@ export class AgentCommitmentRepository {
   private readonly getByDedupeStmt;
   private readonly listDueStmt;
   private readonly listBySessionStmt;
+  private readonly hasOpenBySessionStmt;
   private readonly markDeliveryPendingStmt;
   private readonly markDeliveryFailedStmt;
   private readonly markSentStmt;
@@ -89,6 +90,16 @@ export class AgentCommitmentRepository {
       WHERE session_id = @sessionId
       ORDER BY due_at ASC, commitment_id ASC
       LIMIT @limit
+    `);
+    // Existence-only counterpart to `listBySession(...).some(status === 'pending')`,
+    // used on the proactive scheduler hot path. Encodes the IDENTICAL "open" predicate
+    // (status = 'pending') as a single bounded existence probe so an idle session never
+    // pays to materialize and map up to N commitment rows just to answer a yes/no.
+    this.hasOpenBySessionStmt = db.prepare(`
+      SELECT 1 AS present
+      FROM agent_commitments
+      WHERE session_id = @sessionId AND status = 'pending'
+      LIMIT 1
     `);
     this.markSentStmt = db.prepare(`
       UPDATE agent_commitments
@@ -163,6 +174,16 @@ export class AgentCommitmentRepository {
   public listBySession(sessionId: string, limit = 100): AgentCommitmentRecord[] {
     const rows = toRows(this.listBySessionStmt.all({ sessionId, limit: clampLimit(limit) }));
     return rows.map(mapRow);
+  }
+
+  /**
+   * True when the session has at least one `pending` commitment. Behaviourally
+   * equivalent to `listBySession(sessionId, anyLimit).some((c) => c.status === "pending")`
+   * but answered by a single bounded existence query — no rows are materialized or
+   * mapped. Intended for the proactive scheduler's per-tick "has open work?" gate.
+   */
+  public hasOpenBySession(sessionId: string): boolean {
+    return this.hasOpenBySessionStmt.get({ sessionId }) !== undefined;
   }
 
   /** Transition a still-pending commitment to async delivery-pending. Returns true if updated. */

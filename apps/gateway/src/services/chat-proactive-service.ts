@@ -508,10 +508,11 @@ export class ChatProactiveService {
 
   /** True when the session has at least one pending commitment or an open linked task. */
   private hasOpenDeNovoWork(sessionId: string): boolean {
-    const hasPendingCommitment = this.ctx.storage.agentCommitments
-      .listBySession(sessionId, PROACTIVE_DE_NOVO_COMMITMENT_LIMIT)
-      .some((commitment) => commitment.status === "pending");
-    if (hasPendingCommitment) {
+    // Existence probe rather than fetch-and-scan: this runs on every scheduler tick
+    // for each eligible session, so we ask the DB "is there ≥1 pending commitment?"
+    // (same predicate as the former listBySession(...).some(status === "pending"))
+    // without materializing up to PROACTIVE_DE_NOVO_COMMITMENT_LIMIT rows.
+    if (this.ctx.storage.agentCommitments.hasOpenBySession(sessionId)) {
       return true;
     }
     return this.findReusableTask(sessionId) !== undefined;
