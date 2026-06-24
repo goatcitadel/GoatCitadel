@@ -78,6 +78,7 @@ import {
 import {
   chatModeAllowsDynamicTeamGrowth,
   ConflictError,
+  DEFAULT_CITADEL_ID,
   inferProviderForModelId,
   isChatTurnActiveStatus,
   isChatTurnTerminalStatus,
@@ -967,11 +968,6 @@ export class GatewayService {
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
-      // Legacy wrap-first Citadel enforcement. Off by default; when the operator
-      // sets GOATCITADEL_CITADEL_ENFORCEMENT=1 the engine can still use workspace
-      // scope as a compatibility Citadel fallback. New gateway call sites pass
-      // the parent citadelId directly when it is known.
-      citadelEnforcementEnabled: () => process.env.GOATCITADEL_CITADEL_ENFORCEMENT === "1",
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -1409,18 +1405,28 @@ export class GatewayService {
       listMcpElicitations: (filter) => this.mcpElicitationService.listRequests(filter),
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
-      normalizeToolInvokeRequest: (request) =>
-        this.enrichToolPolicyContext(
+      normalizeToolInvokeRequest: (request) => {
+        const resolvedWorkspaceId =
+          request.workspaceId ??
+          this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
+          DEFAULT_WORKSPACE_ID;
+        return this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
             this.resolveToolInvokeRequestPaths({
               ...request,
-              workspaceId:
-                request.workspaceId ??
-                this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
-                DEFAULT_WORKSPACE_ID,
+              workspaceId: resolvedWorkspaceId,
+              // Resolve the parent Citadel from the workspace so Citadel Wards always
+              // enforce on the correct scope (Wards key on the real citadelId, never
+              // the workspaceId). Default to the personal Citadel — which has no Wards —
+              // when the workspace cannot be resolved, so the common case is unaffected.
+              citadelId:
+                request.citadelId ??
+                this.storage.workspaces?.find(resolvedWorkspaceId)?.citadelId ??
+                DEFAULT_CITADEL_ID,
             }),
           ),
-        ),
+        );
+      },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
         evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args),

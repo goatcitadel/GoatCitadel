@@ -846,7 +846,7 @@ export const ROUTE_RELEASE_SCOPE = [
     status: "ship",
     releaseAction: "List, add, and test Gatehouse Wards (deny-wins) for the active Citadel.",
     verification: "verify:surface:regression, verify:agentic:governance",
-    note: "Wards are release-bearing for authoring and evaluation; live request-path enforcement stays behind the GOATCITADEL_CITADEL_ENFORCEMENT flag until it is fully proven.",
+    note: "Wards are release-bearing for authoring, evaluation, and live request-path enforcement: the gateway resolves the parent Citadel from the workspace on every tool invoke, so a matching Ward always enforces (deny-wins).",
   },
   {
     area: "library",
