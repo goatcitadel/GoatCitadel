@@ -117,6 +117,7 @@ export class ChatTurnTraceRepository {
   private readonly listBySessionStmt;
   private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
+  private readonly getByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
@@ -284,6 +285,41 @@ export class ChatTurnTraceRepository {
       }),
     );
     return rows.map(mapRow);
+  }
+
+  public getByTurnIds(turnIds: Array<string | undefined>): Map<string, ChatTurnTraceRecord> {
+    const uniqueTurnIds = [...new Set(turnIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+    const byTurnId = new Map<string, ChatTurnTraceRecord>();
+    if (uniqueTurnIds.length === 0) {
+      return byTurnId;
+    }
+
+    for (let index = 0; index < uniqueTurnIds.length; index += 400) {
+      const batch = uniqueTurnIds.slice(index, index + 400);
+      const stmt = this.getGetByTurnIdsStmt(batch.length);
+      const rows = toChatTurnTraceRows(stmt.all(...batch));
+      for (const row of rows) {
+        const record = mapRow(row);
+        byTurnId.set(record.turnId, record);
+      }
+    }
+
+    return byTurnId;
+  }
+
+  private getGetByTurnIdsStmt(size: number) {
+    const cached = this.getByTurnIdsStmtCache.get(size);
+    if (cached) {
+      return cached;
+    }
+    const placeholders = new Array(size).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM chat_turn_traces
+      WHERE turn_id IN (${placeholders})
+    `);
+    this.getByTurnIdsStmtCache.set(size, stmt);
+    return stmt;
   }
 
   public deleteByTurnIds(sessionId: string, turnIds: string[]): number {
