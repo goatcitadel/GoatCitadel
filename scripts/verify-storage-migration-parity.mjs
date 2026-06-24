@@ -22,7 +22,7 @@ const PROTECTED_POSTGRES_MIGRATIONS = Object.freeze([
   { version: 4, name: "chat_session_workbench_schema", sha256: "3f019ed0886e1c6006cc7b9ddca4718e04313c1297ab61b6e2e5cea8f85aad5d" },
   { version: 5, name: "sessions_session_key_unique_index", sha256: "b953dad29a0ab2399fd024300ed839d3b381e4fb7869a325b948794735ee1c33" },
   { version: 6, name: "runtime_inline_unique_indexes", sha256: "5f23718df4dca77b201eaaeb8e69ecc0f7b290e001d64e382f867d4631ca7167" },
-  { version: 7, name: "canonical_runtime_schema_repairs", sha256: "4be5644c81f14c661aa180b5c3dbaa4de59f74864cecf0512c8fc8d9a29c6695" },
+  { version: 7, name: "canonical_runtime_schema_repairs", sha256: "9c0d0e0e56025d5bcbf9c5bd8fd43990827c52c57e330fffe14ae6eee4c04ac1" },
   { version: 8, name: "prompt_pack_benchmark_claim_repairs", sha256: "817db1dff8fd52c080f91e17f139655d0e871272586093ffd6bf9aa6733bcd06" },
   { version: 9, name: "orchestration_execution_ownership_schema", sha256: "97a686ed14ca2ddbd1565fe98d2d15c051c0212eb21d5f240c805802149f95d0" },
   { version: 10, name: "chat_user_input_prompt_repairs", sha256: "e5d940d6e74c9e9115fbcd72097e54ce4d5d24d70857ae68eb682505a81e0837" },
@@ -51,13 +51,15 @@ export function extractMigrationNames(source) {
 }
 
 export function extractMigrationRecords(source) {
+  const stringConstants = extractStringConstants(source);
   return [...source.matchAll(/\{\s*version:\s*(\d+),\s*name:\s*"([^"]+)"\s*(?:,([\s\S]*?))?\s*\}(?=\s*,|\s*\])/g)].map(
     (match) => {
       const sqlMatch = match[3]?.match(/sql:\s*`([\s\S]*?)`/);
+      const sql = sqlMatch ? resolveTemplateConstants(sqlMatch[1], stringConstants) : null;
       return {
         version: Number(match[1]),
         name: match[2],
-        sha256: sqlMatch ? hashSql(sqlMatch[1]) : null,
+        sha256: sql ? hashSql(sql) : null,
       };
     },
   );
@@ -135,9 +137,7 @@ export function findRuntimeSchemaSemanticGuardErrors({
     errors.push("Postgres canonical runtime schema migration must be generated from the SQLite schema blueprint.");
   }
   if (
-    !/name:\s*"canonical_runtime_schema_repairs"[\s\S]*?\$\{buildPostgresRuntimeSchemaSql\(\)\}/.test(
-      postgresMigrationsSource,
-    )
+    !replaysRuntimeSchemaInV7RepairMigration(postgresMigrationsSource)
   ) {
     errors.push("Postgres runtime schema repair migration must replay the generated SQLite schema blueprint.");
   }
@@ -157,6 +157,40 @@ export function findRuntimeSchemaSemanticGuardErrors({
 
 function isParityMigrationName(name) {
   return name.endsWith("_parity") || name.includes("_parity_");
+}
+
+function extractStringConstants(source) {
+  const constants = new Map();
+  for (const match of source.matchAll(/\bconst\s+([A-Z0-9_]+)\s*=\s*("(?:(?:\\[\s\S])|[^"\\])*")\s*;/g)) {
+    try {
+      constants.set(match[1], JSON.parse(match[2]));
+    } catch {
+      // Ignore malformed literals; TypeScript will report them before this verifier matters.
+    }
+  }
+  return constants;
+}
+
+function resolveTemplateConstants(sql, stringConstants) {
+  return sql.replace(/\$\{\s*([A-Z0-9_]+)\s*\}/g, (match, constantName) => {
+    return stringConstants.get(constantName) ?? match;
+  });
+}
+
+function replaysRuntimeSchemaInV7RepairMigration(postgresMigrationsSource) {
+  if (
+    /name:\s*"canonical_runtime_schema_repairs"[\s\S]*?\$\{buildPostgresRuntimeSchemaSql\(\)\}/.test(
+      postgresMigrationsSource,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /\bconst\s+POSTGRES_V7_FROZEN_SCHEMA_SQL\s*=/.test(postgresMigrationsSource) &&
+    /name:\s*"canonical_runtime_schema_repairs"[\s\S]*?\$\{\s*POSTGRES_V7_FROZEN_SCHEMA_SQL\s*\}/.test(
+      postgresMigrationsSource,
+    )
+  );
 }
 
 function hashSql(sql) {
