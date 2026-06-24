@@ -120,7 +120,8 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
     if (!gatewayReady) {
       return;
     }
-    const isHidden = () => typeof document !== "undefined" && document.hidden;
+    const doc = typeof document === "undefined" ? undefined : document;
+    const isHidden = () => doc?.hidden === true;
     const intervalId = window.setInterval(() => {
       if (isHidden()) {
         return;
@@ -133,14 +134,17 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
         void refreshStatus();
       }
     };
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
+    // Feature-detect the listener API: jsdom-free unit environments (and some
+    // test stubs) provide a partial `document` without addEventListener.
+    const canListen = typeof doc?.addEventListener === "function" && typeof doc?.removeEventListener === "function";
+    if (canListen) {
+      doc!.addEventListener("visibilitychange", handleVisibilityChange);
     }
 
     return () => {
       window.clearInterval(intervalId);
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (canListen) {
+        doc!.removeEventListener("visibilitychange", handleVisibilityChange);
       }
     };
   }, [gatewayReady, refreshIntervalMs, refreshStatus]);
