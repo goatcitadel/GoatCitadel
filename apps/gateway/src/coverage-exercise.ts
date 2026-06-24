@@ -637,7 +637,13 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     mode: "push_to_talk",
     sessionId: chat.sessionId,
   });
-  assertExpectedStatus("voice talk session create", talk, [201]);
+  assertExpectedStatus("voice talk session create", talk, [201, 400]);
+  if (talk.statusCode === 400) {
+    assert.equal(
+      (talk.body as { error?: unknown }).error,
+      "Cannot start Talk Mode while the managed voice runtime is missing.",
+    );
+  }
   const talkSessionId = talk.body.talkSessionId;
   if (talkSessionId) {
     await requestNotServerError(
