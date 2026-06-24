@@ -375,7 +375,10 @@ function createHarness(
   };
   const ctx = {
     storage,
-    gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
+    gatewaySql: {
+      prepare: (sql: string) => createStatement(sql, state),
+      runImmediateTransaction: <T>(callback: () => T): T => callback(),
+    },
     publishRealtime,
     isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => flag === "durableKernelV1Enabled",
   } as unknown as ServiceContext;

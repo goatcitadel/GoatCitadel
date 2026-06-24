@@ -282,6 +282,48 @@ describe("ChatProactiveService", () => {
     expect(service.findDurableRunIdsForApproval("approval-1")).toEqual(["durable-new", "durable-old"]);
   });
 
+  it("patchProactiveRun performs the read-modify-write atomically (no lost update on concurrent resume)", () => {
+    const harness = createHarness();
+    const { service, state } = harness;
+    state.proactiveRuns.set(
+      "run-race",
+      createProactiveRunRow({
+        runId: "run-race",
+        linkedDurableRunId: "durable-old",
+        approvalId: "approval-1",
+        startedAt: "2026-04-04T18:00:00.000Z",
+      }),
+    );
+
+    const patch = (
+      service as unknown as {
+        patchProactiveRun: (runId: string, patch: Partial<ProactiveRunRecord>) => ProactiveRunRecord;
+      }
+    ).patchProactiveRun.bind(service);
+
+    // Both the read and the write of patchProactiveRun must run inside a single
+    // immediate transaction so a concurrent resolution cannot read the same row,
+    // merge, and clobber the other writer's field updates.
+    const txSpy = vi.spyOn(
+      (service as unknown as { ctx: { gatewaySql: { runImmediateTransaction: <T>(cb: () => T) => T } } }).ctx.gatewaySql,
+      "runImmediateTransaction",
+    );
+
+    // Models the documented interleave: the durable tick re-queue path links a
+    // fresh durable run id, while the approval-resume path clears the approval
+    // and flips status back to running. Each writes a DIFFERENT field on the
+    // same run; after both, BOTH updates must survive.
+    patch("run-race", { linkedDurableRunId: "durable-new" });
+    patch("run-race", { status: "running", approvalId: undefined });
+
+    expect(txSpy).toHaveBeenCalledTimes(2);
+
+    const row = state.proactiveRuns.get("run-race")!;
+    expect(row.linked_durable_run_id).toBe("durable-new"); // first writer's field preserved
+    expect(row.status).toBe("running"); // second writer's field applied
+    expect(row.approval_id).toBeNull(); // second writer cleared the approval
+  });
+
   it("resumes approval-blocked proactive durable runs from checkpoint without rerunning completed actions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-04T19:00:00.000Z"));
@@ -894,7 +936,10 @@ function createHarness(options?: {
     config: { assistant: { durable: { enabled: true } } },
     llmService: {},
     policyEngine: {},
-    gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
+    gatewaySql: {
+      prepare: (sql: string) => createStatement(sql, state),
+      runImmediateTransaction: <T>(callback: () => T): T => callback(),
+    },
     publishRealtime,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => {

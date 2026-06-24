@@ -838,18 +838,26 @@ export class ChatProactiveService {
   }
 
   private patchProactiveRun(runId: string, patch: Partial<ProactiveRunRecord>, finish = false): ProactiveRunRecord {
-    const current = this.readProactiveRun(runId);
-    const next: ProactiveRunRecord = {
-      ...current,
-      ...patch,
-      runId: current.runId,
-      sessionId: current.sessionId,
-      mode: patch.mode ?? current.mode,
-      finishedAt: finish ? new Date().toISOString() : (patch.finishedAt ?? current.finishedAt),
-    };
-    this.ctx.gatewaySql
-      .prepare(
-        `
+    // The read (current state), the JS-side merge (mode fallback, finish
+    // timestamp, action_count derivation, resume_metadata object spread) and the
+    // write must form one atomic unit. Otherwise two concurrent resolutions
+    // (e.g. the durable tick re-queue and an approval-resume callback) can each
+    // read the same row, merge, and write — silently clobbering the other's
+    // field updates (linkedDurableRunId, approvalId, stopReason, …). BEGIN
+    // IMMEDIATE takes the write lock before the read, serialising the pair.
+    return this.ctx.gatewaySql.runImmediateTransaction(() => {
+      const current = this.readProactiveRun(runId);
+      const next: ProactiveRunRecord = {
+        ...current,
+        ...patch,
+        runId: current.runId,
+        sessionId: current.sessionId,
+        mode: patch.mode ?? current.mode,
+        finishedAt: finish ? new Date().toISOString() : (patch.finishedAt ?? current.finishedAt),
+      };
+      this.ctx.gatewaySql
+        .prepare(
+          `
       UPDATE proactive_runs
       SET
         status = @status,
@@ -871,28 +879,29 @@ export class ChatProactiveService {
         finished_at = @finishedAt
       WHERE run_id = @runId
     `,
-      )
-      .run({
-        runId: next.runId,
-        status: next.status,
-        confidence: next.confidence,
-        reasoningSummary: next.reasoningSummary,
-        actionCount: next.suggestedActions.length,
-        suggestedActionsJson: JSON.stringify(next.suggestedActions),
-        executedActionsJson: JSON.stringify(next.executedActions),
-        linkedTaskId: next.linkedTaskId ?? null,
-        linkedDurableRunId: next.linkedDurableRunId ?? null,
-        approvalId: next.approvalId ?? null,
-        triggerSource: next.triggerSource ?? null,
-        originSurface: next.originSurface ?? null,
-        nextWakeAt: next.nextWakeAt ?? null,
-        stopReason: next.stopReason ?? null,
-        externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
-        resumeMetadataJson: next.resumeMetadata ? JSON.stringify(next.resumeMetadata) : null,
-        error: next.error ?? null,
-        finishedAt: next.finishedAt ?? null,
-      });
-    return this.readProactiveRun(runId);
+        )
+        .run({
+          runId: next.runId,
+          status: next.status,
+          confidence: next.confidence,
+          reasoningSummary: next.reasoningSummary,
+          actionCount: next.suggestedActions.length,
+          suggestedActionsJson: JSON.stringify(next.suggestedActions),
+          executedActionsJson: JSON.stringify(next.executedActions),
+          linkedTaskId: next.linkedTaskId ?? null,
+          linkedDurableRunId: next.linkedDurableRunId ?? null,
+          approvalId: next.approvalId ?? null,
+          triggerSource: next.triggerSource ?? null,
+          originSurface: next.originSurface ?? null,
+          nextWakeAt: next.nextWakeAt ?? null,
+          stopReason: next.stopReason ?? null,
+          externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
+          resumeMetadataJson: next.resumeMetadata ? JSON.stringify(next.resumeMetadata) : null,
+          error: next.error ?? null,
+          finishedAt: next.finishedAt ?? null,
+        });
+      return this.readProactiveRun(runId);
+    });
   }
 
   private finishProactiveRun(runId: string, patch: Partial<ProactiveRunRecord>): ProactiveRunRecord {
