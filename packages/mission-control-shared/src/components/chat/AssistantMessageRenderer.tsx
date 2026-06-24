@@ -14,12 +14,16 @@ export function AssistantMessageRenderer({
   content,
   running = false,
   streamPresentationMode = "smooth",
+  streamTurnId,
   className,
 }: {
   role: "user" | "assistant";
   content: string;
   running?: boolean;
   streamPresentationMode?: AssistantStreamPresentationMode;
+  // Identifies the streaming turn so the incremental markdown split can reset its carried
+  // parser state when a new message starts. Optional: omitted for settled / user content.
+  streamTurnId?: string;
   className?: string;
 }) {
   const displayContent = useMemo(
@@ -38,7 +42,11 @@ export function AssistantMessageRenderer({
     >
       <AssistantMessageContainer role={role} content={displayContent} running={running}>
         {role === "assistant" && running ? (
-          <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} />
+          <StreamingMarkdown
+            content={displayContent}
+            streamPresentationMode={streamPresentationMode}
+            streamTurnId={streamTurnId}
+          />
         ) : (
           <MemoizedMarkdownBlock content={displayContent} role={role} components={assistantMarkdownComponents} />
         )}
@@ -333,11 +341,29 @@ function AssistantMessageContainer({
 function StreamingMarkdown({
   content,
   streamPresentationMode,
+  streamTurnId,
 }: {
   content: string;
   streamPresentationMode: AssistantStreamPresentationMode;
+  // Identifies the streaming turn so the incremental parser state is reset when a new
+  // message starts (fence-state must never leak across messages).
+  streamTurnId?: string;
 }) {
-  const { stable, tail } = useMemo(() => splitStreamingMarkdown(content), [content]);
+  // Carry the forward-scan split state across tokens of the same streaming turn so each
+  // delta only scans the newly-appended characters (amortized O(delta) instead of an
+  // O(n) full rescan per token, i.e. O(n^2) cumulative). The state is reset when the turn
+  // id changes (fence-state must never leak across messages); splitIncremental also
+  // self-heals on any non-append delta. Output stays byte-identical to
+  // splitStreamingMarkdown(content) for every prefix.
+  const splitStateRef = useRef<IncrementalSplitState | undefined>(undefined);
+  const splitTurnRef = useRef<string | undefined>(undefined);
+  const { stable, tail } = useMemo(() => {
+    if (splitStateRef.current === undefined || splitTurnRef.current !== streamTurnId) {
+      splitStateRef.current = createIncrementalSplitState();
+      splitTurnRef.current = streamTurnId;
+    }
+    return splitIncremental(splitStateRef.current, content);
+  }, [content, streamTurnId]);
   return (
     <div className="mc-assistant-streaming-markdown">
       {stable ? (
@@ -404,6 +430,142 @@ export function splitStreamingMarkdown(content: string): { stable: string; tail:
     }
     lineStart = index + 1;
   }
+
+  if (bestSplitEnd <= 0) {
+    return { stable: "", tail: content };
+  }
+  return {
+    stable: content.slice(0, bestSplitEnd),
+    tail: content.slice(bestSplitEnd),
+  };
+}
+
+// --- Incremental streaming split -------------------------------------------------
+//
+// `splitStreamingMarkdown` above is a single O(n) forward pass, but a streaming
+// message calls it once per token on the *whole* accumulated string, so the cost is
+// O(1) + O(2) + ... + O(n) = O(n^2) cumulative over a long answer. The engine below
+// carries the forward-scan state across tokens of the SAME message so each delta only
+// processes the characters appended since the last newline-terminated line — turning
+// the cumulative cost into O(n) (amortized O(delta) per token).
+//
+// Equivalence guarantee: `splitIncremental` returns a value byte-identical to
+// `splitStreamingMarkdown(content)` for every prefix of the stream. This is safe
+// because the from-scratch scan is backtrack-free for the split point:
+//   * `bestSplitEnd` only ever advances at an *interior* "\n\n" (the second newline at
+//     index < content.length, i.e. inside a completed, immutable line) and only while
+//     NOT inside a fence.
+//   * `inFence` at any completed newline is fully determined by the bytes before it,
+//     which never change under append — so a boundary finalized while outside a fence
+//     can never be retroactively re-interpreted as inside one.
+//   * The partial trailing line (processed at EOF) can flip fence state but, by the
+//     boundary condition, can NEVER update `bestSplitEnd`. So we never need to re-scan
+//     it to get the split; we only resume from the last newline.
+// If a delta is ever NOT a pure append of the previous content (prefix mismatch or a
+// shorter string), the engine resets and rescans from scratch, so it can never diverge.
+
+export interface IncrementalSplitState {
+  /** Full content seen on the previous push; used to detect non-append deltas. */
+  content: string;
+  /** Resume index: position just after the last newline-terminated line. Bytes before
+   *  this are finalized line-wise and are never re-scanned. */
+  resumeIndex: number;
+  /** Parser state captured at `resumeIndex` (after all complete lines before it). */
+  inFence: boolean;
+  fenceChar: "`" | "~" | null;
+  fenceLength: number;
+  /** Best split end locked in from completed lines so far (-1 if none). */
+  bestSplitEnd: number;
+  /** Index from which the most recent push began its scan (for perf instrumentation). */
+  lastScanStart: number;
+}
+
+export function createIncrementalSplitState(): IncrementalSplitState {
+  return {
+    content: "",
+    resumeIndex: 0,
+    inFence: false,
+    fenceChar: null,
+    fenceLength: 0,
+    bestSplitEnd: -1,
+    lastScanStart: 0,
+  };
+}
+
+/**
+ * Advance the carried split state with the latest accumulated `content` and return the
+ * same `{ stable, tail }` shape as `splitStreamingMarkdown`. Mutates `state` in place.
+ */
+export function splitIncremental(state: IncrementalSplitState, content: string): { stable: string; tail: string } {
+  // Detect a non-append delta (new message, edit, retry, or any shrink) and reset.
+  if (content.length < state.content.length || !content.startsWith(state.content)) {
+    state.resumeIndex = 0;
+    state.inFence = false;
+    state.fenceChar = null;
+    state.fenceLength = 0;
+    state.bestSplitEnd = -1;
+  }
+
+  let { inFence, fenceChar, fenceLength, bestSplitEnd } = state;
+  let lineStart = state.resumeIndex;
+  const scanStart = state.resumeIndex;
+  state.lastScanStart = scanStart;
+
+  // Resume point for the NEXT push: position after the last newline-terminated line.
+  let nextResumeIndex = state.resumeIndex;
+  let nextInFence = inFence;
+  let nextFenceChar = fenceChar;
+  let nextFenceLength = fenceLength;
+  let nextBestSplitEnd = bestSplitEnd;
+
+  for (let index = scanStart; index <= content.length; index += 1) {
+    const atLineEnd = index === content.length || content[index] === "\n";
+    if (!atLineEnd) {
+      continue;
+    }
+    const line = content.slice(lineStart, index);
+    const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (match) {
+      const marker = match[1]!;
+      const markerChar = marker[0] as "`" | "~";
+      if (!inFence) {
+        inFence = true;
+        fenceChar = markerChar;
+        fenceLength = marker.length;
+      } else {
+        const markerTail = line.slice(line.indexOf(marker) + marker.length);
+        if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
+          inFence = false;
+          fenceChar = null;
+          fenceLength = 0;
+        }
+      }
+    }
+    if (!inFence && index < content.length && content[index] === "\n" && index > 0 && content[index - 1] === "\n") {
+      const paragraphIndex = index - 1;
+      if (paragraphIndex > 0) {
+        bestSplitEnd = paragraphIndex + 2;
+      }
+    }
+    lineStart = index + 1;
+    // Only newline-terminated lines (index < length) are immutable; the EOF "line" is a
+    // still-growing partial that the next token may extend, so we must NOT advance the
+    // resume point past it. Snapshot state strictly at completed newlines.
+    if (index < content.length) {
+      nextResumeIndex = index + 1;
+      nextInFence = inFence;
+      nextFenceChar = fenceChar;
+      nextFenceLength = fenceLength;
+      nextBestSplitEnd = bestSplitEnd;
+    }
+  }
+
+  state.content = content;
+  state.resumeIndex = nextResumeIndex;
+  state.inFence = nextInFence;
+  state.fenceChar = nextFenceChar;
+  state.fenceLength = nextFenceLength;
+  state.bestSplitEnd = nextBestSplitEnd;
 
   if (bestSplitEnd <= 0) {
     return { stable: "", tail: content };
