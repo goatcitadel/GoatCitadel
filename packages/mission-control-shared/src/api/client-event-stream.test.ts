@@ -89,6 +89,16 @@ async function waitForEventSourceCount(count: number) {
   expect(FakeEventSource.instances).toHaveLength(count);
 }
 
+async function waitForStateSuffix(states: string[], suffix: string[]) {
+  for (let index = 0; index < 50; index += 1) {
+    await flushAsync();
+    if (states.slice(-suffix.length).join("\n") === suffix.join("\n")) {
+      return;
+    }
+  }
+  expect(states.slice(-suffix.length)).toEqual(suffix);
+}
+
 describe("client event stream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -423,10 +433,9 @@ describe("client event stream", () => {
       () => undefined,
       (state) => states.push(state),
     );
-    await flushAsync();
+    await waitForStateSuffix(states, ["error", "retrying"]);
 
     expect(FakeEventSource.instances).toHaveLength(0);
-    expect(states.slice(-2)).toEqual(["error", "retrying"]);
 
     cleanup();
   });
