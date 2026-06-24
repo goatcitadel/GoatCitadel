@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowRight, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import { Virtuoso } from "react-virtuoso";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
@@ -252,22 +253,83 @@ export function NativeCard({
   );
 }
 
+export type NativeListItem = { title: string; meta?: string; body?: string };
+
+const NATIVE_LIST_DEFAULT_WINDOW_THRESHOLD = 50;
+
+function nativeListItemKey(item: NativeListItem, index: number): string {
+  return `${item.title}-${item.meta ?? ""}-${index}`;
+}
+
+function renderNativeListItem(item: NativeListItem): ReactNode {
+  return (
+    <>
+      <div className="mc-next-directory-list-head">
+        <strong>{item.title}</strong>
+        {item.meta ? <span>{item.meta}</span> : null}
+      </div>
+      {item.body ? <p>{item.body}</p> : null}
+    </>
+  );
+}
+
 export function NativeList({
   items,
   emptyLabel = "Nothing here yet.",
   density = "standard",
   maxHeight,
   ariaLabel,
+  virtualized = false,
+  windowThreshold = NATIVE_LIST_DEFAULT_WINDOW_THRESHOLD,
 }: {
-  items: Array<{ title: string; meta?: string; body?: string }>;
+  items: NativeListItem[];
   emptyLabel?: string;
   density?: "standard" | "compact";
   maxHeight?: string;
   ariaLabel?: string;
+  /**
+   * Opt in to true windowing for high-cardinality lists. Default behavior is
+   * unchanged (every item rendered) so the many small/SSR-asserted callers of
+   * this shared primitive are untouched. Windowing only engages when this is
+   * set, `maxHeight` bounds the scroller, and the item count crosses
+   * `windowThreshold` — small lists still render plainly to avoid Virtuoso's
+   * measurement overhead (and so jsdom/test renders stay complete below it).
+   */
+  virtualized?: boolean;
+  /** Item count above which a `virtualized` list switches to Virtuoso. */
+  windowThreshold?: number;
 }) {
   if (items.length === 0) {
     return <EmptyState size="compact" title={emptyLabel} />;
   }
+
+  // Window only when explicitly opted in, the scroller is height-bounded, and
+  // the list is actually long. Otherwise fall through to the original markup.
+  if (virtualized && maxHeight && items.length > windowThreshold) {
+    return (
+      <Virtuoso
+        data={items}
+        computeItemKey={(index, item) => nativeListItemKey(item, index)}
+        itemContent={(_index, item) => (
+          <div
+            className={["mc-next-directory-list-item", "mc-next-directory-list-item-virtual", density === "compact" ? "is-compact" : ""]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {renderNativeListItem(item)}
+          </div>
+        )}
+        className={["mc-next-directory-list-virtuoso", density === "compact" ? "is-compact" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        data-native-scroll="true"
+        aria-label={ariaLabel}
+        style={{ maxHeight }}
+        increaseViewportBy={{ top: 320, bottom: 480 }}
+      />
+    );
+  }
+
   return (
     <div
       className={["mc-next-directory-list", density === "compact" ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
@@ -278,12 +340,8 @@ export function NativeList({
       aria-label={ariaLabel}
     >
       {items.map((item, index) => (
-        <div key={`${item.title}-${item.meta ?? ""}-${index}`} className="mc-next-directory-list-item">
-          <div className="mc-next-directory-list-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
+        <div key={nativeListItemKey(item, index)} className="mc-next-directory-list-item">
+          {renderNativeListItem(item)}
         </div>
       ))}
     </div>

@@ -446,6 +446,8 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
             }))}
             emptyLabel="No browser session events are attached to this session."
             ariaLabel="Browser session events"
+            maxHeight="min(58vh, 34rem)"
+            virtualized
           />
         </NativeCard>
       </NativeGrid>
