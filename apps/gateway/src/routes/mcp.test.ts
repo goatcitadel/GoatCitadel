@@ -61,6 +61,27 @@ describe("mcp routes", () => {
     return service;
   }
 
+  // Registers the MCP routes behind a stand-in for the auth plugin: the
+  // authenticated operator is taken from the `x-test-actor` header and stamped
+  // onto `request.authActorId`, exactly as the real auth plugin does via
+  // setAuthActor. This lets us exercise operator-scoped behavior on the HTTP
+  // routes without pulling in the full auth stack.
+  async function registerMcpServiceWithAuth(overrides: Record<string, unknown> = {}) {
+    const service = createMcpService(overrides);
+    app = Fastify();
+    app.decorate("services", { mcp: service } as never);
+    app.decorateRequest("authActorId", "anonymous");
+    app.addHook("onRequest", async (request) => {
+      const header = request.headers["x-test-actor"];
+      const actorId = Array.isArray(header) ? header[0] : header;
+      if (typeof actorId === "string" && actorId.trim()) {
+        (request as { authActorId?: string }).authActorId = actorId.trim();
+      }
+    });
+    await app.register(mcpRoutes);
+    return service;
+  }
+
   it("creates and lists MCP elicitation requests with bounded audit and evidence metadata", async () => {
     await registerMcpService();
 
@@ -155,6 +176,56 @@ describe("mcp routes", () => {
     expect(listResponse.json()).toMatchObject({
       items: [expect.objectContaining({ elicitationId: created.elicitationId, status: "pending" })],
     });
+  });
+
+  it("scopes the MCP elicitation HTTP list to the authenticated operator", async () => {
+    await registerMcpServiceWithAuth();
+
+    const createForActor = async (actorId: string, label: string) => {
+      const created = await app!.inject({
+        method: "POST",
+        url: "/api/v1/mcp/elicitations",
+        headers: { "x-test-actor": actorId },
+        payload: {
+          prompt: `Choose ${label}.`,
+          requestedSchema: {
+            type: "object",
+            properties: { choice: { type: "string" } },
+            required: ["choice"],
+          },
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const body = created.json();
+      // Owner operatorId is derived from the authenticated request, not the body.
+      expect(body.owner.operatorId).toBe(actorId);
+      return body.elicitationId as string;
+    };
+
+    const elicitationA = await createForActor("operator-a", "A");
+    const elicitationB = await createForActor("operator-b", "B");
+
+    // Operator A lists: only A's elicitation is visible; B's is excluded.
+    const listAsA = await app!.inject({
+      method: "GET",
+      url: "/api/v1/mcp/elicitations",
+      headers: { "x-test-actor": "operator-a" },
+    });
+    expect(listAsA.statusCode).toBe(200);
+    const idsForA = (listAsA.json().items as Array<{ elicitationId: string }>).map((item) => item.elicitationId);
+    expect(idsForA).toContain(elicitationA);
+    expect(idsForA).not.toContain(elicitationB);
+
+    // Symmetry check: operator B sees only B's elicitation.
+    const listAsB = await app!.inject({
+      method: "GET",
+      url: "/api/v1/mcp/elicitations",
+      headers: { "x-test-actor": "operator-b" },
+    });
+    expect(listAsB.statusCode).toBe(200);
+    const idsForB = (listAsB.json().items as Array<{ elicitationId: string }>).map((item) => item.elicitationId);
+    expect(idsForB).toContain(elicitationB);
+    expect(idsForB).not.toContain(elicitationA);
   });
 
   it("truncates oversized MCP elicitation prompts and redacts secrets before storage", async () => {
