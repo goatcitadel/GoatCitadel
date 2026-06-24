@@ -4850,6 +4850,7 @@ function getPromptPackBenchmarkDedupOrdinalForTest(row: Record<string, unknown>)
 
 export const __sqliteInternals = {
   migrate,
+  addColumnIfMissing,
   createSqliteSchemaBlueprintFromDatabase,
   applySchemaMigrationForTest,
   migrateTaskSubagentSessionColumns,
@@ -6588,11 +6589,22 @@ function migrateOrchestrationPlanWorkspaceScope(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * Adds `columnName` to `tableName` when absent. `tableName` and `columnName` are
+ * quoted as SQLite identifiers so reserved words / case-folding names are safe.
+ *
+ * SECURITY CONTRACT: `columnSql` is a column TYPE expression (e.g.
+ * `"TEXT NOT NULL DEFAULT 'x'"`), NOT an identifier, so it cannot be quoted or
+ * parameterized. It is spliced verbatim into DDL and MUST only ever be a static
+ * literal supplied by a caller in this module — never user/runtime input.
+ */
 function addColumnIfMissing(db: DatabaseSync, tableName: string, columnName: string, columnSql: string): void {
   const rows = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{ name: string }>;
   const columns = new Set(rows.map((row) => row.name));
   if (!columns.has(columnName)) {
-    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnSql}`);
+    db.exec(
+      `ALTER TABLE ${quoteSqliteIdentifier(tableName)} ADD COLUMN ${quoteSqliteIdentifier(columnName)} ${columnSql}`,
+    );
   }
 }
 

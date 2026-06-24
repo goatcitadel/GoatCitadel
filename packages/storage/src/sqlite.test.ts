@@ -857,6 +857,54 @@ test("P2-S4a excludeFtsVirtualTables drops fts5 virtual + shadow tables but keep
   assert.deepEqual(__sqliteInternals.excludeFtsVirtualTables(noVirtual), noVirtual);
 });
 
+test("addColumnIfMissing quotes a reserved-word table+column so the ALTER succeeds", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    // `order` is a SQL reserved word for both the table and the column; without
+    // identifier quoting the ALTER TABLE statement is a syntax error.
+    db.exec(`CREATE TABLE "order" (id TEXT NOT NULL)`);
+
+    assert.doesNotThrow(() =>
+      __sqliteInternals.addColumnIfMissing(db, "order", "select", "TEXT NOT NULL DEFAULT 'pending'"),
+    );
+
+    db.prepare(`INSERT INTO "order" (id) VALUES (?)`).run("o-1");
+    const row = db.prepare(`SELECT id, "select" AS sel FROM "order" WHERE id = ?`).get("o-1") as {
+      id: string;
+      sel: string;
+    };
+    assert.equal(row.id, "o-1");
+    assert.equal(row.sel, "pending");
+
+    // Idempotent: a second call sees the column via PRAGMA and is a no-op.
+    assert.doesNotThrow(() =>
+      __sqliteInternals.addColumnIfMissing(db, "order", "select", "TEXT NOT NULL DEFAULT 'pending'"),
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("addColumnIfMissing still adds an ordinary identifier (quoting is behavior-preserving)", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE cost_ledger (id TEXT NOT NULL)`);
+
+    __sqliteInternals.addColumnIfMissing(db, "cost_ledger", "created_at", "TEXT");
+
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(cost_ledger)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    assert.ok(columns.has("created_at"));
+
+    db.prepare("INSERT INTO cost_ledger (id, created_at) VALUES (?, ?)").run("c-1", "2026-06-24T00:00:00.000Z");
+    const row = db.prepare("SELECT created_at FROM cost_ledger WHERE id = ?").get("c-1") as { created_at: string };
+    assert.equal(row.created_at, "2026-06-24T00:00:00.000Z");
+  } finally {
+    db.close();
+  }
+});
+
 test("cost_ledger carries a created_at index for time-range cost summaries on a fresh DB", () => {
   const db = new DatabaseSync(":memory:");
   try {
