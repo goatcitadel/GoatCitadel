@@ -1,5 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type Ref,
+} from "react";
 import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Virtuoso, type Components } from "react-virtuoso";
 import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/client";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
@@ -16,6 +27,12 @@ const COLUMNS: Array<{ id: KanbanColumnId; label: string }> = [
   { id: "needs_attention", label: "Needs Attention" },
   { id: "closed", label: "Closed" },
 ];
+
+// Window a column's cards only once it gets long enough that offscreen DOM
+// actually costs something. Short columns render plainly so tiny lanes avoid
+// Virtuoso's measurement pass (and so react-test-renderer, which has no layout,
+// still renders every card for assertions).
+const KANBAN_VIRTUALIZE_THRESHOLD = 24;
 
 type BulkAction = "unblock" | "retry" | "close";
 
@@ -208,39 +225,71 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnProps) {
+  // Window long columns. Each KanbanCard is memoized and receives a primitive
+  // `checked` plus the stable `onToggleSelect`, so toggling one selection only
+  // re-renders the cards whose membership actually changed.
+  const renderCard = useCallback(
+    (_index: number, card: KanbanCardModel) => (
+      <KanbanCard card={card} checked={selected.has(card.taskId)} onToggleSelect={onToggleSelect} />
+    ),
+    [selected, onToggleSelect],
+  );
+
   return (
     <section className="mc-next-kanban-column" data-testid={`kanban-column-${column.id}`}>
       <header>
         <h3>{column.label}</h3>
         <span className="count">{cards.length}</span>
       </header>
-      <ul>
-        {cards.length > 0 ? (
-          cards.map((card) => (
+      {cards.length === 0 ? (
+        <ul>
+          <li className="mc-next-kanban-empty">
+            <EmptyState size="compact" title="No runs in this lane." />
+          </li>
+        </ul>
+      ) : cards.length > KANBAN_VIRTUALIZE_THRESHOLD ? (
+        <Virtuoso
+          data={cards}
+          computeItemKey={(_index, card) => `${card.runId}:${card.taskId}`}
+          itemContent={renderCard}
+          className="mc-next-kanban-column-scroller"
+          data-native-scroll="true"
+          components={KANBAN_VIRTUOSO_COMPONENTS}
+          increaseViewportBy={{ top: 240, bottom: 360 }}
+        />
+      ) : (
+        <ul>
+          {cards.map((card) => (
             <KanbanCard
               key={`${card.runId}:${card.taskId}`}
               card={card}
               checked={selected.has(card.taskId)}
-              onToggleSelect={() => onToggleSelect(card.taskId)}
+              onToggleSelect={onToggleSelect}
             />
-          ))
-        ) : (
-          <li className="mc-next-kanban-empty">
-            <EmptyState size="compact" title="No runs in this lane." />
-          </li>
-        )}
-      </ul>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
 
+// Virtuoso renders its rows inside a plain scroller; reuse the <ul> semantics so
+// virtualized and plain columns keep the same list markup/roles. Virtuoso types
+// the List ref as a div, so accept that contract and forward it to the <ul>.
+const KANBAN_VIRTUOSO_COMPONENTS: Components<KanbanCardModel> = {
+  List: forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"ul">>(function KanbanVirtuosoList(props, ref) {
+    return <ul {...props} ref={ref as Ref<HTMLUListElement>} />;
+  }),
+};
+
 interface KanbanCardProps {
   card: KanbanCardModel;
   checked: boolean;
-  onToggleSelect: () => void;
+  onToggleSelect: (taskId: string) => void;
 }
 
-function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
+export const KanbanCard = memo(function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
+  const handleToggle = useCallback(() => onToggleSelect(card.taskId), [onToggleSelect, card.taskId]);
   return (
     <li className={`mc-next-kanban-card tone-${card.statusTone}`}>
       <label>
@@ -248,7 +297,7 @@ function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
           type="checkbox"
           data-testid={`kanban-select-${card.taskId}`}
           checked={checked}
-          onChange={onToggleSelect}
+          onChange={handleToggle}
           aria-label={`Select ${card.title}`}
         />
         <span className="title">{card.title}</span>
@@ -287,4 +336,4 @@ function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
       </small>
     </li>
   );
-}
+});
