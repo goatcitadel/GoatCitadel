@@ -750,57 +750,118 @@ export async function streamAgentChatMessage(
     sessionId,
     route: path,
   });
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "POST",
-    signal: options.signal,
-    headers: buildGatewayHeaders(path, "POST", correlationId, {
-      "x-goatcitadel-session-id": sessionId,
-      ...originSurfaceHeader(options),
-    }),
-    body: JSON.stringify(input),
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
+  // Every `stream.start` must have a matching terminal event so the diagnostics
+  // timeline never shows an orphaned start. A user cancel / transport drop throws
+  // an AbortError, and a non-ok response throws after emitting its own
+  // `stream.error`; the try/catch below records the terminal event for the paths
+  // that would otherwise escape (consume-time abort, transport failure) without
+  // double-recording the non-ok case.
+  let terminalRecorded = false;
+  try {
+    const response = await fetch(buildGatewayUrl(path), {
+      method: "POST",
+      signal: options.signal,
+      headers: buildGatewayHeaders(path, "POST", correlationId, {
+        "x-goatcitadel-session-id": sessionId,
+        ...originSurfaceHeader(options),
+      }),
+      body: JSON.stringify(input),
+    });
+    if (!response.ok || !response.body) {
+      const text = await response.text();
+      recordClientDiagnostic({
+        level: "error",
+        category: "chat",
+        event: "stream.error",
+        message: `Agent chat stream failed (${response.status})`,
+        correlationId,
+        sessionId,
+        route: path,
+        context: { status: response.status, body: text.slice(0, 600) },
+      });
+      terminalRecorded = true;
+      throw new Error(`API error ${response.status}: ${text}`);
+    }
+    await consumeSseResponse(
+      response.body,
+      (chunk) => {
+        if (chunk.type === "error") {
+          recordClientDiagnostic({
+            level: "error",
+            category: "chat",
+            event: "stream.chunk_error",
+            message: "Agent chat stream emitted an error chunk",
+            correlationId,
+            sessionId,
+            route: path,
+            turnId: chunk.turnId,
+          });
+        }
+        onChunk(chunk);
+      },
+      options.signal,
+    );
     recordClientDiagnostic({
-      level: "error",
+      level: "info",
       category: "chat",
-      event: "stream.error",
-      message: `Agent chat stream failed (${response.status})`,
+      event: "stream.complete",
+      message: "Agent chat stream completed",
       correlationId,
       sessionId,
       route: path,
-      context: { status: response.status, body: text.slice(0, 600) },
     });
-    throw new Error(`API error ${response.status}: ${text}`);
+    terminalRecorded = true;
+  } catch (error) {
+    if (!terminalRecorded) {
+      recordStreamTerminalFailure({ error, correlationId, sessionId, route: path });
+    }
+    throw error;
   }
-  await consumeSseResponse(
-    response.body,
-    (chunk) => {
-      if (chunk.type === "error") {
-        recordClientDiagnostic({
-          level: "error",
-          category: "chat",
-          event: "stream.chunk_error",
-          message: "Agent chat stream emitted an error chunk",
-          correlationId,
-          sessionId,
-          route: path,
-          turnId: chunk.turnId,
-        });
-      }
-      onChunk(chunk);
-    },
-    options.signal,
-  );
+}
+
+/**
+ * Records the terminal diagnostic for a chat stream that ended without a
+ * `stream.complete` — `stream.aborted` for a user cancel / transport drop
+ * (AbortError) and `stream.error` for any other failure. Pairs every
+ * `stream.start` with a terminal event in the diagnostics timeline.
+ */
+function recordStreamTerminalFailure(input: {
+  error: unknown;
+  correlationId: string;
+  sessionId: string;
+  route: string;
+}): void {
+  const { error, correlationId, sessionId, route } = input;
+  if (isStreamAbortError(error)) {
+    recordClientDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "stream.aborted",
+      message: "Agent chat stream aborted before completion",
+      correlationId,
+      sessionId,
+      route,
+    });
+    return;
+  }
   recordClientDiagnostic({
-    level: "info",
+    level: "error",
     category: "chat",
-    event: "stream.complete",
-    message: "Agent chat stream completed",
+    event: "stream.error",
+    message: error instanceof Error ? `Agent chat stream errored: ${error.message}` : "Agent chat stream errored",
     correlationId,
     sessionId,
-    route: path,
+    route,
   });
+}
+
+function isStreamAbortError(error: unknown): boolean {
+  if (typeof DOMException === "function" && error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+  return (
+    typeof error === "object" && error !== null && "name" in error && (error as { name?: string }).name === "AbortError"
+  );
 }
 
 export async function selectChatBranchTurn(sessionId: string, turnId: string): Promise<ChatThreadResponse> {

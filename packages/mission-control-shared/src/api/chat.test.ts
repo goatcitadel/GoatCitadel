@@ -459,3 +459,81 @@ describe("chat API origin surface headers", () => {
     CHAT_API_TEST_TIMEOUT_MS,
   );
 });
+
+describe("chat stream terminal diagnostics", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    installMockWindow();
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "test-uuid",
+    });
+    // Diagnostics are off by default outside Vite DEV; force them on so the
+    // terminal-event bookkeeping is observable in this test.
+    vi.stubEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED", "true");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it(
+    "records a stream.aborted terminal diagnostic when the stream is aborted",
+    async () => {
+      const chat = await import("./chat");
+      const { listClientDiagnostics } = await import("../state/dev-diagnostics-store");
+
+      const abortError =
+        typeof DOMException === "function"
+          ? new DOMException("The operation was aborted.", "AbortError")
+          : Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw abortError;
+        }),
+      );
+
+      const controller = new AbortController();
+      await expect(
+        chat.streamAgentChatMessage("session-1", { content: "hello" } as never, () => undefined, {
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(abortError);
+
+      const events = listClientDiagnostics({ category: "chat" }).map((event) => event.event);
+      expect(events).toContain("stream.start");
+      expect(events).toContain("stream.aborted");
+      expect(events).not.toContain("stream.complete");
+    },
+    CHAT_API_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "records a stream.error terminal diagnostic when the transport fails",
+    async () => {
+      const chat = await import("./chat");
+      const { listClientDiagnostics } = await import("../state/dev-diagnostics-store");
+
+      const transportError = new Error("network down");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw transportError;
+        }),
+      );
+
+      await expect(
+        chat.streamAgentChatMessage("session-1", { content: "hello" } as never, () => undefined),
+      ).rejects.toThrow("network down");
+
+      const events = listClientDiagnostics({ category: "chat" }).map((event) => event.event);
+      expect(events).toContain("stream.start");
+      expect(events).toContain("stream.error");
+      expect(events).not.toContain("stream.aborted");
+      expect(events).not.toContain("stream.complete");
+    },
+    CHAT_API_TEST_TIMEOUT_MS,
+  );
+});
