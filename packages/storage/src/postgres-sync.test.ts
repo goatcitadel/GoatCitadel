@@ -252,6 +252,37 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     });
 
     assert.match(workerUrl.pathname, /sync-worker\.(ts|js)$/);
+    assert.deepEqual(
+      __postgresSyncInternals.resolveWorkerExecArgv(new URL("file:///repo/src/postgres/sync-worker.ts"), [
+        "--test",
+        "--require",
+        "/repo/node_modules/tsx/dist/preflight.cjs",
+        "--import",
+        "file:///repo/node_modules/tsx/dist/loader.mjs",
+        "--inspect",
+      ]),
+      [
+        "--require",
+        "/repo/node_modules/tsx/dist/preflight.cjs",
+        "--import",
+        "file:///repo/node_modules/tsx/dist/loader.mjs",
+      ],
+    );
+    assert.deepEqual(
+      __postgresSyncInternals.resolveWorkerExecArgv(new URL("file:///repo/src/postgres/sync-worker.ts"), [
+        "--require=/repo/node_modules/tsx/dist/preflight.cjs",
+        "--import=file:///repo/node_modules/tsx/dist/loader.mjs",
+        "--test",
+      ]),
+      ["--require=/repo/node_modules/tsx/dist/preflight.cjs", "--import=file:///repo/node_modules/tsx/dist/loader.mjs"],
+    );
+    assert.equal(
+      __postgresSyncInternals.resolveWorkerExecArgv(new URL("file:///repo/dist/postgres/sync-worker.js"), [
+        "--require",
+        "/repo/node_modules/tsx/dist/preflight.cjs",
+      ]),
+      undefined,
+    );
     assert.equal(error.name, "QueryError");
     assert.equal(error.message, "bad query");
     assert.equal(error.stack, "stack line");
