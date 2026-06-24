@@ -308,9 +308,29 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     };
   }, [selectedItemId]);
 
+  // Derive the selected run's *stable identity* (its primitive ids) so the
+  // provenance/durable-run fetch effect below depends on those primitives rather
+  // than the `maintenanceRuns` array reference. `reload()` (refresh-bus signal /
+  // 15s poll) rebuilds `maintenanceRuns` as a brand-new array even when its
+  // contents are unchanged; depending on the array reference re-fired the effect
+  // and re-issued up to 3 fetches for the same run on every poll. Keying on the
+  // ids means an unchanged selected run on a poll does not refetch, while a genuinely
+  // new run (or a real change to its ids) still does.
+  const selectedRunFetchKey = useMemo(() => {
+    const run = data?.maintenanceRuns.find((candidate) => candidate.runId === selectedRunId);
+    return {
+      runId: run?.runId,
+      durableRunId: run?.durableRunId,
+    };
+  }, [data?.maintenanceRuns, selectedRunId]);
+
+  // Destructure to primitives at render scope so the effect closes over (and depends
+  // on) the ids directly. exhaustive-deps then needs only the primitives, not the memo
+  // object (which is a fresh reference whenever maintenanceRuns is rebuilt on a poll).
+  const { runId: selectedRunFetchRunId, durableRunId: selectedRunFetchDurableRunId } = selectedRunFetchKey;
+
   useEffect(() => {
-    const selectedRun = data?.maintenanceRuns.find((run) => run.runId === selectedRunId);
-    if (!selectedRun) {
+    if (!selectedRunFetchRunId) {
       setData((current) =>
         current
           ? {
@@ -325,16 +345,16 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     }
     let cancelled = false;
     void Promise.all([
-      fetchMemoryMaintenanceRunProvenance(selectedRun.runId)
+      fetchMemoryMaintenanceRunProvenance(selectedRunFetchRunId)
         .then((provenance) => ({ value: provenance, error: null }))
         .catch((provenanceError) => ({ value: null, error: getErrorMessage(provenanceError) })),
-      selectedRun.durableRunId
-        ? fetchDurableRun(selectedRun.durableRunId)
+      selectedRunFetchDurableRunId
+        ? fetchDurableRun(selectedRunFetchDurableRunId)
             .then((durableRun) => ({ value: durableRun, error: null }))
             .catch((durableRunError) => ({ value: null, error: getErrorMessage(durableRunError) }))
         : Promise.resolve({ value: null, error: null }),
-      selectedRun.durableRunId
-        ? fetchDurableRunTimeline(selectedRun.durableRunId, 80)
+      selectedRunFetchDurableRunId
+        ? fetchDurableRunTimeline(selectedRunFetchDurableRunId, 80)
             .then((durableTimeline) => ({ value: durableTimeline, error: null }))
             .catch((durableTimelineError) => ({
               value: { items: [] },
@@ -365,7 +385,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     return () => {
       cancelled = true;
     };
-  }, [data?.maintenanceRuns, selectedRunId]);
+  }, [selectedRunFetchDurableRunId, selectedRunFetchRunId]);
 
   const selectedItem = useMemo(
     () => data?.memoryItems.find((item) => item.itemId === selectedItemId) ?? null,
