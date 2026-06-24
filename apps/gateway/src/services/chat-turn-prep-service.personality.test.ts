@@ -920,6 +920,184 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(harness.host.ingestEvent).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(vi.mocked(harness.host.ingestEvent).mock.calls[0]?.[1])).not.toContain("parent-1");
   });
+
+  it("falls back to the template draft when the planner completion never settles within the bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHost("cowork");
+      // Simulate a provider that ignores the request timeoutMs and never resolves.
+      // The hardened planner must bound the wait with its own timer and fall back,
+      // rather than block the critical path indefinitely.
+      let rejectPlanner: ((reason: Error) => void) | undefined;
+      const neverSettles = new Promise<never>((_resolve, reject) => {
+        rejectPlanner = reject;
+      });
+      // Attach a catch so that, if the production code does NOT keep its own
+      // reference and the promise later rejects, this test harness still does not
+      // emit an unhandledRejection (the assertion below proves production safety).
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandled);
+      vi.mocked(harness.host.createChatCompletion).mockReturnValue(neverSettles as never);
+
+      const templatePlan = createPlan({
+        steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+      });
+      const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
+      const routerInput = { task: { mode: "cowork" } };
+
+      const draftPromise = generatePreparedExecutionPlanDraft(
+        harness.host,
+        prepared as never,
+        routerInput as never,
+        templatePlan as never,
+        false,
+      );
+      // Advance past the planner bound so the own-timer wins the race.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const draft = await draftPromise;
+
+      expect(harness.host.createChatCompletion).toHaveBeenCalledTimes(1);
+      expect(draft.source).toBe("template");
+      expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
+
+      // The in-flight planner rejecting AFTER the timeout must not surface as an
+      // unhandled rejection. Settle it and flush microtasks to prove capture.
+      rejectPlanner?.(new Error("late planner failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      process.off("unhandledRejection", onUnhandled);
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts the in-flight planner completion when the bound elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHost("cowork");
+      let capturedSignal: AbortSignal | undefined;
+      const neverSettles = new Promise<never>(() => {
+        /* never settles */
+      });
+      vi.mocked(harness.host.createChatCompletion).mockImplementation((request: { signal?: AbortSignal }) => {
+        capturedSignal = request.signal;
+        return neverSettles as never;
+      });
+      const templatePlan = createPlan({
+        steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+      });
+      const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
+
+      const draftPromise = generatePreparedExecutionPlanDraft(
+        harness.host,
+        prepared as never,
+        { task: { mode: "cowork" } } as never,
+        templatePlan as never,
+        false,
+      );
+      expect(capturedSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await draftPromise;
+      expect(capturedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the planner draft when it resolves within the bound and invokes the planner exactly once", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHost("cowork");
+      vi.mocked(harness.host.createChatCompletion).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve({
+                  model: "gpt-5.4-mini",
+                  choices: [
+                    {
+                      index: 0,
+                      message: {
+                        role: "assistant",
+                        content: JSON.stringify({
+                          summary: "Planner refined the workflow.",
+                          steps: [
+                            {
+                              objective: "Find the release notes.",
+                              successCriteria: "Return source-linked evidence.",
+                              suggestedTools: ["browser.search"],
+                              expectedOutput: "Release evidence handoff",
+                              parallelizable: true,
+                              dependsOnStepIds: [],
+                            },
+                          ],
+                        }),
+                      },
+                      finish_reason: "stop",
+                    },
+                  ],
+                } as never),
+              50,
+            );
+          }),
+      );
+      const templatePlan = createPlan({
+        steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+      });
+      const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
+
+      const draftPromise = generatePreparedExecutionPlanDraft(
+        harness.host,
+        prepared as never,
+        { task: { mode: "cowork" } } as never,
+        templatePlan as never,
+        false,
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      const draft = await draftPromise;
+
+      expect(harness.host.createChatCompletion).toHaveBeenCalledTimes(1);
+      expect(draft).toEqual(
+        expect.objectContaining({
+          source: "planner",
+          summary: "Planner refined the workflow.",
+          steps: [expect.objectContaining({ stepId: "research", objective: "Find the release notes." })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never starts the planner completion for fast-mode turns", async () => {
+    const harness = createHost("cowork");
+    const templatePlan = createPlan({
+      steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+    });
+    const prepared = {
+      content: "Research release notes",
+      prefs: createPrefs("cowork"),
+      normalized: { mode: "cowork", speedMode: "fast" },
+    };
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      harness.host,
+      prepared as never,
+      { task: { mode: "cowork" } } as never,
+      templatePlan as never,
+      false,
+    );
+
+    expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
+    expect(draft.source).toBe("template");
+    expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
+  });
 });
 
 function createPreparedTurnForOrchestration(overrides: {
@@ -943,6 +1121,7 @@ function createPlan(overrides: { steps: ReturnType<typeof createStep>[] }) {
   return {
     workflowTemplate: "cowork.plan.work.synthesize",
     summary: "Plan summary",
+    source: "template",
     routeDecision: {
       modePolicy: "cowork",
       workflowTemplate: "cowork.plan.work.synthesize",
