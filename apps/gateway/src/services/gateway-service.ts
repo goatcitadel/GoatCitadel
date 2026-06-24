@@ -622,6 +622,7 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { hashSensitiveToken } from "./device-access-helpers.js";
+import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
@@ -865,6 +866,7 @@ export class GatewayService {
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
   private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
   public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
+  public readonly deviceTokenVault = new DeviceTokenVault();
   private lastChatStreamPurgeAt = 0;
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   public readonly onboardingMarkerPath: string;

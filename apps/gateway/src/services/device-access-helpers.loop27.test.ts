@@ -83,31 +83,38 @@ describe("device access helper branch coverage", () => {
       message: "Waiting for approval from another authenticated Mission Control session.",
     });
 
+    // SECURITY: the mapper never reads the plaintext token from the persisted
+    // record (it is no longer stored at rest). A token is only emitted when the
+    // status handler injects a single-use delivery from the in-memory vault.
+    expect(
+      mapDeviceAccessStatusResponse(
+        {
+          ...request,
+          status: "approved",
+          resolvedAt: "2026-05-15T01:02:00.000Z",
+        },
+        { deviceToken: "handoff-token" },
+      ),
+    ).toMatchObject({
+      status: "approved",
+      deviceToken: "handoff-token",
+      // Falls back to the record's non-secret expiry when the delivery omits it.
+      deviceTokenExpiresAt: "2026-06-15T01:00:00.000Z",
+      message: "Access approved. Finishing secure handoff to this device.",
+    });
+    // Even when the record still carries a stale plaintext, no delivery arg ⇒ no token.
     expect(
       mapDeviceAccessStatusResponse({
         ...request,
         status: "approved",
         resolvedAt: "2026-05-15T01:02:00.000Z",
       }),
-    ).toMatchObject({
-      status: "approved",
-      deviceToken: "token",
-      deviceTokenExpiresAt: "2026-06-15T01:00:00.000Z",
-      message: "Access approved. Finishing secure handoff to this device.",
-    });
-    expect(
-      mapDeviceAccessStatusResponse({
-        ...request,
-        status: "approved",
-        approvedTokenPlaintext: undefined,
-        approvedTokenExpiresAt: undefined,
-      }),
     ).toEqual({
       requestId: "request-1",
       approvalId: "approval-1",
       status: "approved",
       expiresAt: "2026-05-15T01:10:00.000Z",
-      resolvedAt: undefined,
+      resolvedAt: "2026-05-15T01:02:00.000Z",
       message: "Access approved. Finishing secure handoff to this device.",
     });
     expect(mapDeviceAccessStatusResponse({ ...request, status: "rejected" }).message).toContain("rejected");

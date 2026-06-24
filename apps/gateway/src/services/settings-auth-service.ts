@@ -110,6 +110,7 @@ import {
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
+import type { DeviceTokenVault } from "./device-token-vault.js";
 
 export interface SettingsRuntimeDependencies {
   readonly config: GatewayRuntimeConfig;
@@ -139,6 +140,12 @@ export interface SettingsAuthRuntimeDependencies {
   readonly config: GatewayRuntimeConfig;
   readonly gatewaySql: Storage["gatewaySql"];
   readonly storage: Pick<Storage, "audit" | "runImmediateTransaction" | "approvals" | "approvalEvents">;
+  /**
+   * In-memory, single-use store for approved device-access tokens. The
+   * plaintext token is NEVER persisted at rest; it lives here between approval
+   * and the device's first status poll.
+   */
+  readonly deviceTokenVault: DeviceTokenVault;
   createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   enqueueApprovalResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[];
@@ -805,7 +812,7 @@ export async function resolveDeviceAccessApproval(
             resolved_at = @resolvedAt,
             resolved_by = @resolvedBy,
             resolution_note = @resolutionNote,
-            approved_token_plaintext = @approvedTokenPlaintext,
+            approved_token_plaintext = NULL,
             approved_token_expires_at = @approvedTokenExpiresAt
         WHERE request_id = @requestId
           AND status = 'pending'
@@ -817,7 +824,12 @@ export async function resolveDeviceAccessApproval(
         resolvedAt,
         resolvedBy: input.resolvedBy,
         resolutionNote: input.resolutionNote ?? null,
-        approvedTokenPlaintext: deviceToken ?? null,
+        // SECURITY: the operator-equivalent device token is NEVER written to
+        // disk. The hashed token lives in auth_device_grants (above); the
+        // plaintext is stashed in the in-memory vault for single-use handoff on
+        // the device's next status poll. We keep approved_token_expires_at as
+        // non-secret metadata for the status response/UI, and keep the
+        // approved_token_plaintext column (always NULL now) for schema compat.
         approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
       });
 
@@ -832,6 +844,12 @@ export async function resolveDeviceAccessApproval(
       },
     });
   });
+
+  // Stash the plaintext only AFTER the approval transaction commits, so a rolled
+  // back approval can never leave a deliverable token in the in-memory vault.
+  if (deviceToken) {
+    deps.deviceTokenVault.store(request.requestId, deviceToken, deviceTokenExpiresAt);
+  }
 
   deps.enqueueApprovalResolutionEffects(approval!, input);
   await recordApprovalResolution(deps, approval!, input);
@@ -1177,11 +1195,24 @@ export async function getDeviceAccessRequestStatus(
         deliveredAt,
       });
     if (result.changes === 0) {
+      // A concurrent poll already won the single-use delivery. This caller must
+      // not receive the token; drop any vault entry defensively and report the
+      // approved-but-awaiting-handoff status.
+      deps.deviceTokenVault.delete(current.requestId);
       const refreshed = getAuthDeviceRequestById(deps, requestId);
       if (refreshed) {
         return mapDeviceAccessStatusResponse(refreshed);
       }
+      return mapDeviceAccessStatusResponse(current);
     }
+    // This poll won the delivery race: hand off the plaintext from the in-memory
+    // vault exactly once. If the entry is gone (gateway restarted) or expired,
+    // the device simply keeps waiting / re-requests — no token, no rejection.
+    const claimed = deps.deviceTokenVault.claim(current.requestId);
+    return mapDeviceAccessStatusResponse(
+      current,
+      claimed ? { deviceToken: claimed.token, deviceTokenExpiresAt: claimed.deviceTokenExpiresAt } : undefined,
+    );
   }
 
   return mapDeviceAccessStatusResponse(current);
