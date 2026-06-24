@@ -904,4 +904,81 @@ describe("useMemoryOperatorSnapshot", () => {
     historyFailure.reject(new Error("late history failed"));
     await flush();
   });
+
+  it("does not refetch selected-run detail when a poll returns a contents-equal runs array", async () => {
+    // reload() (refresh-bus signal / 15s poll) rebuilds `maintenanceRuns` as a brand-new
+    // array even when its contents are unchanged. The detail effect must key on the
+    // selected run's stable ids, not the array reference, so an unchanged run on a poll
+    // does NOT re-issue the provenance/durable-run/timeline fetches -- while a genuinely
+    // different selected run still does.
+    const buildRuns = () => ({
+      items: [
+        {
+          runId: "run-1",
+          durableRunId: "durable-1",
+          workspaceId: "default",
+          triggerSource: "manual" as const,
+          status: "completed" as const,
+          policySnapshot: {},
+          sourceSessionCount: 1,
+          changedArtifactCount: 1,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:10:00.000Z",
+        },
+        {
+          runId: "run-2",
+          durableRunId: "durable-2",
+          workspaceId: "default",
+          triggerSource: "manual" as const,
+          status: "completed" as const,
+          policySnapshot: {},
+          sourceSessionCount: 2,
+          changedArtifactCount: 2,
+          createdAt: "2026-04-22T00:01:00.000Z",
+          updatedAt: "2026-04-22T00:11:00.000Z",
+        },
+      ],
+    });
+    // A fresh array (new references) with identical contents on every call -- exactly
+    // what the real reload path produces.
+    apiMocks.fetchMemoryMaintenanceRuns.mockImplementation(async () => buildRuns());
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    // Initial selection is the first run; the detail effect fired exactly once.
+    expect(latest?.selectedRun?.runId).toBe("run-1");
+    expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenLastCalledWith("run-1");
+    expect(apiMocks.fetchDurableRun).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchDurableRun).toHaveBeenLastCalledWith("durable-1");
+    expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledTimes(1);
+
+    // Poll: reload() rebuilds maintenanceRuns as a NEW array with equal contents and the
+    // same selected run. The detail effect must NOT re-fire (RED before the id-keying fix:
+    // the array-reference dependency re-issued all three fetches here).
+    await act(async () => {
+      await latest?.reload();
+    });
+    await flush();
+
+    expect(latest?.selectedRun?.runId).toBe("run-1");
+    expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchDurableRun).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledTimes(1);
+
+    // A genuinely different selected run must still trigger a fresh detail fetch.
+    await act(async () => {
+      latest?.setSelectedRunId("run-2");
+    });
+    await flush();
+
+    expect(latest?.selectedRun?.runId).toBe("run-2");
+    expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenLastCalledWith("run-2");
+    expect(apiMocks.fetchDurableRun).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchDurableRun).toHaveBeenLastCalledWith("durable-2");
+    expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledTimes(2);
+  });
 });
