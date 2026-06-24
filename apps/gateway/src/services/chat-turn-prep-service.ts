@@ -72,7 +72,11 @@ import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 
-const CHAT_PLANNER_COMPLETION_TIMEOUT_MS = 2500;
+// Bound for the planner LLM call — the only blocking completion on the
+// non-fast turn-prep critical path. Lowered from 2500ms: on timeout we fall
+// back to the deterministic template draft (see generatePreparedExecutionPlanDraft),
+// so a tighter bound trims worst-case latency without changing behavior.
+const CHAT_PLANNER_COMPLETION_TIMEOUT_MS = 1500;
 
 export interface ChatTurnRoute {
   channel: string;
@@ -927,59 +931,81 @@ export async function generatePreparedExecutionPlanDraft(
   if ((prepared.normalized?.speedMode ?? prepared.prefs.speedMode) === "fast") {
     return fallbackDraft;
   }
+  // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
+  // a provider that ignores its deadline cannot pin the hot turn-prep path. On
+  // timeout we abort the in-flight call (no leaked request) and fall back to the
+  // deterministic template draft. Invariants: createChatCompletion runs exactly
+  // once; the planner promise gets a rejection handler up-front so a late
+  // rejection (e.g. from the abort, after the fallback returned) is captured and
+  // never surfaces as an unhandledRejection; when the completion wins the race
+  // the payload is parsed/coerced exactly as before, so output is byte-identical.
+  const abortController = new AbortController();
+  const plannerCompletion = host.createChatCompletion({
+    providerId: prepared.prefs.providerId,
+    model: prepared.prefs.model,
+    stream: false,
+    timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
+    signal: abortController.signal,
+    memory: { enabled: false, mode: "off" },
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are GoatCitadel's execution planner.",
+          "Return strict JSON with keys: summary, steps.",
+          `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
+          "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
+          "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
+          "If the mode is chat, delegatedRole must be null for all steps.",
+          "Keep step objectives specific, practical, and directly tied to the user request.",
+          "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          mode: routerInput.task.mode,
+          planningMode: prepared.prefs.planningMode,
+          objective: prepared.content,
+          workflowTemplate: templatePlan.workflowTemplate,
+          routeDecision: templatePlan.routeDecision,
+          allowedRoles: [...new Set(templatePlan.steps.map((step) => step.role))],
+          templateSteps: templatePlan.steps.map((step) => ({
+            stepId: step.stepId,
+            role: step.role,
+            label: step.label,
+            objective: step.objective,
+            successCriteria: step.successCriteria,
+            suggestedTools: step.suggestedTools,
+            expectedOutput: step.expectedOutput,
+            parallelizable: step.parallelizable,
+            dependsOnStepIds: step.dependsOnStepIds,
+            delegatedRole: step.delegatedRole ?? null,
+          })),
+        }),
+      },
+    ],
+  });
+  // Neutralize unhandled rejections up-front: if the timer wins the race and we
+  // return the fallback, the in-flight planner promise may still reject later
+  // (e.g. from the abort). This detached handler captures that, the race below
+  // re-reads the same promise for the in-time path.
+  plannerCompletion.catch(() => undefined);
+
+  const timeoutSentinel = Symbol("chat-planner-timeout");
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutGuard = new Promise<typeof timeoutSentinel>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve(timeoutSentinel), CHAT_PLANNER_COMPLETION_TIMEOUT_MS);
+  });
+
   try {
-    const completion = await host.createChatCompletion({
-      providerId: prepared.prefs.providerId,
-      model: prepared.prefs.model,
-      stream: false,
-      timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
-      memory: {
-        enabled: false,
-        mode: "off",
-      },
-      response_format: {
-        type: "json_object",
-      },
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are GoatCitadel's execution planner.",
-            "Return strict JSON with keys: summary, steps.",
-            `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
-            "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
-            "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
-            "If the mode is chat, delegatedRole must be null for all steps.",
-            "Keep step objectives specific, practical, and directly tied to the user request.",
-            "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
-          ].join("\n"),
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            mode: routerInput.task.mode,
-            planningMode: prepared.prefs.planningMode,
-            objective: prepared.content,
-            workflowTemplate: templatePlan.workflowTemplate,
-            routeDecision: templatePlan.routeDecision,
-            allowedRoles: [...new Set(templatePlan.steps.map((step) => step.role))],
-            templateSteps: templatePlan.steps.map((step) => ({
-              stepId: step.stepId,
-              role: step.role,
-              label: step.label,
-              objective: step.objective,
-              successCriteria: step.successCriteria,
-              suggestedTools: step.suggestedTools,
-              expectedOutput: step.expectedOutput,
-              parallelizable: step.parallelizable,
-              dependsOnStepIds: step.dependsOnStepIds,
-              delegatedRole: step.delegatedRole ?? null,
-            })),
-          }),
-        },
-      ],
-    });
-    const payload = parseLooseJsonRecord(extractCompletionText(completion));
+    const outcome = await Promise.race([plannerCompletion, timeoutGuard]);
+    if (outcome === timeoutSentinel) {
+      abortController.abort(); // bound elapsed: cancel the in-flight call, fall back
+      return fallbackDraft;
+    }
+    const payload = parseLooseJsonRecord(extractCompletionText(outcome));
     const planned = payload
       ? coercePlannerExecutionPlanDraft(payload, templatePlan, {
           advisoryOnly,
@@ -987,12 +1013,12 @@ export async function generatePreparedExecutionPlanDraft(
           objective: prepared.content,
         })
       : undefined;
-    if (!planned) {
-      return fallbackDraft;
-    }
-    return planned;
+    return planned ?? fallbackDraft;
   } catch {
+    // Planner rejected before the timeout (the race surfaced its rejection).
     return fallbackDraft;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 }
 
