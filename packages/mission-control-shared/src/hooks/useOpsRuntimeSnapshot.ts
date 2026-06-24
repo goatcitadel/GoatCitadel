@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchCostSummary,
   fetchDaemonStatus,
@@ -298,18 +298,32 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
     [reload],
   );
 
-  return {
-    loading,
-    error,
-    notice,
-    daemonBusy,
-    data,
-    lastFetchedAt,
-    isStale,
-    reload,
-    runDaemonAction,
-    clearNotice: () => setNotice(null),
-  };
+  const clearNotice = useCallback(() => setNotice(null), []);
+
+  // Stabilize the returned object so its reference only changes when one of its
+  // constituent values changes. The consumer (RuntimeRoutePage's ~1000-line
+  // `content` useMemo) depends on the whole snapshot object; without this memo a
+  // fresh object literal every render would defeat that memoization and force a
+  // recompute on essentially every render. Every constituent is already stable per
+  // render: `notice` is a setState value, `loading`/`error`/`daemonBusy`/
+  // `lastFetchedAt`/`isStale`/`data` are primitives or setState-managed references,
+  // and `reload`/`runDaemonAction`/`clearNotice` are useCallback-memoized — so this
+  // never drops a real update.
+  return useMemo(
+    () => ({
+      loading,
+      error,
+      notice,
+      daemonBusy,
+      data,
+      lastFetchedAt,
+      isStale,
+      reload,
+      runDaemonAction,
+      clearNotice,
+    }),
+    [loading, error, notice, daemonBusy, data, lastFetchedAt, isStale, reload, runDaemonAction, clearNotice],
+  );
 }
 
 type RuntimeSourceResult<T> = { ok: true; data: T } | { ok: false; message: string };

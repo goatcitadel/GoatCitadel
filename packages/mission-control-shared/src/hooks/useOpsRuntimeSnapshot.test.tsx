@@ -405,6 +405,51 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
   });
 
+  it("returns a stable snapshot reference across re-renders when nothing changed", async () => {
+    // The consumer (RuntimeRoutePage's ~1000-line `content` useMemo) depends on the
+    // whole snapshot object. If the hook returned a fresh object literal every render,
+    // that memo would recompute on every render. Assert the reference is preserved when
+    // the hook re-runs with no underlying state change.
+    let renderCount = 0;
+    const references: HookValue[] = [];
+
+    function CountingHarness({ onValue }: { onValue: (value: HookValue) => void }) {
+      const value = useOpsRuntimeSnapshot();
+      renderCount += 1;
+      references.push(value);
+      onValue(value);
+      return null;
+    }
+
+    const collect = (value: HookValue) => {
+      latest = value;
+    };
+
+    await act(async () => {
+      renderer = create(<CountingHarness onValue={collect} />);
+    });
+    await flush();
+
+    const settledReference = latest;
+    const renderCountAfterLoad = renderCount;
+    expect(settledReference).not.toBeNull();
+
+    // Re-render the same element tree. The hook re-runs but no setState fired, so
+    // every internal state value is unchanged. react-test-renderer's update() forces
+    // the function component (and therefore the hook) to execute again.
+    await act(async () => {
+      renderer?.update(<CountingHarness onValue={collect} />);
+    });
+    await flush();
+
+    // The hook must have re-executed (a fresh render happened)...
+    expect(renderCount).toBeGreaterThan(renderCountAfterLoad);
+    // ...but the snapshot object reference must be identical (memoized at the source).
+    // Without source-stabilization the hook returns a fresh object literal here and this fails.
+    expect(latest).toBe(settledReference);
+    expect(references.at(-1)).toBe(settledReference);
+  });
+
   it("surfaces daemon warnings, clears notices, and reports non-error action failures", async () => {
     apiMocks.startDaemon.mockResolvedValueOnce({
       accepted: false,
