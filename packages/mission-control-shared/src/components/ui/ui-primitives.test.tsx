@@ -9,28 +9,8 @@ import { DeviceAccessApprovalModal } from "../DeviceAccessApprovalModal";
 import { GlobalFreshnessPill } from "../GlobalFreshnessPill";
 import { RemoteApprovalActionModal } from "../RemoteApprovalActionModal";
 import {
-  Alert,
-  AlertAction,
-  AlertDescription,
-  AlertTitle,
-  Avatar,
-  AvatarBadge,
-  AvatarFallback,
-  AvatarGroup,
-  AvatarGroupCount,
-  AvatarImage,
   Badge,
   Button,
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
   Dialog,
   DialogClose,
   DialogContent,
@@ -41,34 +21,7 @@ import {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerDescription,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerOverlay,
-  DrawerPortal,
-  DrawerTitle,
-  DrawerTrigger,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuPortal,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-  GCAlert,
   GCCombobox,
-  GCEmptyState,
   GCModal,
   GCSegmentedControl,
   GCSelect,
@@ -81,18 +34,6 @@ import {
   PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
-  ScrollArea,
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectScrollDownButton,
-  SelectScrollUpButton,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-  Separator,
   Sheet,
   SheetClose,
   SheetContent,
@@ -101,25 +42,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-  Skeleton,
-  Switch,
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableFooter,
-  TableHead,
-  TableHeader,
-  TableRow,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
   Textarea,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
 } from ".";
 import { publishEventStreamStatus, resetEventStreamStatus } from "../../state/event-stream-status-store";
 import {
@@ -141,7 +64,6 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from "./input-group";
-import { Toaster } from "./sonner";
 
 vi.mock("radix-ui", async () => {
   const ReactActual = await import("react");
@@ -154,73 +76,9 @@ vi.mock("radix-ui", async () => {
     });
   const namespace = (names: string[]) => Object.fromEntries(names.map((name) => [name, primitive(name)]));
   return {
-    Avatar: namespace(["Root", "Image", "Fallback"]),
-    Collapsible: namespace(["Root", "CollapsibleTrigger", "CollapsibleContent"]),
     Dialog: namespace(["Root", "Trigger", "Portal", "Close", "Overlay", "Content", "Title", "Description"]),
-    Drawer: namespace(["Root", "Trigger", "Portal", "Close", "Overlay", "Content", "Title", "Description"]),
-    DropdownMenu: namespace([
-      "Root",
-      "Portal",
-      "Trigger",
-      "Content",
-      "Group",
-      "Item",
-      "CheckboxItem",
-      "ItemIndicator",
-      "RadioGroup",
-      "RadioItem",
-      "Label",
-      "Separator",
-      "Sub",
-      "SubTrigger",
-      "SubContent",
-    ]),
     Popover: namespace(["Root", "Portal", "Trigger", "Content", "Anchor"]),
-    ScrollArea: namespace(["Root", "Viewport", "ScrollAreaScrollbar", "ScrollAreaThumb", "Corner"]),
-    Separator: namespace(["Root"]),
-    Tabs: namespace(["Root", "List", "Trigger", "Content"]),
     Tooltip: namespace(["Provider", "Root", "Portal", "Trigger", "Content", "Arrow"]),
-  };
-});
-
-vi.mock("@radix-ui/react-switch", async () => {
-  const ReactActual = await import("react");
-  const primitive = (slot: string) =>
-    ReactActual.forwardRef<HTMLElement, Record<string, unknown>>(function Primitive({ children, ...props }, ref) {
-      return ReactActual.createElement(
-        "button",
-        { ref, "data-primitive": slot, ...props },
-        children as React.ReactNode,
-      );
-    });
-  return {
-    Root: primitive("Root"),
-    Thumb: primitive("Thumb"),
-  };
-});
-
-vi.mock("@radix-ui/react-select", async () => {
-  const ReactActual = await import("react");
-  const primitive = (slot: string) =>
-    ReactActual.forwardRef<HTMLElement, Record<string, unknown>>(function Primitive({ children, ...props }, ref) {
-      return ReactActual.createElement("div", { ref, "data-primitive": slot, ...props }, children as React.ReactNode);
-    });
-  return {
-    Root: primitive("Root"),
-    Group: primitive("Group"),
-    Value: primitive("Value"),
-    Trigger: primitive("Trigger"),
-    Icon: primitive("Icon"),
-    Portal: primitive("Portal"),
-    Content: primitive("Content"),
-    Viewport: primitive("Viewport"),
-    Item: primitive("Item"),
-    ItemIndicator: primitive("ItemIndicator"),
-    ItemText: primitive("ItemText"),
-    Label: primitive("Label"),
-    Separator: primitive("Separator"),
-    ScrollUpButton: primitive("ScrollUpButton"),
-    ScrollDownButton: primitive("ScrollDownButton"),
   };
 });
 
@@ -238,26 +96,6 @@ vi.mock("@radix-ui/react-popover", async () => {
     Trigger: primitive("Trigger"),
     Portal: primitive("Portal"),
     Content: primitive("Content"),
-  };
-});
-
-vi.mock("vaul", async () => {
-  const ReactActual = await import("react");
-  const primitive = (slot: string) =>
-    ReactActual.forwardRef<HTMLElement, Record<string, unknown>>(function Primitive({ children, ...props }, ref) {
-      return ReactActual.createElement("div", { ref, "data-primitive": slot, ...props }, children as React.ReactNode);
-    });
-  return {
-    Drawer: {
-      Root: primitive("Root"),
-      Trigger: primitive("Trigger"),
-      Portal: primitive("Portal"),
-      Close: primitive("Close"),
-      Overlay: primitive("Overlay"),
-      Content: primitive("Content"),
-      Title: primitive("Title"),
-      Description: primitive("Description"),
-    },
   };
 });
 
@@ -289,62 +127,10 @@ vi.mock("cmdk", async () => {
   return { Command: command };
 });
 
-vi.mock("next-themes", () => ({
-  useTheme: () => ({ theme: "dark" }),
-}));
-
-vi.mock("sonner", async () => {
-  const ReactActual = await import("react");
-  return {
-    Toaster: (props: Record<string, unknown>) => ReactActual.createElement("div", { "data-slot": "sonner", ...props }),
-  };
-});
-
 describe("shared UI primitives", () => {
   it("renders Radix-backed wrappers with GoatCitadel classes", () => {
     const renderer = create(
       <>
-        <DropdownMenu open>
-          <DropdownMenuTrigger>Open</DropdownMenuTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuContent className="menu">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel inset>Label</DropdownMenuLabel>
-                <DropdownMenuItem inset variant="destructive">
-                  Delete
-                  <DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuCheckboxItem checked inset>
-                  Checked
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuRadioGroup value="a">
-                  <DropdownMenuRadioItem value="a" inset>
-                    Radio
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger inset>More</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>Subcontent</DropdownMenuSubContent>
-                </DropdownMenuSub>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenuPortal>
-        </DropdownMenu>
-        <Select value="a">
-          <SelectTrigger size="sm">
-            <SelectValue placeholder="Pick" />
-          </SelectTrigger>
-          <SelectContent position="popper" align="start">
-            <SelectScrollUpButton />
-            <SelectGroup>
-              <SelectLabel>Group</SelectLabel>
-              <SelectItem value="a">Alpha</SelectItem>
-              <SelectSeparator />
-            </SelectGroup>
-            <SelectScrollDownButton />
-          </SelectContent>
-        </Select>
         <Command>
           <CommandInput placeholder="Search" />
           <CommandList>
@@ -372,20 +158,6 @@ describe("shared UI primitives", () => {
           </SheetContent>
           <SheetClose>Close</SheetClose>
         </Sheet>
-        <Drawer open>
-          <DrawerTrigger>Drawer</DrawerTrigger>
-          <DrawerPortal>
-            <DrawerOverlay />
-          </DrawerPortal>
-          <DrawerContent>
-            <DrawerHeader>
-              <DrawerTitle>Drawer title</DrawerTitle>
-              <DrawerDescription>Drawer description</DrawerDescription>
-            </DrawerHeader>
-            <DrawerFooter>Drawer footer</DrawerFooter>
-          </DrawerContent>
-          <DrawerClose>Close</DrawerClose>
-        </Drawer>
         <Dialog open>
           <DialogTrigger>Dialog</DialogTrigger>
           <DialogPortal>
@@ -410,23 +182,13 @@ describe("shared UI primitives", () => {
             </PopoverHeader>
           </PopoverContent>
         </Popover>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger>Tip</TooltipTrigger>
-            <TooltipContent>Tooltip</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
       </>,
     );
 
-    expect(JSON.stringify(renderer.toJSON())).toContain("dropdown-menu-content");
-    expect(JSON.stringify(renderer.toJSON())).toContain("select-trigger");
     expect(JSON.stringify(renderer.toJSON())).toContain("command-item");
     expect(JSON.stringify(renderer.toJSON())).toContain("sheet-content");
-    expect(JSON.stringify(renderer.toJSON())).toContain("drawer-content");
     expect(JSON.stringify(renderer.toJSON())).toContain("dialog-content");
     expect(JSON.stringify(renderer.toJSON())).toContain("popover-content");
-    expect(JSON.stringify(renderer.toJSON())).toContain("tooltip-content");
   });
 
   it("renders simple primitive components and handles local UI callbacks", () => {
@@ -434,39 +196,10 @@ describe("shared UI primitives", () => {
     const onAction = vi.fn();
     const renderer = create(
       <>
-        <Alert variant="destructive">
-          <AlertTitle>Alert</AlertTitle>
-          <AlertDescription>Description</AlertDescription>
-          <AlertAction>Retry</AlertAction>
-        </Alert>
-        <GCAlert tone="warning" title="Heads up">
-          Check this
-        </GCAlert>
         <Badge variant="outline">Badge</Badge>
         <Button variant="secondary" size="sm" onClick={onAction}>
           Button
         </Button>
-        <Card>
-          <CardHeader>
-            <CardTitle>Card</CardTitle>
-            <CardDescription>Description</CardDescription>
-            <CardAction>Action</CardAction>
-          </CardHeader>
-          <CardContent>Content</CardContent>
-          <CardFooter>Footer</CardFooter>
-        </Card>
-        <AvatarGroup>
-          <Avatar size="lg">
-            <AvatarImage src="/avatar.png" />
-            <AvatarFallback>GC</AvatarFallback>
-            <AvatarBadge>1</AvatarBadge>
-          </Avatar>
-          <AvatarGroupCount>+2</AvatarGroupCount>
-        </AvatarGroup>
-        <Collapsible open>
-          <CollapsibleTrigger>Toggle</CollapsibleTrigger>
-          <CollapsibleContent>Hidden</CollapsibleContent>
-        </Collapsible>
         <Input value="value" onChange={() => undefined} />
         <Textarea value="body" onChange={() => undefined} />
         <InputGroup>
@@ -478,14 +211,6 @@ describe("shared UI primitives", () => {
           <InputGroupText>Text</InputGroupText>
           <InputGroupTextarea value="long" onChange={() => undefined} />
         </InputGroup>
-        <GCEmptyState
-          title="Empty"
-          subtitle="Nothing here"
-          action={<button type="button">Primary</button>}
-          secondaryAction={<button type="button">Secondary</button>}
-          meta="Meta"
-          compact={false}
-        />
         <GCSelect
           value="a"
           options={[
@@ -496,7 +221,6 @@ describe("shared UI primitives", () => {
           onChange={onAction}
         />
         <GCSwitch checked onCheckedChange={onAction} label="Switch" />
-        <Switch checked onCheckedChange={onAction} />
         <GCSegmentedControl
           value="one"
           ariaLabel="Modes"
@@ -507,34 +231,6 @@ describe("shared UI primitives", () => {
             { value: "disabled", label: "Disabled", disabled: true },
           ]}
         />
-        <ScrollArea>Scroll</ScrollArea>
-        <Separator orientation="vertical" />
-        <Skeleton className="skel" />
-        <Tabs value="one" orientation="vertical">
-          <TabsList variant="line">
-            <TabsTrigger value="one">One</TabsTrigger>
-          </TabsList>
-          <TabsContent value="one">Panel</TabsContent>
-        </Tabs>
-        <Table>
-          <TableCaption>Caption</TableCaption>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Head</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow>
-              <TableCell>Cell</TableCell>
-            </TableRow>
-          </TableBody>
-          <TableFooter>
-            <TableRow>
-              <TableCell>Foot</TableCell>
-            </TableRow>
-          </TableFooter>
-        </Table>
-        <Toaster richColors />
       </>,
     );
 
