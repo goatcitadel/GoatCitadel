@@ -724,6 +724,27 @@
   padding: 0.36rem 0.42rem;
 }
 
+/* Opt-in windowed NativeList: Virtuoso owns the scroll container, so reuse the
+   scrollable list chrome here and restore the inter-item gap via per-item
+   spacing (Virtuoso manages item flow, so the grid `gap` cannot apply). */
+.mc-next-directory-list-virtuoso {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.18rem;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  scrollbar-gutter: stable;
+}
+
+.mc-next-directory-list-item-virtual {
+  margin-bottom: 0.35rem;
+}
+
+.mc-next-directory-list-item-virtual.is-compact {
+  gap: 0.14rem;
+  padding: 0.36rem 0.42rem;
+  margin-bottom: 0.24rem;
+}
+
 .mc-next-directory-list-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
