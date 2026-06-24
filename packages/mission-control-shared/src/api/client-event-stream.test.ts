@@ -79,6 +79,16 @@ async function flushAsync() {
   }
 }
 
+async function waitForEventSourceCount(count: number) {
+  for (let index = 0; index < 50; index += 1) {
+    await flushAsync();
+    if (FakeEventSource.instances.length === count) {
+      return;
+    }
+  }
+  expect(FakeEventSource.instances).toHaveLength(count);
+}
+
 describe("client event stream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -124,9 +134,8 @@ describe("client event stream", () => {
       (state) => states.push(state),
       (status) => statuses.push(status),
     );
-    await flushAsync();
 
-    expect(FakeEventSource.instances).toHaveLength(1);
+    await waitForEventSourceCount(1);
     const source = FakeEventSource.instances[0]!;
     const streamUrl = new URL(source.url);
     expect(streamUrl.pathname).toBe("/api/v1/events/stream");
@@ -176,8 +185,7 @@ describe("client event stream", () => {
     expect(states.slice(-2)).toEqual(["error", "retrying"]);
 
     await vi.advanceTimersByTimeAsync(1000);
-    await flushAsync();
-    expect(FakeEventSource.instances).toHaveLength(2);
+    await waitForEventSourceCount(2);
     expect(states.at(-1)).toBe("connecting");
     const stateCountAfterReconnect = states.length;
     const eventCountAfterReconnect = events.length;
@@ -205,7 +213,7 @@ describe("client event stream", () => {
     window.localStorage.setItem("goatcitadel.events.cursor.v1", "9");
 
     const cleanup = connectEventStream(() => undefined);
-    await flushAsync();
+    await waitForEventSourceCount(1);
 
     const streamUrl = new URL(FakeEventSource.instances[0]!.url);
     expect(streamUrl.searchParams.get("clientId")).toBe("client-existing");
@@ -222,7 +230,7 @@ describe("client event stream", () => {
       window.localStorage.setItem("goatcitadel.events.cursor.v1", invalidCursor);
 
       const cleanup = connectEventStream(() => undefined);
-      await flushAsync();
+      await waitForEventSourceCount(1);
 
       const streamUrl = new URL(FakeEventSource.instances[0]!.url);
       expect(streamUrl.searchParams.get("clientId")).toBe("client-existing");
@@ -234,7 +242,7 @@ describe("client event stream", () => {
     window.localStorage.removeItem("goatcitadel.events.cursor.v1");
     FakeEventSource.instances = [];
     const cleanup = connectEventStream(() => undefined);
-    await flushAsync();
+    await waitForEventSourceCount(1);
     const source = FakeEventSource.instances[0]!;
 
     source.onmessage?.({
@@ -266,10 +274,9 @@ describe("client event stream", () => {
     );
 
     const cleanup = connectEventStream(() => undefined);
-    await flushAsync();
+    await waitForEventSourceCount(1);
 
     expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
-    expect(FakeEventSource.instances).toHaveLength(1);
     expect(new URL(FakeEventSource.instances[0]!.url).searchParams.has("sse_token")).toBe(false);
 
     cleanup();
@@ -291,7 +298,7 @@ describe("client event stream", () => {
     );
 
     const cleanup = connectEventStream(() => undefined);
-    await flushAsync();
+    await waitForEventSourceCount(1);
 
     expect(new URL(FakeEventSource.instances[0]!.url).searchParams.get("sse_token")).toBe("sse-token");
     cleanup();
@@ -313,7 +320,7 @@ describe("client event stream", () => {
     );
 
     const cleanup = connectEventStream(() => undefined);
-    await flushAsync();
+    await waitForEventSourceCount(1);
 
     expect(new URL(FakeEventSource.instances[0]!.url).searchParams.get("sse_token")).toBe("token-only-sse");
     cleanup();
@@ -328,7 +335,7 @@ describe("client event stream", () => {
       undefined,
       (status) => statuses.push(status),
     );
-    await flushAsync();
+    await waitForEventSourceCount(1);
     const source = FakeEventSource.instances[0]!;
 
     source.emit("stream-ready", "{bad json");
@@ -347,7 +354,7 @@ describe("client event stream", () => {
     const events: Array<{ eventType?: string; payload?: unknown }> = [];
 
     const cleanup = connectEventStream((event) => events.push(event as { eventType?: string; payload?: unknown }));
-    await flushAsync();
+    await waitForEventSourceCount(1);
     const source = FakeEventSource.instances[0]!;
 
     // Valid frame without a `payload` field: must be forwarded with payload defaulted to {}.
