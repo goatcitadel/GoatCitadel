@@ -4003,6 +4003,19 @@
   gap: 0.38rem;
 }
 
+/* Virtualized lane scroller: bounds the column so react-virtuoso can window the
+   cards. The inner <ul> keeps the flex/gap list styling above. */
+.mc-next-kanban-column-scroller {
+  max-height: min(62vh, 38rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-next-kanban-column-scroller > div > ul {
+  gap: 0.38rem;
+}
+
 .mc-next-kanban-card {
   background: var(--mc-surface-2);
   border: 1px solid var(--border);
