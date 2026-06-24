@@ -649,6 +649,99 @@ describe("ChatProactiveService", () => {
     );
   });
 
+  it("fails closed to the scheduled-restricted profile when resolveToolPolicyContext is not wired", async () => {
+    // Safety invariant: a background/autonomous proactive turn must always invoke
+    // tools under a restricted permission profile. When the host does not wire the
+    // optional resolveToolPolicyContext callback, the proactive path must NOT fall
+    // back to an undefined permissionProfileId (which the gateway would resolve to
+    // whatever interactive profile is active for the session — potentially a bypass
+    // profile). It must pin the scheduled-restricted profile.
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    expect(harness.callbacks.resolveToolPolicyContext).toBeUndefined();
+    const planSpy = vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    );
+    planSpy.mockResolvedValue({
+      confidence: 0.8,
+      reasoningSummary: "Inspect current time on a background tick.",
+      actions: [{ kind: "tool", toolName: "time.now", args: { timezone: "UTC" } }],
+    });
+    invokeTool.mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowlisted",
+      auditEventId: "audit-restricted",
+      result: { ok: true },
+    } satisfies ToolInvokeResult);
+
+    // Non-manual source => background autonomous trigger => actor carries the
+    // scheduled-restricted profile in its resume metadata.
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "scheduler" });
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    const invokeArgs = invokeTool.mock.calls[0]![0] as {
+      permissionProfileId?: string;
+      policyContext?: { permissionProfileId?: string };
+    };
+    expect(invokeArgs.permissionProfileId).toBe(SCHEDULED_TURN_PERMISSION_PROFILE_ID);
+    expect(invokeArgs.policyContext).toBeDefined();
+    expect(invokeArgs.policyContext?.permissionProfileId).toBe(SCHEDULED_TURN_PERMISSION_PROFILE_ID);
+
+    const actions = actionsForRun(state, started.runId);
+    expect(actions.map((action) => action.status)).toEqual(["executed"]);
+  });
+
+  it("uses the resolved policy context unchanged when resolveToolPolicyContext IS wired", async () => {
+    // The wired path must be untouched by the fail-closed fallback: whatever the
+    // host's resolveToolPolicyContext returns is what invokeTool receives.
+    const resolveToolPolicyContext = vi.fn(
+      (input: Parameters<NonNullable<ChatProactiveServiceCallbacks["resolveToolPolicyContext"]>>[0]) => ({
+        ...input,
+        permissionProfileId: input.permissionProfileId ?? "wired-profile",
+        localOperatorOverrideId: "wired-override",
+      }),
+    );
+    const harness = createHarness({ callbacks: { resolveToolPolicyContext } });
+    const { service, state, invokeTool } = harness;
+    const planSpy = vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    );
+    planSpy.mockResolvedValue({
+      confidence: 0.8,
+      reasoningSummary: "Inspect current time on a manual tick.",
+      actions: [{ kind: "tool", toolName: "time.now", args: { timezone: "UTC" } }],
+    });
+    invokeTool.mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowlisted",
+      auditEventId: "audit-wired",
+      result: { ok: true },
+    } satisfies ToolInvokeResult);
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, {
+      source: "manual",
+      operatorId: "operator-1",
+      permissionProfileId: "explicit-profile",
+    });
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
+
+    expect(resolveToolPolicyContext).toHaveBeenCalledTimes(1);
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    const invokeArgs = invokeTool.mock.calls[0]![0] as {
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      policyContext?: { permissionProfileId?: string; localOperatorOverrideId?: string };
+    };
+    // Callback echoes back the explicit profile id; the fallback must not override it.
+    expect(invokeArgs.permissionProfileId).toBe("explicit-profile");
+    expect(invokeArgs.localOperatorOverrideId).toBe("wired-override");
+    expect(invokeArgs.policyContext?.permissionProfileId).toBe("explicit-profile");
+    expect(invokeArgs.policyContext?.localOperatorOverrideId).toBe("wired-override");
+  });
+
   it("completes suggest-mode durable ticks with suggested actions but no linked task", async () => {
     const harness = createHarness();
     const { service, state, publishRealtime } = harness;
