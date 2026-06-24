@@ -434,8 +434,6 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
         <NativeCard
           title="Event timeline"
           subtitle="Retained session events show grant changes and policy blocks without exposing browser state values."
-          scrollBody
-          bodyMaxHeight="min(58vh, 34rem)"
         >
           <NativeList
             density="compact"

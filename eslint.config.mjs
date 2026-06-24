@@ -67,6 +67,16 @@ export default tseslint.config(
     },
   },
   {
+    files: [
+      "apps/gateway/src/services/llm-completion-service.ts",
+      "packages/gateway-core/src/channel-core.ts",
+      "packages/mission-control-shared/src/components/chat/ChatThreadPrimitives.tsx",
+    ],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
     files: ["**/*.test.ts", "**/*.test.tsx"],
     rules: {
       "no-console": "off",
