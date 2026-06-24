@@ -388,6 +388,12 @@ export interface ImprovementServiceCallbacks {
  */
 export class ImprovementService {
   private scheduler?: ReturnType<typeof setInterval>;
+  // Cache of prepared statements keyed by the built SQL string. The hot read
+  // paths (listImprovementSignals / listImprovementCandidates) recompiled their
+  // statement on every call during improvement passes; each query has at most a
+  // couple of static variants (workspace-filtered vs unfiltered), so caching by
+  // SQL text compiles each variant exactly once while preserving query semantics.
+  private readonly preparedCache = new Map<string, ReturnType<ImprovementServiceContext["gatewaySql"]["prepare"]>>();
 
   constructor(
     private readonly ctx: ImprovementServiceContext,
@@ -395,6 +401,21 @@ export class ImprovementService {
   ) {
     this.ensureCapabilityGapTables();
     this.ensureImprovementLedgerTables();
+  }
+
+  /**
+   * Returns a cached prepared statement for {@link sql}, preparing it once on
+   * first use. Callers must pass a stable SQL string (no per-call interpolation
+   * of values — use bound `@params`) so the cache key space stays bounded.
+   */
+  private prepareCached(sql: string): ReturnType<ImprovementServiceContext["gatewaySql"]["prepare"]> {
+    const cached = this.preparedCache.get(sql);
+    if (cached) {
+      return cached;
+    }
+    const stmt = this.ctx.gatewaySql.prepare(sql);
+    this.preparedCache.set(sql, stmt);
+    return stmt;
   }
 
   // ── scheduler lifecycle ──────────────────────────────────────────
@@ -693,11 +714,11 @@ export class ImprovementService {
         `;
     const rows = toImprovementSignalRows(
       normalizedWorkspaceId
-        ? this.ctx.gatewaySql.prepare(sql).all({
+        ? this.prepareCached(sql).all({
             workspaceId: normalizedWorkspaceId,
             limit: Math.max(1, Math.min(limit, 500)),
           })
-        : this.ctx.gatewaySql.prepare(sql).all({
+        : this.prepareCached(sql).all({
             limit: Math.max(1, Math.min(limit, 500)),
           }),
     );
@@ -743,11 +764,11 @@ export class ImprovementService {
         `;
     const rows = toImprovementCandidateRows(
       normalizedWorkspaceId
-        ? this.ctx.gatewaySql.prepare(sql).all({
+        ? this.prepareCached(sql).all({
             workspaceId: normalizedWorkspaceId,
             limit: Math.max(1, Math.min(limit, 300)),
           })
-        : this.ctx.gatewaySql.prepare(sql).all({
+        : this.prepareCached(sql).all({
             limit: Math.max(1, Math.min(limit, 300)),
           }),
     );
