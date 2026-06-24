@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { test } from "node:test";
 import {
   extractMigrationNames,
@@ -24,6 +25,16 @@ test("extracts migration records with SQL hashes where available", () => {
   assert.equal(records[0]?.name, "one");
   assert.match(records[0]?.sha256 ?? "", /^[a-f0-9]{64}$/);
   assert.equal(records[1]?.sha256, null);
+});
+
+test("extracts migration record hashes after resolving frozen string constants", () => {
+  const records = extractMigrationRecords(`
+    const FROZEN_SQL = "SELECT 2;\\nSELECT 3;";
+    const migrations = [{ version: 1, name: "frozen", sql: \`\${FROZEN_SQL}\` }];
+  `);
+
+  const expectedHash = crypto.createHash("sha256").update("SELECT 2;\nSELECT 3;").digest("hex");
+  assert.equal(records[0]?.sha256, expectedHash);
 });
 
 test("requires parity-bearing migrations on both storage backends", () => {
@@ -69,6 +80,32 @@ test("requires Postgres runtime schema to stay generated from the SQLite bluepri
       export const postgresMigrations = [
         { version: 2, name: "canonical_runtime_schema", sql: buildPostgresRuntimeSchemaSql() },
         { version: 7, name: "canonical_runtime_schema_repairs", sql: \`${"${buildPostgresRuntimeSchemaSql()}"}\` },
+      ];
+    `,
+    runtimeSchemaSource: `
+      import { createSqliteSchemaBlueprint } from "../sqlite.js";
+      export function buildPostgresRuntimeSchemaSql() {
+        return buildPostgresRuntimeSchemaSqlFromBlueprint(createSqliteSchemaBlueprint());
+      }
+    `,
+    runtimeSchemaInternalSource: `
+      table.columns;
+      table.indexes;
+      table.foreignKeys;
+      table.seedRows;
+    `,
+  });
+
+  assert.deepEqual(errors, []);
+});
+
+test("allows frozen v7 runtime schema repairs after the historical SQL is embedded", () => {
+  const errors = findRuntimeSchemaSemanticGuardErrors({
+    postgresMigrationsSource: `
+      const POSTGRES_V7_FROZEN_SCHEMA_SQL = "CREATE TABLE sessions ();";
+      export const postgresMigrations = [
+        { version: 2, name: "canonical_runtime_schema", sql: buildPostgresRuntimeSchemaSql() },
+        { version: 7, name: "canonical_runtime_schema_repairs", sql: \`\${POSTGRES_V7_FROZEN_SCHEMA_SQL}\` },
       ];
     `,
     runtimeSchemaSource: `
