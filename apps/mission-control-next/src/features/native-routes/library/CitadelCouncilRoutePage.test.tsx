@@ -92,4 +92,22 @@ describe("CitadelCouncilRoutePage", () => {
     });
     expect(treeString(renderer!)).toContain("No agents seated yet");
   });
+
+  it("associates the council agent select with a visible label", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelCouncilRoutePage {...makeProps()} />);
+    });
+
+    const select = renderer!.root.findByType("select");
+    expect(select.props.id).toBeTruthy();
+
+    const label = renderer!.root.findAllByType("label").find((node) => node.props.htmlFor === select.props.id);
+    expect(label).toBeDefined();
+    expect(treeString(renderer!)).toContain("Council agent");
+
+    // The accessible name now comes from the associated <label>, so the select
+    // no longer needs (and should not carry a conflicting) aria-label.
+    expect(select.props["aria-label"]).toBeUndefined();
+  });
 });

@@ -31,9 +31,11 @@ import {
   type SettingsRuntimeDependencies,
 } from "./settings-auth-service.js";
 import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
+import { DeviceTokenVault } from "./device-token-vault.js";
 
 interface AuthHarness {
   deps: SettingsAuthRuntimeDependencies;
+  deviceTokenVault: DeviceTokenVault;
   rootDir: string;
   storage: Storage;
   auditRecords: Record<string, unknown>[];
@@ -227,6 +229,7 @@ function buildAuthHarness(): AuthHarness {
   });
   const auditRecords: Record<string, unknown>[] = [];
   const realtimeEvents: AuthHarness["realtimeEvents"] = [];
+  const deviceTokenVault = new DeviceTokenVault();
   const deps: SettingsAuthRuntimeDependencies = {
     config: {
       assistant: {
@@ -236,6 +239,7 @@ function buildAuthHarness(): AuthHarness {
       },
     } as never,
     gatewaySql: storage.gatewaySql,
+    deviceTokenVault,
     storage: {
       approvals: storage.approvals,
       approvalEvents: storage.approvalEvents,
@@ -266,9 +270,16 @@ function buildAuthHarness(): AuthHarness {
       realtimeEvents.push({ eventType, source, payload, options: options as Record<string, unknown> | undefined });
     }),
   };
-  const harness = { deps, rootDir, storage, auditRecords, realtimeEvents };
+  const harness = { deps, deviceTokenVault, rootDir, storage, auditRecords, realtimeEvents };
   authHarnesses.push(harness);
   return harness;
+}
+
+function readPersistedTokenPlaintext(harness: AuthHarness, requestId: string): string | null {
+  const row = harness.storage.gatewaySql
+    .prepare("SELECT approved_token_plaintext FROM auth_device_requests WHERE request_id = @requestId")
+    .get({ requestId }) as { approved_token_plaintext: string | null } | undefined;
+  return row?.approved_token_plaintext ?? null;
 }
 
 async function approveDeviceRequest(harness: AuthHarness, approvalId: string): Promise<string> {
@@ -1217,6 +1228,57 @@ describe("settings-auth-service device access lifecycle", () => {
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       });
     expect(getActiveAuthDeviceGrantById(grantHarness.deps, expiredGrant.grantId)).toBeUndefined();
+  });
+});
+
+describe("settings-auth-service device token is never at rest", () => {
+  it("never persists the approved token plaintext after approval", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+
+    await approveDeviceRequest(harness, request.approvalId);
+
+    // The operator-equivalent token must NOT sit in SQLite in plaintext.
+    expect(readPersistedTokenPlaintext(harness, request.requestId)).toBeNull();
+    // It must instead live (single-use) in the ephemeral in-memory vault.
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
+  });
+
+  it("delivers the token on the first poll and never on the second (single-use)", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    await approveDeviceRequest(harness, request.approvalId);
+
+    const first = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
+    expect(first.status).toBe("approved");
+    expect(first.deviceToken).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(first.deviceTokenExpiresAt).toBeDefined();
+
+    // Plaintext never touched disk, and the vault entry is consumed on delivery.
+    expect(readPersistedTokenPlaintext(harness, request.requestId)).toBeNull();
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
+
+    const second = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
+    expect(second.status).toBe("approved");
+    expect(second.deviceToken).toBeUndefined();
+    // Absence is framed as "awaiting handoff", never as a rejection.
+    expect(second.message).toContain("secure handoff");
+  });
+
+  it("does not deliver a token whose vault entry has already expired", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    await approveDeviceRequest(harness, request.approvalId);
+
+    // Simulate the device token expiring before the device ever polled.
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
+    harness.deviceTokenVault.store(request.requestId, "stale-token", new Date(Date.now() - 1_000).toISOString());
+
+    const status = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
+    expect(status.status).toBe("approved");
+    expect(status.deviceToken).toBeUndefined();
+    expect(status.message).toContain("secure handoff");
+    expect(readPersistedTokenPlaintext(harness, request.requestId)).toBeNull();
   });
 });
 

@@ -74,6 +74,7 @@ export function createSettingsAuthRuntimeDependenciesForGateway(
     config: gateway.config,
     gatewaySql: gateway.storage.gatewaySql,
     storage: gateway.storage,
+    deviceTokenVault: gateway.deviceTokenVault,
     createApproval: (input) => gateway.createApproval(input),
     resolveApproval: (approvalId, input) => gateway.resolveApproval(approvalId, input),
     enqueueApprovalResolutionEffects: (approval, input) => gateway.enqueueApprovalResolutionEffects(approval, input),

@@ -335,6 +335,8 @@ export interface ToolInvokeRequest {
   agentId: string;
   sessionId: string;
   workspaceId?: string;
+  /** Protected parent operating-world scope resolved by the gateway when available. */
+  citadelId?: string;
   taskId?: string;
   runId?: string;
   signal?: AbortSignal;

@@ -565,43 +565,11 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(listWards).not.toHaveBeenCalled();
   });
 
-  it("activates legacy workspace fallback enforcement when the wrap-first flag is on", () => {
-    const storage = createStorageStub();
-    Object.assign(storage, {
-      citadels: {
-        listWards: vi.fn((citadelId: string) =>
-          citadelId === "ws-1"
-            ? [
-                {
-                  wardId: "w1",
-                  citadelId: "ws-1",
-                  name: "No shell",
-                  actionPattern: "shell.*",
-                  effect: "deny",
-                  createdAt: "t",
-                },
-              ]
-            : [],
-        ),
-      },
-    });
-    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
-      citadelEnforcementEnabled: () => true,
-    });
-
-    const evaluation = engine.evaluateAccess({
-      toolName: "shell.exec",
-      args: { command: "echo hi" },
-      agentId: "agent",
-      sessionId: "session",
-      workspaceId: "ws-1",
-    });
-
-    expect(evaluation.allowed).toBe(false);
-    expect(evaluation.reasonCodes).toContain("citadel_ward_deny");
-  });
-
-  it("stays dormant for a workspace when the flag is off (default)", () => {
+  it("never treats workspaceId as a Citadel fallback (Wards stay unconsulted when only workspaceId is present)", () => {
+    // A request carrying a workspaceId but no citadelId is unscoped for Ward
+    // purposes: Wards key on the real citadelId, never the workspaceId. The
+    // gateway resolves the parent citadelId before invoke, so the engine never
+    // has to guess one from the workspace.
     const storage = createStorageStub();
     const listWards = vi.fn(() => []);
     Object.assign(storage, { citadels: { listWards } });
@@ -620,6 +588,84 @@ describe("ToolPolicyEngine citadel scope", () => {
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {
+  it("blocks an invoke whose resolved Citadel has a matching deny Ward (enforcement on the invoke path)", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "c1"
+            ? [
+                {
+                  wardId: "w1",
+                  citadelId: "c1",
+                  name: "No shell",
+                  actionPattern: "shell.*",
+                  effect: "deny",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const result = await engine.invoke({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toContain("denied by a Citadel Ward");
+    const recordedDecision = vi
+      .mocked(storage.toolAccessDecisions.record)
+      .mock.calls.find(([decision]) => decision.toolName === "shell.exec")?.[0];
+    expect(recordedDecision?.reasonCodes).toContain("citadel_ward_deny");
+  });
+
+  it("leaves an invoke resolving to a no-Ward Citadel (e.g. the default 'personal') unaffected", async () => {
+    const storage = createStorageStub();
+    const listWards = vi.fn((citadelId: string) =>
+      citadelId === "c1"
+        ? [
+            {
+              wardId: "w1",
+              citadelId: "c1",
+              name: "No shell",
+              actionPattern: "shell.*",
+              effect: "deny" as const,
+              createdAt: "t",
+            },
+          ]
+        : [],
+    );
+    Object.assign(storage, { citadels: { listWards } });
+    const engine = new ToolPolicyEngine(policyConfig, storage, createCustomAllowedRegistry());
+
+    const result = await engine.invoke({
+      toolName: "custom.allowed",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "personal",
+      dryRun: true,
+    });
+
+    // The default 'personal' Citadel has no Wards, so a request resolving to it
+    // behaves exactly as before: the Wards table is consulted but yields nothing,
+    // and the tool is not blocked by Ward enforcement.
+    expect(listWards).toHaveBeenCalledWith("personal");
+    expect(result.outcome).toBe("executed");
+    const recordedDecision = vi
+      .mocked(storage.toolAccessDecisions.record)
+      .mock.calls.find(([decision]) => decision.toolName === "custom.allowed")?.[0];
+    expect(recordedDecision?.reasonCodes ?? []).not.toContain("citadel_ward_deny");
+  });
+
   it("lets approved Code Mode wrapper calls skip prompts without widening profile access", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);

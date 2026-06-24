@@ -346,7 +346,9 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\[\s*key\s*:\s*string\s*\]/);
     const portBlock = portSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const portMemberCount = portBlock.match(/^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm)?.length ?? 0;
-    expect(portMemberCount).toBeLessThanOrEqual(160);
+    // Soft bloat cap. Bumped to 161 for the security-required `deviceTokenVault`
+    // singleton (ephemeral device-token delivery; never plaintext at rest).
+    expect(portMemberCount).toBeLessThanOrEqual(161);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

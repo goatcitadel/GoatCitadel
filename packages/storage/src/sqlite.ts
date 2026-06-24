@@ -1519,6 +1519,18 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "chat_delegation_parent_run_id",
     up: ensureChatDelegationParentRunIdSchema,
   },
+  {
+    version: 131,
+    name: "cost_ledger_created_at_index",
+    up: (db) => {
+      if (tableExists(db, "cost_ledger")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_cost_ledger_created_at
+            ON cost_ledger(created_at);
+        `);
+      }
+    },
+  },
 ];
 
 function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {
@@ -1938,6 +1950,7 @@ function createBaseSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_cost_ledger_day ON cost_ledger(day);
     CREATE INDEX IF NOT EXISTS idx_cost_ledger_session_id ON cost_ledger(session_id);
+    CREATE INDEX IF NOT EXISTS idx_cost_ledger_created_at ON cost_ledger(created_at);
 
     CREATE TABLE IF NOT EXISTS tasks (
       task_id TEXT PRIMARY KEY,

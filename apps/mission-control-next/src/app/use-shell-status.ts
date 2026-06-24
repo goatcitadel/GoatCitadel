@@ -111,14 +111,42 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
 
   // Background refresh while the gateway is ready. First load is the caller's
   // responsibility (they typically pair it with workspace options).
+  //
+  // The poll is paused while the tab is hidden (mirrors useRefreshSubscription):
+  // a backgrounded dashboard has no viewer, so the 15s dashboard+health fetch
+  // is pure waste. When the tab becomes visible again we run one immediate
+  // refresh so the operator never stares at stale numbers on return.
   useEffect(() => {
     if (!gatewayReady) {
       return;
     }
+    const doc = typeof document === "undefined" ? undefined : document;
+    const isHidden = () => doc?.hidden === true;
     const intervalId = window.setInterval(() => {
+      if (isHidden()) {
+        return;
+      }
       void refreshStatus();
     }, refreshIntervalMs);
-    return () => window.clearInterval(intervalId);
+
+    const handleVisibilityChange = () => {
+      if (!isHidden()) {
+        void refreshStatus();
+      }
+    };
+    // Feature-detect the listener API: jsdom-free unit environments (and some
+    // test stubs) provide a partial `document` without addEventListener.
+    const canListen = typeof doc?.addEventListener === "function" && typeof doc?.removeEventListener === "function";
+    if (canListen) {
+      doc!.addEventListener("visibilitychange", handleVisibilityChange);
+    }
+
+    return () => {
+      window.clearInterval(intervalId);
+      if (canListen) {
+        doc!.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
+    };
   }, [gatewayReady, refreshIntervalMs, refreshStatus]);
 
   return { status, refreshStatus };

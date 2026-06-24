@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Plus, Trash2, Users } from "lucide-react";
 import type { AgentProfileRecord, CitadelCouncilAssignment } from "@goatcitadel/contracts";
 import {
@@ -35,6 +35,7 @@ export function CitadelCouncilRoutePage({
   const [council, setCouncil] = useState<CouncilState>({ loading: true, error: null, items: [], agents: [] });
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const selectAgentId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -113,18 +114,21 @@ export function CitadelCouncilRoutePage({
           stats={[{ label: "Seats", value: String(council.items.length) }]}
           actions={
             <div className="mc-next-settings-actions">
-              <select
-                aria-label="Council agent"
-                value={selectedAgentId}
-                onChange={(event) => setSelectedAgentId(event.target.value)}
-              >
-                <option value="">Select agent</option>
-                {council.agents.map((agent) => (
-                  <option key={agent.agentId} value={agent.agentId}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
+              <label className="mc-next-mason-field" htmlFor={selectAgentId}>
+                <span>Council agent</span>
+                <select
+                  id={selectAgentId}
+                  value={selectedAgentId}
+                  onChange={(event) => setSelectedAgentId(event.target.value)}
+                >
+                  <option value="">Select agent</option>
+                  {council.agents.map((agent) => (
+                    <option key={agent.agentId} value={agent.agentId}>
+                      {agent.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={handleSeatAgent} disabled={!selectedAgentId}>
                 <Plus className="h-4 w-4" aria-hidden="true" />
                 Seat

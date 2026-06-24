@@ -49,6 +49,7 @@ import type { RealtimeEventService } from "./realtime-event-service.js";
 import type { ResearchService } from "./research-service.js";
 import type { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import type { SecretStoreService } from "./secret-store-service.js";
+import type { DeviceTokenVault } from "./device-token-vault.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import type { ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
@@ -102,6 +103,7 @@ export interface GatewayRouteCompositionPort {
   readonly researchService: ResearchService;
   readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   readonly secretStore?: SecretStoreService;
+  readonly deviceTokenVault: DeviceTokenVault;
   readonly storage: Storage;
   readonly taskLifecycleService: TaskLifecycleService;
   readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
@@ -313,6 +315,7 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    deviceTokenVault: gateway.deviceTokenVault,
     steerService: gateway.steerService,
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),

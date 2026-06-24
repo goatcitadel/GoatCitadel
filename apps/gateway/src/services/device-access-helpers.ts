@@ -272,7 +272,22 @@ export function toDeviceAccessGrantRecord(grant: AuthDeviceGrantRecord): DeviceA
   };
 }
 
-export function mapDeviceAccessStatusResponse(record: AuthDeviceRequestRecord): DeviceAccessRequestStatusResponse {
+/**
+ * Optional single-use token handoff injected by the status-poll handler. The
+ * plaintext token is NEVER read from the persisted record (it is no longer
+ * stored at rest); the service supplies it from the in-memory vault on the
+ * delivering poll only. Absence is framed as "awaiting secure handoff", not a
+ * rejection, so the device keeps waiting / re-requests.
+ */
+export interface DeviceAccessTokenDelivery {
+  deviceToken: string;
+  deviceTokenExpiresAt?: string;
+}
+
+export function mapDeviceAccessStatusResponse(
+  record: AuthDeviceRequestRecord,
+  tokenDelivery?: DeviceAccessTokenDelivery,
+): DeviceAccessRequestStatusResponse {
   if (record.status === "approved") {
     return {
       requestId: record.requestId,
@@ -280,10 +295,10 @@ export function mapDeviceAccessStatusResponse(record: AuthDeviceRequestRecord): 
       status: record.status,
       expiresAt: record.expiresAt,
       resolvedAt: record.resolvedAt,
-      ...(record.approvedTokenPlaintext
+      ...(tokenDelivery
         ? {
-            deviceToken: record.approvedTokenPlaintext,
-            deviceTokenExpiresAt: record.approvedTokenExpiresAt,
+            deviceToken: tokenDelivery.deviceToken,
+            deviceTokenExpiresAt: tokenDelivery.deviceTokenExpiresAt ?? record.approvedTokenExpiresAt,
           }
         : {}),
       message: "Access approved. Finishing secure handoff to this device.",

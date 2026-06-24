@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-05-20
+Last updated: 2026-06-23
 
 ## Supported Versions
 
@@ -54,6 +54,24 @@ Do not publish exploit details before coordinated remediation.
 - Deny-wins policy precedence is mandatory.
 - Approval-required actions remain gated.
 - Tool grants and sandbox limits are never weakened by local docs.
+
+## Accepted Limitations
+
+These are known, deliberately-accepted residual risks. Each was reviewed and judged
+low enough that the mitigation cost outweighs the benefit; revisit if the threat model
+changes.
+
+- **macOS keychain write exposes the secret on argv (local, same-user, transient).**
+  `secret-store-service.setMacCredential` runs `security add-generic-password … -w <secret>`,
+  so the secret is briefly visible to a same-user `ps` during the synchronous spawn.
+  macOS `security(1)` has no non-interactive way to read the add-password from stdin
+  (the `-w`-prompts-on-TTY path does not exist under a spawned child), so the value must
+  be passed on argv. The exposure window is narrow, local-only, and same-user; the error
+  path already redacts the secret. A native Security-framework binding (e.g. keytar) would
+  remove the window but adds platform-specific native build/packaging fragility that is
+  disproportionate to the threat on a single-operator host. **Accepted 2026-06-23.**
+  Revisit if GoatCitadel must defend against hostile same-user processes on shared macOS
+  hosts. (Windows PasswordVault and Linux `secret-tool` already keep the secret off argv.)
 
 ## Triaging GitHub Security Findings
 

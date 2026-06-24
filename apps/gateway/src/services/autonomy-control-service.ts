@@ -153,12 +153,21 @@ export class AutonomyControlService {
     opts: RevertAutonomousChangesOptions = {},
   ): AutonomyRevertSummary {
     const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : undefined;
-    let candidates = this.storage.autonomyAudit.listUnrevertedSince(sinceIso);
+    const hasLimit = typeof opts.limit === "number" && opts.limit >= 0;
+    // Push the cap into SQL only when there is no kind filter — with a filter the
+    // limit applies to the post-filter set, so a pre-filter DB cap could
+    // under-return. In that case the repo's default bound still keeps the fetch
+    // from loading an unbounded backlog, and the post-filter slice below applies
+    // the caller's limit.
+    let candidates =
+      hasLimit && !kindFilter
+        ? this.storage.autonomyAudit.listUnrevertedSince(sinceIso, Math.floor(opts.limit as number))
+        : this.storage.autonomyAudit.listUnrevertedSince(sinceIso);
     if (kindFilter) {
       candidates = candidates.filter((entry) => kindFilter.has(entry.kind));
     }
-    if (typeof opts.limit === "number" && opts.limit >= 0) {
-      candidates = candidates.slice(0, Math.floor(opts.limit));
+    if (hasLimit) {
+      candidates = candidates.slice(0, Math.floor(opts.limit as number));
     }
 
     const results: AutonomyRevertEntryResult[] = [];

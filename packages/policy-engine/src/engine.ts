@@ -185,15 +185,7 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
   listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
 };
 
-export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
-  /**
-   * Compatibility switch for legacy callers that do not pass citadelId yet. When
-   * it returns true, the request workspace is used as a compatibility Citadel
-   * fallback. Gateway-owned runtime paths should pass the effective parent
-   * Citadel directly.
-   */
-  citadelEnforcementEnabled?: () => boolean;
-}
+export type ToolPolicyEngineRuntimeHooks = ToolExecutorRuntimeHooks;
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
@@ -693,13 +685,11 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
-    // Effective Citadel scope. Gateway runtime paths pass the parent Citadel
-    // directly; the flag is a compatibility bridge for older callers that only
-    // know workspaceId.
-    const effectiveCitadelId =
-      request.citadelId ?? (this.runtimeHooks.citadelEnforcementEnabled?.() ? request.workspaceId : undefined);
-    const scopedRequest =
-      effectiveCitadelId === request.citadelId ? request : { ...request, citadelId: effectiveCitadelId };
+    // Effective Citadel scope. Gateway runtime paths resolve the parent Citadel
+    // from the workspace and pass it on the request, so Wards always enforce on
+    // the correct scope. Requests without a citadelId are unscoped (global) and
+    // simply skip Ward evaluation.
+    const effectiveCitadelId = request.citadelId;
 
     // Citadel Wards (deny-wins) gate the request before grants.
     const wardEffect = effectiveCitadelId ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName) : undefined;
@@ -708,7 +698,7 @@ export class ToolPolicyEngine {
     }
     const wardRequiresApproval = wardEffect === "require_approval";
 
-    const grantDecision = this.resolveGrantDecision(scopedRequest, toolDef);
+    const grantDecision = this.resolveGrantDecision(request, toolDef);
     if (grantDecision?.decision === "deny") {
       return {
         allowed: false,
