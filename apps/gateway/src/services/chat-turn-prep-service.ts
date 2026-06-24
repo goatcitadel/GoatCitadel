@@ -940,53 +940,55 @@ export async function generatePreparedExecutionPlanDraft(
   // never surfaces as an unhandledRejection; when the completion wins the race
   // the payload is parsed/coerced exactly as before, so output is byte-identical.
   const abortController = new AbortController();
-  const plannerCompletion = host.createChatCompletion({
-    providerId: prepared.prefs.providerId,
-    model: prepared.prefs.model,
-    stream: false,
-    timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
-    signal: abortController.signal,
-    memory: { enabled: false, mode: "off" },
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: [
-          "You are GoatCitadel's execution planner.",
-          "Return strict JSON with keys: summary, steps.",
-          `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
-          "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
-          "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
-          "If the mode is chat, delegatedRole must be null for all steps.",
-          "Keep step objectives specific, practical, and directly tied to the user request.",
-          "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
-        ].join("\n"),
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          mode: routerInput.task.mode,
-          planningMode: prepared.prefs.planningMode,
-          objective: prepared.content,
-          workflowTemplate: templatePlan.workflowTemplate,
-          routeDecision: templatePlan.routeDecision,
-          allowedRoles: [...new Set(templatePlan.steps.map((step) => step.role))],
-          templateSteps: templatePlan.steps.map((step) => ({
-            stepId: step.stepId,
-            role: step.role,
-            label: step.label,
-            objective: step.objective,
-            successCriteria: step.successCriteria,
-            suggestedTools: step.suggestedTools,
-            expectedOutput: step.expectedOutput,
-            parallelizable: step.parallelizable,
-            dependsOnStepIds: step.dependsOnStepIds,
-            delegatedRole: step.delegatedRole ?? null,
-          })),
-        }),
-      },
-    ],
-  });
+  const plannerCompletion = Promise.resolve().then(() =>
+    host.createChatCompletion({
+      providerId: prepared.prefs.providerId,
+      model: prepared.prefs.model,
+      stream: false,
+      timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
+      signal: abortController.signal,
+      memory: { enabled: false, mode: "off" },
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are GoatCitadel's execution planner.",
+            "Return strict JSON with keys: summary, steps.",
+            `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
+            "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
+            "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
+            "If the mode is chat, delegatedRole must be null for all steps.",
+            "Keep step objectives specific, practical, and directly tied to the user request.",
+            "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            mode: routerInput.task.mode,
+            planningMode: prepared.prefs.planningMode,
+            objective: prepared.content,
+            workflowTemplate: templatePlan.workflowTemplate,
+            routeDecision: templatePlan.routeDecision,
+            allowedRoles: [...new Set(templatePlan.steps.map((step) => step.role))],
+            templateSteps: templatePlan.steps.map((step) => ({
+              stepId: step.stepId,
+              role: step.role,
+              label: step.label,
+              objective: step.objective,
+              successCriteria: step.successCriteria,
+              suggestedTools: step.suggestedTools,
+              expectedOutput: step.expectedOutput,
+              parallelizable: step.parallelizable,
+              dependsOnStepIds: step.dependsOnStepIds,
+              delegatedRole: step.delegatedRole ?? null,
+            })),
+          }),
+        },
+      ],
+    }),
+  );
   // Neutralize unhandled rejections up-front: if the timer wins the race and we
   // return the fallback, the in-flight planner promise may still reject later
   // (e.g. from the abort). This detached handler captures that, the race below

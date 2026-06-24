@@ -64,7 +64,10 @@ export class CoworkAgenticProjectionService {
     });
     const parentTurnIds = runs.map((run) => parseTurnIdFromChatOrchestrationTaskId(run.taskId));
     const traceMap = readOptional(() => this.storage.chatTurnTraces.getByTurnIds(parentTurnIds)) ?? new Map();
-    const ctx = new ProjectionReadContext(this.storage, traceMap);
+    const durableRunIds = [...traceMap.values()].map((trace) => trace.durable?.runId);
+    const durableMap = readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds)) ?? new Map();
+    const toolRunMap = readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()])) ?? new Map();
+    const ctx = new ProjectionReadContext(this.storage, traceMap, durableMap, toolRunMap);
     const items: AgenticRunListItem[] = [];
     for (const run of runs) {
       const surface = this.resolveRunSurface(run, ctx);
@@ -630,10 +633,7 @@ export class CoworkAgenticProjectionService {
     return ctx.getToolRuns(trace.turnId);
   }
 
-  private buildReadContext(
-    run: ChatDelegationRunRecord,
-    steps: ChatDelegationStepRecord[],
-  ): ProjectionReadContext {
+  private buildReadContext(run: ChatDelegationRunRecord, steps: ChatDelegationStepRecord[]): ProjectionReadContext {
     const turnIds: Array<string | undefined> = [parseTurnIdFromChatOrchestrationTaskId(run.taskId)];
     const durableRunIds: Array<string | undefined> = [];
     for (const step of steps) {
@@ -648,7 +648,8 @@ export class CoworkAgenticProjectionService {
       }
     }
     const durableMap = readOptional(() => this.storage.durableRuns.getRunsByIds(durableRunIds)) ?? new Map();
-    return new ProjectionReadContext(this.storage, traceMap, durableMap);
+    const toolRunMap = readOptional(() => this.storage.chatToolRuns?.listByTurnIds([...traceMap.keys()])) ?? new Map();
+    return new ProjectionReadContext(this.storage, traceMap, durableMap, toolRunMap);
   }
 }
 
@@ -660,7 +661,19 @@ class ProjectionReadContext {
     private readonly storage: CoworkAgenticProjectionStorage,
     private readonly traceMap: Map<string, ChatTurnTraceRecord>,
     private readonly durableMap: Map<string, DurableRunRecord> = new Map(),
-  ) {}
+    preloadedToolRuns?: Map<string, ChatToolRunRecord[]>,
+  ) {
+    if (preloadedToolRuns) {
+      for (const [turnId, records] of preloadedToolRuns) {
+        this.toolRunCache.set(turnId, records);
+      }
+      for (const turnId of traceMap.keys()) {
+        if (!this.toolRunCache.has(turnId)) {
+          this.toolRunCache.set(turnId, []);
+        }
+      }
+    }
+  }
 
   public getTrace(turnId: string | undefined): ChatTurnTraceRecord | undefined {
     const key = turnId?.trim();

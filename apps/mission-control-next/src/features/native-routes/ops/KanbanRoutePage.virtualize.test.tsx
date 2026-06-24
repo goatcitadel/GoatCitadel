@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ComponentType, type ReactNode } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
@@ -27,15 +27,25 @@ vi.mock("react-virtuoso", () => ({
     data?: unknown[];
     computeItemKey?: (index: number, item: unknown) => string;
     itemContent: (index: number, item: unknown) => ReactNode;
-    components?: { List?: (props: { children?: ReactNode }) => ReactNode };
+    components?: {
+      List?: ComponentType<{ children?: ReactNode }>;
+      Item?: ComponentType<{ children?: ReactNode; "data-virtuoso-item"?: string }>;
+    };
     className?: string;
   }) => {
     const List = components?.List;
-    const children = data.map((item, index) => (
-      <div key={computeItemKey?.(index, item) ?? index} data-virtuoso-item="true">
-        {itemContent(index, item)}
-      </div>
-    ));
+    const Item = components?.Item;
+    const children = data.map((item, index) =>
+      Item ? (
+        <Item key={computeItemKey?.(index, item) ?? index} data-virtuoso-item="true">
+          {itemContent(index, item)}
+        </Item>
+      ) : (
+        <div key={computeItemKey?.(index, item) ?? index} data-virtuoso-item="true">
+          {itemContent(index, item)}
+        </div>
+      ),
+    );
     return (
       <div className={className} data-virtuoso="true">
         {List ? <List>{children}</List> : children}
@@ -99,6 +109,12 @@ describe("KanbanRoutePage virtualization", () => {
     // The virtualized scroller is mounted for the over-threshold Queued column.
     const scrollers = renderer.root.findAll((node) => node.props?.["data-virtuoso"] === "true");
     expect(scrollers.length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((node) => node.type === "li" && node.props?.["data-virtuoso-item"] === "true").length,
+    ).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((node) => node.type === "div" && node.props?.["data-virtuoso-item"] === "true"),
+    ).toHaveLength(0);
     // Every queued card is still reachable through the mocked window.
     expect(findByTestId(renderer, "kanban-select-t-0")).toBeTruthy();
     expect(findByTestId(renderer, "kanban-select-t-29")).toBeTruthy();
@@ -118,8 +134,11 @@ describe("KanbanRoutePage virtualization", () => {
     const unblock = renderer.root.findAll(
       (node) =>
         node.type === "button" &&
-        node.children.map((child) => (typeof child === "string" ? child : "")).join("").trim().toLowerCase() ===
-          "unblock",
+        node.children
+          .map((child) => (typeof child === "string" ? child : ""))
+          .join("")
+          .trim()
+          .toLowerCase() === "unblock",
     )[0];
     if (!unblock) {
       throw new Error("Unblock button not found");

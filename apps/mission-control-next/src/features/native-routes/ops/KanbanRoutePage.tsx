@@ -230,7 +230,12 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
   // re-renders the cards whose membership actually changed.
   const renderCard = useCallback(
     (_index: number, card: KanbanCardModel) => (
-      <KanbanCard card={card} checked={selected.has(card.taskId)} onToggleSelect={onToggleSelect} />
+      <KanbanCard
+        card={card}
+        checked={selected.has(card.taskId)}
+        onToggleSelect={onToggleSelect}
+        containerElement="div"
+      />
     ),
     [selected, onToggleSelect],
   );
@@ -280,18 +285,27 @@ const KANBAN_VIRTUOSO_COMPONENTS: Components<KanbanCardModel> = {
   List: forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"ul">>(function KanbanVirtuosoList(props, ref) {
     return <ul {...props} ref={ref as Ref<HTMLUListElement>} />;
   }),
+  Item: forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"li">>(function KanbanVirtuosoItem(props, ref) {
+    return <li {...props} ref={ref as Ref<HTMLLIElement>} />;
+  }),
 };
 
 interface KanbanCardProps {
   card: KanbanCardModel;
   checked: boolean;
   onToggleSelect: (taskId: string) => void;
+  containerElement?: "li" | "div";
 }
 
-export const KanbanCard = memo(function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
+export const KanbanCard = memo(function KanbanCard({
+  card,
+  checked,
+  onToggleSelect,
+  containerElement = "li",
+}: KanbanCardProps) {
   const handleToggle = useCallback(() => onToggleSelect(card.taskId), [onToggleSelect, card.taskId]);
-  return (
-    <li className={`mc-next-kanban-card tone-${card.statusTone}`}>
+  const content = (
+    <>
       <label>
         <input
           type="checkbox"
@@ -334,6 +348,11 @@ export const KanbanCard = memo(function KanbanCard({ card, checked, onToggleSele
       <small className="run-id" title={`Run ${card.runId}`}>
         Run {card.runId.slice(0, 8)}
       </small>
-    </li>
+    </>
+  );
+  return containerElement === "div" ? (
+    <div className={`mc-next-kanban-card tone-${card.statusTone}`}>{content}</div>
+  ) : (
+    <li className={`mc-next-kanban-card tone-${card.statusTone}`}>{content}</li>
   );
 });

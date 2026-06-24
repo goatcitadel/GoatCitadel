@@ -940,39 +940,67 @@ describe("prepareAgentChatTurn personality overlay", () => {
         unhandled.push(reason);
       };
       process.on("unhandledRejection", onUnhandled);
-      vi.mocked(harness.host.createChatCompletion).mockReturnValue(neverSettles as never);
+      try {
+        vi.mocked(harness.host.createChatCompletion).mockReturnValue(neverSettles as never);
 
-      const templatePlan = createPlan({
-        steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
-      });
-      const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
-      const routerInput = { task: { mode: "cowork" } };
+        const templatePlan = createPlan({
+          steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+        });
+        const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
+        const routerInput = { task: { mode: "cowork" } };
 
-      const draftPromise = generatePreparedExecutionPlanDraft(
-        harness.host,
-        prepared as never,
-        routerInput as never,
-        templatePlan as never,
-        false,
-      );
-      // Advance past the planner bound so the own-timer wins the race.
-      await vi.advanceTimersByTimeAsync(5_000);
-      const draft = await draftPromise;
+        const draftPromise = generatePreparedExecutionPlanDraft(
+          harness.host,
+          prepared as never,
+          routerInput as never,
+          templatePlan as never,
+          false,
+        );
+        // Advance past the planner bound so the own-timer wins the race.
+        await vi.advanceTimersByTimeAsync(5_000);
+        const draft = await draftPromise;
 
-      expect(harness.host.createChatCompletion).toHaveBeenCalledTimes(1);
-      expect(draft.source).toBe("template");
-      expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
+        expect(harness.host.createChatCompletion).toHaveBeenCalledTimes(1);
+        expect(draft.source).toBe("template");
+        expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
 
-      // The in-flight planner rejecting AFTER the timeout must not surface as an
-      // unhandled rejection. Settle it and flush microtasks to prove capture.
-      rejectPlanner?.(new Error("late planner failure"));
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
-      process.off("unhandledRejection", onUnhandled);
-      expect(unhandled).toHaveLength(0);
+        // The in-flight planner rejecting AFTER the timeout must not surface as an
+        // unhandled rejection. Settle it and flush microtasks to prove capture.
+        rejectPlanner?.(new Error("late planner failure"));
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        expect(unhandled).toHaveLength(0);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("falls back to the template draft when planner creation throws synchronously", async () => {
+    const harness = createHost("cowork");
+    vi.mocked(harness.host.createChatCompletion).mockImplementation(() => {
+      throw new Error("provider unavailable before promise creation");
+    });
+
+    const templatePlan = createPlan({
+      steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+    });
+    const prepared = { content: "Research release notes", prefs: createPrefs("cowork") };
+    const routerInput = { task: { mode: "cowork" } };
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      harness.host,
+      prepared as never,
+      routerInput as never,
+      templatePlan as never,
+      false,
+    );
+
+    expect(harness.host.createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(draft.source).toBe("template");
+    expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
   });
 
   it("aborts the in-flight planner completion when the bound elapses", async () => {
@@ -999,6 +1027,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
         templatePlan as never,
         false,
       );
+      await Promise.resolve();
       expect(capturedSignal).toBeInstanceOf(AbortSignal);
       expect(capturedSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(5_000);

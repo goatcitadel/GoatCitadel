@@ -148,6 +148,47 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tree?.controls.every((control) => control.enabled === false)).toBe(true);
   });
 
+  it("hydrates durable status drift diagnostics in the run list without per-run reads", () => {
+    const { storage, service } = createHarness();
+    storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
+    storage.durableRuns.createRun({
+      runId: "durable-parent-list",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      startedAt: "2026-06-22T00:00:00.000Z",
+      finishedAt: "2026-06-22T00:04:00.000Z",
+    });
+    createTrace(storage, {
+      turnId: "parent-list-turn",
+      sessionId: "parent-session",
+      durableRunId: "durable-parent-list",
+      durableStatus: "queued",
+    });
+    storage.chatDelegationRuns.create({
+      runId: "orch-list-drift",
+      sessionId: "parent-session",
+      taskId: "chat-orchestration:parent-list-turn",
+      objective: "Surface list drift",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-06-22T00:00:00.000Z",
+    });
+
+    const getRunsByIds = vi.spyOn(storage.durableRuns, "getRunsByIds");
+    const getRun = vi.spyOn(storage.durableRuns, "getRun");
+
+    const items = service.listAgenticRuns({ workspaceId: "default" });
+
+    expect(items[0]?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "projection_status_drift", evidenceRef: "durable-run:durable-parent-list" }),
+      ]),
+    );
+    expect(getRunsByIds).toHaveBeenCalled();
+    expect(getRun).not.toHaveBeenCalled();
+  });
+
   it("does not fake parent-filtered child runs until delegation parent links are persisted", () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
@@ -897,6 +938,17 @@ describe("CoworkAgenticProjectionService", () => {
       durableRunId: "durable-child-2",
       durableStatus: "completed",
     });
+    storage.chatToolRuns.create({
+      toolRunId: "tool-child-1",
+      turnId: "child-turn-1",
+      sessionId: "child-session-1",
+      toolName: "browser.search",
+      status: "executed",
+      args: { query: "bulk path probe" },
+      result: { ok: true },
+      startedAt: "2026-06-22T00:02:00.000Z",
+      finishedAt: "2026-06-22T00:02:01.000Z",
+    });
     storage.chatDelegationRuns.create({
       runId: "orch-bulk",
       sessionId: "parent-session",
@@ -923,6 +975,8 @@ describe("CoworkAgenticProjectionService", () => {
 
     const getByTurnIds = vi.spyOn(storage.chatTurnTraces, "getByTurnIds");
     const getRunsByIds = vi.spyOn(storage.durableRuns, "getRunsByIds");
+    const listToolRunsByTurnIds = vi.spyOn(storage.chatToolRuns, "listByTurnIds");
+    const listToolRunsByTurn = vi.spyOn(storage.chatToolRuns, "listByTurn");
     const traceGet = vi.spyOn(storage.chatTurnTraces, "get");
     const durableGetRun = vi.spyOn(storage.durableRuns, "getRun");
     const listByRun = vi.spyOn(storage.chatDelegationSteps, "listByRun");
@@ -940,6 +994,10 @@ describe("CoworkAgenticProjectionService", () => {
     // The bulk readers are used, and neither traces nor durable runs are fetched one-row-at-a-time.
     expect(getByTurnIds).toHaveBeenCalled();
     expect(getRunsByIds).toHaveBeenCalled();
+    expect(new Set(listToolRunsByTurnIds.mock.calls[0]?.[0])).toEqual(
+      new Set(["parent-turn", "child-turn-1", "child-turn-2"]),
+    );
+    expect(listToolRunsByTurn).not.toHaveBeenCalled();
     expect(traceGet).not.toHaveBeenCalled();
     expect(durableGetRun).not.toHaveBeenCalled();
     // Steps are loaded once at entry and threaded through workspace-resolution + reconciliation.
