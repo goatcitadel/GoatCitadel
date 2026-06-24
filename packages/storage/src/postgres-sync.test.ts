@@ -196,6 +196,21 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.throws(() => noResponse.client.exec("SELECT no-response"), /did not return a response/);
   });
 
+  it("terminates the worker when a close response times out", () => {
+    const timedOut = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const waitMock = mock.method(Atomics, "wait", () => "timed-out");
+    try {
+      assert.doesNotThrow(() => timedOut.client.close());
+    } finally {
+      waitMock.mock.restore();
+    }
+
+    assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
+    assert.match(timedOut.internals.fatalError?.message ?? "", /Timed out waiting for Postgres response \(close\)/);
+    assert.throws(() => timedOut.client.exec("SELECT after-close"), /already closed/);
+  });
+
   it("translates positional parameters for run, get, and all calls", () => {
     const { client, calls } = createClientHarness();
     const statement = client.prepare("SELECT * FROM tasks WHERE status = ? AND workspace_id = ?");
@@ -240,6 +255,14 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.equal(error.name, "QueryError");
     assert.equal(error.message, "bad query");
     assert.equal(error.stack, "stack line");
+    assert.equal(
+      __postgresSyncInternals.isCloseTimeoutError(new Error("Timed out waiting for Postgres response (close).")),
+      true,
+    );
+    assert.equal(
+      __postgresSyncInternals.isCloseTimeoutError(new Error("Timed out waiting for Postgres response (query).")),
+      false,
+    );
   });
 
   it("covers sync-worker pool config defaults, cached server encoding, and transaction cleanup", async () => {
