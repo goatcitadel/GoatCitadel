@@ -6,6 +6,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
+import AdmZip from "adm-zip";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
@@ -2567,6 +2568,13 @@ async function extractZip(zipPath: string, targetDir: string): Promise<void> {
     // continue to fallback
   }
 
+  try {
+    await extractZipWithAdmZip(zipPath, targetDir);
+    return;
+  } catch {
+    // continue to platform fallback
+  }
+
   if (process.platform === "win32") {
     const command = `Expand-Archive -Path "${zipPath.replaceAll('"', '""')}" -DestinationPath "${targetDir.replaceAll('"', '""')}" -Force`;
     await execFileAsync("powershell", ["-NoProfile", "-Command", command], { windowsHide: true });
@@ -2574,6 +2582,35 @@ async function extractZip(zipPath: string, targetDir: string): Promise<void> {
   }
 
   throw new Error("Unable to extract zip file in this runtime. Extract locally and use sourceType=local_path.");
+}
+
+async function extractZipWithAdmZip(zipPath: string, targetDir: string): Promise<void> {
+  const zip = new AdmZip(zipPath);
+  for (const entry of zip.getEntries()) {
+    const relativePath = normalizeZipEntryPath(entry.entryName);
+    const destination = path.resolve(targetDir, ...relativePath.split("/"));
+    assertWritePathInJail(destination, [targetDir]);
+    if (entry.isDirectory) {
+      await fs.mkdir(destination, { recursive: true });
+      continue;
+    }
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, entry.getData());
+  }
+}
+
+function normalizeZipEntryPath(entryName: string): string {
+  const normalized = path.posix.normalize(entryName.replace(/\\/g, "/"));
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    path.posix.isAbsolute(normalized) ||
+    path.win32.isAbsolute(entryName)
+  ) {
+    throw new Error(`Unsafe zip entry path: ${entryName}`);
+  }
+  return normalized;
 }
 
 async function scanSkillDirectory(dir: string): Promise<{

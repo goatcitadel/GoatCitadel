@@ -5,6 +5,7 @@ const pendingRpc = new Map();
 let currentRunPromise = null;
 let inFlightWrapperCall = null;
 let cancelledReason = null;
+const pendingConsoleDrains = new Set();
 
 function encodeMessageBytes(message) {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -127,7 +128,22 @@ function writeConsoleLine(stream, args) {
       }
     })
     .join(" ");
-  stream.write(text + "\n");
+  if (!stream.write(text + "\n")) {
+    const drain = new Promise((resolve) => stream.once("drain", resolve));
+    pendingConsoleDrains.add(drain);
+    drain.finally(() => pendingConsoleDrains.delete(drain));
+  }
+}
+
+async function waitForConsoleDrains() {
+  const snapshot = Array.from(pendingConsoleDrains);
+  if (snapshot.length === 0) {
+    return;
+  }
+  await Promise.race([
+    Promise.allSettled(snapshot),
+    new Promise((resolve) => setTimeout(resolve, 1000)),
+  ]);
 }
 
 const consoleFacade = Object.freeze({
@@ -350,14 +366,20 @@ async function executeRun(params) {
       displayErrors: true,
     },
   );
-  const value = await script.runInNewContext(sandboxGlobal, {
-    timeout:
-      typeof deadlineAt === "number" && Number.isFinite(deadlineAt)
-        ? Math.max(1, deadlineAt - Date.now())
-        : undefined,
-  });
-  assertNoUnawaitedWrapperCalls();
-  return normalizeResult(value);
+  try {
+    const value = await script.runInNewContext(sandboxGlobal, {
+      timeout:
+        typeof deadlineAt === "number" && Number.isFinite(deadlineAt)
+          ? Math.max(1, deadlineAt - Date.now())
+          : undefined,
+    });
+    await waitForConsoleDrains();
+    assertNoUnawaitedWrapperCalls();
+    return normalizeResult(value);
+  } catch (error) {
+    await waitForConsoleDrains();
+    throw error;
+  }
 }
 
 function rejectPendingRpc(error) {
