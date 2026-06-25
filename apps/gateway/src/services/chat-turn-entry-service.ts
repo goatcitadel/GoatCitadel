@@ -42,7 +42,7 @@ import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import { applyAutoRouteToInput, recordModeOverrideIfChanged } from "./surface-router-entry.js";
+import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
@@ -161,10 +161,7 @@ export async function agentSendChatMessage(
   options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
-    try {
-      input = await applyAutoRouteToInput(host, sessionId, input);
-      recordModeOverrideIfChanged(host, sessionId, input);
-    } catch (error) {
+    input = await applySurfaceRoutingPreflight(host, sessionId, input, (error) => {
       host.recordDevDiagnostic({
         level: "warn",
         category: "chat",
@@ -173,7 +170,7 @@ export async function agentSendChatMessage(
         sessionId,
         context: { error: error instanceof Error ? error.message : String(error) },
       });
-    }
+    });
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,
@@ -671,6 +668,16 @@ export async function* agentSendChatMessageStream(
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
+      input = await applySurfaceRoutingPreflight(host, sessionId, input, (error) => {
+        host.recordDevDiagnostic({
+          level: "warn",
+          category: "chat",
+          event: "chat.surface_router.failed",
+          message: "Surface auto-router failed; continuing with the provided/default mode",
+          sessionId,
+          context: { error: error instanceof Error ? error.message : String(error) },
+        });
+      });
       host.recordDevDiagnostic({
         level: "info",
         category: "chat",

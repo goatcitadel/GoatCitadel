@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyAutoRouteToInput, recordModeOverrideIfChanged, hashPromptFeatures } from "./surface-router-entry.js";
+import { applyAutoRouteToInput, applySurfaceRoutingPreflight, recordModeOverrideIfChanged, hashPromptFeatures } from "./surface-router-entry.js";
 
 function makeHost(overrides: Record<string, unknown> = {}) {
   return {
@@ -81,6 +81,31 @@ describe("recordModeOverrideIfChanged", () => {
     const host = makeOverrideHost({ readChatSessionMode: vi.fn(() => undefined) });
     recordModeOverrideIfChanged(host as never, "s1", { content: "x", mode: "code" });
     expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
+  });
+});
+
+describe("applySurfaceRoutingPreflight", () => {
+  it("routes and persists on success path", async () => {
+    const host = makeHost();
+    const out = await applySurfaceRoutingPreflight(host as never, "s1", {
+      content: "run tests in the repo",
+      autoRoute: true,
+    });
+    expect(out.mode).toBe("code");
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "code");
+  });
+
+  it("calls onError and returns original input when router throws", async () => {
+    const host = makeHost({
+      surfaceRouter: { route: vi.fn(async () => { throw new Error("judge boom"); }) },
+    });
+    const onError = vi.fn();
+    const original = { content: "run tests in the repo", autoRoute: true };
+    const out = await applySurfaceRoutingPreflight(host as never, "s1", original, onError);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0][0] as Error).message).toBe("judge boom");
+    expect(out.mode).toBeUndefined();
+    expect(out).toBe(original);
   });
 });
 

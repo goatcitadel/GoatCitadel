@@ -88,6 +88,27 @@ export function recordModeOverrideIfChanged(
   }
 }
 
+/**
+ * Run surface auto-routing + override-recording for a send turn, error-isolated.
+ * Returns input (possibly with `mode` filled by the router); on any failure,
+ * calls onError and returns the input unchanged so the turn always proceeds.
+ */
+export async function applySurfaceRoutingPreflight(
+  host: AutoRouteHost & ModeOverrideHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+  onError?: (error: unknown) => void,
+): Promise<ChatSendMessageRequest> {
+  try {
+    const routed = await applyAutoRouteToInput(host, sessionId, input);
+    recordModeOverrideIfChanged(host, sessionId, routed);
+    return routed;
+  } catch (error) {
+    onError?.(error);
+    return input;
+  }
+}
+
 /** Stable, low-resolution bucket of a prompt's shape (first word + capped length). The first word is stored in plaintext, so this is NOT a cryptographic hash. */
 export function hashPromptFeatures(content: string): string {
   const firstWord = (content.trim().split(/\s+/)[0] ?? "").toLowerCase().slice(0, 24);
