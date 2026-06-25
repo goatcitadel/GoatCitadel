@@ -101,6 +101,7 @@ import {
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
 } from "./chat/chat-page-pure-helpers";
+import { resolveOutboundSurfaceMode } from "./pure-helpers";
 import { useChatApprovalController } from "./chat/useChatApprovalController";
 import { useChatContextActions } from "./chat/useChatContextActions";
 import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
@@ -1207,6 +1208,7 @@ export function MissionThreadedControllerHost({
   });
   const executionSurfaceMode: ChatMode =
     lockSurface && surface ? surface : (modeOverride ?? selectedSession?.mode ?? fallbackSessionMode);
+  const outboundSurfaceMode = resolveOutboundSurfaceMode({ lockSurface, surface, modeOverride });
   const executionRoutePrefs = useMemo(
     () => resolveExecutionRoutePrefs(prefs, executionSurfaceMode, selectedProviderId, selectedModel),
     [executionSurfaceMode, prefs, selectedModel, selectedProviderId],
@@ -1437,7 +1439,7 @@ export function MissionThreadedControllerHost({
 
   const outbound = useChatOutboundExecution({
     sessionConfig: {
-      surfaceMode: executionSurfaceMode,
+      surfaceMode: outboundSurfaceMode,
       selectedSessionId,
       selectedSession,
       prefs,

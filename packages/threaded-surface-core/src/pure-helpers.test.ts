@@ -4,6 +4,7 @@ import {
   groupDelegatedSessionsForRail,
   resolveMissionControlMessageMode,
   resolveOptimisticChatPrefs,
+  resolveOutboundSurfaceMode,
   resolveSelectedTurnId,
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
@@ -304,5 +305,17 @@ describe("threaded-surface-core pure helpers", () => {
         prefsMode: "chat",
       }),
     ).toBe("code");
+  });
+
+  it("forces the surface mode when locked", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: true, surface: "code", modeOverride: null })).toBe("code");
+  });
+
+  it("returns the override on an unlocked surface", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: "cowork" })).toBe("cowork");
+  });
+
+  it("returns undefined on a new unlocked thread with no override (enables auto-route)", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: null })).toBeUndefined();
   });
 });

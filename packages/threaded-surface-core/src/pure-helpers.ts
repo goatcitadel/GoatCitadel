@@ -18,3 +18,22 @@ export {
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,
 } from "./chat/useMissionControlSurfaceState";
+
+import type { ChatMode } from "@goatcitadel/contracts";
+
+/**
+ * The surfaceMode handed to the outbound send hook. `undefined` on a new unlocked
+ * thread with no override is REQUIRED so the gateway auto-router fires
+ * (shouldAutoRouteSend gates on surfaceMode === undefined). A locked surface forces
+ * its mode; an explicit override sends that mode.
+ */
+export function resolveOutboundSurfaceMode(input: {
+  lockSurface: boolean;
+  surface: ChatMode | undefined;
+  modeOverride: ChatMode | null;
+}): ChatMode | undefined {
+  if (input.lockSurface && input.surface) {
+    return input.surface;
+  }
+  return input.modeOverride ?? undefined;
+}
