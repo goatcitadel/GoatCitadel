@@ -68,7 +68,9 @@ export class SkillsRouteService {
   public constructor(private readonly skills: SkillsRoutePort) {}
 
   public listSkills(effectiveSkills?: EffectiveCapabilitySet) {
-    return this.skills.listSkills(effectiveSkills);
+    // Forward faithfully: omit the arg entirely when unscoped so the port's own
+    // default ("ALL") applies and the pass-through stays argument-identical.
+    return effectiveSkills === undefined ? this.skills.listSkills() : this.skills.listSkills(effectiveSkills);
   }
 
   public reloadSkills() {

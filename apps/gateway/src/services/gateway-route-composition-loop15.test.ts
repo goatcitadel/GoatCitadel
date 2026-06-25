@@ -237,6 +237,7 @@ function createGateway() {
       listCatalog: fn(() => [{ name: "browser.search" }]),
     },
     taskLifecycleService: { list: fn(() => []) },
+    invokeMcpTool: fn((input: unknown) => ({ input, mcp: true })),
     toolInvocationCoordinator: {
       invokeMcpTool: fn((input: unknown) => ({ input, mcp: true })),
     },
