@@ -45,6 +45,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onToggleDock: () => void;
   onToggleArchiveSession: () => void;
   onNavigateSurface: (surface: ChatMode) => void;
+  onModeOverride?: (mode: ChatMode) => void;
+  modeOverridePending?: ChatMode | null;
   onRequestProviderChange: (providerId: string) => void;
   onRequestModelChange: (model: string) => void;
   loading: boolean;

@@ -2156,4 +2156,34 @@ describe("useChatOutboundExecution", () => {
 
     expect(latest?.getSnapshot().streamStatus).toBe("streaming");
   });
+
+  it("an explicit surfaceMode override sends explicit mode and no autoRoute on the first turn", async () => {
+    // Render with a fresh thread (0 prior turns) and surfaceMode="code" (unlocked override path).
+    // The Harness initialThread defaults to makeThread() which has 1 turn, so pass initialThread=null
+    // to simulate a brand-new session where isFirstTurn=true.
+    await act(async () => {
+      create(<Harness surfaceMode="code" initialThread={null} />);
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-override",
+        action: "send",
+        content: "build the parser",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        content: "build the parser",
+        mode: "code",
+      }),
+      { originSurface: "code" },
+    );
+    // autoRoute must NOT be present when an explicit surfaceMode is provided
+    expect(sendAgentChatMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("autoRoute");
+  });
 });

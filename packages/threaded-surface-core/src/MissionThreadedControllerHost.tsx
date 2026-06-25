@@ -750,6 +750,7 @@ export function MissionThreadedControllerHost({
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [modeOverride, setModeOverride] = useState<ChatMode | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
   const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
@@ -965,6 +966,13 @@ export function MissionThreadedControllerHost({
       onResolvedModeChange?.(currentSessionMode);
     }
   }, [currentSessionMode, onResolvedModeChange]);
+
+  // Clear a stale override when the selected thread changes to prevent cross-thread leakage.
+  // The override is read synchronously by the next send before this fires, so a same-thread
+  // override still applies; on an existing code thread subsequent turns naturally remain code.
+  useEffect(() => {
+    setModeOverride(null);
+  }, [selectedSessionId]);
 
   const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
     if (!selectedSessionId || (currentSessionMode !== "cowork" && currentSessionMode !== "code")) {
@@ -1198,7 +1206,7 @@ export function MissionThreadedControllerHost({
     mcpTemplates,
   });
   const executionSurfaceMode: ChatMode =
-    lockSurface && surface ? surface : (selectedSession?.mode ?? fallbackSessionMode);
+    lockSurface && surface ? surface : (modeOverride ?? selectedSession?.mode ?? fallbackSessionMode);
   const executionRoutePrefs = useMemo(
     () => resolveExecutionRoutePrefs(prefs, executionSurfaceMode, selectedProviderId, selectedModel),
     [executionSurfaceMode, prefs, selectedModel, selectedProviderId],
@@ -3103,6 +3111,11 @@ export function MissionThreadedControllerHost({
         onToggleDock: handleToggleDock,
         onToggleArchiveSession: () => void handleToggleArchiveSession(),
         onNavigateSurface: handleNavigateSurface,
+        onModeOverride: (mode: ChatMode) => {
+          setModeOverride(mode);
+          onResolvedModeChange?.(mode);
+        },
+        modeOverridePending: modeOverride,
         onRequestProviderChange: (providerId) => {
           const provider = providerOptions.find((item) => item.providerId === providerId);
           const selection = resolveProviderModelSelection({
