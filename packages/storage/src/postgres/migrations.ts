@@ -2103,4 +2103,68 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS active_hours_json TEXT;
     `,
   },
+  {
+    version: 72,
+    name: "operator_memory_commitment_runtime_backfill",
+    sql: `
+      CREATE TABLE IF NOT EXISTS memory_items (
+        item_id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        pinned BIGINT NOT NULL DEFAULT 0,
+        ttl_override_seconds BIGINT,
+        expires_at TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        forgotten_at TEXT,
+        workspace_id TEXT
+      );
+
+      ALTER TABLE IF EXISTS memory_items
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_status
+        ON memory_items(namespace, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_items_pinned_updated
+        ON memory_items(pinned DESC, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_items_workspace
+        ON memory_items(workspace_id, status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS agent_commitments (
+        commitment_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        kind TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+        dedupe_key TEXT NOT NULL,
+        suggested_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_by TEXT NOT NULL DEFAULT 'classifier',
+        created_at TEXT NOT NULL,
+        sent_at TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_commitments_session_dedupe
+        ON agent_commitments(session_id, dedupe_key);
+      CREATE INDEX IF NOT EXISTS idx_agent_commitments_status_due
+        ON agent_commitments(status, due_at);
+
+      CREATE TABLE IF NOT EXISTS operator_profiles (
+        operator_profile_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        summary TEXT NOT NULL DEFAULT '',
+        facts_json TEXT NOT NULL DEFAULT '[]',
+        revision BIGINT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_profiles_workspace
+        ON operator_profiles(workspace_id);
+    `,
+  },
 ];

@@ -139,6 +139,14 @@ export class PostgresDatabaseClient {
     appliedMigrations: ReadonlyArray<{ version: number; name: string }>,
   ): Promise<string[]> {
     const issues: string[] = [];
+    const runtimeSchemaRepairApplied =
+      latestVersion >= 7 ||
+      appliedMigrations.some((migration) => migration.name === "canonical_runtime_schema_repairs");
+    if (runtimeSchemaRepairApplied) {
+      issues.push(...(await this.findMissingTables(["agent_commitments", "operator_profiles"])));
+      issues.push(...(await this.findMissingColumns("memory_items", ["workspace_id"])));
+    }
+
     const chatPrefsRepairApplied =
       latestVersion >= 28 || appliedMigrations.some((migration) => migration.name === "chat_operator_control_prefs");
     if (chatPrefsRepairApplied) {
@@ -159,6 +167,25 @@ export class PostgresDatabaseClient {
     }
 
     return issues;
+  }
+
+  private async findMissingTables(tableNames: readonly string[]): Promise<string[]> {
+    if (tableNames.length === 0) {
+      return [];
+    }
+    const tablePlaceholders = tableNames.map((_, index) => `$${index + 1}`).join(", ");
+    const rows = await this.query<{ table_name: string }>(
+      `
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = current_schema()
+        AND table_name IN (${tablePlaceholders})
+    `,
+      tableNames,
+    );
+    const present = new Set(rows.map((row) => row.table_name));
+    const missing = tableNames.filter((table) => !present.has(table));
+    return missing.map((table) => `schema drift: ${table} table is missing`);
   }
 
   private async findMissingColumns(tableName: string, columnNames: readonly string[]): Promise<string[]> {
