@@ -65,6 +65,7 @@ import {
 } from "./code-mode-execution-backends.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -159,6 +160,24 @@ interface BoundedCaptureState {
 
 type CodeModeOriginSurface = NonNullable<CodeModeRunRequest["originSurface"]>;
 
+/**
+ * Filters an array of skill items by an effective capability set.
+ *
+ * When `effective === "ALL"` (the default for unconfigured scopes), returns the
+ * full input unchanged. Otherwise returns only items whose `skillId` is present
+ * in the effective set. This is the core filter for workspace/citadel capability
+ * scoping of the skill catalog.
+ */
+export function filterSkillItemsByEffectiveSet<T extends { skillId: string }>(
+  items: T[],
+  effective: EffectiveCapabilitySet,
+): T[] {
+  if (effective === "ALL") {
+    return items;
+  }
+  return items.filter((item) => effective.has(item.skillId));
+}
+
 class CodeModeSandboxLaunchFailure extends Error {
   public constructor(
     message: string,
@@ -206,10 +225,10 @@ export class CapabilitySystemService {
     }
   }
 
-  public listSkills(): SkillListItem[] {
+  public listSkills(effectiveSkills: EffectiveCapabilitySet = "ALL"): SkillListItem[] {
     this.ensureSkillLifecycleBackfill();
     const stateMap = this.options.readSkillStates();
-    return this.options.listLoadedSkills().map((skill) => {
+    const all = this.options.listLoadedSkills().map((skill) => {
       const state = stateMap.get(skill.skillId);
       const lifecycle = this.options.storage.skillLifecycle.find(skill.skillId) ?? buildSkillLifecycleRecord(skill);
       return {
@@ -228,6 +247,7 @@ export class CapabilitySystemService {
         reviewWarning: lifecycle.reviewWarning,
       };
     });
+    return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
 
   public listCatalog(scope: CapabilityCatalogScope): CapabilityCatalogEntry[] {
