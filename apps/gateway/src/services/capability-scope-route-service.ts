@@ -90,6 +90,16 @@ export class CapabilityScopeRouteService {
     return this.getView(scopeKind, scopeId, resourceType);
   }
 
+  /**
+   * Resolves the effective skill set for a workspace, for use in skills listing.
+   * Returns "ALL" when the workspace (and its citadel) have no skill assignments
+   * configured — preserving the non-breaking default behavior.
+   */
+  public resolveEffectiveSkills(workspaceId: string): EffectiveCapabilitySet {
+    const citadelId = this.deps.resolveCitadelId(workspaceId);
+    return this.resolveType(citadelId, workspaceId, "skill");
+  }
+
   /** Candidate set: citadel scope draws from the global registry; workspace scope draws
    *  from the citadel-effective set (D4 — a workspace can only narrow its citadel). */
   private candidateEntries(
