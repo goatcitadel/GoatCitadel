@@ -178,17 +178,15 @@ Then intersect each `*Effective` set with `allGlobal` so a deleted/renamed regis
 
 ---
 
-## 7. Turn-time wiring
+## 7. Turn-time wiring (resolved during planning)
 
-`citadelId` + `workspaceId` are already resolved at `chat-turn-prep-service.ts:237-238`. We call the resolver once during turn prep and apply the effective sets at the three points where capabilities enter the turn:
+`citadelId` + `workspaceId` are already resolved at `chat-turn-prep-service.ts:237-238`. A planning-time trace established that the three resource classes reach a turn through **asymmetric** paths, so each has a different (narrowest) enforcement seam — there is no single unified catalog filter:
 
-- **(a) Skills** — filter the skill set surfaced to the turn (the list assembled via `SkillsService` / capability-system) to `effective.skills` (skip if `ALL`).
-- **(b) Integrations / connectors** — the connector registry is built from `integrationConnections.list(...)` (e.g. `gateway-route-composition-integrations.ts:225`). Filter connection-derived tools/connectors to `effective.integrations` before they enter the turn's catalog (skip if `ALL`).
-- **(c) MCP servers** — restrict the MCP servers (and their cached tools) exposed/invocable for the turn to `effective.mcpServers` (skip if `ALL`).
+- **(a) MCP servers — deny-at-invocation (primary, security-relevant).** MCP tools are *not* per-turn tool-list items; the model reaches them via the `mcp.invoke` built-in tool → `GatewayService.invokeMcpTool()` (`gateway-service.ts:7760`). `enrichMcpInvokePolicyContext()` already resolves `workspaceId` (from `input.workspaceId` ?? the session's `chatSessionMeta.workspaceId` ?? `DEFAULT_WORKSPACE_ID`). Enforcement: derive `citadelId` from `workspaceId`, resolve `effective.mcpServers`, and **deny** the invocation when `serverId ∉ effective` (allow when `ALL`). Fail-open + kill-switch. This covers every caller (model and REST).
+- **(b) Skills — capability-catalog filter.** Skills surface to the model through the capability catalog (`capability-system-service.listCatalog("callable")` / `getCompactToolDirectorySnapshot()` / `buildInspectableCatalog()`); each skill-kind `CapabilityCatalogEntry` carries a `skillId` (`packages/contracts/src/capabilities.ts:64`). Enforcement: when a workspace context is supplied, drop skill-kind entries whose `skillId ∉ effective.skills` (leave built-in tool entries untouched; allow when `ALL`).
+- **(c) Integrations — curation/visibility only (no turn gate).** A trace confirmed integration connections are **not** model-callable per turn (`invokeIntegrationConnectionAction` is only reached from REST/channel paths, never from turn execution). Scoping therefore governs the management surface + connector registry, not a chat-turn filter. The effective integration set is still resolved and exposed (API/UI); a REST-action gate is a documented future follow-up (the action request carries no workspace context today).
 
-**Invariant:** downstream consumers (orchestration router, tool-policy evaluation, MCP invocation coordinator) are unchanged; they simply receive an already-scoped input set. Tool-policy access control remains as-is and runs after this availability filter (defense in depth).
-
-Exact seam functions/signatures (whether to filter the catalog builder vs. thread the set through) are an implementation-plan detail; the plan will pick the narrowest seam that covers all three without reshaping downstream interfaces.
+**Invariant:** downstream consumers (orchestration router, tool-policy evaluation, MCP invocation coordinator) are unchanged; MCP enforcement is an added pre-check, skills enforcement is a list filter. Tool-policy access control remains as-is and runs after (defense in depth).
 
 ---
 
@@ -242,24 +240,26 @@ Both surfaces read the active `citadelId`/`workspaceId` from the existing topbar
 
 ---
 
-## 11. Open questions / risks
+## 11. Open questions / risks (resolved in planning unless noted)
 
-- **`citadel_integration_grants` relationship (must resolve in planning).** That table already gates integrations per citadel via provider/account/capability/mode authorization (`sqlite.ts:1214-1226`, routes `GET/POST/DELETE /api/v1/citadels/:id/integrations`). Decide one of: (a) keep orthogonal — grants authorize *provider capabilities/mode*, our layer scopes *which connections are available* (default assumption); or (b) have the integration resolver also consult grants so the two can't disagree. Verify its real usage before finalizing the integration seam (§7b).
-- **Narrowest turn-time seam.** Confirm whether to filter the catalog/connector builders directly or thread effective sets through; pick the option that touches the fewest downstream interfaces. (§7)
-- **Skill identity mapping.** Confirm the `resource_ref` for skills is the same `skillId` the turn-time skill list is keyed by (vs. a slug/name), so the filter matches. (§7a)
-- **Postgres schema derivation.** The Postgres runtime schema is partly auto-derived from the SQLite blueprint (`createSqliteSchemaBlueprint` → `buildPostgresRuntimeSchemaSql`). Verify whether adding the SQLite table auto-propagates to Postgres (making the explicit v73 migration belt-and-suspenders, or risking a double-create) vs. being required; ensure no conflict and that `postgres-runtime-schema.test.ts` passes either way.
-- **Effective-set caching.** Resolution runs once per turn; if profiling shows cost, memoize per `(citadelId, workspaceId)` with invalidation on assignment writes. Not in v1 unless measured.
+- **`citadel_integration_grants` relationship — RESOLVED: keep orthogonal.** That table authorizes provider *capabilities/mode* (`sqlite.ts:1214-1226`); our layer scopes resource *availability*. They don't compete, and since integrations aren't model-callable per turn (§7c) there is no resolver/grant disagreement to reconcile at turn time.
+- **Narrowest turn-time seam — RESOLVED.** See §7: MCP = deny-at-invocation (`invokeMcpTool`), skills = capability-catalog filter, integrations = no turn gate.
+- **Skill identity mapping — RESOLVED.** `CapabilityCatalogEntry.skillId` (`capabilities.ts:64`) and `SkillLifecycleRecord.skillId` (`capabilities.ts:119`) are the same `skillId`; `resource_ref` for skills uses it directly.
+- **Postgres schema derivation — RESOLVED.** New SQLite tables auto-derive into the Postgres runtime schema via `createSqliteSchemaBlueprint` → `buildPostgresRuntimeSchemaSql`. We still add the explicit v73 migration for convention/parity; `CREATE TABLE IF NOT EXISTS` makes it conflict-free, and `postgres-runtime-schema.test.ts` gets a parity assertion.
+- **Agent-side skills scoping (residual).** The capability catalog (`/api/v1/capabilities/*`) is workspace-agnostic today; the skills filter (§7b) applies wherever a workspace context is supplied. Confirming every agent tool-discovery path threads `workspaceId` is a bounded follow-up; MCP (the security-relevant external surface) is fully enforced regardless.
+- **Effective-set caching.** Resolution runs once per turn (and once per MCP invocation); if profiling shows cost, memoize per `(citadelId, workspaceId)` with invalidation on assignment writes. Not in v1 unless measured.
 
 ---
 
 ## 12. Phasing / build order
 
-- **Phase 1 — storage + contracts:** contracts (`capability-scope.ts`), table + SQLite v132 + Postgres v73 migrations, `CapabilityScopeRepository`, migration/parity tests, repo unit tests. Inert (nothing reads it yet).
-- **Phase 2 — resolver + turn-time enforcement:** `CapabilityScopeResolver` (algebra, `ALL` short-circuit, fail-open, kill-switch) + wiring at the three seams; resolver unit tests + gateway integration tests. Ships the enforcing-by-default behavior (non-breaking via inherit-all).
-- **Phase 3 — gateway API:** citadel + workspace capability endpoints + client contracts + handler tests.
-- **Phase 4 — UI:** Workspace capabilities surface (headline) + Citadel capabilities surface + component tests.
+- **Phase 1 — contracts + storage:** contracts (`capability-scope.ts`), table + SQLite v132 + Postgres v73 migrations, `CapabilityScopeRepository`, migration/parity tests, repo unit tests. Inert (nothing reads it yet).
+- **Phase 2 — resolver + MCP enforcement:** `CapabilityScopeResolver` (algebra for all three types, `ALL` short-circuit, fail-open, kill-switch) + MCP **deny-at-invocation** in `invokeMcpTool` (§7a). Resolver unit tests (table-driven) + gateway MCP-enforcement tests (unconfigured=allow, scoped-out=deny, kill-switch/fail-open=allow). Ships the security-relevant gate.
+- **Phase 3 — skills capability-catalog scoping (§7b):** filter skill-kind entries by the effective skill set in the capability surfacing when workspace context is present + tests.
+- **Phase 4 — gateway API + client:** citadel + workspace capability endpoints (read grant state + resolved-effective) + `mission-control-shared` client fns + handler tests.
+- **Phase 5 — UI:** Workspace capabilities surface (headline) + Citadel capabilities surface + component tests.
 
-Each phase is its own verified commit(s) on `worktree-workspace-capability-scoping` (off `main` `230a222e4`), per-package green before moving on.
+Each phase is its own verified commit(s) on `worktree-workspace-capability-scoping` (off `main` `230a222e4`), per-package green before moving on. Phases 1→2 and 4→5 are the load-bearing chains; Phase 3 and the API/UI can proceed once Phase 1 lands.
 
 ---
 
