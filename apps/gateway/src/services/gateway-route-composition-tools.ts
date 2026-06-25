@@ -86,7 +86,10 @@ export function composeToolsMcpRouteDependencies(
       createMcpServer: (input: McpServerCreateInput) => mcpServerAdminService.createMcpServer(mcpAdminDeps, input),
       deleteMcpServer: (serverId: string) => mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId),
       disconnectMcpServer: (serverId: string) => mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId),
-      invokeMcpTool: (input: McpInvokeRequest) => gateway.toolInvocationCoordinator.invokeMcpTool(input),
+      // Route through the guarded public method (enrich → capability-scope assert → coordinator)
+      // so the REST /mcp/invoke surface is subject to the same workspace/citadel scope as the
+      // autonomous-model path (spec §7a: "covers every caller (model and REST)").
+      invokeMcpTool: (input: McpInvokeRequest) => gateway.invokeMcpTool(input),
       listMcpServers: () => gateway.listMcpServers(),
       listMcpTemplateDiscovery: () => mcpDiagnosticsService.listMcpTemplateDiscovery(mcpDiagnosticsDeps),
       listMcpTemplates: () => gateway.listMcpTemplates(),

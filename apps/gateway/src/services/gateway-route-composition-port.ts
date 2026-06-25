@@ -153,6 +153,7 @@ export interface GatewayRouteCompositionPort {
   ingestEvent: RouteDependencyMethod<"gatewayEvents", "ingestEvent">;
   installSkillImport: RouteDependencyMethod<"skills", "installSkillImport">;
   invokeAndUnwrap: CommsHost["invokeAndUnwrap"];
+  invokeMcpTool: RouteDependencyMethod<"mcp", "invokeMcpTool">;
   invokeTool: RouteDependencyMethod<"toolsInvoke", "invokeTool">;
   isConnectionUrlAllowlisted: IntegrationChannelServicePort["isConnectionUrlAllowlisted"];
   isFeatureEnabled: RouteDependencyMethod<"toolsInvoke", "isFeatureEnabled">;
@@ -358,6 +359,7 @@ export function createGatewayRouteCompositionPort(
     ingestEvent: gateway.ingestEvent.bind(gateway),
     installSkillImport: gateway.installSkillImport.bind(gateway),
     invokeAndUnwrap: gateway.invokeAndUnwrap.bind(gateway),
+    invokeMcpTool: gateway.invokeMcpTool.bind(gateway),
     invokeTool: gateway.invokeTool.bind(gateway),
     isConnectionUrlAllowlisted: gateway.isConnectionUrlAllowlisted.bind(gateway),
     isFeatureEnabled: gateway.isFeatureEnabled.bind(gateway),
