@@ -2093,4 +2093,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_delegation_runs(parent_run_id, started_at DESC);
     `,
   },
+  {
+    version: 71,
+    name: "session_autonomy_heartbeat_prefs",
+    sql: `
+      ALTER TABLE IF EXISTS session_autonomy_prefs
+        ADD COLUMN IF NOT EXISTS heartbeat_enabled BIGINT NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS heartbeat_interval_seconds BIGINT NOT NULL DEFAULT 3600,
+        ADD COLUMN IF NOT EXISTS active_hours_json TEXT;
+    `,
+  },
 ];

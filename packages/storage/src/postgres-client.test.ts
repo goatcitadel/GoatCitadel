@@ -149,6 +149,7 @@ describe("PostgresDatabaseClient", () => {
         { version: 999, name: "future_unknown" },
       ],
       [{ column_name: "speed_mode" }],
+      [{ column_name: "heartbeat_enabled" }],
     ]);
     const client = new PostgresDatabaseClient({ database: "goatcitadel" }, { pool: asPool(pool) });
 
@@ -160,6 +161,8 @@ describe("PostgresDatabaseClient", () => {
       "schema drift: migration 1 is stale_initial_name, expected runtime_event_and_cutover_tables",
       "schema drift: unknown migration version 999 (future_unknown)",
       "schema drift: chat_session_prefs.subagent_policy is missing",
+      "schema drift: session_autonomy_prefs.heartbeat_interval_seconds is missing",
+      "schema drift: session_autonomy_prefs.active_hours_json is missing",
     ]);
   });
 

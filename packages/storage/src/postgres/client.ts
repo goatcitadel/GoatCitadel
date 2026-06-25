@@ -138,21 +138,47 @@ export class PostgresDatabaseClient {
     latestVersion: number,
     appliedMigrations: ReadonlyArray<{ version: number; name: string }>,
   ): Promise<string[]> {
+    const issues: string[] = [];
     const chatPrefsRepairApplied =
       latestVersion >= 28 || appliedMigrations.some((migration) => migration.name === "chat_operator_control_prefs");
-    if (!chatPrefsRepairApplied) {
+    if (chatPrefsRepairApplied) {
+      issues.push(...(await this.findMissingColumns("chat_session_prefs", ["speed_mode", "subagent_policy"])));
+    }
+
+    const autonomyHeartbeatRepairApplied =
+      latestVersion >= 71 ||
+      appliedMigrations.some((migration) => migration.name === "session_autonomy_heartbeat_prefs");
+    if (autonomyHeartbeatRepairApplied) {
+      issues.push(
+        ...(await this.findMissingColumns("session_autonomy_prefs", [
+          "heartbeat_enabled",
+          "heartbeat_interval_seconds",
+          "active_hours_json",
+        ])),
+      );
+    }
+
+    return issues;
+  }
+
+  private async findMissingColumns(tableName: string, columnNames: readonly string[]): Promise<string[]> {
+    if (columnNames.length === 0) {
       return [];
     }
-    const rows = await this.query<{ column_name: string }>(`
+    const columnPlaceholders = columnNames.map((_, index) => `$${index + 2}`).join(", ");
+    const rows = await this.query<{ column_name: string }>(
+      `
       SELECT column_name
       FROM information_schema.columns
       WHERE table_schema = current_schema()
-        AND table_name = 'chat_session_prefs'
-        AND column_name IN ('speed_mode', 'subagent_policy')
-    `);
+        AND table_name = $1
+        AND column_name IN (${columnPlaceholders})
+    `,
+      [tableName, ...columnNames],
+    );
     const present = new Set(rows.map((row) => row.column_name));
-    const missing = ["speed_mode", "subagent_policy"].filter((column) => !present.has(column));
-    return missing.map((column) => `schema drift: chat_session_prefs.${column} is missing`);
+    const missing = columnNames.filter((column) => !present.has(column));
+    return missing.map((column) => `schema drift: ${tableName}.${column} is missing`);
   }
 
   public async close(): Promise<void> {

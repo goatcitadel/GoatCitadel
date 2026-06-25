@@ -57,6 +57,9 @@ describe("Postgres runtime schema generation", () => {
     const delegationParentMigration = POSTGRES_MIGRATIONS.find(
       (migration) => migration.name === "chat_delegation_parent_run_id",
     );
+    const autonomyHeartbeatMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "session_autonomy_heartbeat_prefs",
+    );
 
     assert.ok(autonomyMigration, "expected Postgres migration for autonomy_audit");
     assert.match(autonomyMigration.sql, /CREATE TABLE IF NOT EXISTS autonomy_audit/);
@@ -66,6 +69,18 @@ describe("Postgres runtime schema generation", () => {
     assert.ok(delegationParentMigration, "expected Postgres migration for chat_delegation_runs.parent_run_id");
     assert.match(delegationParentMigration.sql, /ADD COLUMN IF NOT EXISTS parent_run_id TEXT/);
     assert.match(delegationParentMigration.sql, /idx_chat_delegation_runs_parent/);
+
+    assert.ok(autonomyHeartbeatMigration, "expected Postgres migration for session autonomy heartbeat prefs");
+    assert.match(autonomyHeartbeatMigration.sql, /ALTER TABLE IF EXISTS session_autonomy_prefs/);
+    assert.match(
+      autonomyHeartbeatMigration.sql,
+      /ADD COLUMN IF NOT EXISTS heartbeat_enabled BIGINT NOT NULL DEFAULT 1/,
+    );
+    assert.match(
+      autonomyHeartbeatMigration.sql,
+      /ADD COLUMN IF NOT EXISTS heartbeat_interval_seconds BIGINT NOT NULL DEFAULT 3600/,
+    );
+    assert.match(autonomyHeartbeatMigration.sql, /ADD COLUMN IF NOT EXISTS active_hours_json TEXT/);
   });
 
   it("preserves SQLite partial-index WHERE predicates on the generated Postgres schema", () => {
