@@ -597,6 +597,19 @@ describe("Postgres runtime schema generation", () => {
     );
   });
 
+  it("ships a Postgres migration for capability_scope_assignments", () => {
+    const migration = POSTGRES_MIGRATIONS.find((m) => m.name === "capability_scope_assignments");
+    assert.ok(migration, "expected Postgres migration for capability_scope_assignments");
+    assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS capability_scope_assignments/);
+    assert.match(migration.sql, /idx_capability_scope_assignments_unique/);
+    assert.match(migration.sql, /idx_capability_scope_assignments_lookup/);
+  });
+
+  it("auto-derives capability_scope_assignments into the runtime schema", () => {
+    const sql = buildPostgresRuntimeSchemaSql();
+    assert.match(sql, /capability_scope_assignments/);
+  });
+
   it("falls back to deterministic table ordering for circular foreign keys", () => {
     const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
       tables: [
