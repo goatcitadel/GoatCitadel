@@ -49,7 +49,7 @@ export function WorkspaceCapabilitiesSection({ activeWorkspaceId, route, navigat
         <button
           type="button"
           className="mc-next-settings-link"
-          onClick={() => navigate({ area: "settings", section: "citadel-capabilities" as Parameters<typeof navigate>[0]["section"], theme: route.theme })}
+          onClick={() => navigate({ area: "settings", section: "citadel-capabilities", theme: route.theme })}
         >
           Grant it at the Citadel.
         </button>

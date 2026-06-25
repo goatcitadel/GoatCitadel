@@ -226,6 +226,8 @@ import {
 import "./native-routes.css";
 import { BudgetSection } from "./settings/sections/BudgetSection";
 import { TrustPolicySection } from "./settings/sections/TrustPolicySection";
+import { WorkspaceCapabilitiesSection } from "./settings/sections/WorkspaceCapabilitiesSection";
+import { CitadelCapabilitiesSection } from "./settings/sections/CitadelCapabilitiesSection";
 import { UnknownSettingsSection } from "./settings/sections/UnknownSettingsSection";
 import {
   SettingsActionList,
@@ -401,6 +403,10 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <ToolsSection {...props} />;
     case "addons":
       return <AddonsSection {...props} />;
+    case "workspace-capabilities":
+      return <WorkspaceCapabilitiesSection {...props} />;
+    case "citadel-capabilities":
+      return <CitadelCapabilitiesSection {...props} />;
     default:
       return <UnknownSettingsSection {...props} />;
   }
