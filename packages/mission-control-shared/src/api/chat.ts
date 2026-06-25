@@ -66,6 +66,8 @@ import type {
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
+  SurfaceClassifyRequest,
+  SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
@@ -729,6 +731,13 @@ export async function preflightChatRoute(
   return request<RoutingPreflightResult>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/route-preflight`, {
     method: "POST",
     ...originSurfaceInit(options),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function classifySurfaceMode(input: SurfaceClassifyRequest): Promise<SurfaceClassifyResponse> {
+  return request<SurfaceClassifyResponse>("/api/v1/surface/classify", {
+    method: "POST",
     body: JSON.stringify(input),
   });
 }
