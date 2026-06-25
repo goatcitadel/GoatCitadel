@@ -10,6 +10,7 @@ import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
+  ChatMode,
   ChatTurnBranchKind,
   ChatMessageRecord,
   RoutingPreflightRequest,
@@ -41,6 +42,10 @@ import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import { applyAutoRouteToInput, recordModeOverrideIfChanged } from "./surface-router-entry.js";
+import type { SurfaceClassification } from "./surface-router-heuristics.js";
+import type { SurfaceRouteRequest } from "./surface-router-service.js";
+import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnLeaseControl,
@@ -123,6 +128,11 @@ export interface ChatTurnEntryHost
   }): ChatSpecialistCandidateSuggestionRecord[];
   isReplayScratchSession(sessionId: string): boolean;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
+  // Optional surface-router hooks — provided by the composition root when the auto-router is wired up.
+  surfaceRouter?: { route(req: SurfaceRouteRequest): SurfaceClassification };
+  readChatSessionMode?(sessionId: string): ChatMode | undefined;
+  persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
+  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): void;
 }
 
 export interface ChatTurnResumeHost {
@@ -151,6 +161,19 @@ export async function agentSendChatMessage(
   options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
+    try {
+      input = applyAutoRouteToInput(host, sessionId, input);
+      recordModeOverrideIfChanged(host, sessionId, input);
+    } catch (error) {
+      host.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.surface_router.failed",
+        message: "Surface auto-router failed; continuing with the provided/default mode",
+        sessionId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,

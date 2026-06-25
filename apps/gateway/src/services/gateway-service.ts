@@ -76,6 +76,7 @@ import {
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
 import {
+  buildChatModePrefsPatch,
   chatModeAllowsDynamicTeamGrowth,
   ConflictError,
   DEFAULT_CITADEL_ID,
@@ -96,6 +97,7 @@ import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import { SurfaceRouterService } from "./surface-router-service.js";
 import { wait } from "./wait.js";
 import type {
   DatabaseCutoverProfile,
@@ -1891,6 +1893,12 @@ export class GatewayService {
       withChatTurnWriteLeaseStream: (sessionId, operation, factory) =>
         this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
+      surfaceRouter: new SurfaceRouterService({ traceRepo: this.storage.runtimeDecisionTraces }),
+      readChatSessionMode: (sessionId: string) => this.storage.chatSessionPrefs.get(sessionId)?.mode,
+      persistChatSessionMode: (sessionId: string, mode: ChatMode) => {
+        this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));
+      },
+      recordSurfaceRouteOverrideSignal: (input) => this.improvementService.recordSurfaceRouteOverrideSignal(input),
     } as Omit<ChatTurnRuntimeHost, "config">;
     Object.defineProperty(host, "config", {
       configurable: false,
