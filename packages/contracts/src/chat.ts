@@ -1594,6 +1594,12 @@ export interface ChatSendMessageRequest {
   useMemory?: boolean;
   attachments?: string[];
   mode?: ChatMode;
+  /**
+   * When true and the session has no resolved mode yet, the gateway auto-routes
+   * this turn into chat/cowork/code instead of defaulting to "chat".
+   * Transient (request-only); never persisted.
+   */
+  autoRoute?: boolean;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
