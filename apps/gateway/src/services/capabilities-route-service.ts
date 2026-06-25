@@ -1,5 +1,6 @@
 import type { CapabilityCatalogScope } from "@goatcitadel/contracts";
 import type { CapabilitySystemService } from "./capability-system-service.js";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 
 export type CapabilitiesRoutePort = Pick<
   CapabilitySystemService,
@@ -30,8 +31,11 @@ export type CapabilitiesRoutePort = Pick<
 export class CapabilitiesRouteService {
   public constructor(private readonly capabilities: CapabilitiesRoutePort) {}
 
-  public listCapabilityCatalog(scope: CapabilityCatalogScope) {
-    return this.capabilities.listCatalog(scope);
+  public listCapabilityCatalog(scope: CapabilityCatalogScope, effectiveSkills?: EffectiveCapabilitySet) {
+    // Forward faithfully: omit the arg when unscoped so listCatalog's own default ("ALL") applies.
+    return effectiveSkills === undefined
+      ? this.capabilities.listCatalog(scope)
+      : this.capabilities.listCatalog(scope, effectiveSkills);
   }
 
   public getCapabilityCatalogSnapshot(snapshotId: string) {

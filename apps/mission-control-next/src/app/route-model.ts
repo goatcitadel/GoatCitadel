@@ -1149,6 +1149,22 @@ export const ROUTE_RELEASE_SCOPE = [
     verification: "verify:surface:regression, verify:agentic:governance",
     note: "Tool grants and deny-wins policy are release-bearing.",
   },
+  {
+    area: "settings",
+    section: "workspace-capabilities",
+    status: "hide",
+    releaseAction: "Choose which skills, plugins, and MCP servers this workspace uses.",
+    verification: "not release-bearing; gateway capability-scope suite",
+    note: "Workspace capability scoping is not yet part of the certified 1.0 release surface: MCP scope is enforced at invocation, but agent-side skill-discovery scoping and visual-regression coverage are tracked follow-ups.",
+  },
+  {
+    area: "settings",
+    section: "citadel-capabilities",
+    status: "hide",
+    releaseAction: "Govern which skills, plugins, and MCP servers exist in this Citadel.",
+    verification: "not release-bearing; gateway capability-scope suite",
+    note: "Citadel capability ownership is not yet part of the certified 1.0 release surface; pending agent-side skill enforcement and visual-regression baselines.",
+  },
 ] as const satisfies readonly RouteReleaseScope[];
 
 const ROUTE_RELEASE_SCOPE_BY_KEY = new Map(ROUTE_RELEASE_SCOPE.map((scope) => [getRouteReleaseKey(scope), scope]));

@@ -6,6 +6,7 @@ const DEFAULT_WORKSPACE_ID = "default";
 export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const catalogQuerySchema = z.object({
     scope: z.enum(["inspectable", "callable"]).optional(),
+    workspaceId: z.string().trim().min(1).optional(),
   });
 
   const snapshotParamsSchema = z.object({
@@ -145,10 +146,15 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const scope = parsed.data.scope ?? "inspectable";
-    return reply.send({
-      scope,
-      items: fastify.services.capabilities.listCapabilityCatalog(scope),
-    });
+    // Scope skill-kind catalog entries to the active workspace's effective skill set when a
+    // workspaceId is supplied (mirrors GET /api/v1/skills?workspaceId). Absent → unchanged call.
+    const items = parsed.data.workspaceId
+      ? fastify.services.capabilities.listCapabilityCatalog(
+          scope,
+          fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
+        )
+      : fastify.services.capabilities.listCapabilityCatalog(scope);
+    return reply.send({ scope, items });
   });
 
   fastify.get("/api/v1/capabilities/tool-directory/compact", async (request, reply) => {
