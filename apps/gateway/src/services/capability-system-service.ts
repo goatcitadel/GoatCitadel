@@ -250,9 +250,12 @@ export class CapabilitySystemService {
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
 
-  public listCatalog(scope: CapabilityCatalogScope): CapabilityCatalogEntry[] {
+  public listCatalog(
+    scope: CapabilityCatalogScope,
+    effectiveSkills: EffectiveCapabilitySet = "ALL",
+  ): CapabilityCatalogEntry[] {
     this.ensureSkillLifecycleBackfill();
-    const inspectable = this.buildInspectableCatalog();
+    const inspectable = this.buildInspectableCatalog(effectiveSkills);
     return scope === "callable" ? inspectable.filter((entry) => entry.callable) : inspectable;
   }
 
@@ -2169,7 +2172,7 @@ export class CapabilitySystemService {
     }
   }
 
-  private buildInspectableCatalog(): CapabilityCatalogEntry[] {
+  private buildInspectableCatalog(effectiveSkills: EffectiveCapabilitySet = "ALL"): CapabilityCatalogEntry[] {
     const entries: CapabilityCatalogEntry[] = [];
     for (const tool of this.options.listToolCatalog()) {
       entries.push({
@@ -2188,7 +2191,7 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const skill of this.listSkills()) {
+    for (const skill of this.listSkills(effectiveSkills)) {
       entries.push({
         capabilityId: `skill:${skill.skillId}`,
         kind: "skill",

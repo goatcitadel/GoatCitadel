@@ -264,6 +264,48 @@ describe("capabilities routes", () => {
     });
   });
 
+  it("scopes the catalog by the workspace's effective skill set when workspaceId is supplied", async () => {
+    const effective = new Set(["skill-a"]);
+    const resolveEffectiveSkills = vi.fn((_workspaceId: string) => effective);
+    const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") => [
+      { capabilityId: `cap-${scope}`, name: `Catalog ${scope}`, kind: "tool", category: "built_in", callable: false },
+    ]);
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("services", {
+      capabilities: { listCapabilityCatalog },
+      capabilityScope: { resolveEffectiveSkills },
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/capabilities/catalog?workspaceId=ws-1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveEffectiveSkills).toHaveBeenCalledWith("ws-1");
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable", effective);
+  });
+
+  it("leaves the catalog call unscoped (argument-identical) when workspaceId is absent", async () => {
+    const resolveEffectiveSkills = vi.fn();
+    const listCapabilityCatalog = vi.fn(() => []);
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("services", {
+      capabilities: { listCapabilityCatalog },
+      capabilityScope: { resolveEffectiveSkills },
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    await app.inject({ method: "GET", url: "/api/v1/capabilities/catalog" });
+
+    expect(resolveEffectiveSkills).not.toHaveBeenCalled();
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
+  });
+
   it("returns compact tool-directory snapshots and fetches full schemas by ref", async () => {
     const service = await registerCapabilitiesService();
 
