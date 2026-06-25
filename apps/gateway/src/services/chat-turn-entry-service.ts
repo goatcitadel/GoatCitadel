@@ -10,6 +10,7 @@ import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
+  ChatMode,
   ChatTurnBranchKind,
   ChatMessageRecord,
   RoutingPreflightRequest,
@@ -41,6 +42,9 @@ import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import { applyAutoRouteToInput } from "./surface-router-entry.js";
+import type { SurfaceClassification } from "./surface-router-heuristics.js";
+import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnLeaseControl,
@@ -123,6 +127,10 @@ export interface ChatTurnEntryHost
   }): ChatSpecialistCandidateSuggestionRecord[];
   isReplayScratchSession(sessionId: string): boolean;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
+  // Optional surface-router hooks — provided by the composition root when the auto-router is wired up.
+  surfaceRouter?: { route(req: SurfaceRouteRequest): SurfaceClassification };
+  readChatSessionMode?(sessionId: string): ChatMode | undefined;
+  persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
 }
 
 export interface ChatTurnResumeHost {
@@ -151,6 +159,7 @@ export async function agentSendChatMessage(
   options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
+    input = applyAutoRouteToInput(host, sessionId, input);
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,
