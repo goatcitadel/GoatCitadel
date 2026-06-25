@@ -8,7 +8,7 @@ export interface SurfaceHeuristicContext {
 export interface SurfaceClassification {
   mode: ChatMode;
   confidence: number; // 0..1
-  source: "heuristic";
+  source: "heuristic" | "judge";
   rationale: string;
   alternatives: ChatMode[];
 }

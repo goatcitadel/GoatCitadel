@@ -129,7 +129,7 @@ export interface ChatTurnEntryHost
   isReplayScratchSession(sessionId: string): boolean;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
   // Optional surface-router hooks — provided by the composition root when the auto-router is wired up.
-  surfaceRouter?: { route(req: SurfaceRouteRequest): SurfaceClassification };
+  surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
   readChatSessionMode?(sessionId: string): ChatMode | undefined;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
   recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): void;
@@ -162,7 +162,7 @@ export async function agentSendChatMessage(
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
     try {
-      input = applyAutoRouteToInput(host, sessionId, input);
+      input = await applyAutoRouteToInput(host, sessionId, input);
       recordModeOverrideIfChanged(host, sessionId, input);
     } catch (error) {
       host.recordDevDiagnostic({
