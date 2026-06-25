@@ -97,6 +97,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "assemblyService",
   "backupRetentionService",
   "capabilityPackService",
+  "capabilityScopeResolver",
   "capabilitySystemService",
   "chatMessageRouteRuntimeHost",
   "chatProjectService",
@@ -346,9 +347,10 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\[\s*key\s*:\s*string\s*\]/);
     const portBlock = portSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const portMemberCount = portBlock.match(/^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm)?.length ?? 0;
-    // Soft bloat cap. Bumped to 161 for the security-required `deviceTokenVault`
-    // singleton (ephemeral device-token delivery; never plaintext at rest).
-    expect(portMemberCount).toBeLessThanOrEqual(161);
+    // Soft bloat cap. Bumped to 163 for workspace/citadel capability scoping: `invokeMcpTool`
+    // (routes the REST /mcp/invoke surface through the guarded gateway method) + `capabilityScopeResolver`
+    // (resolution for the capability-scope route service).
+    expect(portMemberCount).toBeLessThanOrEqual(163);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

@@ -2,6 +2,10 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 
+const skillsListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+});
+
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
 
@@ -102,7 +106,16 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     skillId: z.string().min(1),
   });
 
-  fastify.get("/api/v1/skills", async (_request, reply) => {
+  fastify.get("/api/v1/skills", async (request, reply) => {
+    const parsed = skillsListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const workspaceId = parsed.data.workspaceId;
+    if (workspaceId !== undefined) {
+      const effective = fastify.services.capabilityScope.resolveEffectiveSkills(workspaceId);
+      return reply.send({ items: skills.listSkills(effective) });
+    }
     return reply.send({ items: skills.listSkills() });
   });
 

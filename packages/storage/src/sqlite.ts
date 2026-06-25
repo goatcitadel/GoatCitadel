@@ -1531,6 +1531,30 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 132,
+    name: "capability_scope_assignments",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS capability_scope_assignments (
+          assignment_id TEXT PRIMARY KEY,
+          scope_kind TEXT NOT NULL,
+          scope_id TEXT NOT NULL,
+          resource_type TEXT NOT NULL,
+          resource_ref TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_capability_scope_assignments_unique
+          ON capability_scope_assignments(scope_kind, scope_id, resource_type, resource_ref);
+
+        CREATE INDEX IF NOT EXISTS idx_capability_scope_assignments_lookup
+          ON capability_scope_assignments(scope_kind, scope_id, resource_type, enabled);
+      `);
+    },
+  },
 ];
 
 function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {

@@ -253,4 +253,85 @@ describe("skills routes", () => {
       sourceType: "git_url",
     });
   });
+
+  it("returns all skills when no workspaceId is provided (non-breaking default)", async () => {
+    const listSkills = vi.fn(() => [
+      { skillId: "skill-a", name: "Skill A" },
+      { skillId: "skill-b", name: "Skill B" },
+    ]);
+
+    app = Fastify();
+    app.decorate("services", {
+      skills: { listSkills },
+      capabilityScope: {},
+    } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/skills" });
+
+    expect(response.statusCode).toBe(200);
+    // no workspaceId → listSkills called with no args (uses service default "ALL")
+    expect(listSkills).toHaveBeenCalledWith();
+    expect(response.json().items).toHaveLength(2);
+  });
+
+  it("scopes skills by workspace when ?workspaceId is provided", async () => {
+    const effectiveSet = new Set(["skill-a"]);
+    const resolveEffectiveSkills = vi.fn(() => effectiveSet);
+    const listSkills = vi.fn((effective?: unknown) => {
+      if (effective instanceof Set) {
+        return [{ skillId: "skill-a", name: "Skill A" }];
+      }
+      return [
+        { skillId: "skill-a", name: "Skill A" },
+        { skillId: "skill-b", name: "Skill B" },
+      ];
+    });
+
+    app = Fastify();
+    app.decorate("services", {
+      skills: { listSkills },
+      capabilityScope: { resolveEffectiveSkills },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/skills?workspaceId=ws-scoped",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveEffectiveSkills).toHaveBeenCalledWith("ws-scoped");
+    expect(listSkills).toHaveBeenCalledWith(effectiveSet);
+    expect(response.json().items).toHaveLength(1);
+    expect(response.json().items[0].skillId).toBe("skill-a");
+  });
+
+  it("resolves the effective set per workspace and does not bleed across calls", async () => {
+    const resolveEffectiveSkillsForA = new Set(["skill-a"]);
+    const resolveEffectiveSkillsForB = new Set(["skill-b"]);
+    const resolveEffectiveSkills = vi.fn((workspaceId: string) =>
+      workspaceId === "ws-a" ? resolveEffectiveSkillsForA : resolveEffectiveSkillsForB,
+    );
+    const listSkills = vi.fn((effective?: unknown) => {
+      if (effective === resolveEffectiveSkillsForA) return [{ skillId: "skill-a", name: "A" }];
+      if (effective === resolveEffectiveSkillsForB) return [{ skillId: "skill-b", name: "B" }];
+      return [];
+    });
+
+    app = Fastify();
+    app.decorate("services", {
+      skills: { listSkills },
+      capabilityScope: { resolveEffectiveSkills },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const resA = await app.inject({ method: "GET", url: "/api/v1/skills?workspaceId=ws-a" });
+    const resB = await app.inject({ method: "GET", url: "/api/v1/skills?workspaceId=ws-b" });
+
+    expect(resA.statusCode).toBe(200);
+    expect(resB.statusCode).toBe(200);
+    expect(resA.json().items[0].skillId).toBe("skill-a");
+    expect(resB.json().items[0].skillId).toBe("skill-b");
+  });
 });

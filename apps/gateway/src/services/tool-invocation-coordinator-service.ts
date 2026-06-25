@@ -168,6 +168,10 @@ export interface ToolInvocationCoordinatorHost {
   readonly durableTasks: McpDurableTasksPort;
   readonly respondToMcpElicitation: RespondToMcpElicitation;
   readonly listMcpElicitations: ListMcpElicitations;
+  /** Optional capability-scope gate. Throws (PolicyViolationError) when the requested MCP
+   *  server is not available in the active workspace/citadel scope. Absent → no scoping
+   *  (fail-open). Invoked at the executeMcpRuntime choke point for external servers only. */
+  assertMcpServerInScope?: (request: McpInvokeRequest) => void;
   readonly policyEngine: {
     invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
     invoke(request: {
@@ -916,6 +920,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     runtimeStartedAt: number,
     autonomousActivation?: AutonomousActivationRuntimeEvidence,
   ): Promise<McpInvokeResponse> {
+    // Capability-scope choke point: every MCP invocation path converges here (model
+    // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
+    // invokeMcpTool). Internal servers (approval inbox, durable tasks) are infrastructure and
+    // are always allowed. When the host hook is absent, scoping is inert (fail-open).
+    if (!isInternalMcpApprovalInboxServer(server) && !isInternalMcpDurableTasksServer(server)) {
+      this.host.assertMcpServerInScope?.(input);
+    }
     const runtime = isInternalMcpApprovalInboxServer(server)
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
           approvalInbox: this.host.approvalInbox,

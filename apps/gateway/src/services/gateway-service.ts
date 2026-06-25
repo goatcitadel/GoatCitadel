@@ -84,6 +84,7 @@ import {
   isChatTurnActiveStatus,
   isChatTurnTerminalStatus,
   NotFoundError,
+  PolicyViolationError,
   providerAllowsForeignModelIds,
   sanitizeChannelOutboundMessage,
   ValidationError,
@@ -99,6 +100,7 @@ import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
+import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
 import { wait } from "./wait.js";
 import type {
   DatabaseCutoverProfile,
@@ -793,6 +795,7 @@ export class GatewayService {
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
   private readonly skillsService: SkillsService;
+  private readonly capabilityScopeResolver: CapabilityScopeResolver;
   public readonly orchestrationEngine: OrchestrationEngine;
   private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
   private readonly orchestrationPhaseExecutionService: OrchestrationPhaseExecutionService;
@@ -995,6 +998,12 @@ export class GatewayService {
       { source: "managed", dir: path.join(config.rootDir, ".assistant", "skills") },
       { source: "workspace", dir: path.join(config.rootDir, "skills", "workspace") },
     ]);
+    this.capabilityScopeResolver = new CapabilityScopeResolver({
+      listAssignmentsForScope: (scopeKind, scopeId) => this.storage.capabilityScope.listForScope(scopeKind, scopeId),
+      listAllSkillIds: () => this.skillsService.list().map((skill) => skill.skillId),
+      listAllIntegrationIds: () => this.storage.integrationConnections.list(undefined, 1000).map((c) => c.connectionId),
+      listAllMcpServerIds: () => this.listMcpServers().map((server) => server.serverId),
+    });
     this.capabilitySystemService = new CapabilitySystemService({
       rootDir: config.rootDir,
       runtimeConfig: config.assistant.capabilities,
@@ -1388,6 +1397,7 @@ export class GatewayService {
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
+      assertMcpServerInScope: (request) => this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
         listRuns: (limit) => this.storage.durableRuns.listRuns(limit),
         getRun: (runId) => {
@@ -1748,6 +1758,7 @@ export class GatewayService {
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,
       capabilityPackService: this.capabilityPackService,
+      capabilityScopeResolver: this.capabilityScopeResolver,
       capabilitySystemService: this.capabilitySystemService,
       chatMessageRouteRuntimeHost: this.buildChatMessageRouteRuntimeHost(),
       chatProjectService: this.chatProjectService,
@@ -7769,7 +7780,28 @@ export class GatewayService {
   }
 
   public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+    // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
+    // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
+    // correctly exempts internal servers. Enrich here so the gate sees the resolved workspaceId.
     return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input));
+  }
+
+  private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
+    // Guard: if the resolver was not constructed (e.g. test harness using Object.create),
+    // fail-open by allowing all.
+    if (!this.capabilityScopeResolver) {
+      return;
+    }
+    const workspaceId = request.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const citadelId = this.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+    const effective = this.capabilityScopeResolver.resolve(citadelId, workspaceId).mcpServers;
+    if (!isCapabilityAllowed(effective, request.serverId)) {
+      throw new PolicyViolationError({
+        code: "POLICY_BLOCKED",
+        message: `MCP server ${request.serverId} is not available in this workspace's capability scope.`,
+        details: { serverId: request.serverId, workspaceId, citadelId },
+      });
+    }
   }
 
   private enrichMcpInvokePolicyContext(input: McpInvokeRequest): McpInvokeRequest {

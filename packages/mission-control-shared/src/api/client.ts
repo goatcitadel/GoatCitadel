@@ -357,6 +357,7 @@ export async function fetchEvidenceReceipt(runId: string): Promise<EvidenceRecei
 }
 
 export * from "./types.js";
+export * from "./capabilities-scope.js";
 export * from "./citadels.js";
 export {
   controlAgenticRun,

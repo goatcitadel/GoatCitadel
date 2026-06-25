@@ -1,5 +1,6 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
 import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
+import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createCronRoutePort } from "./cron-route-service.js";
@@ -33,6 +34,7 @@ export function composeRuntimeAdminRouteDependencies(
 ): RouteDependencyDomain<
   | "authAdmin"
   | "approvals"
+  | "capabilityScope"
   | "citadels"
   | "masonInterpret"
   | "vaultKey"
@@ -110,6 +112,24 @@ export function composeRuntimeAdminRouteDependencies(
       verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),
     },
     approvals: gateway.approvalRuntime,
+    capabilityScope: {
+      repo: gateway.storage.capabilityScope,
+      resolver: gateway.capabilityScopeResolver,
+      listRegistry: (type) => {
+        if (type === "skill") {
+          return gateway.listSkills().map((s) => ({ ref: s.skillId, label: s.name }));
+        }
+        if (type === "integration") {
+          return gateway.storage.integrationConnections
+            .list(undefined, 1000)
+            .map((c) => ({ ref: c.connectionId, label: c.label }));
+        }
+        // mcp_server
+        return gateway.listMcpServers().map((s) => ({ ref: s.serverId, label: s.label }));
+      },
+      resolveCitadelId: (workspaceId) =>
+        gateway.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID,
+    },
     citadels: gateway.storage.citadels,
     masonInterpret: async (prompt: string): Promise<string> => {
       // Best-effort extraction. If no model/provider is configured, chatCompletions

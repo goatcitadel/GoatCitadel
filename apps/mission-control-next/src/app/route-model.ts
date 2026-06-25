@@ -49,7 +49,9 @@ export type SettingsSection =
   | "channels"
   | "mcp"
   | "tools"
-  | "trust-policy";
+  | "trust-policy"
+  | "workspace-capabilities"
+  | "citadel-capabilities";
 export type ReleaseSurfaceStatus = "ship" | "hide" | "experimental" | "needs_release_polish";
 
 export interface AppRoute {
@@ -591,6 +593,20 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       area: "settings",
       section: "budget",
     },
+    {
+      id: "settings-workspace-capabilities",
+      label: "Workspace capabilities",
+      description: "Choose which skills, plugins, and MCP servers this workspace uses.",
+      area: "settings",
+      section: "workspace-capabilities",
+    },
+    {
+      id: "settings-citadel-capabilities",
+      label: "Citadel capabilities",
+      description: "Govern which skills, plugins, and MCP servers exist in this Citadel.",
+      area: "settings",
+      section: "citadel-capabilities",
+    },
   ],
 };
 
@@ -649,11 +665,11 @@ export interface RailGroup {
  */
 export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
   settings: [
-    { id: "settings-foundations", label: "Foundations", sections: ["general", "onboarding", "workspaces"] },
+    { id: "settings-foundations", label: "Foundations", sections: ["general", "onboarding", "workspaces", "workspace-capabilities"] },
     {
       id: "settings-identity",
       label: "Identity",
-      sections: ["access", "permissions", "personalities", "providers", "local-ai", "trust-policy"],
+      sections: ["access", "permissions", "personalities", "providers", "local-ai", "trust-policy", "citadel-capabilities"],
     },
     { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
     { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },

@@ -53,6 +53,7 @@ import type { DeviceTokenVault } from "./device-token-vault.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import type { ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
+import type { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 
 type RouteDependencyMethod<
   TDomain extends keyof GatewayRouteServiceDependencies,
@@ -67,6 +68,7 @@ export interface GatewayRouteCompositionPort {
   readonly assemblyService: AssemblyService;
   readonly backupRetentionService: BackupRetentionService;
   readonly capabilityPackService: CapabilityPackService;
+  readonly capabilityScopeResolver: CapabilityScopeResolver;
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
@@ -153,6 +155,7 @@ export interface GatewayRouteCompositionPort {
   ingestEvent: RouteDependencyMethod<"gatewayEvents", "ingestEvent">;
   installSkillImport: RouteDependencyMethod<"skills", "installSkillImport">;
   invokeAndUnwrap: CommsHost["invokeAndUnwrap"];
+  invokeMcpTool: RouteDependencyMethod<"mcp", "invokeMcpTool">;
   invokeTool: RouteDependencyMethod<"toolsInvoke", "invokeTool">;
   isConnectionUrlAllowlisted: IntegrationChannelServicePort["isConnectionUrlAllowlisted"];
   isFeatureEnabled: RouteDependencyMethod<"toolsInvoke", "isFeatureEnabled">;
@@ -238,6 +241,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "assemblyService"
   | "backupRetentionService"
   | "capabilityPackService"
+  | "capabilityScopeResolver"
   | "capabilitySystemService"
   | "chatMessageRouteRuntimeHost"
   | "chatProjectService"
@@ -276,6 +280,7 @@ export function createGatewayRouteCompositionPort(
     assemblyService: privateDependencies.assemblyService,
     backupRetentionService: privateDependencies.backupRetentionService,
     capabilityPackService: privateDependencies.capabilityPackService,
+    capabilityScopeResolver: privateDependencies.capabilityScopeResolver,
     capabilitySystemService: privateDependencies.capabilitySystemService,
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
@@ -358,6 +363,7 @@ export function createGatewayRouteCompositionPort(
     ingestEvent: gateway.ingestEvent.bind(gateway),
     installSkillImport: gateway.installSkillImport.bind(gateway),
     invokeAndUnwrap: gateway.invokeAndUnwrap.bind(gateway),
+    invokeMcpTool: gateway.invokeMcpTool.bind(gateway),
     invokeTool: gateway.invokeTool.bind(gateway),
     isConnectionUrlAllowlisted: gateway.isConnectionUrlAllowlisted.bind(gateway),
     isFeatureEnabled: gateway.isFeatureEnabled.bind(gateway),

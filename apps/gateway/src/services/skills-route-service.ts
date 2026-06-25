@@ -22,6 +22,7 @@ import type {
   SkillSourceProvider,
   SkillStateRecord,
 } from "@goatcitadel/contracts";
+import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 
 export interface SkillImportInstallResult {
   validation: SkillImportValidationResult;
@@ -44,7 +45,7 @@ export interface SkillsRoutePort {
   listSkillEvaluationRuns(skillId: string): SkillEvaluationListResponse;
   listSkillExportTargets(): SkillExportTargetProfile[];
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
-  listSkills(): SkillListItem[];
+  listSkills(effectiveSkills?: EffectiveCapabilitySet): SkillListItem[];
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
   previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest): SkillEvaluationPreviewResponse;
   previewSkillExport(input: SkillExportRequest): SkillExportPreviewResponse;
@@ -66,8 +67,10 @@ export interface SkillsRoutePort {
 export class SkillsRouteService {
   public constructor(private readonly skills: SkillsRoutePort) {}
 
-  public listSkills() {
-    return this.skills.listSkills();
+  public listSkills(effectiveSkills?: EffectiveCapabilitySet) {
+    // Forward faithfully: omit the arg entirely when unscoped so the port's own
+    // default ("ALL") applies and the pass-through stays argument-identical.
+    return effectiveSkills === undefined ? this.skills.listSkills() : this.skills.listSkills(effectiveSkills);
   }
 
   public reloadSkills() {

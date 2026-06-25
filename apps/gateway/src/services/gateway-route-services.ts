@@ -17,6 +17,10 @@ import {
 } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
 import {
+  CapabilityScopeRouteService,
+  type CapabilityScopeRouteServiceDeps,
+} from "./capability-scope-route-service.js";
+import {
   createCapabilityPacksRouteService,
   type CapabilityPacksRoutePort,
   type CapabilityPacksRouteService,
@@ -196,6 +200,7 @@ export interface GatewayRouteServices {
   authAdmin: AuthAdminRouteService;
   autonomyControl: AutonomyControlRouteService;
   approvals: ApprovalsRouteService;
+  capabilityScope: CapabilityScopeRouteService;
   citadels: CitadelsRouteService;
   compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
@@ -266,6 +271,7 @@ export interface GatewayRouteServiceDependencies {
   authAdmin: AuthAdminRoutePort;
   autonomyControl: AutonomyControlRoutePort;
   approvals: ApprovalRuntime;
+  capabilityScope: CapabilityScopeRouteServiceDeps;
   citadels: CitadelsRoutePort;
   masonInterpret?: MasonInterpret;
   vaultKey?: VaultKeyProvider;
@@ -339,6 +345,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
     autonomyControl: createAutonomyControlRouteService(deps.autonomyControl),
     approvals: new ApprovalsRouteService(deps.approvals),
+    capabilityScope: new CapabilityScopeRouteService(deps.capabilityScope),
     citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
     compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
