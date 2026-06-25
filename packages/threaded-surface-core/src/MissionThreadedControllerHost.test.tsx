@@ -2821,4 +2821,37 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.summary).toContain("Chat sion-1");
     expect(latestSurfaceInput?.contextDockProps?.projectOptions).toEqual([{ value: "none", label: "Unassigned" }]);
   });
+
+  it("calls onResolvedModeChange with the resolved mode of the selected session (unlocked surface)", async () => {
+    const codeSession = {
+      ...selectedSession,
+      sessionId: "session-code",
+      sessionKey: "session-code",
+      mode: "code" as ChatMode,
+      title: "Code session",
+    };
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(),
+      sessions: { items: [selectedSession, codeSession] },
+    });
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: codeSession,
+      missionSessions: [selectedSession, codeSession],
+      visibleSessionLabelById: new Map([
+        ["session-1", "Launch plan"],
+        ["session-code", "Code session"],
+      ]),
+    });
+
+    const onResolvedModeChange = vi.fn();
+    await renderHost({ lockSurface: false, onResolvedModeChange });
+
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-code");
+      await flushEffects(8);
+    });
+
+    expect(onResolvedModeChange).toHaveBeenCalledWith("code");
+  });
 });

@@ -22,6 +22,7 @@ export function ThreadedSurfaceRoute({
   onOpenStartHere,
   onOpenUniversalRunDetail,
   onNavigateSurface,
+  onResolvedModeChange,
 }: {
   surface: ChatMode;
   workspaceId: string;
@@ -39,6 +40,7 @@ export function ThreadedSurfaceRoute({
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
   ) => void;
+  onResolvedModeChange?: (mode: ChatMode) => void;
 }) {
   return (
     <MissionThreadedControllerHost
@@ -54,6 +56,7 @@ export function ThreadedSurfaceRoute({
       onOpenApprovals={onOpenApprovals}
       onOpenStartHere={onOpenStartHere}
       onNavigateSurface={onNavigateSurface}
+      onResolvedModeChange={onResolvedModeChange}
       renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
         <ThreadedSurfacePermissionBridge
           surface={surface}

@@ -1167,6 +1167,9 @@ export function renderRouteContent(input: {
             artifactId: options?.artifactId ?? undefined,
           })
         }
+        onResolvedModeChange={(mode) =>
+          input.navigate({ ...route, area: "chat", mode }, { replace: true })
+        }
       />
     );
   }

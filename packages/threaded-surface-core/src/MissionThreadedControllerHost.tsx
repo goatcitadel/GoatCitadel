@@ -722,6 +722,7 @@ export function MissionThreadedControllerHost({
   onOpenApprovals = () => undefined,
   onOpenStartHere = () => undefined,
   onNavigateSurface,
+  onResolvedModeChange,
   renderSurface,
 }: {
   workspaceId?: string;
@@ -741,6 +742,7 @@ export function MissionThreadedControllerHost({
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
   ) => void;
+  onResolvedModeChange?: (mode: ChatMode) => void;
   renderSurface: (input: MissionThreadedRenderSurfaceInput) => ReactNode;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
@@ -955,6 +957,14 @@ export function MissionThreadedControllerHost({
       ? surface
       : (sessions?.items.find((item) => item.sessionId === selectedSessionId)?.mode ?? fallbackSessionMode)
     : fallbackSessionMode;
+
+  const lastEmittedModeRef = useRef<ChatMode | null>(null);
+  useEffect(() => {
+    if (currentSessionMode && currentSessionMode !== lastEmittedModeRef.current) {
+      lastEmittedModeRef.current = currentSessionMode;
+      onResolvedModeChange?.(currentSessionMode);
+    }
+  }, [currentSessionMode, onResolvedModeChange]);
 
   const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
     if (!selectedSessionId || (currentSessionMode !== "cowork" && currentSessionMode !== "code")) {
