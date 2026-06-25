@@ -91,11 +91,7 @@ export async function getChatToolArtifactContent(
     throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
   }
   const artifactRoot = path.resolve(deps.config.rootDir, deps.config.assistant.dataDir);
-  const storageRelPath = artifact.storageRelPath.replaceAll("\\", "/");
-  if (path.posix.isAbsolute(storageRelPath) || storageRelPath.split("/").includes("..")) {
-    throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
-  }
-  const absolutePath = path.resolve(artifactRoot, storageRelPath);
+  const absolutePath = path.resolve(artifactRoot, normalizeStoredArtifactPath(artifact.storageRelPath));
   const normalizedRoot = `${artifactRoot}${path.sep}`;
   if (absolutePath !== artifactRoot && !absolutePath.startsWith(normalizedRoot)) {
     throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
@@ -122,4 +118,12 @@ function inferToolArtifactExtension(contentType?: string): string {
     return ".xml";
   }
   return ".txt";
+}
+
+function normalizeStoredArtifactPath(storageRelPath: string): string {
+  const segments = storageRelPath.split(/[\\/]+/u).filter(Boolean);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
+  }
+  return path.join(...segments);
 }

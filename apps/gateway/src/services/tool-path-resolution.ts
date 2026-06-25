@@ -255,7 +255,7 @@ function isFilesystemRootPath(value: string): boolean {
 }
 
 function isWithinRoot(root: string, target: string): boolean {
-  const rel = path.relative(path.resolve(root), target);
+  const rel = path.relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 

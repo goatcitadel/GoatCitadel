@@ -1,0 +1,263 @@
+{
+  "schema_version": "goatcitadel_maturity_scorecard.v1",
+  "scorer_source": "UAA-P1-088 eight-dimension module maturity scorer",
+  "assessed_on": "2026-06-24",
+  "repo": "GoatCitadel",
+  "branch": "codex/goatcitadel-fast-gate-hardening",
+  "commit": "codex/goatcitadel-fast-gate-hardening@HEAD",
+  "status": "post_repair_review",
+  "verdict": {
+    "module_average": 82,
+    "status_label": "product_candidate_fast_gate_green",
+    "delivery_gate": "fast_gate_green_release_proof_required",
+    "reason": "Current fast verification is green; broader release-proof lanes and lower-scored partial modules still need refresh before delivery-ready status."
+  },
+  "scoring_model": {
+    "dimensions": [
+      "product_usefulness",
+      "safety_boundary_clarity",
+      "test_depth",
+      "ui_visibility",
+      "cli_parity",
+      "evidence_quality",
+      "operator_ergonomics",
+      "implementation_maturity"
+    ],
+    "dimension_max": 5,
+    "composite_formula": "floor(sum(dimension_scores) * 100 / 40)",
+    "bands": {
+      "90_100": "delivery_ready_candidate_when_hard_gates_green",
+      "80_89": "strong_product_candidate_with_blocking_debt_or_release_proof_gap",
+      "70_79": "usable_foundation_with_clear_product_gaps",
+      "60_69": "validated_substrate_not_product_ready",
+      "0_59": "immature_or_contract_only"
+    }
+  },
+  "verification_snapshot": {
+    "node": "v22.23.0",
+    "pnpm": "10.31.0",
+    "fast_artifact": "artifacts/verification/2026-06-25T00-04-11-153Z-fast-5c622a48/summary.md",
+    "fast_status": "passed",
+    "fast_counts": {
+      "passed": 10,
+      "failed": 0,
+      "degraded": 0,
+      "skipped": 0
+    },
+    "passing_fast_scenarios": [
+      "fast.skills-catalog",
+      "fast.repo-hygiene",
+      "fast.storage-migration-parity",
+      "fast.extensions-sdk-build",
+      "fast.extensions-sdk-package",
+      "fast.typecheck",
+      "fast.test",
+      "fast.smoke",
+      "fast.build",
+      "fast.docs"
+    ],
+    "failing_fast_scenarios": []
+  },
+  "modules": [
+    {
+      "module_id": "durable_execution_state",
+      "module_name": "Durable Execution / Runtime State",
+      "dimension_scores": [5, 5, 4, 4, 4, 5, 4, 5],
+      "composite_score": 90,
+      "rank": 1,
+      "status": "mature_strength",
+      "primary_gap": "Keep recovery and resume proof current on the exact release SHA."
+    },
+    {
+      "module_id": "code_mode",
+      "module_name": "Code Mode",
+      "dimension_scores": [5, 5, 4, 4, 4, 5, 4, 4],
+      "composite_score": 87,
+      "rank": 3,
+      "status": "mature_strength",
+      "primary_gap": "Keep trusted-code claims distinct from hostile-code sandbox claims until all named platform proof exists."
+    },
+    {
+      "module_id": "approvals_auth_policy",
+      "module_name": "Approvals / Auth / Policy",
+      "dimension_scores": [5, 5, 4, 4, 4, 5, 4, 4],
+      "composite_score": 87,
+      "rank": 4,
+      "status": "mature_strength",
+      "primary_gap": "Continue proving deny-wins behavior across remote surfaces and autonomous grants."
+    },
+    {
+      "module_id": "evidence_release_truth",
+      "module_name": "Evidence / Release Truth",
+      "dimension_scores": [5, 5, 4, 4, 5, 5, 4, 4],
+      "composite_score": 90,
+      "rank": 2,
+      "status": "gate_green_proof_refresh_needed",
+      "primary_gap": "Fast gate is green; release proof lanes still need exact-SHA refresh before delivery-ready claims."
+    },
+    {
+      "module_id": "runtime_gateway_core",
+      "module_name": "Runtime / Gateway Core",
+      "dimension_scores": [5, 5, 4, 4, 4, 5, 4, 4],
+      "composite_score": 87,
+      "rank": 5,
+      "status": "strong",
+      "primary_gap": "Path-boundary hardening is repaired; large core service files still create review and targeted-validation cost."
+    },
+    {
+      "module_id": "memory_lifecycle_retrieval",
+      "module_name": "Memory Lifecycle / Retrieval",
+      "dimension_scores": [4, 5, 4, 4, 4, 5, 4, 4],
+      "composite_score": 85,
+      "rank": 6,
+      "status": "strong",
+      "primary_gap": "Advanced vector-like retrieval remains a future explicit milestone, not current authority."
+    },
+    {
+      "module_id": "surface_governance_product_truth",
+      "module_name": "Surface Governance / Product Truth",
+      "dimension_scores": [4, 5, 4, 4, 4, 5, 4, 4],
+      "composite_score": 85,
+      "rank": 7,
+      "status": "strong",
+      "primary_gap": "Keep route counts, experimental labels, and release claims gated against drift."
+    },
+    {
+      "module_id": "mission_control_shell",
+      "module_name": "Mission Control Shell",
+      "dimension_scores": [5, 4, 4, 5, 3, 4, 4, 4],
+      "composite_score": 82,
+      "rank": 8,
+      "status": "strong_product_surface",
+      "primary_gap": "Operator shell is broad; keep reducing monoliths and preserving clear blocked states."
+    },
+    {
+      "module_id": "tools_capability_registry",
+      "module_name": "Tools / Capability Registry",
+      "dimension_scores": [4, 5, 4, 4, 4, 4, 4, 4],
+      "composite_score": 82,
+      "rank": 9,
+      "status": "strong",
+      "primary_gap": "Keep capability activation tied to policy, provenance, and explicit operator grants."
+    },
+    {
+      "module_id": "cowork_orchestration",
+      "module_name": "Cowork / Orchestration",
+      "dimension_scores": [4, 4, 4, 5, 3, 4, 4, 4],
+      "composite_score": 80,
+      "rank": 12,
+      "status": "product_candidate",
+      "primary_gap": "Maintain durable, inspectable orchestration proof while reducing core orchestration file size."
+    },
+    {
+      "module_id": "integrations_mcp_a2a_mesh",
+      "module_name": "Integrations / MCP / A2A / Mesh",
+      "dimension_scores": [4, 5, 4, 4, 4, 4, 3, 4],
+      "composite_score": 80,
+      "rank": 13,
+      "status": "product_candidate",
+      "primary_gap": "Remote and mesh claims need exact-SHA proof and must stay subordinate to Gateway policy."
+    },
+    {
+      "module_id": "chat_surface",
+      "module_name": "Chat Surface",
+      "dimension_scores": [5, 4, 4, 5, 3, 5, 4, 4],
+      "composite_score": 82,
+      "rank": 10,
+      "status": "fast_smoke_repaired",
+      "primary_gap": "Keep attachment, artifact, and workbench path-boundary proof current as Chat remains a flagship loop."
+    },
+    {
+      "module_id": "extensions_skills_addons",
+      "module_name": "Extensions / Skills / Add-ons",
+      "dimension_scores": [4, 4, 4, 3, 4, 4, 3, 3],
+      "composite_score": 72,
+      "rank": 14,
+      "status": "partial_product_lane",
+      "primary_gap": "Add-ons remain experimental; package publication/provenance proof needs continued hardening."
+    },
+    {
+      "module_id": "desktop_packaging_installers",
+      "module_name": "Desktop / Packaging / Installers",
+      "dimension_scores": [4, 4, 3, 4, 4, 4, 3, 3],
+      "composite_score": 72,
+      "rank": 15,
+      "status": "partial_product_lane",
+      "primary_gap": "Signed public distribution and installer release proof remain separate gates."
+    },
+    {
+      "module_id": "realtime_event_stream",
+      "module_name": "Realtime / Event Stream",
+      "dimension_scores": [4, 4, 4, 4, 3, 5, 4, 4],
+      "composite_score": 82,
+      "rank": 11,
+      "status": "realtime_regression_repaired",
+      "primary_gap": "Keep SSE replay, auth bridge, and cleanup/reset behavior covered in fast-gate tests."
+    },
+    {
+      "module_id": "local_ai_npu_providers",
+      "module_name": "Local AI / NPU / Provider Diagnostics",
+      "dimension_scores": [3, 4, 3, 4, 3, 4, 3, 3],
+      "composite_score": 67,
+      "rank": 16,
+      "status": "bounded_partial",
+      "primary_gap": "Do not claim full local inference maturity; keep provider/NPU support diagnostic and bounded."
+    }
+  ],
+  "p0_to_p4_lanes": [
+    {
+      "priority": "P0",
+      "title": "Keep the repaired fast gate green",
+      "purpose": "Preserve the restored local baseline signal before using this checkout as product evidence.",
+      "targets": [
+        "packages/mission-control-shared/src/api/client-event-stream.test.ts",
+        "packages/mission-control-shared/src/api/client.ts",
+        "packages/mission-control-shared/src/api/sse-bridge.ts",
+        "apps/gateway/src/smoke.ts",
+        "apps/gateway/src/routes/chat.attachments.ts",
+        "apps/gateway/src/services/chat-attachment-service.ts"
+      ],
+      "retest": [
+        "pnpm --filter @goatcitadel/mission-control-shared exec vitest run src/api/client-event-stream.test.ts",
+        "pnpm --filter @goatcitadel/gateway smoke",
+        "pnpm verify:fast"
+      ]
+    },
+    {
+      "priority": "P1",
+      "title": "Refresh release-critical proof lanes",
+      "purpose": "Convert strong architecture into current, exact checkout evidence.",
+      "retest": [
+        "pnpm verify:runtime:truth",
+        "pnpm verify:durable:recovery",
+        "pnpm verify:memory:truth",
+        "pnpm verify:realtime:truth",
+        "pnpm verify:code-mode:sandbox",
+        "pnpm verify:mesh:readiness"
+      ]
+    },
+    {
+      "priority": "P2",
+      "title": "Promote maturity scoring into a recurring repo-owned lane",
+      "purpose": "Keep module scores retestable instead of one-off review prose.",
+      "safe_path": "Keep this scorecard manifest updated after gate changes and add a verifier once the format is stable."
+    },
+    {
+      "priority": "P3",
+      "title": "Reduce broad-surface maintenance drag",
+      "purpose": "Improve day-to-day product velocity without weakening release proof.",
+      "targets": [
+        "verification lane routing",
+        "Gateway service monoliths",
+        "Mission Control settings monolith",
+        "generated test ownership"
+      ]
+    },
+    {
+      "priority": "P4",
+      "title": "Advanced retrieval milestone",
+      "purpose": "Leave a safe path for vector-like or HRR-style retrieval without silently granting truth or prompt authority.",
+      "safe_path": "Treat advanced retrieval as explicit milestone work with recall-only semantics, evaluation fixtures, provenance, operator-visible source attribution, and no hidden context injection."
+    }
+  ]
+}

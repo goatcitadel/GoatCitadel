@@ -489,7 +489,8 @@ export async function prepareAgentChatTurn(
   recordPreparedTurnDecisions(host, prepared, {
     projectId,
     missingRequiredProjectBinding,
-    guidanceFileCount: resolvedGuidance.globalFilesUsed.length + resolvedGuidance.workspaceFilesUsed.length,
+    guidanceFileCount:
+      (resolvedGuidance.globalFilesUsed?.length ?? 0) + (resolvedGuidance.workspaceFilesUsed?.length ?? 0),
     threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
   });
   return prepared;

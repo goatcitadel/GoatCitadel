@@ -240,11 +240,23 @@ describe("AddonsService", () => {
 
     await expect(service.update("arena")).rejects.toThrow("pnpm install failed");
 
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      "git",
-      expect.arrayContaining(["reset", "--hard", "abc123"]),
-      expect.objectContaining({ cwd: addonPath }),
+    const safeAddonPath = await fs.realpath(addonPath);
+    const rollbackCall = execFileSyncMock.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "git" &&
+        Array.isArray(args) &&
+        args.includes("reset") &&
+        args.includes("--hard") &&
+        args.includes("abc123"),
     );
+    expect(rollbackCall).toBeDefined();
+    const rollbackArgs = rollbackCall?.[1] as string[] | undefined;
+    const rollbackOptions = rollbackCall?.[2] as { cwd?: string } | undefined;
+    const rollbackTargetDir =
+      rollbackArgs && rollbackArgs.includes("-C") ? rollbackArgs[rollbackArgs.indexOf("-C") + 1] : undefined;
+    expect(rollbackArgs).toEqual(expect.arrayContaining(["reset", "--hard", "abc123"]));
+    expect(await fs.realpath(String(rollbackTargetDir))).toBe(safeAddonPath);
+    expect(await fs.realpath(String(rollbackOptions?.cwd))).toBe(safeAddonPath);
 
     const manifest = JSON.parse(await fs.readFile(path.join(addonsRoot, "manifest.json"), "utf8")) as {
       items: Record<string, { installRef?: string; lastError?: string }>;
@@ -336,9 +348,10 @@ describe("AddonsService", () => {
     if (spawnFile === process.execPath) {
       expect(spawnArgs).toEqual(expect.arrayContaining([expect.stringContaining("corepack.js")]));
     }
+    const safeAddonPath = await fs.realpath(addonPath);
+    expect(await fs.realpath(String((spawnOptions as { cwd?: string } | undefined)?.cwd))).toBe(safeAddonPath);
     expect(spawnOptions).toEqual(
       expect.objectContaining({
-        cwd: addonPath,
         env: expect.objectContaining({
           ARENA_HOST: "127.0.0.1",
           ARENA_PORT: "3099",

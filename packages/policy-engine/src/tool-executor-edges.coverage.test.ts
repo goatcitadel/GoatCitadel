@@ -11,7 +11,9 @@ import type { Storage } from "@goatcitadel/storage";
 // driven per-test via `mocked.spawnResult`.
 type SpawnResult = { stdout?: string; stderr?: string; exitCode?: number | null; error?: Error };
 
-function makeSpawnChild(result: SpawnResult): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
+function makeSpawnChild(
+  result: SpawnResult,
+): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
     stdout: EventEmitter;
@@ -557,6 +559,36 @@ describe("tool executor edge coverage", () => {
     } finally {
       await fs.rm(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  it("matches active read grants when an allowed root resolves through a symlink", async () => {
+    const realRoot = path.join(tempRoot, "grant-real");
+    const linkedRoot = path.join(tempRoot, "grant-link");
+    await fs.mkdir(realRoot, { recursive: true });
+    await fs.symlink(realRoot, linkedRoot, "junction");
+    const grantedFile = path.join(linkedRoot, "granted.txt");
+    await fs.writeFile(path.join(realRoot, "granted.txt"), "linked grant ok\n", "utf8");
+    const storage = {
+      toolGrants: {
+        list: vi.fn(() => [
+          grantRecord("grant-active-link", {
+            allowedPaths: [linkedRoot],
+            usesRemaining: 1,
+          }),
+        ]),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        ...request("file.read_range", { path: grantedFile, startLine: 1, endLine: 1 }),
+        taskId: "task-granted-read",
+      },
+      config,
+      storage,
+    );
+
+    expect(result).toMatchObject({ content: "linked grant ok" });
   });
 
   it("dispatches Gmail and Calendar read/write adapters through allowlisted Google APIs", async () => {

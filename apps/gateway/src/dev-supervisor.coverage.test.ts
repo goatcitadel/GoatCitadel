@@ -180,7 +180,7 @@ describe("dev supervisor coverage", () => {
     );
 
     await import("./dev-supervisor.js");
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await new Promise((resolve) => setTimeout(resolve, 2100));
     process.emit("SIGINT");
     await new Promise((resolve) => setTimeout(resolve, 20));
 

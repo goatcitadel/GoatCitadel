@@ -65,6 +65,7 @@ import type {
   ChatTurnTranscriptIngress,
 } from "./chat-turn-runtime-collaborators.js";
 import { PROMPT_LAB_LOCAL_FILE_TOOL_NAMES } from "./chat-tool-families.js";
+import { routeWithModelRouter } from "./model-router-decision-service.js";
 
 type ChatTurnStreamStorage = Pick<
   Storage,
@@ -215,6 +216,18 @@ function recordRuntimeDecision(host: ChatTurnStreamHost, input: RuntimeDecisionT
   }
 }
 
+function resolvePreparedModelRouterDecision(
+  prepared: PreparedAgentChatTurn,
+): PreparedAgentChatTurn["modelRouterDecision"] {
+  return (
+    (prepared as Partial<PreparedAgentChatTurn>).modelRouterDecision ??
+    routeWithModelRouter({
+      prompt: prepared.content,
+      hasAttachments: false,
+    })
+  );
+}
+
 function recordStepRuntimeDecisions(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
@@ -328,6 +341,7 @@ export async function executePreparedModeOrchestration(
   if (!orchestration) {
     throw new Error("Prepared chat turn is not eligible for orchestration");
   }
+  const modelRouterDecision = resolvePreparedModelRouterDecision(prepared);
   const runId = randomUUID();
   const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
   const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
@@ -385,7 +399,7 @@ export async function executePreparedModeOrchestration(
       {
         source: "model_router",
         key: "decision",
-        value: prepared.modelRouterDecision.orchestration?.decision ?? "allowed",
+        value: modelRouterDecision.orchestration?.decision ?? "allowed",
         weight: "informational",
       },
     ],
@@ -1294,6 +1308,7 @@ export async function* streamPreparedAgentChatTurn(
   const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
+  const modelRouterDecision = resolvePreparedModelRouterDecision(prepared);
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   host.steerService.registerActiveTurn({ sessionId, turnId });
@@ -1338,7 +1353,7 @@ export async function* streamPreparedAgentChatTurn(
             input.providerId ??
             prepared.prefs.providerId,
           effectiveModel: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-          modelRouter: prepared.modelRouterDecision,
+          modelRouter: modelRouterDecision,
         },
       });
       yield {
@@ -1378,7 +1393,7 @@ export async function* streamPreparedAgentChatTurn(
                 modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
                 input.model ??
                 prepared.prefs.model,
-              modelRouter: prepared.modelRouterDecision,
+              modelRouter: modelRouterDecision,
             },
           });
           progressQueue.push(progressTrace);
@@ -1490,7 +1505,7 @@ export async function* streamPreparedAgentChatTurn(
               modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
               input.model ??
               prepared.prefs.model,
-            modelRouter: prepared.modelRouterDecision,
+            modelRouter: modelRouterDecision,
           },
           retrieval: prepared.retrievalTrace,
           reflection: {
@@ -1668,29 +1683,28 @@ export async function* streamPreparedAgentChatTurn(
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
     recordRuntimeDecision(host, {
-      kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
+      kind: modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
       scope: {
         workspaceId: prepared.workspaceId,
         sessionId,
         turnId,
       },
-      selected: prepared.modelRouterDecision.requiresTools ? "Use direct tool-capable turn runtime" : "Answer directly",
+      selected: modelRouterDecision.requiresTools ? "Use direct tool-capable turn runtime" : "Answer directly",
       rationale:
-        prepared.modelRouterDecision.orchestration?.reason ??
-        "The turn did not enter the governed mode-orchestration workflow.",
+        modelRouterDecision.orchestration?.reason ?? "The turn did not enter the governed mode-orchestration workflow.",
       alternatives: [
         {
           label: "Mode orchestration workflow",
           outcome: "not_chosen",
           reasonNotChosen:
-            prepared.modelRouterDecision.orchestration?.reason ??
+            modelRouterDecision.orchestration?.reason ??
             "Router and preference signals did not require a multi-step workflow.",
         },
       ],
       signals: [
         { source: "routing", key: "mode", value: prepared.normalized.mode ?? prepared.prefs.mode, weight: "strong" },
-        { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
-        { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
+        { source: "model_router", key: "route", value: modelRouterDecision.route, weight: "strong" },
+        { source: "model_router", key: "requires_tools", value: modelRouterDecision.requiresTools },
         { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
       ],
       evidenceRefs: [{ refType: "turn", refId: turnId }],
@@ -1736,7 +1750,7 @@ export async function* streamPreparedAgentChatTurn(
       policyTaskId: input.policyTaskId,
       fullWebAccess: input.fullWebAccess,
       historyMessages: historyWithSteers,
-      modelRouter: prepared.modelRouterDecision,
+      modelRouter: modelRouterDecision,
       signal: controller.signal,
     })) {
       if (chunk.type === "message_done" && chunk.content) {

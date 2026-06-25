@@ -1844,7 +1844,16 @@ function assertExistingWorkbenchRealpathAllowed(
     deps.config.toolPolicy.sandbox.writeJailRoots,
     deps.config.toolPolicy.sandbox.readOnlyRoots,
   );
-  assertPathInsideRoot(fsSync.realpathSync(path.resolve(targetPath)), projectRoot, label);
+  assertPathInsideRoot(fsSync.realpathSync(path.resolve(targetPath)), resolveExistingWorkbenchRoot(projectRoot), label);
+}
+
+function resolveExistingWorkbenchRoot(projectRoot: string): string {
+  const resolvedRoot = path.resolve(projectRoot);
+  try {
+    return fsSync.realpathSync(resolvedRoot);
+  } catch {
+    return resolvedRoot;
+  }
 }
 
 function assertWorkbenchDirectoryMoveSafe(sourcePath: string, destinationPath: string): void {

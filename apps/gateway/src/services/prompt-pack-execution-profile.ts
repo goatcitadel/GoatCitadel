@@ -513,7 +513,7 @@ function promptPackPathApiFor(...values: string[]): typeof path.win32 | typeof p
   return values.some((value) => isPromptPackWindowsAbsolutePath(value)) ? path.win32 : path;
 }
 
-function resolvePromptPackPortablePath(...segments: string[]): string {
+export function resolvePromptPackPortablePath(...segments: string[]): string {
   return promptPackPathApiFor(...segments).resolve(...segments);
 }
 

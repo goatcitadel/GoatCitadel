@@ -407,9 +407,8 @@ function resolveChatRuntimeScope(
 }
 
 function resolvePortablePath(rootDir: string, workspaceDir: string, relativePath: string): string {
-  return isWindowsAbsolutePath(rootDir)
-    ? path.win32.resolve(rootDir, workspaceDir, relativePath)
-    : path.resolve(rootDir, workspaceDir, relativePath);
+  const pathApi = [rootDir, workspaceDir, relativePath].some(isWindowsAbsolutePath) ? path.win32 : path;
+  return pathApi.resolve(rootDir, workspaceDir, relativePath);
 }
 
 function isWindowsAbsolutePath(value: string): boolean {

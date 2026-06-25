@@ -142,7 +142,7 @@ async function waitForConsoleDrains() {
   }
   await Promise.race([
     Promise.allSettled(snapshot),
-    new Promise((resolve) => setTimeout(resolve, 1000)),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
   ]);
 }
 

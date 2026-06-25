@@ -74,8 +74,9 @@ function installBrowser() {
 }
 
 async function flushAsync() {
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 20; index += 1) {
     await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
   }
 }
 

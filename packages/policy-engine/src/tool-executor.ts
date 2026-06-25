@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Tool execution policy remains intentionally centralized so grants, approvals, and audit behavior stay in one authoritative path. */
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -1413,7 +1413,9 @@ function normalizeEmbeddingProfileRequest(value: unknown): MemoryEmbeddingProfil
   const modelId = asString(input.modelId);
   const profileId = asString(input.profileId);
   const dimensions =
-    typeof input.dimensions === "number" && Number.isFinite(input.dimensions) ? Math.floor(input.dimensions) : undefined;
+    typeof input.dimensions === "number" && Number.isFinite(input.dimensions)
+      ? Math.floor(input.dimensions)
+      : undefined;
   if (!provider && !modelId && !profileId && dimensions === undefined) {
     return undefined;
   }
@@ -6183,7 +6185,12 @@ function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {
 }
 
 function normalizePathForGrantMatch(candidate: string): string {
-  return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
+  const resolved = path.resolve(candidate);
+  try {
+    return fsSync.realpathSync(resolved).replace(/\\/g, "/").toLowerCase();
+  } catch {
+    return resolved.replace(/\\/g, "/").toLowerCase();
+  }
 }
 
 function normalizePathVariantsForGrantMatch(candidate: string): string[] {

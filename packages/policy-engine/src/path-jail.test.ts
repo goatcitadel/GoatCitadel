@@ -39,6 +39,19 @@ describe("assertWritePathInJail", () => {
     expect(() => assertWritePathInJail(attemptedWritePath, [jailRoot])).not.toThrow();
   });
 
+  it("allows writes when the configured jail root resolves through a symlink", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-root-link-"));
+    tempDirs.push(root);
+    const realWorkspace = path.join(root, "real-workspace");
+    const linkedWorkspace = path.join(root, "workspace");
+    fs.mkdirSync(realWorkspace, { recursive: true });
+    fs.symlinkSync(realWorkspace, linkedWorkspace, "junction");
+
+    const attemptedWritePath = path.join(linkedWorkspace, "chat", "attachments", "proof.txt");
+
+    expect(() => assertWritePathInJail(attemptedWritePath, [linkedWorkspace])).not.toThrow();
+  });
+
   it("still blocks siblings of a missing configured jail root", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-missing-root-"));
     tempDirs.push(root);
