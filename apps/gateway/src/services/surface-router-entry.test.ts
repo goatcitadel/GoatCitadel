@@ -26,11 +26,11 @@ describe("applyAutoRouteToInput", () => {
     expect(host.surfaceRouter.route).toHaveBeenCalledTimes(1);
   });
 
-  it("does nothing when a mode is already persisted", () => {
+  it("auto-routes even if a mode was previously persisted (gated only by the autoRoute flag)", () => {
     const host = makeHost({ readChatSessionMode: vi.fn(() => "cowork") });
-    const out = applyAutoRouteToInput(host as never, "s1", { content: "x", autoRoute: true });
-    expect(out.mode).toBeUndefined();
-    expect(host.surfaceRouter.route).not.toHaveBeenCalled();
+    const out = applyAutoRouteToInput(host as never, "s1", { content: "run tests in the repo", autoRoute: true });
+    expect(out.mode).toBe("code");
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "code");
   });
 
   it("does nothing when autoRoute is not set", () => {

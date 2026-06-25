@@ -234,6 +234,10 @@ function composeEntryExtras(
   | "triggerChatSessionProactive"
   | "updateActiveLeafOrThrow"
   | "updateChatSessionPrefs"
+  | "surfaceRouter"
+  | "readChatSessionMode"
+  | "persistChatSessionMode"
+  | "recordSurfaceRouteOverrideSignal"
 > {
   return {
     agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
@@ -246,6 +250,10 @@ function composeEntryExtras(
     updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
       source.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
     updateChatSessionPrefs: (sessionId, input) => source.updateChatSessionPrefs(sessionId, input),
+    surfaceRouter: source.surfaceRouter,
+    readChatSessionMode: source.readChatSessionMode,
+    persistChatSessionMode: source.persistChatSessionMode,
+    recordSurfaceRouteOverrideSignal: source.recordSurfaceRouteOverrideSignal,
   };
 }
 
