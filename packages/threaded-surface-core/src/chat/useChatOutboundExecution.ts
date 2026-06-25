@@ -42,6 +42,25 @@ const MAX_STREAM_RESUME_ATTEMPTS = 2;
 const ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE = "Please confirm the route fallback before sending.";
 const STREAMING_REQUEST_FAILED_MESSAGE = "Streaming request failed.";
 
+/**
+ * Determines whether a send action on a new (empty) chat thread should use
+ * the gateway auto-router instead of an explicit mode.
+ *
+ * Exported for unit testing. The hook inlines this logic directly for
+ * performance (avoid an extra call in the hot send path).
+ */
+export function shouldAutoRouteSend({
+  action,
+  threadEmpty,
+  surfaceMode,
+}: {
+  action: string;
+  threadEmpty: boolean;
+  surfaceMode: string | undefined;
+}): boolean {
+  return action === "send" && threadEmpty && surfaceMode === undefined;
+}
+
 export function abortActiveChatStream(stream: ActiveChatStreamState | null): void {
   if (!stream || stream.controller.signal.aborted) {
     return;
@@ -353,6 +372,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
       const effectiveMode = surfaceMode ?? currentPrefs?.mode ?? "chat";
+      const isFirstTurn = item.action === "send" && (threadRef.current?.turns?.length ?? 0) === 0;
+      const shouldAutoRoute = isFirstTurn && surfaceMode === undefined;
       const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
       const executionModel = currentPrefs?.model ?? selectedModel;
       const outboundPrefs = resolveOutboundExecutionPrefs(currentPrefs);
@@ -708,7 +729,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     content: trimmedContent,
                     attachments: attachmentIds,
                     ...outboundPrefs,
-                    mode: effectiveMode,
+                    mode: shouldAutoRoute ? undefined : effectiveMode,
+                    ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
@@ -785,7 +807,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                       content: trimmedContent,
                       attachments: attachmentIds,
                       ...outboundPrefs,
-                      mode: effectiveMode,
+                      mode: shouldAutoRoute ? undefined : effectiveMode,
+                      ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,

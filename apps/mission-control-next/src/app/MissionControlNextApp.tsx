@@ -1147,7 +1147,7 @@ export function renderRouteContent(input: {
         gatewayStatus={input.gatewayStatus}
         approvalsCount={input.pendingApprovals}
         surface="chat"
-        lockSurface
+        lockSurface={false}
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
