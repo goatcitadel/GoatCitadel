@@ -771,9 +771,9 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
     });
 
+    // The cross-area nav buttons ("Open in Cowork", "Back to Chat") are replaced by the in-surface
+    // mode chip. Verify the chip is present and the remaining header actions still wire correctly.
     await act(async () => {
-      findButton(renderer!.root, "Open in Cowork").props.onClick();
-      findButton(renderer!.root, "Back to Chat").props.onClick();
       findExactButton(renderer!.root, "Archive").props.onClick();
       findButton(renderer!.root, "Show context").props.onClick();
       findButton(renderer!.root, "Context").props.onClick();
@@ -787,8 +787,11 @@ describe("ThreadedSurfacePage", () => {
       dropzone.props.onDrop();
     });
 
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("cowork");
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("chat");
+    // Chip is present in the header
+    const chipTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    );
+    expect(chipTrigger.length).toBeGreaterThan(0);
     expect(activeProps.onToggleArchiveSession).toHaveBeenCalledTimes(1);
     expect(input.onDockOpenChange).toHaveBeenCalledWith(true);
     expect(input.dropTargetProps.onDragEnter).toHaveBeenCalledTimes(1);
@@ -855,15 +858,17 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
+    // The cross-area nav buttons ("Continue in Cowork", "Open in Code") are replaced by the mode chip.
     await act(async () => {
       findButton(renderer!.root, "Sessions").props.onClick();
-      findButton(renderer!.root, "Continue in Cowork").props.onClick();
-      findButton(renderer!.root, "Open in Code").props.onClick();
     });
 
+    // Rail toggle still works; chip is present instead of old nav buttons
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("cowork");
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("code");
+    const chipTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    );
+    expect(chipTrigger.length).toBeGreaterThan(0);
   });
 
   it("toggles the code workbench from mobile and conversation controls", async () => {
@@ -1100,12 +1105,12 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    await act(async () => {
-      findButton(renderer!.root, "Open in Code").props.onClick();
-      findButton(renderer!.root, "Back to Chat").props.onClick();
-    });
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("code");
-    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("chat");
+    // The cross-area nav buttons ("Open in Code", "Back to Chat") are replaced by the mode chip.
+    // Verify the chip is present in the cowork surface header.
+    const chipTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    );
+    expect(chipTrigger.length).toBeGreaterThan(0);
 
     const projectInputs = renderer!.root.findAllByType("input");
     await act(async () => {

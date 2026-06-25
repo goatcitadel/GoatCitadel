@@ -194,6 +194,74 @@
   gap: 0.24rem;
 }
 
+/* ---- in-surface mode chip ---- */
+.mc-next-mode-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mc-next-mode-chip-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--mc-border-subtle, var(--border));
+  border-radius: var(--r-pill, 999px);
+  background: var(--background);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mc-next-mode-chip-trigger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--background) 85%, var(--text));
+  color: var(--text);
+}
+
+.mc-next-mode-chip-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mc-next-mode-chip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 8rem;
+  background: var(--background);
+  border: 1px solid var(--mc-border-subtle, var(--border));
+  border-radius: var(--r-sm, 6px);
+  box-shadow: 0 4px 12px color-mix(in oklab, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+
+.mc-next-mode-chip-item {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.72rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-mode-chip-item:hover {
+  background: color-mix(in oklab, var(--background) 85%, var(--text));
+  color: var(--text);
+}
+
+.mc-next-mode-chip-item.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .mc-next-threaded-model-picker .chat-model-picker {
   display: grid;
   gap: 0.28rem;

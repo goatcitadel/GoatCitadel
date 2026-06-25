@@ -51,6 +51,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { ThreadedComposer } from "./ThreadedComposer";
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
+import { ThreadedModeChip } from "./ThreadedModeChip";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
 import "./styles/rail.css";
@@ -662,20 +663,6 @@ function ThreadConversationSurface({
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const compactArtifactSheet = useMediaQuery("(max-width: 840px)");
-  const actions = useMemo(() => {
-    const list: Array<{ label: string; onClick: () => void }> = [];
-    if (surface === "chat") {
-      list.push({ label: "Continue in Cowork", onClick: () => props.onNavigateSurface("cowork") });
-      list.push({ label: "Open in Code", onClick: () => props.onNavigateSurface("code") });
-    } else if (surface === "cowork") {
-      list.push({ label: "Open in Code", onClick: () => props.onNavigateSurface("code") });
-      list.push({ label: "Back to Chat", onClick: () => props.onNavigateSurface("chat") });
-    } else {
-      list.push({ label: "Open in Cowork", onClick: () => props.onNavigateSurface("cowork") });
-      list.push({ label: "Back to Chat", onClick: () => props.onNavigateSurface("chat") });
-    }
-    return list;
-  }, [props, surface]);
   const approvalSignalText = `${props.trust.approvalsSummary} ${props.trust.runStateSummary ?? ""}`.toLowerCase();
   const approvalsAreBlocking =
     props.approvalsCount > 0 &&
@@ -702,7 +689,10 @@ function ThreadConversationSurface({
       ) : null}
       <header className="mc-next-threaded-header">
         <div className="mc-next-threaded-header-copy">
-          <p>{MODE_META[surface].label}</p>
+          <ThreadedModeChip
+            mode={props.modeOverridePending ?? props.mode}
+            onOverride={(m) => props.onModeOverride?.(m)}
+          />
           <h1>{props.sessionTitle}</h1>
           <span>{props.summary}</span>
         </div>
@@ -742,11 +732,6 @@ function ThreadConversationSurface({
             <ThreadedPanelSwitcher activePanel={activeUtilityPanel} onSelectPanel={onSelectUtilityPanel} />
           </div>
           <div className={`mc-next-threaded-action-row${approvalsAreBlocking ? " has-priority-approval" : ""}`}>
-            {actions.map((action) => (
-              <button key={action.label} type="button" className="mc-next-threaded-secondary" onClick={action.onClick}>
-                {action.label}
-              </button>
-            ))}
             {onToggleCodeWorkbench ? (
               <button type="button" className="mc-next-threaded-secondary" onClick={onToggleCodeWorkbench}>
                 {codeWorkbenchOpen ? "Hide editor" : "Code editor"}
