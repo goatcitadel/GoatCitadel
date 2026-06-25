@@ -5,7 +5,6 @@ import {
   Bell,
   Bot,
   BookOpenText,
-  Code2,
   FolderKanban,
   LibraryBig,
   Menu,
@@ -67,6 +66,7 @@ import {
   AREA_META,
   RAIL_ITEMS,
   buildAppHref,
+  buildModeRail,
   buildNavigationTarget,
   describeReleaseScopeForOperator,
   describeReleaseSurfaceStatus,
@@ -99,8 +99,6 @@ type RailSection = {
 
 const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
   { area: "chat", icon: Bot },
-  { area: "cowork", icon: Workflow },
-  { area: "code", icon: Code2 },
   { area: "projects", icon: FolderKanban },
   { area: "library", icon: LibraryBig },
   { area: "ops", icon: Activity },
@@ -199,12 +197,13 @@ export function MissionControlNextApp() {
   const buildPrimaryAreaRoute = useCallback(
     (area: PrimaryArea): AppRoute => ({
       area,
+      mode: area === "chat" ? route.mode : undefined,
       theme: route.theme,
-      sessionId: area === "chat" || area === "cowork" || area === "code" ? route.sessionId : undefined,
-      turnId: area === "chat" || area === "cowork" || area === "code" ? route.turnId : undefined,
-      artifactId: area === "chat" || area === "cowork" || area === "code" ? route.artifactId : undefined,
+      sessionId: area === "chat" ? route.sessionId : undefined,
+      turnId: area === "chat" ? route.turnId : undefined,
+      artifactId: area === "chat" ? route.artifactId : undefined,
     }),
-    [route.artifactId, route.sessionId, route.theme, route.turnId],
+    [route.artifactId, route.mode, route.sessionId, route.theme, route.turnId],
   );
   const {
     navigate,
@@ -301,7 +300,8 @@ export function MissionControlNextApp() {
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
   const currentAreaMeta = AREA_META[route.area];
-  const currentRailItems = RAIL_ITEMS[route.area];
+  const currentRailItems =
+    route.area === "chat" ? buildModeRail(route.mode) : RAIL_ITEMS[route.area];
   const groupedRailItems = useMemo(
     () =>
       buildRailSections(
