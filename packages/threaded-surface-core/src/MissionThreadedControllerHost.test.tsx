@@ -2854,4 +2854,47 @@ describe("MissionThreadedControllerHost", () => {
 
     expect(onResolvedModeChange).toHaveBeenCalledWith("code");
   });
+
+  describe("auto-route surfaceMode wiring guard (#136)", () => {
+    it("passes surfaceMode=undefined to the outbound hook on a new unlocked thread (auto-route guard)", async () => {
+      // Render unlocked (no lockSurface, no surface) — modeOverride starts null,
+      // so resolveOutboundSurfaceMode returns undefined, which is what shouldAutoRouteSend
+      // gates on. This test will FAIL if MissionThreadedControllerHost is reverted to
+      // passing executionSurfaceMode (always defined) instead of outboundSurfaceMode.
+      await renderHost();
+      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(lastInput.sessionConfig.surfaceMode).toBeUndefined();
+    });
+
+    it("passes the locked surface mode to the outbound hook when locked", async () => {
+      await renderHost({ lockSurface: true, surface: "cowork" });
+      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(lastInput.sessionConfig.surfaceMode).toBe("cowork");
+    });
+
+    it("passes the override mode to the outbound hook after onModeOverride is called", async () => {
+      await renderHost();
+      // Before override: surfaceMode is undefined (auto-route path)
+      const beforeInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(beforeInput.sessionConfig.surfaceMode).toBeUndefined();
+
+      // Trigger a mode override via the activeSessionSurfaceProps callback.
+      // activeSessionSurfaceProps is non-null because setupMocks sets selectedSession.
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onModeOverride("code");
+        await flushEffects(4);
+      });
+
+      const afterInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(afterInput.sessionConfig.surfaceMode).toBe("code");
+    });
+  });
 });
