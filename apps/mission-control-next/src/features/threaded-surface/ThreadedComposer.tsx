@@ -12,6 +12,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
+import { ThreadedModeChip } from "./ThreadedModeChip";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
@@ -19,16 +20,6 @@ type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttach
    blocked); the counter only surfaces once a message gets long. */
 const COMPOSER_SOFT_LIMIT = 8000;
 const COMPOSER_COUNT_VISIBLE_AT = Math.round(COMPOSER_SOFT_LIMIT * 0.7);
-
-function getSurfaceLabel(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
-  if (mode === "code") {
-    return "Code";
-  }
-  if (mode === "cowork") {
-    return "Cowork";
-  }
-  return "Chat";
-}
 
 function getPlaceholder(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
   if (mode === "code") {
@@ -676,7 +667,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
            * unified-shell CSS and the recovery state surfaces via its dedicated
            * banner below, so the heading was dead text.
            */}
-          <p className="mc-next-composer-kicker">{getSurfaceLabel(props.mode)}</p>
+          <ThreadedModeChip
+            mode={props.modeOverridePending ?? props.mode}
+            onOverride={(m) => props.onModeOverride?.(m)}
+            disabled={props.sending}
+          />
         </div>
         <div className="mc-next-composer-chip-row mc-next-technical-detail">
           {props.contextSelection ? (
