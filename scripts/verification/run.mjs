@@ -152,6 +152,10 @@ async function main() {
   const profile = String(options.profile ?? process.env.GOATCITADEL_VERIFY_PROFILE ?? "local");
   const durationMs = maybeParseInt(options["duration-ms"] ?? process.env.GOATCITADEL_VERIFY_DURATION_MS, undefined);
   const includeSoak = maybeParseBool(options["include-soak"] ?? process.env.GOATCITADEL_VERIFY_INCLUDE_SOAK, false);
+  const fastOptions = {
+    failFast: maybeParseBool(options["fail-fast"] ?? process.env.GOATCITADEL_VERIFY_FAIL_FAST, false),
+    serial: maybeParseBool(options.serial ?? process.env.GOATCITADEL_VERIFY_SERIAL, false),
+  };
   const context = await createRunContext(lane, {
     runId: typeof options["run-id"] === "string" ? options["run-id"] : undefined,
     profile,
@@ -162,7 +166,7 @@ async function main() {
   let manifest;
   try {
     if (lane === "fast") {
-      await runFastLane(context);
+      await runFastLane(context, fastOptions);
     } else if (lane === "a2a-full") {
       await runA2AFullLane(context);
     } else if (lane === "deep-core") {
@@ -230,7 +234,7 @@ async function main() {
     } else if (lane === "agentic-proof" || lane === "agentic-parity") {
       await runAgenticProofSuite(context);
     } else if (lane === "all") {
-      await runFastLane(context);
+      await runFastLane(context, fastOptions);
       await runCodeModeSandboxRequiredLane(context);
       await runCodeModeHostileSandboxLane(context);
       await runMeshReadinessLane(context, { profile });

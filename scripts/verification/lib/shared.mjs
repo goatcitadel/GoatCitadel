@@ -16,6 +16,12 @@ export const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 export const artifactsRoot = path.join(repoRoot, "artifacts", "verification");
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 const COMMAND_SUMMARY_CAPTURE_BYTES = 256 * 1024;
+const FAST_LANE_PERF_ARTIFACT = "perf/fast-lane-timing.json";
+const FAST_LANE_PERF_BUDGETS = Object.freeze({
+  total: { warnMs: 240_000, failMs: 300_000 },
+  "fast.test": { warnMs: 135_000 },
+  "fast.smoke": { warnMs: 45_000 },
+});
 
 export function createRunId(lane) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -61,16 +67,38 @@ export async function createRunContext(lane, options = {}) {
 }
 
 export async function finalizeRunContext(context, statusOverride) {
+  await flushManifestWrites(context);
   const finishedAt = new Date().toISOString();
   const durationMs = Date.parse(finishedAt) - Date.parse(context.manifest.startedAt);
-  const finalManifest = createVerificationRunManifest({
+  const baseManifest = createVerificationRunManifest({
     ...context.manifest,
     finishedAt,
     durationMs,
     status: statusOverride ?? deriveManifestStatus(context.manifest),
   });
+  const fastLanePerf =
+    baseManifest.lane === "fast" ? await writeFastLanePerfArtifact(context, baseManifest) : undefined;
+  const finalStatus =
+    statusOverride ??
+    (fastLanePerf?.strict && fastLanePerf.status === "failed" ? "failed" : deriveManifestStatus(context.manifest));
+  const finalManifest = createVerificationRunManifest({
+    ...baseManifest,
+    status: finalStatus,
+    metadata: {
+      ...baseManifest.metadata,
+      ...(fastLanePerf
+        ? {
+            fastLanePerf: {
+              artifact: FAST_LANE_PERF_ARTIFACT,
+              status: fastLanePerf.status,
+              strict: fastLanePerf.strict,
+            },
+          }
+        : {}),
+    },
+  });
   context.manifest = finalManifest;
-  await writeJson(path.join(context.artifactRoot, "manifest.json"), finalManifest);
+  await writeManifest(context, finalManifest);
   await writeText(path.join(context.artifactRoot, "summary.md"), buildSummaryMarkdown(finalManifest));
   await writeText(path.join(context.artifactRoot, "junit.xml"), buildJunitXml(finalManifest));
   return finalManifest;
@@ -95,8 +123,22 @@ export async function recordScenario(context, scenario) {
     scenarios: [...context.manifest.scenarios, parsed],
     counts: tallyScenarioCounts([...context.manifest.scenarios, parsed]),
   });
-  await writeJson(path.join(context.artifactRoot, "manifest.json"), context.manifest);
+  await writeManifest(context, context.manifest);
   return parsed;
+}
+
+async function writeManifest(context, manifest) {
+  const manifestPath = path.join(context.artifactRoot, "manifest.json");
+  context.manifestWritePromise = (context.manifestWritePromise ?? Promise.resolve()).then(() =>
+    writeJson(manifestPath, manifest),
+  );
+  await context.manifestWritePromise;
+}
+
+async function flushManifestWrites(context) {
+  if (context.manifestWritePromise) {
+    await context.manifestWritePromise;
+  }
 }
 
 export async function runScenario(context, definition, fn) {
@@ -352,6 +394,7 @@ function tallyScenarioCounts(scenarios) {
 }
 
 function buildSummaryMarkdown(manifest) {
+  const fastLanePerf = manifest.metadata?.fastLanePerf;
   const lines = [
     `# Verification Run ${manifest.runId}`,
     "",
@@ -369,6 +412,15 @@ function buildSummaryMarkdown(manifest) {
     `- Skipped: ${manifest.counts.skipped}`,
     `- Not configured: ${manifest.counts.notConfigured}`,
     "",
+    ...(fastLanePerf
+      ? [
+          "## Fast Lane Performance",
+          "",
+          `- Budget status: \`${fastLanePerf.status}\`${fastLanePerf.strict ? " (strict)" : " (not enforced)"}`,
+          `- Timing artifact: \`${fastLanePerf.artifact}\``,
+          "",
+        ]
+      : []),
     "## Scenarios",
     "",
     "| ID | Subsystem | Status | Duration | Notes |",
@@ -380,6 +432,76 @@ function buildSummaryMarkdown(manifest) {
     "",
   ];
   return lines.join("\n");
+}
+
+async function writeFastLanePerfArtifact(context, manifest) {
+  const strict = String(process.env.GOATCITADEL_VERIFY_PERF_BUDGET ?? "").trim().toLowerCase() === "strict";
+  const payload = buildFastLanePerfPayload(manifest, { strict });
+  await writeJson(path.join(context.artifactRoot, FAST_LANE_PERF_ARTIFACT), payload);
+  return { status: payload.status, strict };
+}
+
+export function buildFastLanePerfPayload(manifest, options = {}) {
+  const strict = options.strict === true;
+  const scenarioTimings = manifest.scenarios.map((scenario) => ({
+    id: scenario.id,
+    title: scenario.title,
+    status: scenario.status,
+    durationMs: scenario.durationMs,
+  }));
+  const budgets = [
+    evaluatePerfBudget("total", manifest.durationMs ?? 0, FAST_LANE_PERF_BUDGETS.total),
+    evaluatePerfBudget(
+      "fast.test",
+      scenarioTimings
+        .filter((scenario) => scenario.id === "fast.test" || scenario.id.startsWith("fast.test."))
+        .reduce((sum, scenario) => sum + (scenario.durationMs ?? 0), 0),
+      FAST_LANE_PERF_BUDGETS["fast.test"],
+    ),
+    evaluatePerfBudget(
+      "fast.smoke",
+      scenarioTimings.find((scenario) => scenario.id === "fast.smoke")?.durationMs ?? 0,
+      FAST_LANE_PERF_BUDGETS["fast.smoke"],
+    ),
+  ];
+  const status = derivePerfBudgetStatus(budgets);
+  return {
+    generatedAt: new Date().toISOString(),
+    runId: manifest.runId,
+    lane: manifest.lane,
+    strict,
+    status,
+    budgets,
+    scenarios: scenarioTimings,
+  };
+}
+
+function evaluatePerfBudget(id, durationMs, budget) {
+  const failMs = budget.failMs;
+  const warnMs = budget.warnMs;
+  const status =
+    typeof failMs === "number" && durationMs > failMs
+      ? "failed"
+      : typeof warnMs === "number" && durationMs > warnMs
+        ? "warn"
+        : "passed";
+  return {
+    id,
+    durationMs,
+    warnMs,
+    failMs,
+    status,
+  };
+}
+
+function derivePerfBudgetStatus(budgets) {
+  if (budgets.some((budget) => budget.status === "failed")) {
+    return "failed";
+  }
+  if (budgets.some((budget) => budget.status === "warn")) {
+    return "warn";
+  }
+  return "passed";
 }
 
 function buildJunitXml(manifest) {

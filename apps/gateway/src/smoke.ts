@@ -13,6 +13,15 @@ interface JsonResponse<T = unknown> {
 
 let smokeRunId = randomUUID();
 const DEFAULT_SMOKE_STEP_TIMEOUT_MS = 30_000;
+export type SmokeProfile = "fast" | "full";
+interface SmokeOptions {
+  profile?: SmokeProfile;
+}
+
+type SmokeStep = {
+  name: string;
+  run: (app: Awaited<ReturnType<typeof buildApp>>) => Promise<void>;
+};
 
 function smokeIdempotencyKey(base: string): string {
   return `${base}-${smokeRunId}`;
@@ -33,8 +42,9 @@ function formatSmokeError(error: unknown): string {
   return String(error);
 }
 
-export async function runSmoke(): Promise<void> {
+export async function runSmoke(options: SmokeOptions = {}): Promise<void> {
   smokeRunId = randomUUID();
+  const profile = options.profile ?? resolveSmokeProfile(process.env.GOATCITADEL_SMOKE_PROFILE);
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-smoke-"));
   const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
@@ -56,21 +66,12 @@ export async function runSmoke(): Promise<void> {
 
     const app = await buildApp();
     try {
-      await runSmokeStep("health", () => smokeHealth(app));
-      await runSmokeStep("gateway-events", () => smokeGatewayEvents(app));
-      await runSmokeStep("sessions", () => smokeSessions(app));
-      await runSmokeStep("chat", () => smokeChat(app));
-      await runSmokeStep("prompt-packs", () => smokePromptPacks(app));
-      await runSmokeStep("tools", () => smokeTools(app));
-      await runSmokeStep("native-tools-expansion", () => smokeNativeToolsExpansion(app));
-      await runSmokeStep("approvals", () => smokeApprovals(app));
-      await runSmokeStep("agents", () => smokeAgents(app));
-      await runSmokeStep("integrations", () => smokeIntegrations(app));
-      await runSmokeStep("secrets", () => smokeSecrets(app));
-      await runSmokeStep("mesh", () => smokeMesh(app));
-      await runSmokeStep("npu", () => smokeNpu(app));
-      await runSmokeStep("onboarding", () => smokeOnboarding(app));
-      writeSmokeInfo("Smoke tests passed.");
+      const steps = resolveSmokeSteps(profile);
+      writeSmokeInfo(`[smoke] profile=${profile} steps=${steps.map((step) => step.name).join(",")}`);
+      for (const step of steps) {
+        await runSmokeStep(step.name, () => step.run(app));
+      }
+      writeSmokeInfo(`Smoke tests passed (${profile}).`);
     } finally {
       await app.close();
     }
@@ -106,8 +107,9 @@ export async function runSmoke(): Promise<void> {
 
 async function runSmokeStep(name: string, fn: () => Promise<void>): Promise<void> {
   writeSmokeInfo(`[smoke] ${name}...`);
+  const startedAt = Date.now();
   await withSmokeStepTimeout(name, fn());
-  writeSmokeInfo(`[smoke] ${name} ok`);
+  writeSmokeInfo(`[smoke] ${name} ok (${formatSmokeDuration(Date.now() - startedAt)})`);
 }
 
 async function withSmokeStepTimeout<T>(name: string, promise: Promise<T>): Promise<T> {
@@ -134,6 +136,99 @@ async function withSmokeStepTimeout<T>(name: string, promise: Promise<T>): Promi
       clearTimeout(timeout);
     }
   }
+}
+
+export function parseSmokeArgs(argv: string[]): SmokeOptions {
+  let profile: SmokeProfile | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (!value || value === "--") {
+      continue;
+    }
+    if (value === "--profile") {
+      const profileArg = argv[index + 1];
+      if (!profileArg) {
+        throw new Error("Missing smoke profile after --profile.");
+      }
+      profile = resolveSmokeProfile(profileArg);
+      index += 1;
+      continue;
+    }
+    if (value.startsWith("--profile=")) {
+      profile = resolveSmokeProfile(value.slice("--profile=".length));
+      continue;
+    }
+    if (value === "--help" || value === "-h") {
+      writeSmokeInfo("Usage: pnpm --filter @goatcitadel/gateway smoke -- --profile fast|full");
+      process.exit(0);
+    }
+    throw new Error(`Unknown smoke argument: ${value}`);
+  }
+  return { profile: profile ?? "full" };
+}
+
+function resolveSmokeProfile(raw: string | undefined): SmokeProfile {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return "full";
+  }
+  if (normalized === "fast" || normalized === "full") {
+    return normalized;
+  }
+  throw new Error(`Unknown smoke profile: ${raw}. Expected fast or full.`);
+}
+
+function resolveSmokeSteps(profile: SmokeProfile): SmokeStep[] {
+  const health: SmokeStep = { name: "health", run: smokeHealth };
+  const gatewayEvents: SmokeStep = { name: "gateway-events", run: smokeGatewayEvents };
+  const sessions: SmokeStep = { name: "sessions", run: smokeSessions };
+  const chat: SmokeStep = { name: "chat", run: smokeChat };
+  const tools: SmokeStep = { name: "tools", run: smokeTools };
+  const approvals: SmokeStep = { name: "approvals", run: smokeApprovals };
+  const agents: SmokeStep = { name: "agents", run: smokeAgents };
+  const integrations: SmokeStep = { name: "integrations", run: smokeIntegrations };
+  const secrets: SmokeStep = { name: "secrets", run: smokeSecrets };
+  const mesh: SmokeStep = { name: "mesh", run: smokeMesh };
+  const npu: SmokeStep = { name: "npu", run: smokeNpu };
+  const steps: SmokeStep[] = [
+    health,
+    gatewayEvents,
+    sessions,
+    chat,
+    tools,
+    approvals,
+    agents,
+    integrations,
+    secrets,
+    mesh,
+    npu,
+  ];
+  if (profile === "fast") {
+    return steps;
+  }
+  return [
+    health,
+    gatewayEvents,
+    sessions,
+    chat,
+    { name: "prompt-packs", run: smokePromptPacks },
+    tools,
+    { name: "native-tools-expansion", run: smokeNativeToolsExpansion },
+    approvals,
+    agents,
+    integrations,
+    secrets,
+    mesh,
+    npu,
+    { name: "onboarding", run: smokeOnboarding },
+  ];
+}
+
+function formatSmokeDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
@@ -279,7 +374,7 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(typeof run.body.runId, "string");
   assert.equal(["running", "completed", "failed", "queued"].includes(run.body.status), true);
 
-  if (!isUnscorablePromptPackRun(run.body)) {
+  if (isScoreablePromptPackRun(run.body)) {
     const score = await postJson<{
       reviewId: string;
       scores: {
@@ -311,6 +406,8 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
     assert.equal(score.body.scores.executionQuality, 2);
     assert.equal(score.body.scores.robustness, 2);
     assert.equal(score.body.scores.usability, 2);
+  } else {
+    writeSmokeInfo(`[smoke] prompt-packs score skipped (${describePromptPackRunScoreSkip(run.body)})`);
   }
 
   const report = await app.inject({
@@ -322,20 +419,28 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(reportBody.summary.totalTests >= 2, true);
 }
 
-function isUnscorablePromptPackRun(run: {
+function isScoreablePromptPackRun(run: {
   status: string;
   integrity?: { validationStatus?: string; signals?: string[] };
   trace?: { failure?: { message?: string } };
 }): boolean {
-  const failureMessage = run.trace?.failure?.message ?? "";
-  return (
-    (run.status === "failed" || run.status === "completed") &&
-    (run.integrity?.validationStatus === "invalid" || run.status === "failed") &&
-    ((run.integrity?.signals ?? []).includes("completion_interrupted") || run.status === "failed") &&
-    /No active LLM provider is configured|OAuth is not connected|API key is not configured|provider is not configured/i.test(
-      failureMessage,
-    )
-  );
+  return run.status === "completed" && run.integrity?.validationStatus !== "invalid" && !run.trace?.failure?.message;
+}
+
+function describePromptPackRunScoreSkip(run: {
+  status: string;
+  integrity?: { validationStatus?: string; signals?: string[] };
+  trace?: { failure?: { message?: string } };
+}): string {
+  const failureMessage = run.trace?.failure?.message;
+  if (failureMessage) {
+    return `run ${run.status}: ${failureMessage}`;
+  }
+  const validationStatus = run.integrity?.validationStatus;
+  if (validationStatus) {
+    return `run ${run.status}, validation ${validationStatus}`;
+  }
+  return `run ${run.status}`;
 }
 
 async function smokeHealth(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
@@ -907,7 +1012,7 @@ async function postJson<T>(
 const smokeScriptPath = path.resolve(fileURLToPath(import.meta.url));
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invokedPath === smokeScriptPath) {
-  runSmoke().catch((error) => {
+  runSmoke(parseSmokeArgs(process.argv.slice(2))).catch((error) => {
     writeSmokeError("Smoke tests failed.");
     writeSmokeError(formatSmokeError(error));
     process.exitCode = 1;

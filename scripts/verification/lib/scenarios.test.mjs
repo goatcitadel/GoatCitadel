@@ -1,22 +1,202 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
-import { A2A_FULL_LANE_COMMANDS, FAST_LANE_COMMANDS, deriveProviderStatus } from "./scenarios.mjs";
+import { A2A_FULL_LANE_COMMANDS, FAST_LANE_COMMANDS, deriveProviderStatus, runFastLane } from "./scenarios.mjs";
+import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
 test("fast verification lane keeps required fast commands", () => {
   const commandArgs = new Set(FAST_LANE_COMMANDS.map((command) => command.args.join(" ")));
+  const commandIds = new Set(FAST_LANE_COMMANDS.map((command) => command.id));
 
   for (const expected of [
     "verify:repo:hygiene",
     "verify:storage:migration-parity",
     "--filter @goatcitadel/extensions-sdk build",
-    "verify:extensions:package",
+    "verify:extensions:package:from-build",
     "typecheck",
-    "-r --workspace-concurrency=1 test",
-    "smoke",
+    "smoke -- --profile fast",
     "build",
     "docs:check",
   ]) {
     assert.ok(commandArgs.has(expected), `fast lane should include ${expected}`);
+  }
+
+  for (const expectedId of [
+    "fast.test.gateway",
+    "fast.test.storage",
+    "fast.test.mission-control-next",
+    "fast.test.policy-engine",
+    "fast.test.libraries",
+  ]) {
+    assert.ok(commandIds.has(expectedId), `fast lane should include split test scenario ${expectedId}`);
+  }
+
+  assert.equal(commandArgs.has("-r --workspace-concurrency=1 test"), false);
+});
+
+test("fast verification split tests preserve recursive package coverage", () => {
+  const commandById = new Map(FAST_LANE_COMMANDS.map((command) => [command.id, command]));
+  assert.deepEqual(commandById.get("fast.test.gateway")?.args, ["--filter", "@goatcitadel/gateway", "test"]);
+  assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test"]);
+  assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
+    "--filter",
+    "@goatcitadel/mission-control-next",
+    "test",
+  ]);
+  assert.deepEqual(commandById.get("fast.test.policy-engine")?.args, [
+    "--filter",
+    "@goatcitadel/policy-engine",
+    "test",
+  ]);
+
+  const libraryArgs = commandById.get("fast.test.libraries")?.args ?? [];
+  for (const expectedPackage of [
+    "@goatcitadel/contracts",
+    "@goatcitadel/extensions-sdk",
+    "@goatcitadel/gateway-core",
+    "@goatcitadel/memory-core",
+    "@goatcitadel/mesh-core",
+    "@goatcitadel/mission-control-desktop",
+    "@goatcitadel/mission-control-shared",
+    "@goatcitadel/orchestration",
+    "@goatcitadel/skills",
+    "@goatcitadel/threaded-surface-core",
+  ]) {
+    assert.ok(libraryArgs.includes(expectedPackage), `library test group should include ${expectedPackage}`);
+  }
+  assert.ok(libraryArgs.includes("--workspace-concurrency=2"));
+
+  assert.equal(
+    commandById.get("fast.test.gateway")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD,
+    "1",
+  );
+  assert.deepEqual(commandById.get("fast.smoke")?.args, ["smoke", "--", "--profile", "fast"]);
+  assert.equal(commandById.get("fast.smoke")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
+});
+
+test("fast lane perf budget reports passed, warn, and failed status", () => {
+  const base = {
+    runId: "perf-test",
+    lane: "fast",
+    scenarios: [
+      { id: "fast.test.gateway", title: "Gateway tests", status: "passed", durationMs: 50_000 },
+      { id: "fast.test.storage", title: "Storage tests", status: "passed", durationMs: 30_000 },
+      { id: "fast.smoke", title: "Smoke", status: "passed", durationMs: 30_000 },
+    ],
+  };
+
+  assert.equal(buildFastLanePerfPayload({ ...base, durationMs: 120_000 }).status, "passed");
+  assert.equal(
+    buildFastLanePerfPayload({
+      ...base,
+      durationMs: 220_000,
+      scenarios: [
+        ...base.scenarios,
+        { id: "fast.test.libraries", title: "Library tests", status: "passed", durationMs: 60_000 },
+      ],
+    }).status,
+    "warn",
+  );
+  assert.equal(buildFastLanePerfPayload({ ...base, durationMs: 301_000 }).status, "failed");
+});
+
+test("fail-fast finalization still writes manifest, summary, junit, and timing artifact", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-fast-finalize-"));
+  try {
+    const context = {
+      lane: "fast",
+      runId: "fail-fast-finalize-test",
+      artifactRoot,
+      manifest: {
+        runId: "fail-fast-finalize-test",
+        lane: "fast",
+        startedAt: new Date(Date.now() - 1_000).toISOString(),
+        repoRoot: "repo",
+        artifactRoot,
+        metadata: {},
+        counts: {
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          degraded: 0,
+          notConfigured: 0,
+        },
+        scenarios: [],
+      },
+    };
+
+    await assert.rejects(
+      runFastLane(context, { failFast: true, injectFailureScenario: "fast.skills-catalog" }),
+      /Fast lane stopped after failed scenario fast\.skills-catalog/,
+    );
+    const manifest = await finalizeRunContext(context, "failed");
+    assert.equal(manifest.status, "failed");
+    assert.equal(manifest.scenarios.length, 1);
+    assert.equal(manifest.scenarios[0].id, "fast.skills-catalog");
+    assert.equal(manifest.scenarios[0].status, "failed");
+    assert.equal(manifest.metadata.fastLanePerf.artifact, "perf/fast-lane-timing.json");
+    await fs.access(path.join(artifactRoot, "manifest.json"));
+    await fs.access(path.join(artifactRoot, "summary.md"));
+    await fs.access(path.join(artifactRoot, "junit.xml"));
+    await fs.access(path.join(artifactRoot, "perf", "fast-lane-timing.json"));
+  } finally {
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("parallel scenario recording keeps the manifest artifact complete", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-fast-record-"));
+  try {
+    const startedAt = new Date(Date.now() - 1_000).toISOString();
+    const context = {
+      lane: "fast",
+      runId: "parallel-record-test",
+      artifactRoot,
+      manifest: {
+        runId: "parallel-record-test",
+        lane: "fast",
+        startedAt,
+        repoRoot: "repo",
+        artifactRoot,
+        metadata: {},
+        counts: {
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          degraded: 0,
+          notConfigured: 0,
+        },
+        scenarios: [],
+      },
+    };
+
+    await Promise.all(
+      ["fast.test.mission-control-next", "fast.test.policy-engine", "fast.test.libraries"].map((id) =>
+        recordScenario(context, {
+          id,
+          lane: "fast",
+          title: id,
+          subsystem: "fast",
+          status: "passed",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          durationMs: 1,
+          correlationId: id,
+        }),
+      ),
+    );
+
+    const manifest = JSON.parse(await fs.readFile(path.join(artifactRoot, "manifest.json"), "utf8"));
+    assert.equal(manifest.scenarios.length, 3);
+    assert.deepEqual(
+      new Set(manifest.scenarios.map((scenario) => scenario.id)),
+      new Set(["fast.test.mission-control-next", "fast.test.policy-engine", "fast.test.libraries"]),
+    );
+    assert.equal(manifest.counts.passed, 3);
+  } finally {
+    await fs.rm(artifactRoot, { recursive: true, force: true });
   }
 });
 
