@@ -1757,6 +1757,7 @@ export class GatewayService {
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,
       capabilityPackService: this.capabilityPackService,
+      capabilityScopeResolver: this.capabilityScopeResolver,
       capabilitySystemService: this.capabilitySystemService,
       chatMessageRouteRuntimeHost: this.buildChatMessageRouteRuntimeHost(),
       chatProjectService: this.chatProjectService,
