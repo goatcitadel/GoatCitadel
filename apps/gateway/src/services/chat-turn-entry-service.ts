@@ -42,9 +42,10 @@ import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import { applyAutoRouteToInput } from "./surface-router-entry.js";
+import { applyAutoRouteToInput, recordModeOverrideIfChanged } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
+import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnLeaseControl,
@@ -131,6 +132,7 @@ export interface ChatTurnEntryHost
   surfaceRouter?: { route(req: SurfaceRouteRequest): SurfaceClassification };
   readChatSessionMode?(sessionId: string): ChatMode | undefined;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
+  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): void;
 }
 
 export interface ChatTurnResumeHost {
@@ -160,6 +162,7 @@ export async function agentSendChatMessage(
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
     input = applyAutoRouteToInput(host, sessionId, input);
+    recordModeOverrideIfChanged(host, sessionId, input);
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,
