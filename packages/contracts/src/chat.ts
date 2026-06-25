@@ -1595,9 +1595,9 @@ export interface ChatSendMessageRequest {
   attachments?: string[];
   mode?: ChatMode;
   /**
-   * When true and the session has no resolved mode yet, the gateway auto-routes
-   * this turn into chat/cowork/code instead of defaulting to "chat".
-   * Transient (request-only); never persisted.
+   * When true, the gateway classifies this turn's prompt via the heuristic surface
+   * router and pins the resulting mode. Takes effect only when no explicit `mode`
+   * is present in the same request. Transient (request-only); never persisted.
    */
   autoRoute?: boolean;
   webMode?: ChatWebMode;

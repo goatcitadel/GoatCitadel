@@ -1280,7 +1280,7 @@ export class ImprovementService {
       sourceType: "surface_route_override",
       sourceId: input.sessionId,
       sourceEventId: input.turnId,
-      idempotencyKey: `${input.sessionId}:${input.turnId}:surface_route_override`,
+      idempotencyKey: `${input.sessionId}:${fingerprint}`,
       workspaceId: input.workspaceId,
       origin: "human",
       signalClass: "runtime",

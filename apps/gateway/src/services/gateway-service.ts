@@ -1894,7 +1894,7 @@ export class GatewayService {
         this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
       surfaceRouter: new SurfaceRouterService({ traceRepo: this.storage.runtimeDecisionTraces }),
-      readChatSessionMode: (sessionId: string) => this.storage.chatSessionPrefs.ensure(sessionId).mode,
+      readChatSessionMode: (sessionId: string) => this.storage.chatSessionPrefs.get(sessionId)?.mode,
       persistChatSessionMode: (sessionId: string, mode: ChatMode) => {
         this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));
       },

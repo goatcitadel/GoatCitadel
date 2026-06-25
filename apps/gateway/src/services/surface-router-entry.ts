@@ -15,9 +15,8 @@ export interface AutoRouteHost {
 }
 
 /**
- * If the turn requested auto-routing and the session has no resolved mode yet,
- * classify the first turn, persist the chosen mode (sticky), and return input with `mode` set.
- * Otherwise returns input unchanged.
+ * If the turn requested auto-routing (and carries no explicit mode), classify the first turn,
+ * persist the chosen mode (sticky), and return input with `mode` set. Otherwise returns input unchanged.
  */
 export function applyAutoRouteToInput(
   host: AutoRouteHost,
@@ -36,7 +35,7 @@ export function applyAutoRouteToInput(
     workspaceId,
     sessionId,
     turnId: `${sessionId}:pending`,
-    context: { hasBoundProject: false },
+    context: { hasBoundProject: false }, // TODO(#136 Phase 2): resolve the session's project binding to improve code-intent routing
   });
   host.persistChatSessionMode(sessionId, classified.mode);
   return { ...input, mode: classified.mode };
@@ -89,7 +88,7 @@ export function recordModeOverrideIfChanged(
   }
 }
 
-/** Stable, non-reversible bucket of the prompt's shape (first word + capped length), NOT the transcript. */
+/** Stable, low-resolution bucket of a prompt's shape (first word + capped length). The first word is stored in plaintext, so this is NOT a cryptographic hash. */
 export function hashPromptFeatures(content: string): string {
   const firstWord = (content.trim().split(/\s+/)[0] ?? "").toLowerCase().slice(0, 24);
   return `${firstWord}:${Math.min(content.length, 4000)}`;

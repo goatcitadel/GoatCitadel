@@ -161,8 +161,19 @@ export async function agentSendChatMessage(
   options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
-    input = applyAutoRouteToInput(host, sessionId, input);
-    recordModeOverrideIfChanged(host, sessionId, input);
+    try {
+      input = applyAutoRouteToInput(host, sessionId, input);
+      recordModeOverrideIfChanged(host, sessionId, input);
+    } catch (error) {
+      host.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.surface_router.failed",
+        message: "Surface auto-router failed; continuing with the provided/default mode",
+        sessionId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,
