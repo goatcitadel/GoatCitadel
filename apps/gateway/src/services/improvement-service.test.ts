@@ -9,6 +9,7 @@ import {
   type ImprovementServiceCallbacks,
   type ImprovementServiceContext,
   type SurfaceRouteOverrideSignalInput,
+  type SurfaceRouteOverrideExemplar,
 } from "./improvement-service.js";
 
 interface Harness {
@@ -81,6 +82,121 @@ describe("ImprovementService recordSurfaceRouteOverrideSignal", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
+  it("returns only exemplars for the requested citadel", () => {
+    const harness = createHarness();
+
+    const alphaBase: Omit<SurfaceRouteOverrideSignalInput, "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"> = {
+      citadelId: "alpha",
+      workspaceId: "default",
+      autoConfidence: 0.7,
+    };
+
+    harness.service.recordSurfaceRouteOverrideSignal({
+      ...alphaBase,
+      sessionId: "s-alpha-1",
+      turnId: "t-alpha-1",
+      fromMode: "code",
+      toMode: "chat",
+      promptFeatureHash: "h1",
+    });
+    harness.service.recordSurfaceRouteOverrideSignal({
+      ...alphaBase,
+      sessionId: "s-alpha-2",
+      turnId: "t-alpha-2",
+      fromMode: "cowork",
+      toMode: "code",
+      promptFeatureHash: "h2",
+    });
+    harness.service.recordSurfaceRouteOverrideSignal({
+      citadelId: "beta",
+      workspaceId: "default",
+      sessionId: "s-beta-1",
+      turnId: "t-beta-1",
+      fromMode: "chat",
+      toMode: "code",
+      autoConfidence: 0.6,
+      promptFeatureHash: "h3",
+    });
+
+    const exemplars: SurfaceRouteOverrideExemplar[] = harness.service.listSurfaceRouteOverrideExemplars("alpha");
+
+    expect(exemplars).toHaveLength(2);
+    // Most recent first — cowork→code was recorded last
+    expect(exemplars[0]).toMatchObject({ fromMode: "cowork", toMode: "code" });
+    expect(exemplars[1]).toMatchObject({ fromMode: "code", toMode: "chat" });
+    // All exemplars have a recordedAt timestamp
+    for (const ex of exemplars) {
+      expect(typeof ex.recordedAt).toBe("string");
+      expect(ex.recordedAt.length).toBeGreaterThan(0);
+    }
+    // Beta override must not appear
+    const hasBeta = exemplars.some((ex) => ex.fromMode === "chat" && ex.toMode === "code");
+    expect(hasBeta).toBe(false);
+  });
+
+  it("respects the limit parameter", () => {
+    const harness = createHarness();
+
+    const base: Omit<SurfaceRouteOverrideSignalInput, "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"> = {
+      citadelId: "alpha",
+      workspaceId: "default",
+      autoConfidence: 0.8,
+    };
+
+    harness.service.recordSurfaceRouteOverrideSignal({
+      ...base,
+      sessionId: "s1",
+      turnId: "t1",
+      fromMode: "code",
+      toMode: "chat",
+      promptFeatureHash: "h1",
+    });
+    harness.service.recordSurfaceRouteOverrideSignal({
+      ...base,
+      sessionId: "s2",
+      turnId: "t2",
+      fromMode: "cowork",
+      toMode: "code",
+      promptFeatureHash: "h2",
+    });
+
+    const limited = harness.service.listSurfaceRouteOverrideExemplars("alpha", 1);
+    expect(limited).toHaveLength(1);
+  });
+
+  it("returns an empty array when no signals exist for the citadel", () => {
+    const harness = createHarness();
+    const exemplars = harness.service.listSurfaceRouteOverrideExemplars("nonexistent");
+    expect(exemplars).toEqual([]);
+  });
+});
+
+describe("ImprovementService surface_route_override synthesizes routing_policy candidate", () => {
+  it("synthesizes a routing_policy candidate after threshold-meeting override signals", () => {
+    const harness = createHarness();
+
+    const base = {
+      citadelId: "alpha",
+      workspaceId: "default",
+      fromMode: "code" as const,
+      toMode: "chat" as const,
+      autoConfidence: 0.3,
+      promptFeatureHash: "abc",
+    };
+
+    // Two signals with the same fingerprint satisfy requiredCount=2 (low-volume workspace)
+    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s1", turnId: "t1" });
+    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s2", turnId: "t2" });
+
+    const candidates = harness.service.listImprovementCandidates(100, "default");
+    const routingCandidate = candidates.find((c) => c.kind === "routing_policy");
+
+    expect(routingCandidate).toBeDefined();
+    expect(routingCandidate!.kind).toBe("routing_policy");
   });
 });
 

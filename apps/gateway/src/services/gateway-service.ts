@@ -98,6 +98,7 @@ import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
+import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { wait } from "./wait.js";
 import type {
   DatabaseCutoverProfile,
@@ -1893,7 +1894,17 @@ export class GatewayService {
       withChatTurnWriteLeaseStream: (sessionId, operation, factory) =>
         this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
-      surfaceRouter: new SurfaceRouterService({ traceRepo: this.storage.runtimeDecisionTraces }),
+      surfaceRouter: new SurfaceRouterService({
+        traceRepo: this.storage.runtimeDecisionTraces,
+        fetchExemplars: (citadelId: string) => this.improvementService.listSurfaceRouteOverrideExemplars(citadelId),
+        judge:
+          process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED === "1"
+            ? buildSurfaceRouterJudge({
+                createChatCompletion: (request) => this.createChatCompletion(request),
+                resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+              })
+            : undefined,
+      }),
       readChatSessionMode: (sessionId: string) => this.storage.chatSessionPrefs.get(sessionId)?.mode,
       persistChatSessionMode: (sessionId: string, mode: ChatMode) => {
         this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));

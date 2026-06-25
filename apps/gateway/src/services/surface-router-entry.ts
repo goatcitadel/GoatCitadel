@@ -5,7 +5,7 @@ import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 
 export interface AutoRouteHost {
-  surfaceRouter?: { route(req: SurfaceRouteRequest): SurfaceClassification };
+  surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
   persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
   normalizeWorkspaceId(workspaceId?: string): string;
   storage: {
@@ -18,18 +18,18 @@ export interface AutoRouteHost {
  * If the turn requested auto-routing (and carries no explicit mode), classify the first turn,
  * persist the chosen mode (sticky), and return input with `mode` set. Otherwise returns input unchanged.
  */
-export function applyAutoRouteToInput(
+export async function applyAutoRouteToInput(
   host: AutoRouteHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-): ChatSendMessageRequest {
+): Promise<ChatSendMessageRequest> {
   if (!input.autoRoute || input.mode !== undefined || !host.surfaceRouter || !host.persistChatSessionMode) {
     return input;
   }
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
   const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
-  const classified = host.surfaceRouter.route({
+  const classified = await host.surfaceRouter.route({
     prompt: input.content,
     citadelId,
     workspaceId,
@@ -85,6 +85,27 @@ export function recordModeOverrideIfChanged(
       autoConfidence: 0,
       promptFeatureHash: hashPromptFeatures(input.content),
     });
+  }
+}
+
+/**
+ * Run surface auto-routing + override-recording for a send turn, error-isolated.
+ * Returns input (possibly with `mode` filled by the router); on any failure,
+ * calls onError and returns the input unchanged so the turn always proceeds.
+ */
+export async function applySurfaceRoutingPreflight(
+  host: AutoRouteHost & ModeOverrideHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+  onError?: (error: unknown) => void,
+): Promise<ChatSendMessageRequest> {
+  try {
+    const routed = await applyAutoRouteToInput(host, sessionId, input);
+    recordModeOverrideIfChanged(host, sessionId, routed);
+    return routed;
+  } catch (error) {
+    onError?.(error);
+    return input;
   }
 }
 

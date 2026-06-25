@@ -344,6 +344,12 @@ export interface SurfaceRouteOverrideSignalInput {
   promptFeatureHash: string;
 }
 
+export interface SurfaceRouteOverrideExemplar {
+  fromMode: string;
+  toMode: string;
+  recordedAt: string;
+}
+
 /**
  * Callbacks needed from GatewayService.
  */
@@ -1296,6 +1302,29 @@ export class ImprovementService {
         autoConfidence: input.autoConfidence,
       },
     });
+  }
+
+  public listSurfaceRouteOverrideExemplars(citadelId: string, limit = 8): SurfaceRouteOverrideExemplar[] {
+    const exemplars: SurfaceRouteOverrideExemplar[] = [];
+    for (const signal of this.listImprovementSignals(500)) {
+      if (exemplars.length >= limit) {
+        break;
+      }
+      if (signal.signalKind !== "surface_route_override") {
+        continue;
+      }
+      const meta = safeJsonRecord(signal.metadata);
+      if (asOptionalString(meta.citadelId) !== citadelId) {
+        continue;
+      }
+      const fromMode = asOptionalString(meta.fromMode);
+      const toMode = asOptionalString(meta.toMode);
+      if (!fromMode || !toMode) {
+        continue;
+      }
+      exemplars.push({ fromMode, toMode, recordedAt: signal.recordedAt });
+    }
+    return exemplars;
   }
 
   recordPromptLabBenchmarkCompletionSignal(input: {
@@ -3122,6 +3151,9 @@ export class ImprovementService {
     }
     if (signal.signalKind === "skill_revision_evaluated") {
       return "skill_revision";
+    }
+    if (signal.signalKind === "surface_route_override") {
+      return "routing_policy";
     }
     return undefined;
   }
