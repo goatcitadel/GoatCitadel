@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-25-unified-surface-ux-ia-design.md`
 
-**Worktree:** `F:\code\personal-ai\.claude\worktrees\unified-surface-shell` (branch `worktree-unified-surface-shell`, off `origin/main`). `pnpm install` done. Commit with `git commit --no-verify` (husky can't spawn here); no co-author trailer (global attribution-disabled preference).
+**Worktree:** `.claude\worktrees\unified-surface-shell` (branch `worktree-unified-surface-shell`, off `origin/main`). `pnpm install` done. Commit with `git commit --no-verify` (husky can't spawn here); no co-author trailer (global attribution-disabled preference).
 
 ---
 

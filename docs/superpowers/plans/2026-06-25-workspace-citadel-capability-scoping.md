@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-25-workspace-citadel-capability-scoping-design.md`
 
-**Branch/worktree:** already on `worktree-workspace-capability-scoping` (off `main` `230a222e4`) at `F:/code/personal-ai/.claude/worktrees/workspace-capability-scoping`; `pnpm install` already done. Use `git commit --no-verify` (husky cannot spawn here). All `pnpm --filter` commands run from the worktree root.
+**Branch/worktree:** already on `worktree-workspace-capability-scoping` (off `main` `230a222e4`) at `.claude/worktrees/workspace-capability-scoping`; `pnpm install` already done. Use `git commit --no-verify` (husky cannot spawn here). All `pnpm --filter` commands run from the worktree root.
 
 **Key file:line anchors (verified against `main`):**
 - Repo template: `packages/storage/src/workspace-hook-repo.ts`; storage registration `packages/storage/src/index.ts` (import ~83, property ~204, instantiate ~319); SQLite migrations tail `packages/storage/src/sqlite.ts` (last entry v131 ends ~1533, array closes `];` ~1534); Postgres migrations tail `packages/storage/src/postgres/migrations.ts` (last entry v72 closes `];` ~2169).
@@ -1649,4 +1649,4 @@ pnpm --filter @goatcitadel/mission-control-next typecheck
 - **Fail-open is load-bearing:** the resolver must never throw out of `resolve()`. Every enforcement site treats `"ALL"` as "allow".
 - **Non-breaking invariant:** unconfigured scopes resolve to `"ALL"`. If any existing test starts failing because a capability was hidden, that is a bug in the resolver/wiring, not the test.
 - **Husky:** commit with `git commit --no-verify` (the pre-commit hook cannot spawn in this environment). Run the per-package typecheck/test commands manually before each commit instead.
-- **Worktree:** stay in `F:/code/personal-ai/.claude/worktrees/workspace-capability-scoping` on `worktree-workspace-capability-scoping`. Do not switch to any `codex/*` branch.
+- **Worktree:** stay in `.claude/worktrees/workspace-capability-scoping` on `worktree-workspace-capability-scoping`. Do not switch to any `codex/*` branch.
