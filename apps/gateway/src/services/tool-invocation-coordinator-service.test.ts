@@ -6,6 +6,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { PolicyViolationError } from "@goatcitadel/contracts";
 import {
   ToolInvocationCoordinatorService,
   type ToolInvocationCoordinatorHost,
@@ -1991,5 +1992,41 @@ describe("ToolInvocationCoordinatorService", () => {
         }),
       }),
     );
+  });
+});
+
+describe("capability-scope choke point (executeMcpRuntime)", () => {
+  it("denies a scoped-out external MCP server on the model approval-replay path", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "ok" } }));
+    const assertMcpServerInScope = vi.fn(() => {
+      throw new PolicyViolationError({ code: "POLICY_BLOCKED", message: "scoped out" });
+    });
+    const host = createHost({ assertMcpServerInScope, invokeMcpRuntimeTool });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    await expect(
+      coordinator.invokeApprovedMcpRuntime({ serverId: "srv-1", toolName: "tool.echo", workspaceId: "default" }),
+    ).rejects.toThrow(PolicyViolationError);
+    expect(assertMcpServerInScope).toHaveBeenCalledTimes(1);
+    // Denied before the external runtime ever executes.
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not capability-gate internal MCP servers (approval inbox)", async () => {
+    const assertMcpServerInScope = vi.fn(() => {
+      throw new PolicyViolationError({ code: "POLICY_BLOCKED", message: "must not gate internal infra" });
+    });
+    const host = createHost({
+      assertMcpServerInScope,
+      requireMcpServer: vi.fn(() => createMcpServer({ url: MCP_APPROVAL_INBOX_URL })),
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
+      workspaceId: "default",
+    });
+    expect(assertMcpServerInScope).not.toHaveBeenCalled();
   });
 });

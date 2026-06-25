@@ -1397,6 +1397,7 @@ export class GatewayService {
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
+      assertMcpServerInScope: (request) => this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
         listRuns: (limit) => this.storage.durableRuns.listRuns(limit),
         getRun: (runId) => {
@@ -7779,9 +7780,10 @@ export class GatewayService {
   }
 
   public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
-    const enriched = this.enrichMcpInvokePolicyContext(input);
-    this.assertMcpServerInCapabilityScope(enriched);
-    return this.toolInvocationCoordinator.invokeMcpTool(enriched);
+    // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
+    // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
+    // correctly exempts internal servers. Enrich here so the gate sees the resolved workspaceId.
+    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input));
   }
 
   private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
