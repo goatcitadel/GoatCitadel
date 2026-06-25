@@ -20,14 +20,14 @@ import { adaptLegacyUrl, coerceLegacyHrefToNext, resolveRouteFromLocation } from
 describe("legacy route adapter", () => {
   it("maps legacy work surface tabs into the new areas", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=chat")).toBe("/chat");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=cowork")).toBe("/cowork");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=code")).toBe("/code");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=cowork")).toBe("/chat?mode=cowork");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=code")).toBe("/chat?mode=code");
   });
 
   it("maps bare legacy surface parameters into the new areas", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=chat")).toBe("/chat");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=cowork")).toBe("/cowork");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=code")).toBe("/code");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=cowork")).toBe("/chat?mode=cowork");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=code")).toBe("/chat?mode=code");
   });
 
   it("maps legacy herd tabs into the cowork board", () => {
@@ -58,9 +58,11 @@ describe("legacy route adapter", () => {
 
   it("maps legacy operate routes into task and approval destinations", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=cowork")).toBe(
-      "/cowork",
+      "/chat?mode=cowork",
     );
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=code")).toBe("/code");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=code")).toBe(
+      "/chat?mode=code",
+    );
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=tasks")).toBe("/cowork/tasks");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=approvals")).toBe("/ops/approvals");
   });
@@ -189,9 +191,9 @@ describe("mission-control-next route model", () => {
   it("covers route labels, descriptions, navigation preservation, and legacy tab aliases", () => {
     expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Task Board");
     expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Agent Board");
-    expect(getRouteLabel({ area: "cowork" })).toBe("Cowork");
+    expect(getRouteLabel({ area: "cowork" })).toBe("Chat");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("board exposes");
-    expect(getRouteDescription({ area: "cowork" })).toContain("Delegation");
+    expect(getRouteDescription({ area: "cowork" })).toContain("Conversation");
     expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
 
     expect(
@@ -218,7 +220,7 @@ describe("mission-control-next route model", () => {
     expect(isRailItemActive({ area: "chat" }, RAIL_ITEMS.chat[0]!)).toBe(true);
     expect(isRailItemActive({ area: "chat" }, RAIL_ITEMS.library[0]!)).toBe(false);
 
-    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=assembly")).toMatchObject({ area: "cowork" });
+    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=assembly")).toMatchObject({ area: "chat", mode: "cowork" });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=tasks")).toMatchObject({
       area: "cowork",
       section: "tasks",

@@ -411,7 +411,7 @@ describe("ApprovalsRoutePage", () => {
 
     const liveLink = findLink(renderer!.root, "Open live session");
     expect(liveLink.props.href).toBe(
-      "/cowork?sessionId=session-1&turnId=turn-1&approvalId=11111111-1111-4111-8111-111111111111",
+      "/chat?sessionId=session-1&turnId=turn-1&approvalId=11111111-1111-4111-8111-111111111111&mode=cowork",
     );
     await act(async () => {
       liveLink.props.onClick({ preventDefault: vi.fn() });

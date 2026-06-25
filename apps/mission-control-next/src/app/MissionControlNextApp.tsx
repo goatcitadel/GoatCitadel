@@ -1140,6 +1140,68 @@ export function renderRouteContent(input: {
 }): ReactNode {
   const route = normalizeAppRoute(input.route);
   if (route.area === "chat") {
+    if (route.mode === "cowork") {
+      return (
+        <LazyThreadedSurfaceRoute
+          workspaceId={input.activeWorkspaceId}
+          workspaceName={input.activeWorkspaceName}
+          gatewayStatus={input.gatewayStatus}
+          approvalsCount={input.pendingApprovals}
+          surface="cowork"
+          lockSurface
+          onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
+          onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
+          onOpenApprovals={(approvalId?: string) =>
+            input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+          }
+          onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
+          onOpenUniversalRunDetail={(runId) =>
+            input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
+          }
+          onNavigateSurface={(surface, options) =>
+            input.navigate({
+              area: surface,
+              theme: route.theme,
+              sessionId: options?.sessionId ?? undefined,
+              turnId: options?.turnId ?? undefined,
+              artifactId: options?.artifactId ?? undefined,
+            })
+          }
+        />
+      );
+    }
+
+    if (route.mode === "code") {
+      return (
+        <LazyThreadedSurfaceRoute
+          workspaceId={input.activeWorkspaceId}
+          workspaceName={input.activeWorkspaceName}
+          gatewayStatus={input.gatewayStatus}
+          approvalsCount={input.pendingApprovals}
+          surface="code"
+          lockSurface
+          onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
+          onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
+          onOpenApprovals={(approvalId?: string) =>
+            input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+          }
+          onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
+          onOpenUniversalRunDetail={(runId) =>
+            input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
+          }
+          onNavigateSurface={(surface, options) =>
+            input.navigate({
+              area: surface,
+              theme: route.theme,
+              sessionId: options?.sessionId ?? undefined,
+              turnId: options?.turnId ?? undefined,
+              artifactId: options?.artifactId ?? undefined,
+            })
+          }
+        />
+      );
+    }
+
     return (
       <LazyThreadedSurfaceRoute
         workspaceId={input.activeWorkspaceId}
@@ -1178,65 +1240,6 @@ export function renderRouteContent(input: {
     if (route.section === "tasks" || route.section === "board") {
       return <LazyNativeRoutePages {...input} route={route} />;
     }
-    return (
-      <LazyThreadedSurfaceRoute
-        workspaceId={input.activeWorkspaceId}
-        workspaceName={input.activeWorkspaceName}
-        gatewayStatus={input.gatewayStatus}
-        approvalsCount={input.pendingApprovals}
-        surface="cowork"
-        lockSurface
-        onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
-        onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-        onOpenApprovals={(approvalId?: string) =>
-          input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
-        }
-        onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
-        onOpenUniversalRunDetail={(runId) =>
-          input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
-        }
-        onNavigateSurface={(surface, options) =>
-          input.navigate({
-            area: surface,
-            theme: route.theme,
-            sessionId: options?.sessionId ?? undefined,
-            turnId: options?.turnId ?? undefined,
-            artifactId: options?.artifactId ?? undefined,
-          })
-        }
-      />
-    );
-  }
-
-  if (route.area === "code") {
-    return (
-      <LazyThreadedSurfaceRoute
-        workspaceId={input.activeWorkspaceId}
-        workspaceName={input.activeWorkspaceName}
-        gatewayStatus={input.gatewayStatus}
-        approvalsCount={input.pendingApprovals}
-        surface="code"
-        lockSurface
-        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
-        onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-        onOpenApprovals={(approvalId?: string) =>
-          input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
-        }
-        onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
-        onOpenUniversalRunDetail={(runId) =>
-          input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
-        }
-        onNavigateSurface={(surface, options) =>
-          input.navigate({
-            area: surface,
-            theme: route.theme,
-            sessionId: options?.sessionId ?? undefined,
-            turnId: options?.turnId ?? undefined,
-            artifactId: options?.artifactId ?? undefined,
-          })
-        }
-      />
-    );
   }
 
   if (route.area === "projects") {

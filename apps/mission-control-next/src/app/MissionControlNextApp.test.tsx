@@ -599,16 +599,18 @@ describe("MissionControlNextApp", () => {
     });
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
 
+    // Code is no longer a primary-nav area; it is reached via /chat?mode=code.
+    // Verify a primary-nav area that still exists (Chat) navigates correctly.
     await act(async () => {
       renderer.root
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Code"),
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
     });
-    expect(window.location.pathname).toBe("/code");
+    expect(window.location.pathname).toBe("/chat");
 
     await act(async () => {
       findButton(renderer, "Open threaded Start Here").props.onClick();
@@ -764,6 +766,9 @@ describe("MissionControlNextApp", () => {
   });
 
   it("keeps command-palette area jumps session-scoped without leaking preference theme", async () => {
+    // Cowork is no longer a primary-nav area (it is reached as /chat?mode=cowork).
+    // Verify that navigating to Chat via the palette preserves session context and
+    // does not leak the stored theme preference into the URL.
     const renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1&turnId=turn-1");
 
     await act(async () => {
@@ -771,10 +776,10 @@ describe("MissionControlNextApp", () => {
     });
 
     await act(async () => {
-      findButton(renderer, "Go to Cowork").props.onClick();
+      findButton(renderer, "Go to Chat").props.onClick();
     });
 
-    expect(window.location.pathname).toBe("/cowork");
+    expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toContain("sessionId=session-1");
     expect(window.location.search).toContain("turnId=turn-1");
     expect(window.location.search).not.toContain("theme=dark");
