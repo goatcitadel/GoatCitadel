@@ -870,6 +870,23 @@ describe("MissionControlNextApp", () => {
     renderer.unmount();
   });
 
+  it("chat surface renders with lockSurface=false (auto-route enabled); cowork and code stay locked", async () => {
+    // Chat must be unlocked so the gateway auto-router can classify a new thread's first turn.
+    let renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1");
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false });
+    renderer.unmount();
+
+    // Cowork must remain locked to its explicit surface.
+    renderer = await renderApp("http://localhost:5173/cowork?sessionId=session-1");
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "cowork", lockSurface: true });
+    renderer.unmount();
+
+    // Code must remain locked to its explicit surface.
+    renderer = await renderApp("http://localhost:5173/code?sessionId=code-session");
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "code", lockSurface: true });
+    renderer.unmount();
+  });
+
   it("covers shell realtime fallback, redirect, and status failure branches", async () => {
     const warningRenderer = await renderApp("http://localhost:5173/chat?sessionId=session-1");
     await act(async () => {
