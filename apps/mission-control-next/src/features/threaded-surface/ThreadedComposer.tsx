@@ -424,6 +424,46 @@ function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSession
   return null;
 }
 
+function ComposerCodeGate({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const gate = props.pendingCodeGate;
+  if (!gate) {
+    return null;
+  }
+
+  const message =
+    gate.reason === "unbound"
+      ? "Code tasks run against a connected project. Run as Code anyway (you can connect a project next), or send as Chat?"
+      : "This looks like a Code task. Run it as Code, or send as Chat?";
+
+  return (
+    <section
+      className="mc-next-composer-banner warning"
+      role="alert"
+      aria-live="assertive"
+      data-code-gate={gate.reason}
+    >
+      <StatusChip tone="warning">Code task?</StatusChip>
+      <p>{message}</p>
+      <div className="mc-next-composer-delegation-actions">
+        <button
+          type="button"
+          className="mc-next-composer-inline-button primary"
+          onClick={() => props.onConfirmCodeTurn?.()}
+        >
+          Run as Code
+        </button>
+        <button
+          type="button"
+          className="mc-next-composer-inline-button"
+          onClick={() => props.onSendAsChatInstead?.()}
+        >
+          Send as Chat
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const threadKnowledgeAttachments = props.threadKnowledgeAttachments ?? [];
   const presetOptions = props.presetOptions ?? [];
@@ -644,6 +684,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           </button>
         </div>
       ) : null}
+
+      <ComposerCodeGate props={props} />
 
       <ComposerBlockingPrompt props={props} />
 

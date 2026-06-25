@@ -63,6 +63,10 @@ const useRouteGeneratedArtifactRevealMock = vi.fn();
 
 let mockSurfaceMode: ChatMode = "chat";
 let mockCompact = false;
+let mockSurfacePreview:
+  | { mode: ChatMode; confidence: number; source?: string; rationale?: string; alternatives?: unknown[] }
+  | undefined;
+const handleSendMock = vi.fn(async () => undefined);
 let latestSurfaceInput: MissionThreadedRenderSurfaceInput | null = null;
 let confirmModalProps: any[] = [];
 let mockSelectedTurn: any = null;
@@ -307,7 +311,7 @@ vi.mock("./chat/useRouteGeneratedArtifactReveal", () => ({
   useRouteGeneratedArtifactReveal: (...args: unknown[]) => useRouteGeneratedArtifactRevealMock(...args),
 }));
 
-vi.mock("./chat/useSurfaceClassifyPreview", () => ({ useSurfaceClassifyPreview: () => undefined }));
+vi.mock("./chat/useSurfaceClassifyPreview", () => ({ useSurfaceClassifyPreview: () => mockSurfacePreview }));
 
 vi.mock("./chat/useMissionControlSurfaceState", () => ({
   formatSessionLabel: (session: any) => session?.title ?? session?.sessionId ?? "Session",
@@ -560,7 +564,7 @@ function setupMocks() {
     setQueuedOutbound: vi.fn(),
     editingTurnId: null,
     setEditingTurnId: vi.fn(),
-    handleSend: vi.fn(async () => undefined),
+    handleSend: handleSendMock,
     handleRetryTurn: vi.fn(async () => undefined),
     handleStopActiveTurn: vi.fn(async () => undefined),
     handleBeginEditTurn: vi.fn(),
@@ -810,6 +814,7 @@ describe("MissionThreadedControllerHost", () => {
     latestSurfaceInput = null;
     mockSurfaceMode = "chat";
     mockCompact = false;
+    mockSurfacePreview = undefined;
     mockSelectedTurn = selectedTurn;
     installBrowserGlobals();
     setupMocks();
@@ -3006,6 +3011,144 @@ describe("MissionThreadedControllerHost", () => {
       });
       await renderHost({ lockSurface: true, surface: "chat" });
       expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
+    });
+  });
+
+  describe("code-path pre-send gate (#136)", () => {
+    // Reconfigure the session-data mock to an EMPTY thread (no turns) so
+    // autoRouteActive is true, and point the thread controller at a session
+    // whose projectId reflects the desired bound/unbound state.
+    function setupEmptyThread(options: { hasBoundProject: boolean }) {
+      const base = useChatSessionDataMock();
+      useChatSessionDataMock.mockReturnValue({
+        ...base,
+        thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
+      });
+      const sessionForThread = options.hasBoundProject
+        ? selectedSession
+        : { ...selectedSession, projectId: undefined };
+      useChatThreadControllerMock.mockReturnValue({
+        selectedSession: sessionForThread,
+        selectedProject: options.hasBoundProject ? selectedProject : null,
+        messages: [],
+        missionSessions: [sessionForThread],
+        externalSessions: [],
+        workspaceMissionSessionCount: 1,
+        boundMissionSessionCount: options.hasBoundProject ? 1 : 0,
+        visibleSessionLabelById: new Map([["session-1", "Launch plan"]]),
+        availableFolders: [{ folderId: "all", name: "All", count: 1 }],
+      });
+    }
+
+    function lastOutboundSurfaceMode(): string | undefined {
+      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      return lastInput.sessionConfig.surfaceMode;
+    }
+
+    it("gates an unbound predicted-code send and does not call the underlying send", async () => {
+      setupEmptyThread({ hasBoundProject: false });
+      mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
+      await renderHost();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(true);
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "unbound" });
+      expect(handleSendMock).not.toHaveBeenCalled();
+    });
+
+    it("gates a low-confidence predicted-code send when a project is bound", async () => {
+      setupEmptyThread({ hasBoundProject: true });
+      mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
+      await renderHost();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "low_confidence" });
+      expect(handleSendMock).not.toHaveBeenCalled();
+    });
+
+    it("sends normally when predicted code is bound and confident (no gate)", async () => {
+      setupEmptyThread({ hasBoundProject: true });
+      mockSurfacePreview = { mode: "code", confidence: 0.95, source: "classifier" };
+      await renderHost();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends normally when there is no preview (fail-open)", async () => {
+      setupEmptyThread({ hasBoundProject: false });
+      mockSurfacePreview = undefined;
+      await renderHost();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("confirms a gated code turn via the deferred forced send with modeOverride 'code'", async () => {
+      setupEmptyThread({ hasBoundProject: false });
+      mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
+      await renderHost();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "unbound" });
+      expect(handleSendMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onConfirmCodeTurn?.();
+        await flushEffects(8);
+      });
+
+      // The deferred effect fired the send after the override rendered.
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
+      // Gate cleared and the override routed the turn as code.
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("code");
+      expect(lastOutboundSurfaceMode()).toBe("code");
+    });
+
+    it("sends as chat instead via the deferred forced send with modeOverride 'chat'", async () => {
+      setupEmptyThread({ hasBoundProject: true });
+      mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
+      await renderHost();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "low_confidence" });
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSendAsChatInstead?.();
+        await flushEffects(8);
+      });
+
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
+      expect(lastOutboundSurfaceMode()).toBe("chat");
     });
   });
 });
