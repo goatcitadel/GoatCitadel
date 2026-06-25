@@ -1686,6 +1686,21 @@ export interface RoutingPreflightResult {
   decision: RoutingDecisionSnapshot;
 }
 
+export interface SurfaceClassifyRequest {
+  prompt: string;
+  workspaceId?: string;
+  citadelId?: string;
+  hasBoundProject?: boolean;
+}
+
+export interface SurfaceClassifyResponse {
+  mode: ChatMode;
+  confidence: number; // 0..1
+  source: "heuristic" | "judge";
+  rationale: string;
+  alternatives: ChatMode[];
+}
+
 export interface ChatSendMessageResponse {
   sessionId: string;
   userMessage: ChatMessageRecord;
