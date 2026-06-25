@@ -3074,6 +3074,30 @@
   display: none;
 }
 
+/* Capability-scope panel: row head (resource name left, enabled/disabled state
+   right) and the inherit/curated chip row above the list. */
+.mc-next-settings-selectable-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.mc-next-settings-selectable-head > span {
+  flex: none;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-settings-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
 .mc-next-settings-selectable p,
 .mc-next-settings-action-copy p,
 .mc-next-directory-list-item p,
