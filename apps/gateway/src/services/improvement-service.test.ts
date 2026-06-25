@@ -175,6 +175,31 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
   });
 });
 
+describe("ImprovementService surface_route_override synthesizes routing_policy candidate", () => {
+  it("synthesizes a routing_policy candidate after threshold-meeting override signals", () => {
+    const harness = createHarness();
+
+    const base = {
+      citadelId: "alpha",
+      workspaceId: "default",
+      fromMode: "code" as const,
+      toMode: "chat" as const,
+      autoConfidence: 0.3,
+      promptFeatureHash: "abc",
+    };
+
+    // Two signals with the same fingerprint satisfy requiredCount=2 (low-volume workspace)
+    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s1", turnId: "t1" });
+    harness.service.recordSurfaceRouteOverrideSignal({ ...base, sessionId: "s2", turnId: "t2" });
+
+    const candidates = harness.service.listImprovementCandidates(100, "default");
+    const routingCandidate = candidates.find((c) => c.kind === "routing_policy");
+
+    expect(routingCandidate).toBeDefined();
+    expect(routingCandidate!.kind).toBe("routing_policy");
+  });
+});
+
 function createHarness(): Harness {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-surface-router-"));
   const transcriptsDir = path.join(rootDir, "transcripts");

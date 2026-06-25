@@ -3152,6 +3152,9 @@ export class ImprovementService {
     if (signal.signalKind === "skill_revision_evaluated") {
       return "skill_revision";
     }
+    if (signal.signalKind === "surface_route_override") {
+      return "routing_policy";
+    }
     return undefined;
   }
 
