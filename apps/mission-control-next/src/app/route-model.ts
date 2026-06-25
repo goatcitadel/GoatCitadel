@@ -1,4 +1,6 @@
 /* eslint-disable max-lines -- Route metadata intentionally centralizes the release surface contract. */
+import type { ChatMode } from "@goatcitadel/contracts";
+
 export type PrimaryArea = "chat" | "cowork" | "code" | "projects" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
 export type LibrarySection =
@@ -52,6 +54,7 @@ export type ReleaseSurfaceStatus = "ship" | "hide" | "experimental" | "needs_rel
 
 export interface AppRoute {
   area: PrimaryArea;
+  mode?: ChatMode; // unified-surface conversation mode (chat area only)
   section?: CoworkSection | LibrarySection | OpsSection | SettingsSection;
   view?: string;
   sessionId?: string;
@@ -1096,6 +1099,13 @@ export const ROUTE_RELEASE_SCOPE = [
 const ROUTE_RELEASE_SCOPE_BY_KEY = new Map(ROUTE_RELEASE_SCOPE.map((scope) => [getRouteReleaseKey(scope), scope]));
 
 export function normalizeAppRoute(route: AppRoute): AppRoute {
+  if (route.area === "code") {
+    return normalizeAppRoute({ ...route, area: "chat", mode: "code", section: undefined });
+  }
+  if (route.area === "cowork" && (!route.section || route.section === "workspace")) {
+    return normalizeAppRoute({ ...route, area: "chat", mode: "cowork", section: undefined });
+  }
+
   const base = {
     area: route.area,
     sessionId: route.sessionId,
@@ -1139,6 +1149,7 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
   return {
     ...base,
     area: route.area,
+    mode: route.area === "chat" ? route.mode : undefined,
   };
 }
 
@@ -1154,9 +1165,12 @@ export function parseAppRoute(input: string | URL): AppRoute {
   const normalizedArea = isPrimaryArea(area) ? area : "chat";
   const routeArea = normalizedArea;
   const routeSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
+  const rawMode = readParam(params, "mode");
+  const parsedMode = isChatMode(rawMode) ? rawMode : undefined;
   const nextRoute: AppRoute = normalizeAppRoute({
     area: routeArea,
     section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
+    mode: parsedMode,
     sessionId: readParam(params, "sessionId"),
     turnId: readParam(params, "turnId"),
     runId: readParam(params, "runId"),
@@ -1185,10 +1199,13 @@ export function buildAppHref(route: AppRoute): string {
   }
   writeParam(params, "view", next.view);
   // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
+  if (next.area === "chat" && next.mode && next.mode !== "chat") {
+    writeParam(params, "mode", next.mode);
+  }
 
   const path =
-    next.area === "chat" || next.area === "code"
-      ? `/${next.area}`
+    next.area === "chat"
+      ? "/chat"
       : next.area === "projects"
         ? `/projects${next.projectId ? `/${encodeURIComponent(next.projectId)}` : ""}`
         : next.area === "cowork" && (!next.section || next.section === "workspace")
@@ -1348,6 +1365,10 @@ function isPrimaryArea(value: string | undefined): value is PrimaryArea {
     value === "ops" ||
     value === "settings"
   );
+}
+
+function isChatMode(value: string | undefined): value is ChatMode {
+  return value === "chat" || value === "cowork" || value === "code";
 }
 
 function readParam(params: URLSearchParams, key: string): string | undefined {
