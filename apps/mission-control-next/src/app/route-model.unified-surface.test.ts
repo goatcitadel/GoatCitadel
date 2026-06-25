@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAppRoute, buildAppHref, normalizeAppRoute } from "./route-model";
+import { parseAppRoute, buildAppHref, normalizeAppRoute, buildModeRail } from "./route-model";
 
 describe("unified surface mode field", () => {
   it("collapses /code to chat with mode=code", () => {
@@ -42,5 +42,36 @@ describe("unified surface mode field", () => {
     const n = normalizeAppRoute({ area: "code", sessionId: "s2" } as never);
     expect(n.area).toBe("chat");
     expect(n.mode).toBe("code");
+  });
+});
+
+describe("buildModeRail", () => {
+  it("chat mode → Thread + Artifacts + Memory + Approvals", () => {
+    const ids = buildModeRail("chat").map((i) => i.id);
+    expect(ids).toContain("chat-thread");
+    expect(ids).toContain("chat-artifacts");
+    expect(ids).toContain("chat-memory");
+    expect(ids).toContain("chat-approvals");
+  });
+  it("cowork mode → Task Board + Agent Board", () => {
+    const items = buildModeRail("cowork");
+    const tasks = items.find((i) => i.id === "mode-tasks");
+    expect(tasks?.area).toBe("cowork");
+    expect(tasks?.section).toBe("tasks");
+    expect(items.some((i) => i.id === "mode-board" && i.section === "board")).toBe(true);
+  });
+  it("code mode → Files + Runtime + Prompt Packs", () => {
+    const items = buildModeRail("code");
+    expect(items.some((i) => i.section === "files")).toBe(true);
+    expect(items.some((i) => i.section === "runtime")).toBe(true);
+    expect(items.some((i) => i.section === "prompt-packs")).toBe(true);
+  });
+  it("every mode rail ends with Approvals", () => {
+    for (const m of ["chat", "cowork", "code"] as const) {
+      expect(buildModeRail(m).some((i) => i.section === "approvals")).toBe(true);
+    }
+  });
+  it("defaults to the chat rail when mode is undefined", () => {
+    expect(buildModeRail(undefined).map((i) => i.id)).toContain("chat-artifacts");
   });
 });

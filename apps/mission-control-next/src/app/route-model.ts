@@ -594,6 +594,45 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ],
 };
 
+const MODE_RAIL_THREAD: RailItem = {
+  id: "chat-thread", label: "Thread",
+  description: "The active conversation with artifacts and attachments close at hand.",
+  area: "chat", preserveThread: true,
+};
+const MODE_RAIL_APPROVALS: RailItem = {
+  id: "chat-approvals", label: "Approvals",
+  description: "Review pending tool or risk decisions.",
+  area: "ops", section: "approvals", preserveThread: true,
+};
+
+/** Mode-adaptive rail for the unified chat surface (keyed on route.mode). */
+export function buildModeRail(mode: ChatMode | undefined): RailItem[] {
+  const m = mode ?? "chat";
+  if (m === "cowork") {
+    return [
+      MODE_RAIL_THREAD,
+      { id: "mode-tasks", label: "Task Board", description: "Planning, assigned, review, blocked, and done.", area: "cowork", section: "tasks" },
+      { id: "mode-board", label: "Agent Board", description: "Agent posture and live board state.", area: "cowork", section: "board" },
+      MODE_RAIL_APPROVALS,
+    ];
+  }
+  if (m === "code") {
+    return [
+      MODE_RAIL_THREAD,
+      { id: "mode-files", label: "Files", description: "Browse shared workspace files outside the active thread.", area: "library", section: "files" },
+      { id: "mode-runtime", label: "Runtime", description: "Serving posture and spend while coding.", area: "ops", section: "runtime" },
+      { id: "mode-prompt-packs", label: "Prompt Packs", description: "Quality gates and pack authoring.", area: "library", section: "prompt-packs" },
+      MODE_RAIL_APPROVALS,
+    ];
+  }
+  return [
+    MODE_RAIL_THREAD,
+    { id: "chat-artifacts", label: "Artifacts", description: "Jump to generated outputs from active work.", area: "library", section: "artifacts", preserveThread: true },
+    { id: "chat-memory", label: "Memory", description: "Inspect what the system knows and what it learned.", area: "library", section: "memory" },
+    MODE_RAIL_APPROVALS,
+  ];
+}
+
 export interface RailGroup {
   id: string;
   label: string;
