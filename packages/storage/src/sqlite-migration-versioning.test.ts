@@ -237,6 +237,33 @@ describe("sqlite schema migrations", () => {
     db.close();
   });
 
+  it("creates the capability_scope_assignments table with unique + lookup indexes", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-capscope-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const cols = db
+      .prepare("SELECT name FROM pragma_table_info('capability_scope_assignments') ORDER BY name")
+      .all() as Array<{ name: string }>;
+    const names = cols.map((c) => c.name);
+    assert.deepEqual(names, [
+      "assignment_id",
+      "created_at",
+      "enabled",
+      "resource_ref",
+      "resource_type",
+      "scope_id",
+      "scope_kind",
+      "updated_at",
+    ]);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='capability_scope_assignments'")
+      .all() as Array<{ name: string }>;
+    const idxNames = indexes.map((i) => i.name);
+    assert.ok(idxNames.includes("idx_capability_scope_assignments_unique"));
+    assert.ok(idxNames.includes("idx_capability_scope_assignments_lookup"));
+    db.close();
+  });
+
   it("waits through a transient lock before switching to WAL mode", async () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-lock-${randomUUID()}.db`);
     createdFiles.push(dbPath);
