@@ -638,7 +638,7 @@ export function ThreadedSurfacePage({
 }
 
 function ThreadConversationSurface({
-  surface,
+  // `surface` is part of the typed prop contract but not consumed here; don't destructure it.
   props,
   dropTarget,
   dockOpen,
