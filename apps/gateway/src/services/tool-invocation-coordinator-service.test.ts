@@ -2019,14 +2019,19 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
     const host = createHost({
       assertMcpServerInScope,
       requireMcpServer: vi.fn(() => createMcpServer({ url: MCP_APPROVAL_INBOX_URL })),
+      // Register the inbox tool so resolveMcpRuntimeTarget succeeds and the call actually reaches
+      // executeMcpRuntime (the choke point) — otherwise the exemption branch is never exercised.
+      listMcpTools: vi.fn(() => [createMcpTool({ toolName: MCP_APPROVAL_INBOX_LIST_TOOL_NAME })]),
     });
     const coordinator = new ToolInvocationCoordinatorService(host);
 
-    await coordinator.invokeApprovedMcpRuntime({
+    const result = await coordinator.invokeApprovedMcpRuntime({
       serverId: "srv-1",
       toolName: MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
       workspaceId: "default",
     });
+    // Reached executeMcpRuntime, took the internal-approval-inbox branch, and skipped the gate.
+    expect(result.ok).toBe(true);
     expect(assertMcpServerInScope).not.toHaveBeenCalled();
   });
 });
