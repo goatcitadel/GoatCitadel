@@ -62,7 +62,7 @@ describe("CapabilityScopeRepository", () => {
     assert.deepEqual(refs, ["a", "b"]);
   });
 
-  it("replaceSet with an empty array yields curated-to-empty (rows present is false → inherit)", () => {
+  it("replaceSet with an empty array clears curation (no rows → resolver inherits)", () => {
     const repo = createRepo();
     repo.setEnabled("workspace", "default", "mcp_server", "srv-1", true);
     repo.replaceSet("workspace", "default", "mcp_server", []);

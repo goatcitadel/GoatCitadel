@@ -42,7 +42,12 @@ export interface CapabilityScopeView {
 /** PATCH body: replace the scope's curated set for one resource type. */
 export interface CapabilityScopeUpdateInput {
   resourceType: CapabilityResourceType;
-  /** Full candidate set with per-ref enabled flags. Empty array = curate-to-empty. */
+  /**
+   * The scope's curated set for this resource type, as the full candidate list with per-ref
+   * `enabled` flags. To curate to empty (the scope sees NONE of this type), send every candidate
+   * with `enabled: false` (rows persist → curated). An EMPTY array clears curation and reverts the
+   * scope to inherited (equivalent to a DELETE) — it is NOT "curate to empty".
+   */
   assignments: Array<{ resourceRef: string; enabled: boolean }>;
 }
 
