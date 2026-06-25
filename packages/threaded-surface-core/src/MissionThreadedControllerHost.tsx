@@ -140,6 +140,7 @@ import {
   useMissionControlSurfaceState,
 } from "./chat/useMissionControlSurfaceState";
 import { createCodeModeRun } from "@goatcitadel/mission-control-shared/api/capabilities";
+import { useSurfaceClassifyPreview } from "./chat/useSurfaceClassifyPreview";
 
 export {
   formatSessionLabel,
@@ -3097,6 +3098,15 @@ export function MissionThreadedControllerHost({
     ],
   );
 
+  const threadIsEmpty = (thread?.turns?.length ?? 0) === 0;
+  const autoRouteActive = !lockSurface && !modeOverride && threadIsEmpty;
+  const surfacePreview = useSurfaceClassifyPreview({
+    draft,
+    enabled: autoRouteActive,
+    workspaceId,
+    hasBoundProject: !codeModeNeedsProjectBinding,
+  });
+
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = selectedSession
     ? {
         mode: messageMode,
@@ -3298,6 +3308,8 @@ export function MissionThreadedControllerHost({
         onSetGoal: handleSetGoal,
         onClearGoal: handleClearGoal,
         onGoalStatus: handleGoalStatus,
+        modePreview: surfacePreview?.mode,
+        autoRouteActive,
       }
     : null;
 

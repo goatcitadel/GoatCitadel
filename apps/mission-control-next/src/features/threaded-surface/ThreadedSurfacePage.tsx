@@ -690,7 +690,8 @@ function ThreadConversationSurface({
       <header className="mc-next-threaded-header">
         <div className="mc-next-threaded-header-copy">
           <ThreadedModeChip
-            mode={props.modeOverridePending ?? props.mode}
+            mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
+            preview={props.modePreview}
             onOverride={(m) => props.onModeOverride?.(m)}
           />
           <h1>{props.sessionTitle}</h1>

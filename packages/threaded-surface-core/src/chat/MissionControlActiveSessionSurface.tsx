@@ -204,4 +204,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onSetGoal?: (goal: string, turnBudget?: number) => Promise<void>;
   onClearGoal?: () => Promise<void>;
   onGoalStatus?: () => Promise<void>;
+  /** Predicted mode from the classify preview hook (only set when autoRouteActive is true). */
+  modePreview?: ChatMode;
+  /** True when auto-routing is active for the current thread (unlocked surface, no override, empty thread). */
+  autoRouteActive?: boolean;
 }

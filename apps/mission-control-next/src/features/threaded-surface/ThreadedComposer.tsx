@@ -668,7 +668,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
            * banner below, so the heading was dead text.
            */}
           <ThreadedModeChip
-            mode={props.modeOverridePending ?? props.mode}
+            mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
+            preview={props.modePreview}
             onOverride={(m) => props.onModeOverride?.(m)}
             disabled={props.sending}
           />

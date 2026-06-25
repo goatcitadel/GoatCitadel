@@ -307,6 +307,8 @@ vi.mock("./chat/useRouteGeneratedArtifactReveal", () => ({
   useRouteGeneratedArtifactReveal: (...args: unknown[]) => useRouteGeneratedArtifactRevealMock(...args),
 }));
 
+vi.mock("./chat/useSurfaceClassifyPreview", () => ({ useSurfaceClassifyPreview: () => undefined }));
+
 vi.mock("./chat/useMissionControlSurfaceState", () => ({
   formatSessionLabel: (session: any) => session?.title ?? session?.sessionId ?? "Session",
   looksMachineSessionLabel: (value: string) => value.startsWith("sess_"),
@@ -2895,6 +2897,115 @@ describe("MissionThreadedControllerHost", () => {
         sessionConfig: { surfaceMode?: string };
       };
       expect(afterInput.sessionConfig.surfaceMode).toBe("code");
+    });
+
+    it("exposes autoRouteActive=true on activeSessionSurfaceProps for a new unlocked empty thread", async () => {
+      // Override the session data mock to return an empty thread.
+      // We must keep all fields from setupMocks but replace thread with an empty one.
+      useChatSessionDataMock.mockReturnValue({
+        projects: { items: [selectedProject] },
+        setProjects: vi.fn(),
+        sessions: { items: [selectedSession] },
+        setSessions: vi.fn(),
+        thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
+        setThread: vi.fn(),
+        prefs,
+        setPrefs: vi.fn(),
+        binding: { sessionId: "session-1", target: null },
+        setBinding: vi.fn(),
+        generatedArtifacts: { items: [generatedArtifact] },
+        setGeneratedArtifacts: vi.fn(),
+        threadKnowledgeAttachments: {
+          items: [{ attachmentId: "knowledge-1", sourceRef: "file.pdf", retrievalMode: "retrieval" }],
+        },
+        setThreadKnowledgeAttachments: vi.fn(),
+        settings: { llm: { activeProviderId: "openai", activeModel: "gpt-5.5" } },
+        setSettings: vi.fn(),
+        commandCatalog: [{ command: "/plan", usage: "/plan", description: "Plan" }],
+        proactiveStatus: { mode: "off" },
+        setProactiveStatus: vi.fn(),
+        proactiveRuns: [],
+        setProactiveRuns: vi.fn(),
+        learnedMemory: [],
+        setLearnedMemory: vi.fn(),
+        specialistCandidates: [],
+        setSpecialistCandidates: vi.fn(),
+        installedSkills: [],
+        setInstalledSkills: vi.fn(),
+        mcpServers: [],
+        setMcpServers: vi.fn(),
+        mcpTemplates: [],
+        setMcpTemplates: vi.fn(),
+        loading: false,
+        isRefreshing: false,
+        messagesLoading: false,
+        secondaryLoading: false,
+        loadSidebar: vi.fn(async () => undefined),
+        loadRuntimeCatalog: vi.fn(async () => undefined),
+        loadSessionCoreState: vi.fn(async () => undefined),
+        loadSessionSecondaryState: vi.fn(async () => undefined),
+        loadSessionState: vi.fn(async () => undefined),
+        refreshViewState: vi.fn(async () => undefined),
+      });
+      await renderHost();
+      // Unlocked (no lockSurface), no modeOverride (starts null), empty thread → autoRouteActive = true.
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(true);
+      // modePreview is undefined because the mock returns undefined (draft is empty, hook returns undefined).
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modePreview).toBeUndefined();
+    });
+
+    it("exposes autoRouteActive=false when the thread has turns", async () => {
+      // Default mock has thread with one turn (selectedTurn) → threadIsEmpty = false.
+      await renderHost();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
+    });
+
+    it("exposes autoRouteActive=false when surface is locked", async () => {
+      useChatSessionDataMock.mockReturnValue({
+        projects: { items: [selectedProject] },
+        setProjects: vi.fn(),
+        sessions: { items: [selectedSession] },
+        setSessions: vi.fn(),
+        thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
+        setThread: vi.fn(),
+        prefs,
+        setPrefs: vi.fn(),
+        binding: { sessionId: "session-1", target: null },
+        setBinding: vi.fn(),
+        generatedArtifacts: { items: [] },
+        setGeneratedArtifacts: vi.fn(),
+        threadKnowledgeAttachments: { items: [] },
+        setThreadKnowledgeAttachments: vi.fn(),
+        settings: { llm: { activeProviderId: "openai", activeModel: "gpt-5.5" } },
+        setSettings: vi.fn(),
+        commandCatalog: [],
+        proactiveStatus: { mode: "off" },
+        setProactiveStatus: vi.fn(),
+        proactiveRuns: [],
+        setProactiveRuns: vi.fn(),
+        learnedMemory: [],
+        setLearnedMemory: vi.fn(),
+        specialistCandidates: [],
+        setSpecialistCandidates: vi.fn(),
+        installedSkills: [],
+        setInstalledSkills: vi.fn(),
+        mcpServers: [],
+        setMcpServers: vi.fn(),
+        mcpTemplates: [],
+        setMcpTemplates: vi.fn(),
+        loading: false,
+        isRefreshing: false,
+        messagesLoading: false,
+        secondaryLoading: false,
+        loadSidebar: vi.fn(async () => undefined),
+        loadRuntimeCatalog: vi.fn(async () => undefined),
+        loadSessionCoreState: vi.fn(async () => undefined),
+        loadSessionSecondaryState: vi.fn(async () => undefined),
+        loadSessionState: vi.fn(async () => undefined),
+        refreshViewState: vi.fn(async () => undefined),
+      });
+      await renderHost({ lockSurface: true, surface: "chat" });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
     });
   });
 });
