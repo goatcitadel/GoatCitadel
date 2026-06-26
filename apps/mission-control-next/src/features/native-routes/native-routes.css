@@ -2255,6 +2255,10 @@
 .mc-next-project-intake-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(8.2rem, 1fr));
+  /* P1 (visual review 2026-06-25): see the matching note on the card below. The
+     cards top-align so their (now content-sized) boxes don't stretch to a pinned
+     row height. */
+  align-items: start;
   gap: 0.36rem;
 }
 
@@ -2265,6 +2269,13 @@
   gap: 0.2rem;
   min-width: 0;
   min-height: 6.8rem;
+  /* P1 (visual review 2026-06-25): the card sets a definite min-height, which in
+     an auto grid row created a circular sizing that pinned the row to the
+     min-height; when the inspector narrows the column the wrapping description
+     (5-6 lines) then overflowed into the card below. `height: fit-content` sizes
+     the card box to its own content (min-height still acts as the floor), so the
+     description always fits and rows never overlap. */
+  height: fit-content;
   padding: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   border-radius: var(--r-sm);
@@ -2287,6 +2298,15 @@
 
 .mc-next-project-intake-card svg {
   color: color-mix(in oklab, var(--mc-area-color) 74%, var(--foreground));
+  /* P1 (visual review 2026-06-25): the icon ships with Tailwind sizing
+     (`h-4 w-4`), which is not compiled in mc-next, so the Lucide glyph fell back
+     to its intrinsic 24px and collapsed its grid row to 0px — the icon then
+     overflowed downward and overlapped the mode eyebrow ("Chat"/"Cowork"/"Code").
+     Pin an explicit 1rem box so the row sizes correctly. */
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  align-self: start;
 }
 
 .mc-next-project-intake-card.is-chat {

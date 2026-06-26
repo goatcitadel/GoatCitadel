@@ -598,7 +598,13 @@
 .mc-next-command-search {
   order: -1;
   flex: 1 1 12rem;
-  min-width: 8.25rem;
+  /* S2 (visual review 2026-06-25): was min-width 8.25rem, which protected the
+     palette label while the Citadel/Workspace selects (min-width:0) collapsed to
+     nothing — leaving "WORKSPACE" with no value visible. The selects carry more
+     important context than the palette label (which has the Ctrl+K hint and its
+     own icon), so let the search yield/ellipsize first. It still grows to its
+     12rem basis whenever there is room. */
+  min-width: 3rem;
   max-width: 20rem;
   height: 32px;
   display: flex;
@@ -637,7 +643,12 @@
   align-items: center;
   gap: 0.3rem;
   flex: 0 1 10.2rem;
-  min-width: 0;
+  /* S2 (visual review 2026-06-25): was min-width:0, which let the field (and the
+     select inside it) collapse to ~14px so the active Citadel/Workspace value
+     vanished entirely when the top bar was tight. Floor the whole field so the
+     value stays at least partially legible; the select inside is width:100% and
+     ellipsizes within the field, so it never overflows onto the next control. */
+  min-width: 7rem;
   max-width: 10.2rem;
 }
 
@@ -652,6 +663,7 @@
 
 .mc-next-select-field select {
   width: 100%;
+  min-width: 0;
   min-height: 1.55rem;
   border-radius: var(--r-pill);
   border: 1px solid var(--mc-border-subtle);
@@ -671,7 +683,14 @@
   align-items: center;
   gap: 0.45rem;
   flex-wrap: nowrap;
-  min-width: 0;
+  /* S1 (visual review 2026-06-25): keep this cluster rigid. When the degraded
+     "Live fallback" badge appears the right cluster runs ~60px over budget; with
+     min-width:0 the status box collapsed below its badges, which then spilled
+     visibly over the bell/audio icons ("0 approvals" overlapping the mute icon).
+     Pinning it to content width pushes the shrink onto the Citadel/Workspace
+     selects (which already ellipsize) instead of overlapping the utility icons. */
+  flex: 0 0 auto;
+  min-width: max-content;
 }
 
 /* TOP-01: a quiet vertical rule separating the primary action controls

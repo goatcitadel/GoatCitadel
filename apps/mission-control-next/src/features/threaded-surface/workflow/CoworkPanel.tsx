@@ -320,9 +320,19 @@ function CoworkCommandCenter({
           <div>
             <dt>Model route</dt>
             <dd>
-              {requestedModel}
-              {" -> "}
-              {effectiveModel}
+              {/* W2 (visual review 2026-06-25): when the requested and effective
+                  models match (the common case), render a single value instead of
+                  the noisy "gpt-5.5 -> gpt-5.5"; only show the routed arrow when
+                  routing actually changed the model. */}
+              {requestedModel === effectiveModel ? (
+                requestedModel
+              ) : (
+                <>
+                  {requestedModel}
+                  {" → "}
+                  {effectiveModel}
+                </>
+              )}
             </dd>
           </div>
         </dl>

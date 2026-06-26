@@ -18,6 +18,13 @@
   align-self: stretch;
   height: 100%;
   max-height: none;
+  /* W1 (visual review 2026-06-25): the work-surface context/inspector rail only
+     inherited the shared 0.62rem padding, with no left clearance for the 9px
+     resize handle pinned at its left edge. Content (ROUTE / POLICY kickers,
+     "openai-codex…", "Gateway:" labels) sat under the handle and read as clipped
+     against the divider. Match the cowork side-panel's left clearance so the rail
+     mirrors the .mode-chat / .utility variants instead of hugging the edge. */
+  padding-left: calc(0.5rem + 9px);
 }
 
 .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
