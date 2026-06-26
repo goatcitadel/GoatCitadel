@@ -322,6 +322,140 @@ export function ChatThreadWindowGap({ hiddenCount, onExpand }: { hiddenCount: nu
   );
 }
 
+function TurnEvidenceSummary({
+  mode,
+  turn,
+  recoveryLabel,
+  routingSummary,
+  durableRunId,
+  citationList,
+  contextSelected,
+  showContextToggle,
+  showOperationalDetails,
+  expandedByDefault,
+  onToggleContextTurn,
+  onOpenRunDetails,
+  onOpenUniversalRunDetail,
+}: {
+  mode: ChatMode;
+  turn: ChatThreadTurnRecord;
+  recoveryLabel: string | null;
+  routingSummary: string[];
+  durableRunId?: string;
+  citationList?: ReactNode;
+  contextSelected: boolean;
+  showContextToggle: boolean;
+  showOperationalDetails: boolean;
+  expandedByDefault: boolean;
+  onToggleContextTurn?: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
+  onOpenUniversalRunDetail?: (runId: string) => void;
+}) {
+  const [open, setOpen] = useState(expandedByDefault);
+  const summaryChips = [
+    turn.trace.status,
+    turn.toolRuns.length > 0 ? `${turn.toolRuns.length} tool${turn.toolRuns.length === 1 ? "" : "s"}` : null,
+    turn.citations.length > 0 ? `${turn.citations.length} source${turn.citations.length === 1 ? "" : "s"}` : null,
+    durableRunId ? `Run ${formatCompactEvidenceId(durableRunId)}` : null,
+    turn.trace.failure ? turn.trace.failure.failureClass : null,
+    turn.trace.orchestration ? "orchestrated" : null,
+  ].filter((chip): chip is string => Boolean(chip));
+
+  return (
+    <details
+      className={`mc-next-turn-evidence-summary${showOperationalDetails ? "" : " compact"}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="mc-next-turn-evidence-summary-trigger">
+        <span className="mc-next-turn-evidence-title">Evidence</span>
+        {summaryChips.map((chip, index) => (
+          <span key={`${chip}-${index}`} className="mc-next-turn-evidence-chip">
+            {chip}
+          </span>
+        ))}
+      </summary>
+      <div className="mc-next-turn-evidence-body">
+        <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
+          {showContextToggle ? (
+            <label className="mc-next-thread-context-toggle">
+              <input
+                type="checkbox"
+                checked={contextSelected}
+                aria-label={`${contextSelected ? "Remove" : "Add"} turn ${turn.turnId} as context`}
+                onChange={() => onToggleContextTurn?.(turn.turnId)}
+              />
+              <span>Context</span>
+            </label>
+          ) : null}
+          {showContextToggle && contextSelected ? (
+            <span className="mc-next-thread-context-pin">Context pinned</span>
+          ) : null}
+          {showOperationalDetails ? (
+            <>
+              <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</PrimitiveStatusChip>
+              {recoveryLabel ? (
+                <span>{recoveryLabel}</span>
+              ) : turn.trace.failure ? (
+                <span>{turn.trace.failure.failureClass}</span>
+              ) : null}
+              {routingSummary.map((item, index) => (
+                <span key={index}>{item}</span>
+              ))}
+              {durableRunId ? (
+                <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
+              ) : null}
+              {turn.trace.guidance?.truncated ? (
+                <span className="mc-next-thread-activity-chip">context trimmed</span>
+              ) : null}
+              {turn.toolRuns.length > 0 ? (
+                <span>
+                  {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              {turn.citations.length > 0 ? (
+                <span>
+                  {turn.citations.length} citation{turn.citations.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              {turn.trace.orchestration ? <span>orchestrated</span> : null}
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="mc-next-thread-inline-button"
+            aria-label={`Open execution detail for turn ${turn.turnId}`}
+            onClick={() => onOpenRunDetails(turn.turnId)}
+          >
+            {mode === "cowork" ? "Run details" : "Details"}
+          </button>
+          {durableRunId && onOpenUniversalRunDetail ? (
+            <button
+              type="button"
+              className="mc-next-thread-inline-button"
+              aria-label={`Open durable run trace ${durableRunId}`}
+              onClick={() => onOpenUniversalRunDetail(durableRunId)}
+            >
+              Run trace
+            </button>
+          ) : null}
+        </div>
+        {citationList ? (
+          <div className="mc-next-turn-evidence-section">
+            <span className="mc-next-turn-evidence-section-title">Sources</span>
+            {citationList}
+          </div>
+        ) : null}
+        <ChatTurnActivityRows
+          mode={mode}
+          toolRuns={turn.toolRuns}
+          onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
+        />
+      </div>
+    </details>
+  );
+}
+
 function formatCompactEvidenceId(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length <= 18) {
@@ -753,7 +887,19 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     Boolean(durableRunId) ||
     Boolean(turn.trace.guidance?.truncated) ||
     hasGeneratedArtifact;
+  const evidenceExpandedByDefault =
+    !isPlainChat ||
+    isStreamingTurn ||
+    turn.trace.status !== "completed" ||
+    turnHasRepairedAssistantOutput(turn) ||
+    turn.trace.routing.fallbackUsed ||
+    Boolean(turn.trace.failure) ||
+    Boolean(turn.trace.orchestration) ||
+    Boolean(durableRunId) ||
+    Boolean(turn.trace.guidance?.truncated) ||
+    hasGeneratedArtifact;
   const isRoutineChatTurn = isPlainChat && !showOperationalDetails;
+  const citationList = renderCitationList?.(turn);
   const turnClassName = [
     "mc-next-thread-turn",
     selected ? "selected" : "",
@@ -830,78 +976,23 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
           ) : (
             <p>{assistantPendingLabel}</p>
           )}
-          {renderCitationList?.(turn)}
-          <ChatTurnActivityRows
-            mode={mode}
-            toolRuns={turn.toolRuns}
-            onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
-          />
         </div>
       </div>
-      <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
-        {showContextToggle ? (
-          <label className="mc-next-thread-context-toggle">
-            <input
-              type="checkbox"
-              checked={contextSelected}
-              aria-label={`${contextSelected ? "Remove" : "Add"} turn ${turn.turnId} as context`}
-              onChange={() => onToggleContextTurn?.(turn.turnId)}
-            />
-            <span>Context</span>
-          </label>
-        ) : null}
-        {showContextToggle && contextSelected ? (
-          <span className="mc-next-thread-context-pin">Context pinned</span>
-        ) : null}
-        {showOperationalDetails ? (
-          <>
-            <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</PrimitiveStatusChip>
-            {recoveryLabel ? (
-              <span>{recoveryLabel}</span>
-            ) : turn.trace.failure ? (
-              <span>{turn.trace.failure.failureClass}</span>
-            ) : null}
-            {routingSummary.map((item, index) => (
-              <span key={index}>{item}</span>
-            ))}
-            {durableRunId ? (
-              <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
-            ) : null}
-            {turn.trace.guidance?.truncated ? (
-              <span className="mc-next-thread-activity-chip">context trimmed</span>
-            ) : null}
-            {turn.toolRuns.length > 0 ? (
-              <span>
-                {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            {turn.citations.length > 0 ? (
-              <span>
-                {turn.citations.length} citation{turn.citations.length === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            {turn.trace.orchestration ? <span>orchestrated</span> : null}
-          </>
-        ) : null}
-        <button
-          type="button"
-          className="mc-next-thread-inline-button"
-          aria-label={`Open execution detail for turn ${turn.turnId}`}
-          onClick={() => onOpenRunDetails(turn.turnId)}
-        >
-          {mode === "cowork" ? "Run details" : "Details"}
-        </button>
-        {durableRunId && onOpenUniversalRunDetail ? (
-          <button
-            type="button"
-            className="mc-next-thread-inline-button"
-            aria-label={`Open durable run trace ${durableRunId}`}
-            onClick={() => onOpenUniversalRunDetail(durableRunId)}
-          >
-            Run trace
-          </button>
-        ) : null}
-      </div>
+      <TurnEvidenceSummary
+        mode={mode}
+        turn={turn}
+        recoveryLabel={recoveryLabel}
+        routingSummary={routingSummary}
+        durableRunId={durableRunId}
+        citationList={citationList}
+        contextSelected={contextSelected}
+        showContextToggle={showContextToggle}
+        showOperationalDetails={showOperationalDetails}
+        expandedByDefault={evidenceExpandedByDefault}
+        onToggleContextTurn={onToggleContextTurn}
+        onOpenRunDetails={onOpenRunDetails}
+        onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+      />
       {showActions ? (
         <div className="mc-next-thread-actions">
           {showActionMenu ? (
@@ -1017,9 +1108,7 @@ function ChatTurnActivityRows({
             <span className="mc-next-thread-tool-activity-status">{formatToolRunStatus(run.status)}</span>
             <span className="mc-next-thread-tool-activity-name">{run.toolName}</span>
             <span className="mc-next-thread-tool-activity-summary">{summary}</span>
-            {diagnostics.storedAsArtifact ? (
-              <span className="mc-next-thread-tool-activity-badge">artifact</span>
-            ) : null}
+            {diagnostics.storedAsArtifact ? <span className="mc-next-thread-tool-activity-badge">artifact</span> : null}
             {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
             {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
           </button>

@@ -1315,12 +1315,15 @@ describe("ThreadedTimeline", () => {
     expect(stopPropagation).toHaveBeenCalled();
     expect(onOpenRunDetails).toHaveBeenCalledWith("turn-delegated");
 
-    const details = renderer.root.find((node) => node.type === "details" && typeof node.props.onToggle === "function");
+    const delegationSummary = renderer.root.findByProps({ className: "mc-next-thread-turn delegation compact" });
+    const details = delegationSummary.find(
+      (node) => node.type === "details" && typeof node.props.onToggle === "function",
+    );
     TestRenderer.act(() => {
       details.props.onToggle({ currentTarget: { open: true } });
     });
     expect(
-      renderer.root.find((node) => node.type === "details" && typeof node.props.onToggle === "function").props.open,
+      delegationSummary.find((node) => node.type === "details" && typeof node.props.onToggle === "function").props.open,
     ).toBe(true);
     expect(renderedText(renderer)).toContain("Delegated work is still running; final synthesis is not ready yet.");
   });

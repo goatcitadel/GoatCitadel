@@ -300,6 +300,61 @@ describe("ChatThreadPrimitives", () => {
     expect(text).toContain("context trimmed");
   });
 
+  it("keeps routine chat evidence collapsed and expands proof-heavy modes", () => {
+    const routine = renderTurn();
+    expect(
+      routine.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
+        .open,
+    ).toBe(false);
+
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "executed",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const routineWithTools = renderTurn({
+      turn: createTurn({
+        toolRuns,
+        trace: {
+          ...createTurn().trace,
+          toolRuns,
+        },
+      }),
+    });
+    expect(
+      routineWithTools.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"))
+        .props.open,
+    ).toBe(false);
+
+    const failed = renderTurn({
+      turn: createTurn({
+        trace: {
+          ...createTurn().trace,
+          status: "failed",
+          failure: {
+            failureClass: "provider_error",
+            message: "Provider unavailable.",
+          },
+        },
+      }),
+    });
+    expect(
+      failed.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
+        .open,
+    ).toBe(true);
+
+    const cowork = renderTurn({ mode: "cowork" });
+    expect(
+      cowork.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
+        .open,
+    ).toBe(true);
+  });
+
   it("does not render an empty action menu when no turn actions are available", () => {
     const renderer = renderTurn({
       turn: createTurn({

@@ -12,7 +12,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
-import { ThreadedModeChip } from "./ThreadedModeChip";
+import { ThreadedModeControl } from "./ThreadedModeControl";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
@@ -452,11 +452,7 @@ function ComposerCodeGate({ props }: { props: MissionThreadedActiveSessionSurfac
         >
           Run as Code
         </button>
-        <button
-          type="button"
-          className="mc-next-composer-inline-button"
-          onClick={() => props.onSendAsChatInstead?.()}
-        >
+        <button type="button" className="mc-next-composer-inline-button" onClick={() => props.onSendAsChatInstead?.()}>
           Send as Chat
         </button>
       </div>
@@ -709,11 +705,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
            * unified-shell CSS and the recovery state surfaces via its dedicated
            * banner below, so the heading was dead text.
            */}
-          <ThreadedModeChip
+          <ThreadedModeControl
             mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-            preview={props.modePreview}
-            onOverride={(m) => props.onModeOverride?.(m)}
-            disabled={props.sending}
+            preview={props.surfaceRoutePreview}
+            variant="compact"
+            interactive={false}
           />
         </div>
         <div className="mc-next-composer-chip-row mc-next-technical-detail">

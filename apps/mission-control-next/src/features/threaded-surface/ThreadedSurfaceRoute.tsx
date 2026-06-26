@@ -15,6 +15,7 @@ export function ThreadedSurfaceRoute({
   gatewayStatus,
   approvalsCount,
   lockSurface,
+  hidePageHeader,
   onOpenCowork,
   onOpenCode,
   onOpenTasks,
@@ -30,6 +31,7 @@ export function ThreadedSurfaceRoute({
   gatewayStatus?: ThreadedGatewayStatusSummary;
   approvalsCount: number;
   lockSurface?: boolean;
+  hidePageHeader?: boolean;
   onOpenCowork?: () => void;
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
@@ -50,6 +52,7 @@ export function ThreadedSurfaceRoute({
       approvalsCount={approvalsCount}
       surface={surface}
       lockSurface={lockSurface}
+      hidePageHeader={hidePageHeader}
       onOpenCowork={onOpenCowork}
       onOpenCode={onOpenCode}
       onOpenTasks={onOpenTasks}

@@ -252,6 +252,31 @@ describe("chat rendering tail coverage", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
+  it("renders gated OpenUI assistant blocks and falls back safely", async () => {
+    const openUiProgram = 'root = StatusCard("Renderer ready", "success", "Structured UI rendered.")';
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content={`\`\`\`openui\n${openUiProgram}\n\`\`\``} />);
+    expect(renderer.root.findAllByProps({ className: "gc-openui-renderer" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(1);
+
+    vi.stubGlobal("__GOATCITADEL_OPENUI_RENDERER__", true);
+    renderer.unmount();
+    renderer = create(<AssistantMessageRenderer role="assistant" content={`\`\`\`openui\n${openUiProgram}\n\`\`\``} />);
+    await waitForRenderedContent(renderer, "Renderer ready");
+    expect(renderer.root.findAllByProps({ className: "gc-openui-renderer" })).toHaveLength(1);
+    expect(normalizedTextOf(renderer.toJSON())).toContain("Structured UI rendered.");
+
+    renderer.update(
+      <AssistantMessageRenderer role="assistant" content={'```openui\nroot = RawHtml("<b>no</b>")\n```'} />,
+    );
+    expect(renderer.root.findAllByProps({ className: "gc-openui-renderer" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(1);
+
+    renderer.update(<AssistantMessageRenderer role="user" content={`\`\`\`openui\n${openUiProgram}\n\`\`\``} />);
+    expect(renderer.root.findAllByProps({ className: "gc-openui-renderer" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(1);
+  });
+
   it("keeps streaming markdown splits outside open fenced code blocks", () => {
     expect(splitStreamingMarkdown("foo\n```js\nbar\n```\n\nbaz")).toEqual({
       stable: "foo\n```js\nbar\n```\n\n",

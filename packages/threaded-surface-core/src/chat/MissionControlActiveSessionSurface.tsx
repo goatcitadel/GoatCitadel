@@ -6,6 +6,7 @@ import type {
   ChatSessionRecord,
   ChatThreadResponse,
   RoutingPreflightResult,
+  SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
@@ -205,8 +206,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onSetGoal?: (goal: string, turnBudget?: number) => Promise<void>;
   onClearGoal?: () => Promise<void>;
   onGoalStatus?: () => Promise<void>;
-  /** Predicted mode from the classify preview hook (only set when autoRouteActive is true). */
-  modePreview?: ChatMode;
+  /** Full classify preview hook result (only set when autoRouteActive is true). */
+  surfaceRoutePreview?: SurfaceClassifyResponse;
   /** True when auto-routing is active for the current thread (unlocked surface, no override, empty thread). */
   autoRouteActive?: boolean;
   /**

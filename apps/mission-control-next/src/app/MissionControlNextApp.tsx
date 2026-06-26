@@ -300,8 +300,7 @@ export function MissionControlNextApp() {
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
   const currentAreaMeta = AREA_META[route.area];
-  const currentRailItems =
-    route.area === "chat" ? buildModeRail(route.mode) : RAIL_ITEMS[route.area];
+  const currentRailItems = route.area === "chat" ? buildModeRail(route.mode) : RAIL_ITEMS[route.area];
   const groupedRailItems = useMemo(
     () =>
       buildRailSections(
@@ -1210,6 +1209,7 @@ export function renderRouteContent(input: {
         approvalsCount={input.pendingApprovals}
         surface="chat"
         lockSurface={false}
+        hidePageHeader
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
@@ -1229,9 +1229,7 @@ export function renderRouteContent(input: {
             artifactId: options?.artifactId ?? undefined,
           })
         }
-        onResolvedModeChange={(mode) =>
-          input.navigate({ ...route, area: "chat", mode }, { replace: true })
-        }
+        onResolvedModeChange={(mode) => input.navigate({ ...route, area: "chat", mode }, { replace: true })}
       />
     );
   }

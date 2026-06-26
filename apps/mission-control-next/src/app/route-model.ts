@@ -101,9 +101,9 @@ type RouteReleaseKeyInput = {
 export const AREA_META: Record<PrimaryArea, AreaMeta> = {
   chat: {
     id: "chat",
-    label: "Chat",
+    label: "Work",
     kicker: "Conversation",
-    description: "Conversation, search, attachments, and quick help.",
+    description: "One conversation/work surface for Chat, Cowork, Code, search, attachments, and quick help.",
   },
   cowork: {
     id: "cowork",
@@ -147,8 +147,8 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   chat: [
     {
       id: "chat-thread",
-      label: "Thread",
-      description: "Conversation with artifacts and attachments close at hand.",
+      label: "Conversation",
+      description: "Active work thread with artifacts and attachments close at hand.",
       area: "chat",
       preserveThread: true,
     },
@@ -611,14 +611,19 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
 };
 
 const MODE_RAIL_THREAD: RailItem = {
-  id: "chat-thread", label: "Thread",
-  description: "The active conversation with artifacts and attachments close at hand.",
-  area: "chat", preserveThread: true,
+  id: "chat-thread",
+  label: "Conversation",
+  description: "The active work thread with artifacts and attachments close at hand.",
+  area: "chat",
+  preserveThread: true,
 };
 const MODE_RAIL_APPROVALS: RailItem = {
-  id: "chat-approvals", label: "Approvals",
+  id: "chat-approvals",
+  label: "Approvals",
   description: "Review pending tool or risk decisions.",
-  area: "ops", section: "approvals", preserveThread: true,
+  area: "ops",
+  section: "approvals",
+  preserveThread: true,
 };
 
 /** Mode-adaptive rail for the unified chat surface (keyed on route.mode). */
@@ -627,24 +632,67 @@ export function buildModeRail(mode: ChatMode | undefined): RailItem[] {
   if (m === "cowork") {
     return [
       MODE_RAIL_THREAD,
-      { id: "mode-tasks", label: "Task Board", description: "Planning, assigned, review, blocked, and done.", area: "cowork", section: "tasks" },
-      { id: "mode-board", label: "Agent Board", description: "Agent posture and live board state.", area: "cowork", section: "board" },
+      {
+        id: "mode-tasks",
+        label: "Task Board",
+        description: "Planning, assigned, review, blocked, and done.",
+        area: "cowork",
+        section: "tasks",
+      },
+      {
+        id: "mode-board",
+        label: "Agent Board",
+        description: "Agent posture and live board state.",
+        area: "cowork",
+        section: "board",
+      },
       MODE_RAIL_APPROVALS,
     ];
   }
   if (m === "code") {
     return [
       MODE_RAIL_THREAD,
-      { id: "mode-files", label: "Files", description: "Browse shared workspace files outside the active thread.", area: "library", section: "files" },
-      { id: "mode-runtime", label: "Runtime", description: "Serving posture and spend while coding.", area: "ops", section: "runtime" },
-      { id: "mode-prompt-packs", label: "Prompt Packs", description: "Quality gates and pack authoring.", area: "library", section: "prompt-packs" },
+      {
+        id: "mode-files",
+        label: "Files",
+        description: "Browse shared workspace files outside the active thread.",
+        area: "library",
+        section: "files",
+      },
+      {
+        id: "mode-runtime",
+        label: "Runtime",
+        description: "Serving posture and spend while coding.",
+        area: "ops",
+        section: "runtime",
+      },
+      {
+        id: "mode-prompt-packs",
+        label: "Prompt Packs",
+        description: "Quality gates and pack authoring.",
+        area: "library",
+        section: "prompt-packs",
+      },
       MODE_RAIL_APPROVALS,
     ];
   }
   return [
     MODE_RAIL_THREAD,
-    { id: "chat-artifacts", label: "Artifacts", description: "Jump to generated outputs from active work.", area: "library", section: "artifacts", preserveThread: true },
-    { id: "chat-memory", label: "Memory", description: "Inspect what the system knows and what it learned.", area: "library", section: "memory" },
+    {
+      id: "chat-artifacts",
+      label: "Artifacts",
+      description: "Jump to generated outputs from active work.",
+      area: "library",
+      section: "artifacts",
+      preserveThread: true,
+    },
+    {
+      id: "chat-memory",
+      label: "Memory",
+      description: "Inspect what the system knows and what it learned.",
+      area: "library",
+      section: "memory",
+    },
     MODE_RAIL_APPROVALS,
   ];
 }
@@ -665,11 +713,23 @@ export interface RailGroup {
  */
 export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
   settings: [
-    { id: "settings-foundations", label: "Foundations", sections: ["general", "onboarding", "workspaces", "workspace-capabilities"] },
+    {
+      id: "settings-foundations",
+      label: "Foundations",
+      sections: ["general", "onboarding", "workspaces", "workspace-capabilities"],
+    },
     {
       id: "settings-identity",
       label: "Identity",
-      sections: ["access", "permissions", "personalities", "providers", "local-ai", "trust-policy", "citadel-capabilities"],
+      sections: [
+        "access",
+        "permissions",
+        "personalities",
+        "providers",
+        "local-ai",
+        "trust-policy",
+        "citadel-capabilities",
+      ],
     },
     { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
     { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },
@@ -725,6 +785,9 @@ export function railGroupForSection(area: PrimaryArea, section: AppRoute["sectio
 export function routeKicker(route: AppRoute): string {
   const areaLabel = AREA_META[route.area].label;
   const section = route.section;
+  if (route.area === "chat" && route.mode && route.mode !== "chat" && !section) {
+    return `${areaLabel} · ${route.mode === "cowork" ? "Cowork" : "Code"}`;
+  }
   if (!section) {
     return areaLabel;
   }
@@ -1289,7 +1352,10 @@ export function buildAppHref(route: AppRoute): string {
 
 export function getRouteLabel(route: AppRoute): string {
   const next = normalizeAppRoute(route);
-  if (next.area === "chat" || next.area === "code" || next.area === "projects") {
+  if (next.area === "chat") {
+    return next.mode === "cowork" ? "Cowork" : next.mode === "code" ? "Code" : AREA_META.chat.label;
+  }
+  if (next.area === "code" || next.area === "projects") {
     return AREA_META[next.area].label;
   }
   if (next.area === "cowork") {
@@ -1302,7 +1368,16 @@ export function getRouteLabel(route: AppRoute): string {
 
 export function getRouteDescription(route: AppRoute): string {
   const next = normalizeAppRoute(route);
-  if (next.area === "chat" || next.area === "code" || next.area === "projects") {
+  if (next.area === "chat") {
+    if (next.mode === "cowork") {
+      return "Cowork mode keeps decomposition, checkpoints, approvals, and proof inside the unified work surface.";
+    }
+    if (next.mode === "code") {
+      return "Code mode keeps project binding, governed execution, diffs, and validation inside the unified work surface.";
+    }
+    return AREA_META.chat.description;
+  }
+  if (next.area === "code" || next.area === "projects") {
     return AREA_META[next.area].description;
   }
   if (next.area === "cowork") {

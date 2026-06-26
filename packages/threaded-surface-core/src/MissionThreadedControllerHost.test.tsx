@@ -2955,8 +2955,8 @@ describe("MissionThreadedControllerHost", () => {
       await renderHost();
       // Unlocked (no lockSurface), no modeOverride (starts null), empty thread → autoRouteActive = true.
       expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(true);
-      // modePreview is undefined because the mock returns undefined (draft is empty, hook returns undefined).
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modePreview).toBeUndefined();
+      // surfaceRoutePreview is undefined because the mock returns undefined (draft is empty, hook returns undefined).
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.surfaceRoutePreview).toBeUndefined();
     });
 
     it("exposes autoRouteActive=false when the thread has turns", async () => {
@@ -3024,9 +3024,7 @@ describe("MissionThreadedControllerHost", () => {
         ...base,
         thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
       });
-      const sessionForThread = options.hasBoundProject
-        ? selectedSession
-        : { ...selectedSession, projectId: undefined };
+      const sessionForThread = options.hasBoundProject ? selectedSession : { ...selectedSession, projectId: undefined };
       useChatThreadControllerMock.mockReturnValue({
         selectedSession: sessionForThread,
         selectedProject: options.hasBoundProject ? selectedProject : null,

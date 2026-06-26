@@ -223,6 +223,7 @@ vi.mock("./lazy-legacy-pages", () => ({
     createElement("div", { className: "mock-prompt-packs" }, `Prompt packs ${variant}`),
   LazyThreadedSurfaceRoute: (props: {
     surface: string;
+    hidePageHeader?: boolean;
     gatewayStatus?: { label?: string };
     onOpenApprovals?: (approvalId?: string) => void;
     onOpenStartHere?: () => void;
@@ -600,13 +601,13 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
 
     // Code is no longer a primary-nav area; it is reached via /chat?mode=code.
-    // Verify a primary-nav area that still exists (Chat) navigates correctly.
+    // Verify the unified Work primary-nav area navigates to /chat.
     await act(async () => {
       renderer.root
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Work"),
         )
         ?.props.onClick();
     });
@@ -767,7 +768,7 @@ describe("MissionControlNextApp", () => {
 
   it("keeps command-palette area jumps session-scoped without leaking preference theme", async () => {
     // Cowork is no longer a primary-nav area (it is reached as /chat?mode=cowork).
-    // Verify that navigating to Chat via the palette preserves session context and
+    // Verify that navigating to Work via the palette preserves session context and
     // does not leak the stored theme preference into the URL.
     const renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1&turnId=turn-1");
 
@@ -776,7 +777,7 @@ describe("MissionControlNextApp", () => {
     });
 
     await act(async () => {
-      findButton(renderer, "Go to Chat").props.onClick();
+      findButton(renderer, "Go to Work").props.onClick();
     });
 
     expect(window.location.pathname).toBe("/chat");
@@ -878,7 +879,7 @@ describe("MissionControlNextApp", () => {
   it("chat surface renders with lockSurface=false (auto-route enabled); cowork and code stay locked", async () => {
     // Chat must be unlocked so the gateway auto-router can classify a new thread's first turn.
     let renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1");
-    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false });
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false, hidePageHeader: true });
     renderer.unmount();
 
     // Cowork must remain locked to its explicit surface.

@@ -772,7 +772,7 @@ describe("ThreadedSurfacePage", () => {
     });
 
     // The cross-area nav buttons ("Open in Cowork", "Back to Chat") are replaced by the in-surface
-    // mode chip. Verify the chip is present and the remaining header actions still wire correctly.
+    // mode control. Verify the control is present and the remaining header actions still wire correctly.
     await act(async () => {
       findExactButton(renderer!.root, "Archive").props.onClick();
       findButton(renderer!.root, "Show context").props.onClick();
@@ -787,11 +787,11 @@ describe("ThreadedSurfacePage", () => {
       dropzone.props.onDrop();
     });
 
-    // Chip is present in the header
-    const chipTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    // Mode control is present in the header
+    const modeControlTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
     );
-    expect(chipTrigger.length).toBeGreaterThan(0);
+    expect(modeControlTrigger.length).toBeGreaterThan(0);
     expect(activeProps.onToggleArchiveSession).toHaveBeenCalledTimes(1);
     expect(input.onDockOpenChange).toHaveBeenCalledWith(true);
     expect(input.dropTargetProps.onDragEnter).toHaveBeenCalledTimes(1);
@@ -858,17 +858,17 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
-    // The cross-area nav buttons ("Continue in Cowork", "Open in Code") are replaced by the mode chip.
+    // The cross-area nav buttons ("Continue in Cowork", "Open in Code") are replaced by the mode control.
     await act(async () => {
       findButton(renderer!.root, "Sessions").props.onClick();
     });
 
-    // Rail toggle still works; chip is present instead of old nav buttons
+    // Rail toggle still works; mode control is present instead of old nav buttons
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
-    const chipTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    const modeControlTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
     );
-    expect(chipTrigger.length).toBeGreaterThan(0);
+    expect(modeControlTrigger.length).toBeGreaterThan(0);
   });
 
   it("toggles the code workbench from mobile and conversation controls", async () => {
@@ -1105,12 +1105,12 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    // The cross-area nav buttons ("Open in Code", "Back to Chat") are replaced by the mode chip.
-    // Verify the chip is present in the cowork surface header.
-    const chipTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-mode-chip-trigger"),
+    // The cross-area nav buttons ("Open in Code", "Back to Chat") are replaced by the mode control.
+    // Verify the control is present in the cowork surface header.
+    const modeControlTrigger = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
     );
-    expect(chipTrigger.length).toBeGreaterThan(0);
+    expect(modeControlTrigger.length).toBeGreaterThan(0);
 
     const projectInputs = renderer!.root.findAllByType("input");
     await act(async () => {

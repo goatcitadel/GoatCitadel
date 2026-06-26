@@ -715,6 +715,7 @@ export function MissionThreadedControllerHost({
   approvalsCount = 0,
   surface,
   lockSurface = false,
+  hidePageHeader = false,
   gatewayStatus,
   workTrust,
   onWorkTrustSummaryChange,
@@ -732,6 +733,7 @@ export function MissionThreadedControllerHost({
   approvalsCount?: number;
   surface?: ChatMode;
   lockSurface?: boolean;
+  hidePageHeader?: boolean;
   gatewayStatus?: ThreadedGatewayStatusSummary;
   workTrust?: WorkTrustDescriptor;
   onWorkTrustSummaryChange?: (summary: string | null) => void;
@@ -3350,7 +3352,7 @@ export function MissionThreadedControllerHost({
         onSetGoal: handleSetGoal,
         onClearGoal: handleClearGoal,
         onGoalStatus: handleGoalStatus,
-        modePreview: surfacePreview?.mode,
+        surfaceRoutePreview: surfacePreview,
         autoRouteActive,
       }
     : null;
@@ -3576,7 +3578,7 @@ export function MissionThreadedControllerHost({
   if (loading) {
     return (
       <section className={rootClassName}>
-        {!lockSurface ? (
+        {!lockSurface && !hidePageHeader ? (
           <PageHeader
             title={surfaceHeaderTitle}
             subtitle={surfaceHeaderSubtitle}
@@ -3596,7 +3598,7 @@ export function MissionThreadedControllerHost({
 
   return (
     <section className={rootClassName}>
-      {!lockSurface ? (
+      {!lockSurface && !hidePageHeader ? (
         <PageHeader
           title={surfaceHeaderTitle}
           subtitle={surfaceHeaderSubtitle}

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseAppRoute, buildAppHref, normalizeAppRoute, buildModeRail } from "./route-model";
+import {
+  parseAppRoute,
+  buildAppHref,
+  normalizeAppRoute,
+  buildModeRail,
+  getRouteDescription,
+  getRouteLabel,
+} from "./route-model";
 
 describe("unified surface mode field", () => {
   it("collapses /code to chat with mode=code", () => {
@@ -31,8 +38,7 @@ describe("unified surface mode field", () => {
     expect(parseAppRoute("http://x/chat?mode=bogus").mode).toBeUndefined();
   });
   it("round-trips a code thread href", () => {
-    expect(buildAppHref({ area: "chat", mode: "code", sessionId: "s9" }))
-      .toBe("/chat?sessionId=s9&mode=code");
+    expect(buildAppHref({ area: "chat", mode: "code", sessionId: "s9" })).toBe("/chat?sessionId=s9&mode=code");
   });
   it("emits bare /chat for chat mode", () => {
     expect(buildAppHref({ area: "chat", mode: "chat" })).toBe("/chat");
@@ -42,6 +48,13 @@ describe("unified surface mode field", () => {
     const n = normalizeAppRoute({ area: "code", sessionId: "s2" } as never);
     expect(n.area).toBe("chat");
     expect(n.mode).toBe("code");
+  });
+  it("labels the unified root as Work and mode routes by their routed mode", () => {
+    expect(getRouteLabel({ area: "chat" })).toBe("Work");
+    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Cowork");
+    expect(getRouteLabel({ area: "code" })).toBe("Code");
+    expect(getRouteDescription({ area: "chat" })).toContain("One conversation/work surface");
+    expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("Code mode");
   });
 });
 

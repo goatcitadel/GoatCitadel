@@ -727,7 +727,7 @@ function extractTypeUnionLiterals(source, typeName) {
 }
 
 function nextReleaseRouteKey(route) {
-  return `${route.expectedArea}/${route.expectedSection ?? "root"}`;
+  return `${route.canonicalArea ?? route.expectedArea}/${route.canonicalSection ?? route.expectedSection ?? "root"}`;
 }
 
 function validateReleaseSurfaceScopeDoc(source, canonicalRoutes) {

@@ -51,7 +51,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { ThreadedComposer } from "./ThreadedComposer";
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
-import { ThreadedModeChip } from "./ThreadedModeChip";
+import { ThreadedModeControl } from "./ThreadedModeControl";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
 import "./styles/rail.css";
@@ -689,9 +689,9 @@ function ThreadConversationSurface({
       ) : null}
       <header className="mc-next-threaded-header">
         <div className="mc-next-threaded-header-copy">
-          <ThreadedModeChip
+          <ThreadedModeControl
             mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-            preview={props.modePreview}
+            preview={props.surfaceRoutePreview}
             onOverride={(m) => props.onModeOverride?.(m)}
           />
           <h1>{props.sessionTitle}</h1>

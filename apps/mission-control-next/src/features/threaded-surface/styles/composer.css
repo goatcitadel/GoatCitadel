@@ -314,7 +314,102 @@
   opacity: 0.86;
 }
 
+.mc-next-turn-evidence-summary {
+  margin-top: 0.28rem;
+  padding: 0.32rem 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-border-subtle));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, var(--background));
+  color: var(--foreground);
+}
+
+.mc-next-turn-evidence-summary.compact {
+  padding: 0.08rem 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.mc-next-turn-evidence-summary-trigger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.75rem;
+  padding: 0.14rem 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.mc-next-turn-evidence-summary-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-turn-evidence-summary-trigger::before {
+  content: "+";
+  display: inline-grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.mc-next-turn-evidence-summary[open] > .mc-next-turn-evidence-summary-trigger::before {
+  content: "-";
+}
+
+.mc-next-turn-evidence-title {
+  color: color-mix(in oklab, var(--foreground) 90%, var(--mc-area-color));
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.mc-next-turn-evidence-chip {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.14rem 0.34rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 26%, var(--mc-border-subtle));
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-1));
+  color: color-mix(in oklab, var(--foreground) 76%, var(--text-secondary));
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-turn-evidence-body {
+  display: grid;
+  gap: 0.42rem;
+  padding: 0.12rem 0 0.2rem;
+  color: var(--foreground);
+}
+
+.mc-next-turn-evidence-section {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.mc-next-turn-evidence-section-title {
+  color: color-mix(in oklab, var(--mc-area-color) 56%, var(--text-secondary));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .mc-next-shell.ui-hide-technical .mc-next-thread-strip.compact {
+  min-height: 1.2rem;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-turn-evidence-summary.compact {
   min-height: 1.2rem;
   opacity: 0;
   visibility: hidden;
@@ -323,6 +418,12 @@
 
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-strip.compact,
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:focus-within .mc-next-thread-strip.compact {
+  opacity: 1;
+  visibility: visible;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-turn-evidence-summary.compact,
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:focus-within .mc-next-turn-evidence-summary.compact {
   opacity: 1;
   visibility: visible;
 }

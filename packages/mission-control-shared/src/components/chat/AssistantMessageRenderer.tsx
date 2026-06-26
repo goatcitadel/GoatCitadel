@@ -4,6 +4,11 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils";
 import { normalizeAssistantDisplayText } from "./assistant-display-text";
+import {
+  canRenderOpenUiStructuredBlock,
+  isGoatOpenUiRendererEnabled,
+  OpenUiStructuredBlockRenderer,
+} from "./OpenUiStructuredBlock";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
@@ -48,103 +53,121 @@ export function AssistantMessageRenderer({
             streamTurnId={streamTurnId}
           />
         ) : (
-          <MemoizedMarkdownBlock content={displayContent} role={role} components={assistantMarkdownComponents} />
+          <MemoizedMarkdownBlock
+            content={displayContent}
+            role={role}
+            components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents}
+          />
         )}
       </AssistantMessageContainer>
     </div>
   );
 }
 
-const assistantMarkdownComponents: Components = {
-  a({ children, href, node: _node, ...props }) {
-    const safeHref = resolveSafeMarkdownHref(href);
-    if (!safeHref) {
-      return <span className="mc-assistant-link-disabled">{children}</span>;
-    }
-    const external = isExternalMarkdownHref(safeHref);
-    return (
-      <a href={safeHref} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined} {...props}>
-        {children}
-      </a>
-    );
-  },
-  blockquote({ children, node: _node, ...props }) {
-    return <blockquote {...props}>{children}</blockquote>;
-  },
-  code({ children, className, node: _node, ...props }) {
-    const content = String(children ?? "");
-    const language = /language-([a-z0-9_+-]+)/i.exec(className ?? "")?.[1];
-    const isBlock = Boolean(language || content.includes("\n"));
-    if (isBlock) {
+function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: boolean }): Components {
+  return {
+    a({ children, href, node: _node, ...props }) {
+      const safeHref = resolveSafeMarkdownHref(href);
+      if (!safeHref) {
+        return <span className="mc-assistant-link-disabled">{children}</span>;
+      }
+      const external = isExternalMarkdownHref(safeHref);
       return (
-        <AssistantCodeBlock
-          language={language}
-          codeClassName={className}
-          codeProps={props as HTMLAttributes<HTMLElement>}
-          rawText={content}
+        <a
+          href={safeHref}
+          rel={external ? "noreferrer" : undefined}
+          target={external ? "_blank" : undefined}
+          {...props}
         >
           {children}
-        </AssistantCodeBlock>
+        </a>
       );
-    }
-    return (
-      <code className={cn("mc-assistant-inline-code", className)} {...props}>
-        {children}
-      </code>
-    );
-  },
-  li({ children, node: _node, ...props }) {
-    return <li {...props}>{children}</li>;
-  },
-  ol({ children, node: _node, ...props }) {
-    return <ol {...props}>{children}</ol>;
-  },
-  pre({ children }) {
-    return <>{children}</>;
-  },
-  table({ children, node: _node, ...props }) {
-    return (
-      <div className="mc-assistant-table-scroll">
-        <table {...props}>{children}</table>
-      </div>
-    );
-  },
-  tbody({ children, node: _node, ...props }) {
-    return <tbody {...props}>{children}</tbody>;
-  },
-  td({ children, node: _node, ...props }) {
-    return <td {...props}>{children}</td>;
-  },
-  th({ children, node: _node, ...props }) {
-    return <th {...props}>{children}</th>;
-  },
-  thead({ children, node: _node, ...props }) {
-    return <thead {...props}>{children}</thead>;
-  },
-  tr({ children, node: _node, ...props }) {
-    return <tr {...props}>{children}</tr>;
-  },
-  ul({ children, node: _node, ...props }) {
-    return <ul {...props}>{children}</ul>;
-  },
-};
+    },
+    blockquote({ children, node: _node, ...props }) {
+      return <blockquote {...props}>{children}</blockquote>;
+    },
+    code({ children, className, node: _node, ...props }) {
+      const content = String(children ?? "");
+      const language = /language-([a-z0-9_+-]+)/i.exec(className ?? "")?.[1];
+      const isBlock = Boolean(language || content.includes("\n"));
+      if (isBlock) {
+        return (
+          <AssistantCodeBlock
+            language={language}
+            codeClassName={className}
+            codeProps={props as HTMLAttributes<HTMLElement>}
+            rawText={content}
+            allowGeneratedUi={allowGeneratedUi}
+          >
+            {children}
+          </AssistantCodeBlock>
+        );
+      }
+      return (
+        <code className={cn("mc-assistant-inline-code", className)} {...props}>
+          {children}
+        </code>
+      );
+    },
+    li({ children, node: _node, ...props }) {
+      return <li {...props}>{children}</li>;
+    },
+    ol({ children, node: _node, ...props }) {
+      return <ol {...props}>{children}</ol>;
+    },
+    pre({ children }) {
+      return <>{children}</>;
+    },
+    table({ children, node: _node, ...props }) {
+      return (
+        <div className="mc-assistant-table-scroll">
+          <table {...props}>{children}</table>
+        </div>
+      );
+    },
+    tbody({ children, node: _node, ...props }) {
+      return <tbody {...props}>{children}</tbody>;
+    },
+    td({ children, node: _node, ...props }) {
+      return <td {...props}>{children}</td>;
+    },
+    th({ children, node: _node, ...props }) {
+      return <th {...props}>{children}</th>;
+    },
+    thead({ children, node: _node, ...props }) {
+      return <thead {...props}>{children}</thead>;
+    },
+    tr({ children, node: _node, ...props }) {
+      return <tr {...props}>{children}</tr>;
+    },
+    ul({ children, node: _node, ...props }) {
+      return <ul {...props}>{children}</ul>;
+    },
+  };
+}
+
+const assistantMarkdownComponents = createMarkdownComponents({ allowGeneratedUi: true });
+const userMarkdownComponents = createMarkdownComponents({ allowGeneratedUi: false });
 
 function AssistantCodeBlock({
   language,
   codeClassName,
   codeProps,
   rawText,
+  allowGeneratedUi,
   children,
 }: {
   language: string | undefined;
   codeClassName: string | undefined;
   codeProps: HTMLAttributes<HTMLElement>;
   rawText: string;
+  allowGeneratedUi: boolean;
   children: ReactNode;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const resetRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
   const trimmed = rawText.endsWith("\n") ? rawText.slice(0, -1) : rawText;
+  const isOpenUiBlock = language?.toLowerCase() === "openui";
 
   useEffect(() => {
     return () => {
@@ -173,6 +196,10 @@ function AssistantCodeBlock({
   }
 
   const copyLabel = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : "Copy code";
+
+  if (allowGeneratedUi && isOpenUiBlock && isGoatOpenUiRendererEnabled() && canRenderOpenUiStructuredBlock(trimmed)) {
+    return <OpenUiStructuredBlockRenderer source={trimmed} />;
+  }
 
   return (
     <div className="mc-assistant-code-shell" data-language={language ?? undefined}>

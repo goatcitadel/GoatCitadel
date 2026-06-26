@@ -809,6 +809,163 @@
   scrollbar-gutter: stable;
 }
 
+.gc-openui-renderer {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+.gc-openui-block {
+  max-width: 100%;
+  border: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, var(--background));
+  color: var(--foreground);
+}
+
+.gc-openui-kicker {
+  color: color-mix(in oklab, var(--mc-area-color) 66%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.gc-openui-status {
+  display: grid;
+  gap: 0.34rem;
+  padding: 0.65rem 0.72rem;
+  border-left: 3px solid color-mix(in oklab, var(--mc-area-color) 64%, var(--border));
+}
+
+.gc-openui-status.tone-success {
+  border-left-color: color-mix(in oklab, var(--gc-risk-safe) 74%, var(--border));
+}
+
+.gc-openui-status.tone-warning {
+  border-left-color: color-mix(in oklab, var(--gc-risk-warn) 78%, var(--border));
+}
+
+.gc-openui-status.tone-critical {
+  border-left-color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--border));
+}
+
+.gc-openui-status > div {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.gc-openui-status p,
+.gc-openui-status ul {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.42;
+}
+
+.gc-openui-metric-strip,
+.gc-openui-action-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.55rem;
+}
+
+.gc-openui-metric-strip > div {
+  display: grid;
+  gap: 0.08rem;
+  min-width: min(9rem, 100%);
+  padding: 0.45rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--mc-surface-1) 82%, transparent);
+}
+
+.gc-openui-metric-strip span,
+.gc-openui-metric-strip small,
+.gc-openui-kv-grid dt,
+.gc-openui-step-list li > span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.gc-openui-metric-strip strong {
+  font-size: var(--text-lg);
+  line-height: 1.1;
+}
+
+.gc-openui-step-list {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.65rem 0.72rem;
+}
+
+.gc-openui-step-list ol {
+  display: grid;
+  gap: 0.38rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gc-openui-step-list li {
+  display: grid;
+  grid-template-columns: 4.8rem minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.gc-openui-step-list p {
+  margin: 0.08rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.gc-openui-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  gap: 0.45rem;
+  padding: 0.55rem;
+}
+
+.gc-openui-kv-grid div {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.gc-openui-kv-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+}
+
+.gc-openui-action-chips span {
+  padding: 0.25rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 28%, var(--border));
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--mc-area-color) 8%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.gc-openui-mini-table {
+  overflow-x: auto;
+}
+
+.gc-openui-mini-table table {
+  width: 100%;
+  min-width: 16rem;
+  border-collapse: collapse;
+}
+
+.gc-openui-mini-table caption {
+  padding: 0.45rem 0.55rem;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
 .mc-assistant-inline-code {
   padding: 0.05rem 0.24rem;
   border-radius: 0.26rem;

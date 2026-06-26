@@ -2794,9 +2794,10 @@ export async function runSurfaceRegressionLane(context, options = {}) {
       }
 
       for (const redirect of verificationTarget.redirectRoutes) {
-        const route = verificationTarget.routeByHref.get(redirect.expectedPath);
+        const targetHref = redirect.targetHref ?? redirect.expectedPath;
+        const route = verificationTarget.routeByHref.get(targetHref);
         if (!route) {
-          throw new Error(`verification redirect target was not mapped: ${redirect.expectedPath}`);
+          throw new Error(`verification redirect target was not mapped: ${targetHref}`);
         }
         await runScenario(
           context,
@@ -2810,7 +2811,7 @@ export async function runSurfaceRegressionLane(context, options = {}) {
             const browserLogCursor = browserLog.mark();
             await page.goto(buildVerificationUiUrl(stack.uiUrl, redirect.href), { waitUntil: "domcontentloaded" });
             await waitForMissionControlShell(page, { packageName: verificationTarget.packageName });
-            await assertLegacyRedirectResolution(page, redirect.expectedPath);
+            await assertLegacyRedirectResolution(page, redirect.expectedPath, redirect.expectedSearchParams);
             await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
             await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
             await performVerificationInteraction(
@@ -2836,6 +2837,7 @@ export async function runSurfaceRegressionLane(context, options = {}) {
               metrics: {
                 href: redirect.href,
                 expectedPath: redirect.expectedPath,
+                targetHref,
                 consoleErrors: browserSanity.consoleErrors.length,
                 pageErrors: browserSanity.pageErrors.length,
               },
@@ -5434,16 +5436,24 @@ async function performVerificationInteraction(page, interaction, packageName = D
   }
 }
 
-async function assertLegacyRedirectResolution(page, expectedPath, timeoutMs = 30000) {
+async function assertLegacyRedirectResolution(page, expectedPath, expectedSearchParams = {}, timeoutMs = 30000) {
   await page.waitForFunction((pathName) => window.location.pathname === pathName, expectedPath, {
     timeout: timeoutMs,
   });
-  const leakedParams = await page.evaluate(() => {
+  const { leakedParams, searchMismatches } = await page.evaluate((expectedEntries) => {
     const params = new URLSearchParams(window.location.search);
-    return ["tab", "space", "page", "surface"].filter((key) => params.has(key));
-  });
+    return {
+      leakedParams: ["tab", "space", "page", "surface"].filter((key) => params.has(key)),
+      searchMismatches: Object.entries(expectedEntries ?? {})
+        .filter(([key, expected]) => params.get(key) !== String(expected))
+        .map(([key, expected]) => `${key}=${params.get(key) ?? "<missing>"} (expected ${expected})`),
+    };
+  }, expectedSearchParams);
   if (leakedParams.length > 0) {
     throw new Error(`legacy redirect left old search params in place: ${leakedParams.join(", ")}`);
+  }
+  if (searchMismatches.length > 0) {
+    throw new Error(`legacy redirect landed with unexpected search params: ${searchMismatches.join(", ")}`);
   }
 }
 

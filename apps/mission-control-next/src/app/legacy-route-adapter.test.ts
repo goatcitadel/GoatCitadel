@@ -191,9 +191,9 @@ describe("mission-control-next route model", () => {
   it("covers route labels, descriptions, navigation preservation, and legacy tab aliases", () => {
     expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Task Board");
     expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Agent Board");
-    expect(getRouteLabel({ area: "cowork" })).toBe("Chat");
+    expect(getRouteLabel({ area: "cowork" })).toBe("Cowork");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("board exposes");
-    expect(getRouteDescription({ area: "cowork" })).toContain("Conversation");
+    expect(getRouteDescription({ area: "cowork" })).toContain("Cowork mode");
     expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
 
     expect(
@@ -220,7 +220,10 @@ describe("mission-control-next route model", () => {
     expect(isRailItemActive({ area: "chat" }, RAIL_ITEMS.chat[0]!)).toBe(true);
     expect(isRailItemActive({ area: "chat" }, RAIL_ITEMS.library[0]!)).toBe(false);
 
-    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=assembly")).toMatchObject({ area: "chat", mode: "cowork" });
+    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=assembly")).toMatchObject({
+      area: "chat",
+      mode: "cowork",
+    });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=tasks")).toMatchObject({
       area: "cowork",
       section: "tasks",
