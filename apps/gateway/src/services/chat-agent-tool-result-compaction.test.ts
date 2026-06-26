@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCompactToolResultMetadata,
+  compactToolResultForExecutionProfile,
   compactToolResultForTurn,
   extractPersistableToolArtifactContent,
   safeSerializeToolResult,
+  shouldPersistToolArtifactForAggregateBudget,
   summarizeVirtualizedToolResult,
   type PersistedToolArtifactSummary,
 } from "./chat-agent-tool-result-compaction.js";
@@ -264,6 +266,60 @@ describe("chat-agent-tool-result-compaction", () => {
 
     expect(compacted.text).toBe("short text");
     expect(compacted.snippet).toBe("short text");
+  });
+
+  it("trims quick-web browser search results to compact evidence", () => {
+    const compacted = compactToolResultForExecutionProfile(
+      "browser.search",
+      {
+        results: [
+          { title: "One", url: "https://one.test", snippet: "x".repeat(700), extra: "ignored" },
+          { title: "Two", url: "https://two.test", snippet: "two" },
+          { title: "Three", url: "https://three.test", snippet: "three" },
+          { title: "Four", url: "https://four.test", snippet: "four" },
+        ],
+      },
+      "quick_web",
+    );
+
+    expect(compacted).toMatchObject({
+      resultCount: 4,
+      compactedForProfile: "quick_web",
+    });
+    expect(compacted.results).toHaveLength(3);
+    expect((compacted.results as Array<Record<string, unknown>>)[0]).toEqual({
+      title: "One",
+      url: "https://one.test",
+      snippet: "x".repeat(520),
+    });
+  });
+
+  it("forces artifact persistence when the aggregate tool-result context budget would be exceeded", () => {
+    const priorToolRuns = [
+      {
+        toolRunId: "run-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "browser.search",
+        status: "executed",
+        args: {},
+        result: { text: "a".repeat(79_000) },
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ] as const;
+
+    expect(
+      shouldPersistToolArtifactForAggregateBudget({
+        priorToolRuns,
+        result: { text: "b".repeat(2_500) },
+      }),
+    ).toBe(true);
+    expect(
+      shouldPersistToolArtifactForAggregateBudget({
+        priorToolRuns: [],
+        result: { text: "small" },
+      }),
+    ).toBe(false);
   });
 });
 

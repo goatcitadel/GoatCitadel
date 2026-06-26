@@ -13,6 +13,7 @@ import type {
   ChatThinkingLevel,
   ChatToolRunRecord,
   ChatTurnBranchKind,
+  ChatTurnExecutionProfile,
   ChatTurnFailureClass,
   ChatTurnFailureRecord,
   ChatTurnRepairKind,
@@ -91,8 +92,10 @@ import {
   rememberToolLoopHistory,
 } from "./chat-tool-loop.js";
 import {
+  compactToolResultForExecutionProfile,
   compactToolResultForTurn,
   extractPersistableToolArtifactContent,
+  shouldPersistToolArtifactForAggregateBudget,
 } from "./chat-agent-tool-result-compaction.js";
 import {
   buildLocalFileAccessProbeFailure,
@@ -115,6 +118,8 @@ import {
   resolveChatExecutionBudget,
   shouldUseConstrainedLocalAgentProfile,
 } from "./chat-agent-budget.js";
+import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
+import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import {
   classifyBrowserToolResult,
   extractBrowserToolUrl,
@@ -369,6 +374,7 @@ const MAX_EXPOSED_TOOLS_PER_TURN = {
   cowork: 12,
   code: 10,
 } as const satisfies Record<ChatMode, number>;
+const QUICK_WEB_ALLOWED_TOOL_NAMES = new Set(["browser.search"]);
 const TOOL_SCHEMA_TOKEN_BUDGET = {
   chat: 2200,
   cowork: 3200,
@@ -594,10 +600,13 @@ export class ChatAgentOrchestrator {
   public async *runStream(input: ChatAgentTurnInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
+    const normalizationProfile = input.normalizationProfile ?? "live";
+    const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
+    const quickWebProfile = executionProfile === "quick_web";
     const promptLabContract = parsePromptLabRunContract(input.content);
     const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
     const promptLabHarnessTurnForIntent =
-      input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+      normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
     const suppressPromptLabCodeArtifactTools =
       input.mode === "code" &&
       promptLabHarnessTurnForIntent &&
@@ -645,6 +654,7 @@ export class ChatAgentOrchestrator {
       subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
       effectiveToolAutonomy: input.toolAutonomy,
       routing: {
+        executionProfile,
         liveDataIntent: intents.liveData,
         ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
       },
@@ -660,7 +670,6 @@ export class ChatAgentOrchestrator {
     };
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
-    const normalizationProfile = input.normalizationProfile ?? "live";
     const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
     // Eval-integrity mode: this turn is a Prompt Lab evaluation. The persisted
     // assistant text must be the model's own output, the controller must not
@@ -712,7 +721,7 @@ export class ChatAgentOrchestrator {
         promptLabPrefetchFilePaths.length > 0);
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
     const toolSchema =
-      input.toolAutonomy === "manual" || promptLabContract.toolUseSuppressed
+      (input.toolAutonomy === "manual" && !quickWebProfile) || promptLabContract.toolUseSuppressed
         ? { tools: [], modelToCanonical: new Map<string, string>(), canonicalToModel: new Map<string, string>() }
         : await this.buildToolSchema(input, intents);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
@@ -747,6 +756,7 @@ export class ChatAgentOrchestrator {
     let assistantContent = "";
     let assistantModel = input.model;
     let routingState: ChatTurnTraceRecord["routing"] = {
+      executionProfile,
       liveDataIntent: intents.liveData,
       primaryProviderId: input.providerId,
       primaryModel: input.model,
@@ -802,6 +812,7 @@ export class ChatAgentOrchestrator {
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
+    let quickWebSynthesisOnly = false;
     // P0-B answer-recovery ladder state. `degradedOutcome` is set whenever a
     // terminal turn fell back to a deterministic recovery path so the outcome can
     // be marked honestly at finalize instead of silently riding `finalStatus`.
@@ -834,6 +845,7 @@ export class ChatAgentOrchestrator {
       promptLabHarness: normalizationProfile === "prompt_pack_harness",
       providerId: input.providerId,
       model: input.model,
+      executionProfile,
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
@@ -990,6 +1002,7 @@ export class ChatAgentOrchestrator {
     if (
       !assistantContent &&
       !promptLabEvalIntegrityTurn &&
+      !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
       input.mode !== "code" &&
       !promptLabShouldInspectFilesForTurn &&
@@ -1719,6 +1732,78 @@ export class ChatAgentOrchestrator {
       }
     }
 
+    if (
+      !assistantContent &&
+      !approvalPayload &&
+      quickWebProfile &&
+      !promptLabEvalIntegrityTurn &&
+      !promptLabContract.toolUseSuppressed &&
+      input.webMode !== "off" &&
+      canUseSearchTool &&
+      toolRunCount < executionBudget.maxToolRunsPerTurn
+    ) {
+      const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
+      if (quickWebQuery.trim().length > 0) {
+        throwIfChatTurnCancelled(input);
+        this.deps.storage.chatTurnTraces.patch(input.turnId, {
+          status: "waiting_for_tool",
+        });
+        ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+        const syntheticRun = await this.executeToolCall({
+          input,
+          turnId: input.turnId,
+          toolName: "browser.search",
+          rawArgs: {
+            query: quickWebQuery,
+            maxResults: executionBudget.searchMaxResults,
+          },
+          localFileIntent: false,
+          priorToolRuns: toolRuns,
+          turnBudgetDeadline,
+        });
+        toolRunCount += 1;
+        toolRuns.push(syntheticRun.record);
+        yield {
+          type: "tool_start",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          toolRun: {
+            ...syntheticRun.record,
+            status: "started",
+          },
+        };
+        if (syntheticRun.chunk) {
+          yield syntheticRun.chunk;
+        }
+        const toolMessageId = `quick-web-search-${randomUUID()}`;
+        conversationMessages.push(
+          createAssistantToolCallMessage({
+            toolCallId: toolMessageId,
+            toolName: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
+            argumentsJson: JSON.stringify({
+              query: quickWebQuery,
+              maxResults: executionBudget.searchMaxResults,
+            }),
+          }),
+        );
+        conversationMessages.push({
+          role: "tool",
+          tool_call_id: toolMessageId,
+          content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+        } as ChatCompletionMessage);
+        quickWebSynthesisOnly = true;
+        for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
+          citations.push(citation);
+          yield {
+            type: "citation",
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            citation,
+          };
+        }
+      }
+    }
+
     // Deterministic live-time helper for simple queries.
     if (!assistantContent && intents.time && canUseTimeTool && !promptLabContract.toolUseSuppressed) {
       throwIfChatTurnCancelled(input);
@@ -1817,6 +1902,7 @@ export class ChatAgentOrchestrator {
       !assistantContent &&
       !approvalPayload &&
       !promptLabEvalIntegrityTurn &&
+      !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
       intents.liveData &&
@@ -2038,7 +2124,7 @@ export class ChatAgentOrchestrator {
       }
     }
 
-    if (intents.liveData && toolRuns.length > 0) {
+    if ((intents.liveData || quickWebProfile) && toolRuns.length > 0) {
       conversationMessages.push({
         role: "system",
         content: buildEvidenceGroundingInstruction(),
@@ -2086,7 +2172,7 @@ export class ChatAgentOrchestrator {
               : remainingTurnBudgetMs,
           );
           const modelControls = resolveModelControlOptions(input, toolSchema.tools.length > 0);
-          const rawToolsForCompletion = promptLabSynthesisOnly ? [] : toolSchema.tools;
+          const rawToolsForCompletion = promptLabSynthesisOnly || quickWebSynthesisOnly ? [] : toolSchema.tools;
           const toolsForCompletion =
             normalizationProfile === "prompt_pack_harness" &&
             input.mode !== "code" &&
@@ -2099,6 +2185,15 @@ export class ChatAgentOrchestrator {
                   return !canonicalToolName || !LOCAL_PATH_TOOL_NAMES.has(canonicalToolName);
                 })
               : rawToolsForCompletion;
+          routingState = {
+            ...routingState,
+            promptContextBudget: buildPromptContextBudgetReceipt({
+              executionProfile,
+              messages: conversationMessages,
+              tools: toolsForCompletion,
+              toolRuns,
+            }),
+          };
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
             model: input.model,
@@ -2385,15 +2480,59 @@ export class ChatAgentOrchestrator {
               markAnswerRecoveredByModel();
             }
             if (completionOutcome.status !== "complete") {
-              completionState = {
-                ...completionState,
-                status: completionOutcome.status,
-              };
-              finalFailure ??= buildChatTurnFailureRecord(
-                "unknown",
-                "The provider stopped before the answer finished, so a repair pass is required.",
-                "continue_from_partial",
-              );
+              if (
+                shouldAcceptQuickWebPartialAnswer({
+                  executionProfile,
+                  completionOutcome,
+                  assistantContent,
+                  toolRuns,
+                })
+              ) {
+                completionState = {
+                  ...completionState,
+                  status: "complete",
+                };
+                suppressIncompleteCompletionRepair = true;
+              } else if (quickWebProfile && hasExecutedToolRun(toolRuns, "browser.search")) {
+                const preRepairContent = assistantContent;
+                assistantContent = buildTurnBudgetExceededFallbackMessage({
+                  turnInput: input,
+                  toolRuns,
+                  turnBudgetMs: effectiveTurnBudgetMs,
+                  fallbackBuilders: {
+                    buildFetchedContentBudgetFallback,
+                    buildSearchResultBudgetFallback,
+                    buildDeterministicToolSynthesisFallback,
+                  },
+                });
+                markCompletionRepair(
+                  "deterministic_empty_output_synthesis",
+                  "orchestrator",
+                  preRepairContent,
+                  assistantContent,
+                );
+                completionState = {
+                  ...completionState,
+                  status: "interrupted",
+                };
+                finalFailure ??= buildChatTurnFailureRecord(
+                  "unknown",
+                  "quick_web final synthesis was incomplete; returned bounded search evidence instead of waiting for repair.",
+                  "retry",
+                );
+                suppressIncompleteCompletionRepair = true;
+                noteDegradedOutcome("provider_timeout");
+              } else {
+                completionState = {
+                  ...completionState,
+                  status: completionOutcome.status,
+                };
+                finalFailure ??= buildChatTurnFailureRecord(
+                  "unknown",
+                  "The provider stopped before the answer finished, so a repair pass is required.",
+                  "continue_from_partial",
+                );
+              }
             } else if (completionState.status !== "complete") {
               completionState = {
                 ...completionState,
@@ -2890,28 +3029,56 @@ export class ChatAgentOrchestrator {
           );
           noteDegradedOutcome("turn_budget_exceeded");
         } else {
-          finalStatus = "failed";
           const failureClass = classifyChatTurnFailure({
             error,
             toolRuns,
           });
-          finalFailure = buildChatTurnFailureRecord(
-            failureClass,
-            (error as Error).message,
-            getChatTurnRecoveryAction(failureClass),
-            extractProviderFailureRecord(error),
-          );
-          completionState = {
-            ...completionState,
-            status: "interrupted",
-          };
-          assistantContent = buildUserSafeFailureMessage(finalFailure);
-          yield {
-            type: "error",
-            sessionId: input.sessionId,
-            turnId: input.turnId,
-            error: assistantContent,
-          };
+          const quickWebCanRecoverFromSearch =
+            quickWebProfile && failureClass === "provider_timeout" && hasExecutedToolRun(toolRuns, "browser.search");
+          if (quickWebCanRecoverFromSearch) {
+            finalStatus = "completed";
+            assistantContent = buildTurnBudgetExceededFallbackMessage({
+              turnInput: input,
+              toolRuns,
+              turnBudgetMs: effectiveTurnBudgetMs,
+              fallbackBuilders: {
+                buildFetchedContentBudgetFallback,
+                buildSearchResultBudgetFallback,
+                buildDeterministicToolSynthesisFallback,
+              },
+            });
+            finalFailure = buildChatTurnFailureRecord(
+              "provider_timeout",
+              "quick_web final synthesis timed out; returned bounded search evidence instead of waiting",
+              "retry",
+              extractProviderFailureRecord(error),
+            );
+            completionState = {
+              ...completionState,
+              status: "interrupted",
+            };
+            suppressIncompleteCompletionRepair = true;
+            noteDegradedOutcome("provider_timeout");
+          } else {
+            finalStatus = "failed";
+            finalFailure = buildChatTurnFailureRecord(
+              failureClass,
+              (error as Error).message,
+              getChatTurnRecoveryAction(failureClass),
+              extractProviderFailureRecord(error),
+            );
+            completionState = {
+              ...completionState,
+              status: "interrupted",
+            };
+            assistantContent = buildUserSafeFailureMessage(finalFailure);
+            yield {
+              type: "error",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              error: assistantContent,
+            };
+          }
         }
       }
     }
@@ -3030,6 +3197,7 @@ export class ChatAgentOrchestrator {
 
     if (
       !approvalPayload &&
+      !quickWebProfile &&
       finalStatus !== "cancelled" &&
       toolRuns.length > 0 &&
       (looksLikeDegradedAssistantFallbackContent(assistantContent) ||
@@ -3356,6 +3524,7 @@ export class ChatAgentOrchestrator {
     const promptLabContract = parsePromptLabRunContract(input.content);
     const promptLabHarnessTurn =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+    const quickWebProfile = input.normalizationProfile === "quick_web";
     const suppressPromptLabCodeArtifactTools =
       input.mode === "code" && promptLabHarnessTurn && !promptLabContractRequiresArtifactTools(promptLabContract);
     const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
@@ -3419,6 +3588,9 @@ export class ChatAgentOrchestrator {
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
     for (const tool of catalog) {
+      if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
+        continue;
+      }
       if (suppressPromptLabCodeArtifactTools && PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(tool.toolName)) {
         continue;
       }
@@ -3476,6 +3648,7 @@ export class ChatAgentOrchestrator {
         continue;
       }
       if (
+        !quickWebProfile &&
         !shouldExposeWebToolForTurn({
           toolName: tool.toolName,
           mode: input.mode,
@@ -3534,6 +3707,7 @@ export class ChatAgentOrchestrator {
     const essentialToolNames = buildEssentialToolSet({
       mode: input.mode,
       webMode: input.webMode,
+      quickWebProfile,
       liveDataIntent: intents.liveData,
       webLookupIntent,
       localFileIntent,
@@ -3565,8 +3739,8 @@ export class ChatAgentOrchestrator {
       selectedCatalog.push(candidate);
       selectedNames.add(candidate.toolName);
     }
-    const toolCountCap = MAX_EXPOSED_TOOLS_PER_TURN[input.mode];
-    let schemaTokenBudget = TOOL_SCHEMA_TOKEN_BUDGET[input.mode];
+    const toolCountCap = quickWebProfile ? 1 : MAX_EXPOSED_TOOLS_PER_TURN[input.mode];
+    let schemaTokenBudget = quickWebProfile ? 600 : TOOL_SCHEMA_TOKEN_BUDGET[input.mode];
     for (const tool of selectedCatalog) {
       schemaTokenBudget -= cachedEstimateToolTokens(JSON.stringify(tool), tool.toolName);
     }
@@ -3643,6 +3817,7 @@ export class ChatAgentOrchestrator {
       mode: input.input.mode,
       priorToolRuns: input.priorToolRuns,
       evalIntegrityTurn: input.input.normalizationProfile === "prompt_pack_harness",
+      quickWebProfile: input.input.normalizationProfile === "quick_web",
     });
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
@@ -3802,6 +3977,8 @@ export class ChatAgentOrchestrator {
         toolRunId: created.toolRunId,
         toolName: preflight.toolName,
         result: result.result,
+        normalizationProfile: input.input.normalizationProfile,
+        priorToolRuns: input.priorToolRuns,
       });
 
       if (result.outcome === "approval_required") {
@@ -4051,13 +4228,22 @@ export class ChatAgentOrchestrator {
     toolRunId: string;
     toolName: string;
     result?: Record<string, unknown>;
+    normalizationProfile?: ChatNormalizationProfile;
+    priorToolRuns?: readonly ChatToolRunRecord[];
   }): Promise<Record<string, unknown> | undefined> {
     if (!input.result || !this.deps.persistToolArtifact) {
-      return input.result;
+      return input.result
+        ? compactToolResultForExecutionProfile(input.toolName, input.result, input.normalizationProfile)
+        : input.result;
     }
-    const content = extractPersistableToolArtifactContent(input.toolName, input.result);
+    const content = extractPersistableToolArtifactContent(input.toolName, input.result, {
+      forceStructuredArtifact: shouldPersistToolArtifactForAggregateBudget({
+        result: input.result,
+        priorToolRuns: input.priorToolRuns ?? [],
+      }),
+    });
     if (!content) {
-      return input.result;
+      return compactToolResultForExecutionProfile(input.toolName, input.result, input.normalizationProfile);
     }
     const persisted = await this.deps.persistToolArtifact({
       sessionId: input.sessionId,
@@ -4165,6 +4351,8 @@ export class ChatAgentOrchestrator {
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
         result: annotatedAlternateBuiltinResult,
+        normalizationProfile: input.turnInput.normalizationProfile,
+        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -4207,6 +4395,8 @@ export class ChatAgentOrchestrator {
           toolRunId: input.created.toolRunId,
           toolName: input.toolName,
           result: annotatedFallbackResult,
+          normalizationProfile: input.turnInput.normalizationProfile,
+          priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
         });
         const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
           status: "executed",
@@ -4239,6 +4429,8 @@ export class ChatAgentOrchestrator {
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
         result: annotatedNormalizedResult,
+        normalizationProfile: input.turnInput.normalizationProfile,
+        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -4276,6 +4468,8 @@ export class ChatAgentOrchestrator {
         toolRunId: input.created.toolRunId,
         toolName: input.toolName,
         result: annotatedNoResultsPayload,
+        normalizationProfile: input.turnInput.normalizationProfile,
+        priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
       const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
         status: "executed",
@@ -4324,6 +4518,8 @@ export class ChatAgentOrchestrator {
       toolRunId: input.created.toolRunId,
       toolName: input.toolName,
       result: annotatedFailureResult,
+      normalizationProfile: input.turnInput.normalizationProfile,
+      priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
     });
     const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
       status: "failed",
@@ -4708,6 +4904,7 @@ export class ChatAgentOrchestrator {
     localFileIntent?: boolean;
     priorToolRuns?: ChatToolRunRecord[];
     evalIntegrityTurn?: boolean;
+    quickWebProfile?: boolean;
   }): {
     toolName: string;
     args: Record<string, unknown>;
@@ -4765,7 +4962,7 @@ export class ChatAgentOrchestrator {
         };
       }
     }
-    if (isBrowserSearch && !input.evalIntegrityTurn) {
+    if (isBrowserSearch && !input.evalIntegrityTurn && !input.quickWebProfile) {
       const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.userContent, input.priorToolRuns);
       if (promotedUrl) {
         effectiveToolName = "browser.navigate";
@@ -5208,6 +5405,35 @@ function classifyCompletionOutcome(input: {
   };
 }
 
+function shouldAcceptQuickWebPartialAnswer(input: {
+  executionProfile: ChatTurnExecutionProfile;
+  completionOutcome: ReturnType<typeof classifyCompletionOutcome>;
+  assistantContent: string;
+  toolRuns: ChatToolRunRecord[];
+}): boolean {
+  if (input.executionProfile !== "quick_web" || input.completionOutcome.status !== "truncated") {
+    return false;
+  }
+  const content = input.assistantContent.trim();
+  if (content.length < 80) {
+    return false;
+  }
+  if (content.length < 160 && !/[.!?)"`\]]$/.test(content)) {
+    return false;
+  }
+  if (!/[.!?]/.test(content) && !/(^|\n)\s*(?:[-*]|\d+\.)\s+\S/.test(content)) {
+    return false;
+  }
+  if (
+    looksLikeRecoverableAssistantFallbackContent(content) ||
+    looksLikeDegradedAssistantFallbackContent(content) ||
+    looksLikeSerializedToolCallMarkupContent(content)
+  ) {
+    return false;
+  }
+  return hasExecutedToolRun(input.toolRuns, "browser.search");
+}
+
 function hasIncompleteToolCalls(message: Record<string, unknown>): boolean {
   const rawToolCalls = Array.isArray(message.tool_calls) ? (message.tool_calls as Array<Record<string, unknown>>) : [];
   if (rawToolCalls.length === 0) {
@@ -5290,7 +5516,10 @@ export function shouldClearRecoverableCompletionFailure(input: {
   if (input.finalStatus !== "completed" || input.approvalPending || !input.failure) {
     return false;
   }
-  const clearableSurface = input.normalizationProfile === "prompt_pack_harness" || input.mode === "cowork";
+  const clearableSurface =
+    input.normalizationProfile === "prompt_pack_harness" ||
+    input.normalizationProfile === "quick_web" ||
+    input.mode === "cowork";
   if (!clearableSurface) {
     return false;
   }
@@ -5380,6 +5609,7 @@ function looksLikePromptLabDelegatedNonCodeTurn(content: string, taskContent = "
 function buildEssentialToolSet(input: {
   mode: ChatMode;
   webMode: ChatWebMode;
+  quickWebProfile?: boolean;
   liveDataIntent: boolean;
   webLookupIntent: boolean;
   localFileIntent: boolean;
@@ -5391,6 +5621,9 @@ function buildEssentialToolSet(input: {
   projectBound: boolean;
   suppressLocalPathTools?: boolean;
 }): string[] {
+  if (input.quickWebProfile) {
+    return input.webMode === "off" ? [] : ["browser.search"];
+  }
   const tools = new Set<string>(["time.now"]);
   if (
     input.memoryLookupIntent ||
@@ -8430,7 +8663,7 @@ function sanitizeQueryClause(value: string): string {
     )
     .replace(/^(please|can you|could you|would you)\b[:,\s-]*/i, "")
     .replace(
-      /^(?:please\s+)?(?:look|search|browse|check|research)\b(?:\s+(?:online|on the web|the web|web|internet))?(?:\s+(?:and|to|for|about|into))?\s*/i,
+      /^(?:please\s+)?(?:look|search|browse|check|research)\b(?:\s+(?:up|online|on the web|the web|web|internet))?(?:\s+(?:and|to|for|about|into))?\s*/i,
       "",
     )
     .replace(/^(?:find(?:\s+out)?|tell|show|give|explain|summarize)\b(?:\s+me)?(?:\s+about)?\s*/i, "")
@@ -13020,4 +13253,8 @@ function hasToolBlockedFailure(toolRuns: ChatToolRunRecord[]): boolean {
 
 function hasToolFailedFailure(toolRuns: ChatToolRunRecord[]): boolean {
   return toolRuns.some((run) => run.status === "failed");
+}
+
+function hasExecutedToolRun(toolRuns: ChatToolRunRecord[], toolName: string): boolean {
+  return toolRuns.some((run) => run.toolName === toolName && run.status === "executed");
 }

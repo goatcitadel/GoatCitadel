@@ -9,6 +9,7 @@
 
 import type { RuntimeDecisionTraceAppendInput } from "@goatcitadel/contracts";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 
 export function recordPreparedTurnDecisions(
   host: ChatTurnPrepHost,
@@ -26,6 +27,7 @@ export function recordPreparedTurnDecisions(
   const mode = prepared.normalized.mode ?? prepared.prefs.mode;
   const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
   const memoryMode = prepared.normalized.memoryMode ?? prepared.prefs.memoryMode;
+  const executionProfile = executionProfileFromNormalizationProfile(prepared.normalized.normalizationProfile);
   safeRecordRuntimeDecision(host, {
     kind: "chat_turn_prepared",
     scope: {
@@ -52,6 +54,7 @@ export function recordPreparedTurnDecisions(
       { source: "operator_pref", key: "web_mode", value: webMode, weight: "informational" },
       { source: "operator_pref", key: "memory_mode", value: memoryMode, weight: "informational" },
       { source: "operator_pref", key: "thinking_level", value: prepared.prefs.thinkingLevel, weight: "informational" },
+      { source: "routing", key: "execution_profile", value: executionProfile, weight: "strong" },
       { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy, weight: "strong" },
       {
         source: "model_router",

@@ -42,7 +42,12 @@ describe("buildBaseAgentSystemPrompt", () => {
     );
     const b = buildBaseAgentSystemPrompt(
       input({
-        runtimeInfo: runtimeInfo({ date: "Tuesday, December 31, 2030", model: "m2", channel: "telegram", cwd: "/tmp/x" }),
+        runtimeInfo: runtimeInfo({
+          date: "Tuesday, December 31, 2030",
+          model: "m2",
+          channel: "telegram",
+          cwd: "/tmp/x",
+        }),
         toolset: { toolNames: ["a", "b", "c"], skills: [{ name: "beta", summary: "x" }] },
       }),
     );
@@ -112,6 +117,32 @@ describe("buildBaseAgentSystemPrompt", () => {
     const withMemory = buildBaseAgentSystemPrompt(input({ memoryDigest: "Operator prefers terse answers." }));
     expect(withMemory.volatileTail).toContain("## Memory");
     expect(withMemory.volatileTail).toContain("Operator prefers terse answers.");
+  });
+
+  it("uses a lean quick-web prompt without project, tools, skills, cwd, or memory", () => {
+    const prompt = buildBaseAgentSystemPrompt(
+      input({
+        mode: "chat" as ChatMode,
+        normalizationProfile: "quick_web",
+        runtimeInfo: runtimeInfo({
+          mode: "chat" as ChatMode,
+          cwd: "/work/app",
+          project: { name: "Acme", description: "the acme app" },
+        }),
+        toolset: { toolNames: ["browser.search", "http.get"], skills: [{ name: "research" }] },
+        memoryDigest: "Operator prefers metric units.",
+      }),
+    );
+
+    const rendered = renderBaseAgentSystemPrompt(prompt);
+    expect(prompt.stablePrefix).toContain("quick web answer");
+    expect(rendered).toContain("Saturday, June 21, 2026");
+    expect(rendered).not.toContain("/work/app");
+    expect(rendered).not.toContain("## Project");
+    expect(rendered).not.toContain("## Tools available");
+    expect(rendered).not.toContain("## Skills");
+    expect(rendered).not.toContain("## Memory");
+    expect(rendered).not.toContain("metric units");
   });
 });
 

@@ -20,6 +20,15 @@ describe("chat turn dispatch durable ownership", () => {
     expect(shouldUseDurableExecution(host, createPrepared("code"), { content: "hello" })).toBe(true);
   });
 
+  it("keeps quick-web turns on the inline fast path instead of durable execution", () => {
+    const host = createHost();
+    expect(
+      shouldUseDurableExecution(host, createPrepared("chat", { normalizationProfile: "quick_web" }), {
+        content: "please look up the best way to eat sushi",
+      }),
+    ).toBe(false);
+  });
+
   it("registers the active stream against the durable run when one is created", () => {
     const durableRun = { runId: "run-1" } as DurableRunRecord;
     const host = createHost({
@@ -297,7 +306,7 @@ function createHost(
   };
 }
 
-function createPrepared(mode: "chat" | "cowork" | "code") {
+function createPrepared(mode: "chat" | "cowork" | "code", normalizedOverrides: Record<string, unknown> = {}) {
   return {
     session: {
       sessionId: "session-1",
@@ -323,6 +332,7 @@ function createPrepared(mode: "chat" | "cowork" | "code") {
     },
     normalized: {
       mode,
+      ...normalizedOverrides,
     },
     prefs: {
       mode,

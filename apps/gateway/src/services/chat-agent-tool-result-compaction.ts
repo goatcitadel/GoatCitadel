@@ -1,8 +1,12 @@
-import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+import type { ChatNormalizationProfile, ChatToolRunRecord, ToolInvokeRequest } from "@goatcitadel/contracts";
 
 const TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES = 12_000;
 const TOOL_OUTPUT_INLINE_SUMMARY_CHARS = 1_400;
 const TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS = 4_000;
+const TOOL_RESULT_AGGREGATE_CONTEXT_BUDGET_BYTES = 80_000;
+const TOOL_RESULT_FORCE_ARTIFACT_MIN_BYTES = 2_000;
+const QUICK_WEB_SEARCH_RESULT_LIMIT = 3;
+const QUICK_WEB_SNIPPET_CHARS = 520;
 
 type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>[number];
 
@@ -26,12 +30,20 @@ export interface PersistedToolArtifactSummary {
   readonly compactMode: "textual" | "structured";
 }
 
+export interface ToolArtifactExtractionOptions {
+  readonly forceStructuredArtifact?: boolean;
+}
+
 export function extractPersistableToolArtifactContent(
   toolName: string,
   result: Record<string, unknown>,
+  options: ToolArtifactExtractionOptions = {},
 ): PersistableToolArtifactContent | undefined {
   if (typeof result.body === "string" && result.body.length > 0) {
-    if (Buffer.byteLength(result.body, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
+    if (
+      !options.forceStructuredArtifact &&
+      Buffer.byteLength(result.body, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES
+    ) {
       return undefined;
     }
     return {
@@ -47,7 +59,10 @@ export function extractPersistableToolArtifactContent(
     };
   }
   if (typeof result.text === "string" && result.text.length > 0) {
-    if (Buffer.byteLength(result.text, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
+    if (
+      !options.forceStructuredArtifact &&
+      Buffer.byteLength(result.text, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES
+    ) {
       return undefined;
     }
     return {
@@ -60,7 +75,11 @@ export function extractPersistableToolArtifactContent(
     };
   }
   const serialized = safeSerializeToolResult(result);
-  if (!serialized || Buffer.byteLength(serialized, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
+  if (
+    !serialized ||
+    (!options.forceStructuredArtifact &&
+      Buffer.byteLength(serialized, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES)
+  ) {
     return undefined;
   }
   return {
@@ -71,6 +90,40 @@ export function extractPersistableToolArtifactContent(
     virtualized: true,
     compactMode: "structured",
   };
+}
+
+export function compactToolResultForExecutionProfile(
+  toolName: string,
+  result: Record<string, unknown>,
+  normalizationProfile: ChatNormalizationProfile | undefined,
+): Record<string, unknown> {
+  if (normalizationProfile !== "quick_web" || toolName !== "browser.search" || !Array.isArray(result.results)) {
+    return result;
+  }
+  return {
+    ...buildCompactToolResultMetadata(result),
+    results: result.results.slice(0, QUICK_WEB_SEARCH_RESULT_LIMIT).map(compactQuickWebSearchResult),
+    resultCount: result.results.length,
+    compactedForProfile: "quick_web",
+  };
+}
+
+export function shouldPersistToolArtifactForAggregateBudget(input: {
+  readonly result?: Record<string, unknown>;
+  readonly priorToolRuns: readonly ChatToolRunRecord[];
+}): boolean {
+  if (!input.result) {
+    return false;
+  }
+  const serialized = safeSerializeToolResult(input.result);
+  if (!serialized) {
+    return false;
+  }
+  const currentBytes = Buffer.byteLength(serialized, "utf8");
+  if (currentBytes < TOOL_RESULT_FORCE_ARTIFACT_MIN_BYTES) {
+    return false;
+  }
+  return currentBytes + estimatePriorToolResultBytes(input.priorToolRuns) > TOOL_RESULT_AGGREGATE_CONTEXT_BUDGET_BYTES;
 }
 
 export function safeSerializeToolResult(result: Record<string, unknown>): string | undefined {
@@ -151,6 +204,37 @@ function compactLocalBusinessResearchRecord(value: unknown): Record<string, unkn
         ? record.verificationNote.trim().slice(0, 800)
         : undefined,
   };
+}
+
+function compactQuickWebSearchResult(value: unknown): Record<string, unknown> {
+  const record = toPlainRecord(value);
+  if (!record) {
+    return {};
+  }
+  return compactDefinedRecord({
+    title: readString(record.title)?.slice(0, 180),
+    url: readString(record.url) ?? readString(record.link),
+    snippet: (readString(record.snippet) ?? readString(record.description) ?? readString(record.text))?.slice(
+      0,
+      QUICK_WEB_SNIPPET_CHARS,
+    ),
+    publishedAt: readString(record.publishedAt) ?? readString(record.date),
+    source: readString(record.source) ?? readString(record.siteName),
+  });
+}
+
+function estimatePriorToolResultBytes(priorToolRuns: readonly ChatToolRunRecord[]): number {
+  let total = 0;
+  for (const run of priorToolRuns) {
+    if (!run.result) {
+      continue;
+    }
+    const serialized = safeSerializeToolResult(run.result);
+    if (serialized) {
+      total += Buffer.byteLength(serialized, "utf8");
+    }
+  }
+  return total;
 }
 
 function compactLocalBusinessPlan(value: unknown): Record<string, unknown> | undefined {

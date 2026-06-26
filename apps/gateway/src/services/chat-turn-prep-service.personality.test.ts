@@ -181,6 +181,38 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(cowork.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
   });
 
+  it("prepares simple lookup turns with quick-web normalization and skips heavyweight context", async () => {
+    const harness = createHost("code", { mode: "code", toolAutonomy: "manual" }, [], "Operator profile digest.");
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi",
+    });
+
+    expect(prepared.normalized).toEqual({
+      mode: "chat",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "minimal",
+      speedMode: "fast",
+      subagentPolicy: "off",
+      normalizationProfile: "quick_web",
+    });
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.host.resolveRuntimeGuidance).not.toHaveBeenCalled();
+    expect(harness.host.resolveThreadKnowledgeContext).not.toHaveBeenCalled();
+    expect(harness.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
+    expect(harness.host.buildDefaultChatPersonalityOverlay).not.toHaveBeenCalled();
+    expect(harness.readGuidance()).toContain("quick web answer");
+    expect(harness.readGuidance()).not.toContain("Operator profile digest");
+    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledWith(
+      "session-1",
+      [],
+      prepared.userMessage,
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("ingests attachment references, applies autonomy overrides, and keeps unbound Code mode manual", async () => {
     const harness = createHost("code", { mode: "code", toolAutonomy: "safe_auto" });
     vi.mocked(harness.host.storage.chatAttachments.listByIds).mockReturnValue([

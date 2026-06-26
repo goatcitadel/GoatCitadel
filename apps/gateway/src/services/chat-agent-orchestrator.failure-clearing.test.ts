@@ -202,6 +202,22 @@ describe("shouldClearRecoverableCompletionFailure", () => {
         ),
       ).toBe(false);
     });
+
+    it("clears repaired continue-from-partial failures on quick_web", () => {
+      expect(
+        shouldClearRecoverableCompletionFailure(
+          buildInput({
+            normalizationProfile: "quick_web",
+            mode: "chat",
+            completion: buildCompletion({ repaired: true }),
+            failure: repairableFailure,
+            assistantContent:
+              "Eat nigiri in one bite when practical, dip fish-side lightly, and use ginger between pieces.",
+            toolRuns: [buildExecutedToolRun({ toolName: "browser.search", result: { results: [] } })],
+          }),
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("gating preconditions", () => {

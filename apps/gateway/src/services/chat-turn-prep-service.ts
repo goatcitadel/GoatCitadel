@@ -30,6 +30,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
+import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
@@ -241,6 +242,9 @@ export async function prepareAgentChatTurn(
   if (!content) {
     throw new Error("content is required");
   }
+  const normalized = normalizeAgentInputFromSend({ ...input, content });
+  const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
+  const quickWebTurn = executionProfile === "quick_web";
   if (branchKind !== "retry") {
     host.maybeAutoTitleChatSession(sessionId, content);
   }
@@ -299,8 +303,17 @@ export async function prepareAgentChatTurn(
     userMessage = options.existingUserMessage;
   }
 
-  const resolvedGuidancePromise = host.resolveRuntimeGuidance(workspaceId);
-  const threadKnowledgeContextPromise = host.resolveThreadKnowledgeContext(sessionId, content);
+  const resolvedGuidancePromise = quickWebTurn
+    ? Promise.resolve({
+        workspaceId,
+        globalFilesUsed: [],
+        workspaceFilesUsed: [],
+        truncated: false,
+      } satisfies Partial<ResolvedRuntimeGuidance>)
+    : host.resolveRuntimeGuidance(workspaceId);
+  const threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> = quickWebTurn
+    ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
+    : host.resolveThreadKnowledgeContext(sessionId, content);
   const sideChatSystemInstructionPromise = input.sideChatContext
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
@@ -324,13 +337,13 @@ export async function prepareAgentChatTurn(
   const prefsPatched = host.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch);
   const prefs = host.ensureChatSessionModelDefaults(sessionId, prefsPatched);
   const autonomy = host.getSessionAutonomyPrefs(sessionId);
-  const normalized = normalizeAgentInputFromSend(input);
   const modelRouterDecision = routeWithModelRouter({
     prompt: content,
     hasAttachments: Boolean(input.attachments?.length || input.parts?.some((part) => part.type !== "text")),
   });
   const projectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
-  const requiresProjectBinding = chatModeRequiresProjectBinding(prefs.mode);
+  const effectiveMode = quickWebTurn ? normalized.mode : prefs.mode;
+  const requiresProjectBinding = chatModeRequiresProjectBinding(effectiveMode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
   const effectiveToolAutonomy =
     prefs.planningMode === "advisory" || missingRequiredProjectBinding ? "manual" : prefs.toolAutonomy;
@@ -351,8 +364,11 @@ export async function prepareAgentChatTurn(
   // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
   // we apply a real layered prompt, and the personality overlay, to every mode.
   const baseSystemPromptEnabled = !host.isFeatureEnabled("coworkRuntimeQualityV1Disabled");
-  const personalityOverlay =
-    baseSystemPromptEnabled || prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  const personalityOverlay = quickWebTurn
+    ? undefined
+    : baseSystemPromptEnabled || effectiveMode === "chat"
+      ? host.buildDefaultChatPersonalityOverlay()
+      : undefined;
   let baseAgentInstruction: string | undefined;
   if (baseSystemPromptEnabled) {
     const now = new Date();
@@ -362,14 +378,17 @@ export async function prepareAgentChatTurn(
     // the base prompt's volatile tail without busting the P0-A cache prefix.
     // Best-effort: never let a profile read break turn preparation.
     let memoryDigest: string | undefined;
-    try {
-      memoryDigest = host.composeFrozenOperatorProfileDigest?.(workspaceId);
-    } catch {
-      memoryDigest = undefined;
+    if (!quickWebTurn) {
+      try {
+        memoryDigest = host.composeFrozenOperatorProfileDigest?.(workspaceId);
+      } catch {
+        memoryDigest = undefined;
+      }
     }
     baseAgentInstruction = renderBaseAgentSystemPrompt(
       buildBaseAgentSystemPrompt({
-        mode: prefs.mode,
+        mode: effectiveMode,
+        normalizationProfile: normalized.normalizationProfile,
         runtimeInfo: {
           date: now.toLocaleDateString("en-US", {
             weekday: "long",
@@ -382,7 +401,7 @@ export async function prepareAgentChatTurn(
           model: input.model ?? prefs.model ?? "unknown",
           providerId: input.providerId ?? prefs.providerId ?? "unknown",
           channel: route.channel,
-          mode: prefs.mode,
+          mode: effectiveMode,
         },
         toolset: { toolNames: [] },
         ...(memoryDigest ? { memoryDigest } : {}),
@@ -416,7 +435,8 @@ export async function prepareAgentChatTurn(
   const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
   const parentTurnId = hasExplicitParentTurnId ? options?.parentTurnId : sessionState.activeLeafTurnId;
   const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(sessionState.turnLineageById, parentTurnId) : [];
-  const conversationMessages = pathTurnIds.flatMap((turnId) => {
+  const contextPathTurnIds = quickWebTurn ? [] : pathTurnIds;
+  const conversationMessages = contextPathTurnIds.flatMap((turnId) => {
     const trace = sessionState.tracesById.get(turnId);
     if (!trace) {
       return [];
@@ -437,7 +457,7 @@ export async function prepareAgentChatTurn(
   conversationMessages.push(userMessage);
   const history = await host.buildLlmMessagesFromBranchPath(
     sessionId,
-    pathTurnIds,
+    contextPathTurnIds,
     userMessage,
     {
       providerId: input.providerId ?? prefs.providerId,

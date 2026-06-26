@@ -3,6 +3,7 @@ import {
   type ChatMode,
   type ChatThinkingLevel,
   type ChatToolRunRecord,
+  type ChatTurnExecutionProfile,
   type ChatTurnFailureRecord,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
@@ -43,6 +44,7 @@ const PROMPT_LAB_MIN_COMPLETION_TIMEOUT_MS = 150_000;
 // minSynthesisReserveMs / expensiveToolMinimumRemainingMs so a hung provider call
 // cannot block a turn indefinitely.
 export const CHAT_TURN_BUDGET_MS_BY_MODE = {
+  quickWeb: 20000,
   quick: 120000,
   off: 120000,
   liveData: 240000,
@@ -51,6 +53,7 @@ export const CHAT_TURN_BUDGET_MS_BY_MODE = {
   default: 240000,
 } as const;
 export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
+  quickWeb: 12000,
   quick: 60000,
   off: 90000,
   liveData: 150000,
@@ -83,6 +86,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly promptLabHarness?: boolean;
   readonly providerId?: string;
   readonly model?: string;
+  readonly executionProfile?: ChatTurnExecutionProfile;
 }
 
 export class ChatTurnBudgetExceededError extends BudgetExceededError {
@@ -114,7 +118,19 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
   const loopLimitBehavior = resolveLoopLimitBehavior(input.mode);
   let budget: ChatExecutionBudget;
-  if (shouldUseCoworkResearchListBudget(input)) {
+  if (input.executionProfile === "quick_web") {
+    budget = {
+      turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quickWeb,
+      completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quickWeb,
+      maxToolLoops: 1,
+      loopLimitBehavior,
+      maxToolRunsPerTurn: 2,
+      searchMaxResults: 3,
+      maxTokens: Math.min(defaultMaxTokens ?? 500, 600),
+      minSynthesisReserveMs: 5000,
+      expensiveToolMinimumRemainingMs: 8000,
+    };
+  } else if (shouldUseCoworkResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.coworkResearchList,
@@ -211,6 +227,9 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     promptLabExplicitTools: input.promptLabExplicitTools,
   });
   budget = applyCoworkResearchListExtendedBudget(budget, input);
+  if (input.executionProfile === "quick_web") {
+    return budget;
+  }
   if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
     return budget;
   }

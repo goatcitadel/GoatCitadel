@@ -52,6 +52,24 @@ describe("chat-agent-budget", () => {
         mode: "chat",
         webMode: "quick",
         thinkingLevel: "extended",
+        executionProfile: "quick_web",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quickWeb,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quickWeb,
+        maxToolLoops: 1,
+        maxToolRunsPerTurn: 2,
+        searchMaxResults: 3,
+        maxTokens: 600,
+      }),
+    );
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "quick",
+        thinkingLevel: "extended",
       }),
     ).toEqual(expect.objectContaining({ maxToolLoops: 2, maxToolRunsPerTurn: 3, searchMaxResults: 4, maxTokens: 600 }));
 
@@ -168,6 +186,11 @@ describe("chat-agent-budget", () => {
   it("uses generous-but-bounded per-web-mode turn and completion budgets", () => {
     const THIRTY_MINUTES_MS = 30 * 60 * 1000;
     const cases: { input: ResolveChatExecutionBudgetInput; turnBudgetMs: number; completionTimeoutMs: number }[] = [
+      {
+        input: { mode: "chat", webMode: "quick", thinkingLevel: "minimal", executionProfile: "quick_web" },
+        turnBudgetMs: 20000,
+        completionTimeoutMs: 12000,
+      },
       {
         input: { mode: "chat", webMode: "quick", thinkingLevel: "standard" },
         turnBudgetMs: 120000,

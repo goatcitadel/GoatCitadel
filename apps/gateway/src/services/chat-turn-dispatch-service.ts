@@ -58,6 +58,9 @@ export function shouldUseDurableExecution(
   if (!isDurableExecutionEnabled(host)) {
     return false;
   }
+  if (prepared.normalized.normalizationProfile === "quick_web") {
+    return false;
+  }
   const mode = prepared.normalized.mode ?? prepared.prefs.mode;
   if (mode === "chat" || mode === "cowork" || mode === "code") {
     return true;

@@ -21,7 +21,28 @@ export type ChatMemoryMode = "auto" | "on" | "off";
 export type ChatThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
 export type ChatSpeedMode = "standard" | "fast";
 export type ChatSubagentPolicy = "off" | "ask_when_useful" | "auto_when_useful";
-export type ChatNormalizationProfile = "live" | "prompt_pack_harness";
+export type ChatNormalizationProfile = "live" | "prompt_pack_harness" | "quick_web";
+export type ChatTurnExecutionProfile = "standard" | "quick_web";
+export interface ChatPromptContextBudgetReceipt {
+  executionProfile: ChatTurnExecutionProfile;
+  messageCount: number;
+  toolSchemaCount: number;
+  toolResultCount: number;
+  charCounts: {
+    system: number;
+    history: number;
+    toolSchemas: number;
+    toolResults: number;
+    total: number;
+  };
+  tokenEstimates: {
+    system: number;
+    history: number;
+    toolSchemas: number;
+    toolResults: number;
+    total: number;
+  };
+}
 export type ChatProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
 export type ChatRetrievalMode = "standard" | "layered";
 export type ChatReflectionMode = "off" | "on";
@@ -1258,6 +1279,8 @@ export interface ChatTurnTraceRecord {
   toolRuns: ChatToolRunRecord[];
   citations: ChatCitationRecord[];
   routing: {
+    executionProfile?: ChatTurnExecutionProfile;
+    promptContextBudget?: ChatPromptContextBudgetReceipt;
     usedVisionFallback?: boolean;
     effectiveProviderId?: string;
     effectiveModel?: string;

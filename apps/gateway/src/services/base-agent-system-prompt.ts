@@ -20,7 +20,7 @@
  * Pure functions only — all inputs are passed in, no I/O. The caller gathers
  * runtime info and feeds the rendered result into `mergeChatSystemInstructions`.
  */
-import type { ChatMode } from "@goatcitadel/contracts";
+import type { ChatMode, ChatNormalizationProfile } from "@goatcitadel/contracts";
 
 export interface BaseAgentRuntimeInfo {
   /** Human-formatted date, e.g. "Saturday, June 21, 2026". Caller formats it. */
@@ -59,6 +59,7 @@ export interface BuildBaseAgentSystemPromptInput {
   runtimeInfo: BaseAgentRuntimeInfo;
   mode: ChatMode;
   toolset: BaseAgentPromptToolset;
+  normalizationProfile?: ChatNormalizationProfile;
   /** Optional compact memory digest; only emitted when present (memory is otherwise injected downstream). */
   memoryDigest?: string;
 }
@@ -103,6 +104,13 @@ const OUTPUT_BAR_SECTION = [
   "- If you could not fully complete the task, say so plainly: state what is done, what is not, and the next step. Never imply success you did not achieve.",
 ].join("\n");
 
+const QUICK_WEB_STABLE_PREFIX = [
+  "# GoatCitadel quick web answer",
+  "You are GoatCitadel answering a simple web lookup in a low-latency profile.",
+  "Use only the operator request and tool evidence from this turn. Do not use or infer project files, local runtime state, learned memory, skills, subagents, or code context.",
+  "Answer directly and concisely. Cite source URLs when the tool evidence provides them. Stop once the simple question is answered.",
+].join("\n");
+
 function buildModeDoctrine(mode: ChatMode): string {
   switch (mode) {
     case "cowork":
@@ -133,6 +141,18 @@ function buildModeDoctrine(mode: ChatMode): string {
  * everything turn-specific is in `volatileTail`.
  */
 export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInput): BaseAgentSystemPrompt {
+  if (input.normalizationProfile === "quick_web") {
+    const { runtimeInfo } = input;
+    return {
+      stablePrefix: QUICK_WEB_STABLE_PREFIX,
+      volatileTail: [
+        "## Runtime",
+        `- Date: ${runtimeInfo.date} (${runtimeInfo.timezone})`,
+        `- Channel: ${runtimeInfo.channel}`,
+        `- Mode: ${runtimeInfo.mode}`,
+      ].join("\n"),
+    };
+  }
   const stablePrefix = [
     IDENTITY_SECTION,
     TOOL_DOCTRINE_SECTION,
@@ -156,10 +176,7 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   const tailSections: string[] = [runtimeLines.join("\n")];
 
   if (runtimeInfo.project) {
-    const projectLines = [
-      "## Project",
-      `- Name: ${runtimeInfo.project.name}`,
-    ];
+    const projectLines = ["## Project", `- Name: ${runtimeInfo.project.name}`];
     if (runtimeInfo.project.description) {
       projectLines.push(`- Description: ${runtimeInfo.project.description}`);
     }
