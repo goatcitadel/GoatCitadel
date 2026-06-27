@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatMessageRecord, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatMessageRecord, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 import {
   applyApprovedSpecialistsToPlan,
   buildChatOrchestrationSummary,
@@ -39,7 +39,7 @@ function createHost(
   disabledFlags: string[] = [],
   operatorProfileDigest: string | undefined = undefined,
 ) {
-  let guidanceSystemInstruction = "";
+  let guidanceSystemInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   const prefs = createPrefs(mode, prefsOverrides);
   const host = {
     storage: {
@@ -49,6 +49,8 @@ function createHost(
           workspaceId: "default",
           lifecycleStatus: "active",
         })),
+        incrementGoalTurnsUsed: vi.fn(() => 1),
+        patch: vi.fn(),
       },
       chatAttachments: {
         listByIds: vi.fn(() => []),
@@ -114,7 +116,7 @@ function createHost(
       turnLineageById: new Map(),
     })),
     buildLlmMessagesFromBranchPath: vi.fn(async (_sessionId, _pathTurnIds, _userMessage, options) => {
-      guidanceSystemInstruction = options?.guidanceSystemInstruction ?? "";
+      guidanceSystemInstruction = options?.guidanceSystemInstruction;
       return [];
     }),
     createChatCompletion: vi.fn(async () => ({ id: "completion-1", message: { role: "assistant", content: "" } })),
@@ -123,8 +125,26 @@ function createHost(
   } as unknown as ChatTurnPrepHost;
   return {
     host,
-    readGuidance: () => guidanceSystemInstruction,
+    readGuidanceContent: () => guidanceSystemInstruction,
+    readGuidance: () => stringifySystemInstructionContent(guidanceSystemInstruction),
   };
+}
+
+function stringifySystemInstructionContent(
+  content: ChatCompletionRequest["messages"][number]["content"] | undefined,
+): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter((block): block is Record<string, unknown> =>
+      Boolean(block && typeof block === "object" && !Array.isArray(block)),
+    )
+    .map((block) => String(block.text ?? ""))
+    .join("\n\n");
 }
 
 describe("prepareAgentChatTurn personality overlay", () => {
@@ -165,6 +185,47 @@ describe("prepareAgentChatTurn personality overlay", () => {
     // The base prompt surfaces the digest under its `## Memory` section.
     expect(cowork.readGuidance()).toContain("## Memory");
     expect(cowork.readGuidance()).toContain("Prefers metric units.");
+  });
+
+  it("keeps the stable base prompt block first and appends goal/runtime guidance as volatile blocks", async () => {
+    const harness = createHost("cowork");
+    vi.mocked(harness.host.storage.chatSessionMeta.ensure).mockReturnValue({
+      sessionId: "session-1",
+      workspaceId: "default",
+      lifecycleStatus: "active",
+      pinnedGoal: "ship stable prompts",
+    } as never);
+
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+    const content = harness.readGuidanceContent();
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<Record<string, unknown>>;
+    expect(blocks[0]?.text).toContain("You are GoatCitadel");
+    expect(blocks[0]?.text).toContain("Mode: cowork");
+    expect(blocks[0]?.text).not.toContain("Pinned goal");
+    expect(blocks[0]?.text).not.toContain("Base Chat guidance.");
+    expect(blocks[1]?.text).toContain("## Runtime");
+    expect(blocks[1]?.text).toContain("Mode: cowork");
+    expect(blocks[2]?.text).toContain("Pinned goal: ship stable prompts");
+    expect(blocks.map((block) => block.text).join("\n\n")).toContain("Base Chat guidance.");
+    expect(harness.host.storage.chatSessionMeta.incrementGoalTurnsUsed).toHaveBeenCalledWith("session-1");
+  });
+
+  it("keeps planning and project-binding warnings as volatile follow-on guidance", async () => {
+    const harness = createHost("code", { planningMode: "advisory" });
+
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "review the repo" });
+
+    const content = harness.readGuidanceContent();
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<Record<string, unknown>>;
+    expect(blocks[0]?.text).toContain("Mode: code");
+    expect(blocks[0]?.text).not.toContain("Planning mode is active");
+    expect(blocks[0]?.text).not.toContain("Code mode requires a bound project");
+    const combined = blocks.map((block) => block.text).join("\n\n");
+    expect(combined).toContain("Planning mode is active");
+    expect(combined).toContain("Code mode requires a bound project");
   });
 
   it("omits the Memory section when there is no operator-profile digest", async () => {

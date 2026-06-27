@@ -171,6 +171,34 @@ describe("chat-message-history-service", () => {
     ]);
   });
 
+  it("preserves structured system guidance blocks when building branch-path messages", async () => {
+    const sessionState = createBranchSessionState(1, "structured-guidance");
+    const deps = createDeps({ sessionState });
+
+    const messages = await buildLlmMessagesFromBranchPath(
+      deps,
+      "session-1",
+      ["turn-1"],
+      createMessage("current-user", "user", "Current question."),
+      {
+        guidanceSystemInstruction: [
+          { type: "text", text: " Stable doctrine. " },
+          { type: "text", text: " Volatile runtime. " },
+        ] as never,
+      },
+      sessionState as never,
+    );
+
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        { type: "text", text: "Stable doctrine." },
+        { type: "text", text: "Volatile runtime." },
+      ],
+    });
+    expect(messages.at(-1)).toEqual({ role: "user", content: "Current question." });
+  });
+
   it("keeps short low-token transcripts verbatim and maps system records from branch state", async () => {
     const transcript = Array.from({ length: 14 }, (_, index) =>
       createTranscriptEvent(`brief-${index}`, index % 2 === 0 ? "message.user" : "message.assistant", {

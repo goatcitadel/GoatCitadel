@@ -1023,7 +1023,13 @@ describe("LlmService", () => {
         providerId: "openai",
         model: "gpt-5.4-mini",
         messages: [
-          { role: "developer", content: "Be terse." },
+          {
+            role: "developer",
+            content: [
+              { type: "text", text: "Stable doctrine.", cache_control: { type: "ephemeral" } },
+              { type: "text", text: "Volatile runtime." },
+            ] as never,
+          },
           { role: "user", content: "hello" },
         ],
         reasoning: { effort: "none" },
@@ -1039,7 +1045,8 @@ describe("LlmService", () => {
     }
 
     expect(requestUrl).toBe("https://api.openai.com/v1/responses");
-    expect(payloadBody?.instructions).toBe("Be terse.");
+    expect(payloadBody?.instructions).toBe("Stable doctrine.\nVolatile runtime.");
+    expect(JSON.stringify(payloadBody?.instructions)).not.toContain("cache_control");
     expect(payloadBody?.reasoning).toEqual({ effort: "none" });
     expect(payloadBody?.text).toEqual({ verbosity: "low" });
     expect(payloadBody?.service_tier).toBe("flex");
@@ -3381,11 +3388,12 @@ describe("LlmService", () => {
     );
     const originalFetch = globalThis.fetch;
     try {
-      globalThis.fetch = vi.fn(async () =>
-        new Response(JSON.stringify({ data: [{ b64_json: "not-base64!" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ b64_json: "not-base64!" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
       ) as unknown as typeof fetch;
       await expect(
         service.generateImage({
@@ -3395,11 +3403,12 @@ describe("LlmService", () => {
         }),
       ).rejects.toThrow("image generation result must be valid base64");
 
-      globalThis.fetch = vi.fn(async () =>
-        new Response(JSON.stringify({ data: [{ url: "data:image/png;base64,not-base64!" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ url: "data:image/png;base64,not-base64!" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
       ) as unknown as typeof fetch;
       await expect(
         service.generateImage({

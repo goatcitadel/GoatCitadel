@@ -71,6 +71,11 @@ export interface BaseAgentSystemPrompt {
   volatileTail: string;
 }
 
+export interface BaseAgentSystemPromptBlock extends Record<string, unknown> {
+  type: "text";
+  text: string;
+}
+
 /** Defensive caps so a large catalog cannot bloat or destabilize the prompt. */
 export const MAX_BASE_PROMPT_SKILLS = 20;
 export const MAX_BASE_PROMPT_TOOL_NAMES = 60;
@@ -211,4 +216,18 @@ export function renderBaseAgentSystemPrompt(prompt: BaseAgentSystemPrompt): stri
     return prompt.stablePrefix;
   }
   return `${prompt.stablePrefix}\n\n${prompt.volatileTail}`;
+}
+
+/** Renders the prompt as ordered system blocks so providers can cache the stable prefix only. */
+export function renderBaseAgentSystemPromptBlocks(prompt: BaseAgentSystemPrompt): BaseAgentSystemPromptBlock[] {
+  const blocks: BaseAgentSystemPromptBlock[] = [];
+  const stablePrefix = prompt.stablePrefix.trim();
+  if (stablePrefix) {
+    blocks.push({ type: "text", text: stablePrefix });
+  }
+  const volatileTail = prompt.volatileTail.trim();
+  if (volatileTail) {
+    blocks.push({ type: "text", text: volatileTail });
+  }
+  return blocks;
 }

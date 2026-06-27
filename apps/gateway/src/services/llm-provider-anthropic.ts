@@ -498,7 +498,7 @@ const ANTHROPIC_EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
  * large, mostly-stable prefix is a cache READ across the multi-loop tool calls
  * within a turn:
  *
- *   - one breakpoint on the system block (the P0-A base prompt now leads the
+ *   - one breakpoint on the first system block (the P0-A base prompt now leads the
  *     system instruction, making it the stable, cacheable prefix), and
  *   - one each on the last and second-to-last non-system messages, so a cache
  *     write at the tail of one loop becomes a read on the next.
@@ -523,7 +523,7 @@ function applyAnthropicCacheBreakpoints(
   if (system !== undefined && remainingBreakpoints > 0) {
     const systemBlocks = toSystemBlocks(system);
     if (systemBlocks.length > 0) {
-      cachedSystem = attachCacheControlToLastBlock(systemBlocks);
+      cachedSystem = attachCacheControlToFirstBlock(systemBlocks);
       remainingBreakpoints -= 1;
     }
   }
@@ -561,9 +561,16 @@ function toSystemBlocks(system: string | Array<Record<string, unknown>>): Array<
   return system.map((block) => ({ ...block }));
 }
 
-function attachCacheControlToLastBlock(
-  blocks: Array<Record<string, unknown>>,
-): Array<Record<string, unknown>> {
+function attachCacheControlToFirstBlock(blocks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (blocks.length === 0) {
+    return blocks;
+  }
+  const next = blocks.slice();
+  next[0] = { ...next[0], cache_control: { ...ANTHROPIC_EPHEMERAL_CACHE_CONTROL } };
+  return next;
+}
+
+function attachCacheControlToLastBlock(blocks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   const lastIndex = blocks.length - 1;
   if (lastIndex < 0) {
     return blocks;
@@ -578,9 +585,7 @@ function attachCacheControlToLastBlock(
  * string `content` to block form when needed. Returns `undefined` when the
  * message has no cacheable content (so the caller does not spend a breakpoint).
  */
-function attachCacheControlToMessage(
-  message: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+function attachCacheControlToMessage(message: Record<string, unknown>): Record<string, unknown> | undefined {
   const content = message.content;
   if (typeof content === "string") {
     if (!content.trim()) {

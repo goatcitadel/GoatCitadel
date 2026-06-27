@@ -34,7 +34,7 @@ import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
-import { buildBaseAgentSystemPrompt, renderBaseAgentSystemPrompt } from "./base-agent-system-prompt.js";
+import { buildBaseAgentSystemPrompt, renderBaseAgentSystemPromptBlocks } from "./base-agent-system-prompt.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -54,7 +54,6 @@ import {
   extractCompletionText,
   extractSpecialistObjectiveKeywords,
   inferSpecialistBaseRole,
-  mergeChatSystemInstructions,
   normalizeChatInputParts,
   parseLooseJsonRecord,
   type ResolvedRuntimeGuidance,
@@ -151,7 +150,7 @@ export interface ChatTurnPrepHost {
     options?: {
       providerId?: string;
       model?: string;
-      guidanceSystemInstruction?: string;
+      guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
     },
     state?: ChatTurnSessionState,
   ): Promise<ChatCompletionRequest["messages"]>;
@@ -369,7 +368,7 @@ export async function prepareAgentChatTurn(
     : baseSystemPromptEnabled || effectiveMode === "chat"
       ? host.buildDefaultChatPersonalityOverlay()
       : undefined;
-  let baseAgentInstruction: string | undefined;
+  let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
     const now = new Date();
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -385,7 +384,7 @@ export async function prepareAgentChatTurn(
         memoryDigest = undefined;
       }
     }
-    baseAgentInstruction = renderBaseAgentSystemPrompt(
+    baseAgentInstruction = renderBaseAgentSystemPromptBlocks(
       buildBaseAgentSystemPrompt({
         mode: effectiveMode,
         normalizationProfile: normalized.normalizationProfile,
@@ -408,10 +407,6 @@ export async function prepareAgentChatTurn(
       }),
     );
   }
-  const goalAdjustedBaseGuidance = applyGoalToGuidanceSystemInstruction({
-    baseInstruction: baseAgentInstruction,
-    goal: sessionMeta.pinnedGoal ?? null,
-  });
   const [rawResolvedGuidance, threadKnowledgeContext, sideChatSystemInstruction, sessionState] = await Promise.all([
     resolvedGuidancePromise,
     threadKnowledgeContextPromise,
@@ -419,8 +414,9 @@ export async function prepareAgentChatTurn(
     sessionStatePromise,
   ]);
   const resolvedGuidance = normalizeResolvedRuntimeGuidance(rawResolvedGuidance, workspaceId);
-  const guidanceSystemInstruction = mergeChatSystemInstructions(
-    goalAdjustedBaseGuidance || undefined,
+  const guidanceSystemInstruction = mergeChatSystemInstructionContent(
+    baseAgentInstruction,
+    buildPinnedGoalSystemInstruction(sessionMeta.pinnedGoal ?? null),
     resolvedGuidance.systemInstruction,
     threadKnowledgeContext.systemInstruction,
     personalityOverlay,
@@ -513,6 +509,44 @@ export async function prepareAgentChatTurn(
     threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
   });
   return prepared;
+}
+
+function buildPinnedGoalSystemInstruction(goal: string | null): string | undefined {
+  if (!goal) {
+    return undefined;
+  }
+  return `Pinned goal: ${goal}\nKeep every turn focused on this goal until the operator clears it.`;
+}
+
+function mergeChatSystemInstructionContent(
+  ...parts: Array<ChatCompletionRequest["messages"][number]["content"] | undefined>
+): ChatCompletionRequest["messages"][number]["content"] | undefined {
+  const blocks: Record<string, unknown>[] = [];
+  for (const part of parts) {
+    if (typeof part === "string") {
+      const trimmed = part.trim();
+      if (trimmed) {
+        blocks.push({ type: "text", text: trimmed });
+      }
+      continue;
+    }
+    if (Array.isArray(part)) {
+      for (const block of part) {
+        if (!isRecord(block)) {
+          continue;
+        }
+        const text = typeof block.text === "string" ? block.text.trim() : "";
+        if (text) {
+          blocks.push({ ...block, text });
+        }
+      }
+    }
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function normalizeResolvedRuntimeGuidance(

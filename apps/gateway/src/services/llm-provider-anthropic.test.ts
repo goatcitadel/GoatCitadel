@@ -118,8 +118,8 @@ describe("anthropicProviderAdapter", () => {
       thinking: { type: "enabled", budget_tokens: 8192 },
     });
     expect(payload.system).toEqual([
-      { type: "text", text: "Use tools only when needed." },
-      { type: "text", text: "Be exact.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Use tools only when needed.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Be exact." },
     ]);
     expect(payload.tools).toEqual([
       {
@@ -682,6 +682,44 @@ describe("anthropicProviderAdapter", () => {
     expect(messages[1].content).toBe("first answer");
 
     expect(countCacheBreakpoints(payload)).toBe(3);
+    expect(countCacheBreakpoints(payload)).toBeLessThanOrEqual(4);
+  });
+
+  it("places the system cache breakpoint on the first structured system block", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ id: "msg_structured_cache", model: "claude-test", content: [{ type: "text", text: "ok" }] }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    await anthropicProviderAdapter.chatCompletions(
+      {
+        messages: [
+          {
+            role: "system",
+            content: [
+              { type: "text", text: "Stable doctrine." },
+              { type: "text", text: "Volatile runtime." },
+            ] as never,
+          },
+          { role: "user", content: "hello" },
+        ],
+      },
+      resolved,
+      "claude-test",
+      host,
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.system).toEqual([
+      { type: "text", text: "Stable doctrine.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Volatile runtime." },
+    ]);
+    expect(countCacheBreakpoints(payload)).toBe(2);
     expect(countCacheBreakpoints(payload)).toBeLessThanOrEqual(4);
   });
 

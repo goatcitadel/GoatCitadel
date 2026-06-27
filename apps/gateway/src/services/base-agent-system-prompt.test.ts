@@ -6,6 +6,7 @@ import {
   type BuildBaseAgentSystemPromptInput,
   MAX_BASE_PROMPT_SKILLS,
   MAX_BASE_PROMPT_TOOL_NAMES,
+  renderBaseAgentSystemPromptBlocks,
   renderBaseAgentSystemPrompt,
 } from "./base-agent-system-prompt.js";
 
@@ -153,5 +154,24 @@ describe("renderBaseAgentSystemPrompt", () => {
     expect(rendered.indexOf("You are GoatCitadel")).toBeLessThan(rendered.indexOf("## Runtime"));
     expect(rendered).toContain(prompt.stablePrefix);
     expect(rendered).toContain(prompt.volatileTail);
+  });
+});
+
+describe("renderBaseAgentSystemPromptBlocks", () => {
+  it("renders the stable prefix before the volatile tail as separate system blocks", () => {
+    const prompt = buildBaseAgentSystemPrompt(input());
+    const blocks = renderBaseAgentSystemPromptBlocks(prompt);
+    expect(blocks).toEqual([
+      { type: "text", text: prompt.stablePrefix },
+      { type: "text", text: prompt.volatileTail },
+    ]);
+    expect(blocks[0]?.text).toContain("You are GoatCitadel");
+    expect(blocks[0]?.text).not.toContain("Saturday, June 21, 2026");
+    expect(blocks[1]?.text).toContain("Saturday, June 21, 2026");
+  });
+
+  it("omits an empty volatile tail without changing the stable block", () => {
+    const blocks = renderBaseAgentSystemPromptBlocks({ stablePrefix: "stable", volatileTail: "   " });
+    expect(blocks).toEqual([{ type: "text", text: "stable" }]);
   });
 });

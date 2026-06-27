@@ -9261,7 +9261,7 @@ export class GatewayService {
     options?: {
       providerId?: string;
       model?: string;
-      guidanceSystemInstruction?: string;
+      guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
     },
   ): Promise<ChatCompletionRequest["messages"]> {
     return chatMessageHistoryService.buildLlmMessagesFromTranscript(
@@ -9294,7 +9294,7 @@ export class GatewayService {
     options?: {
       providerId?: string;
       model?: string;
-      guidanceSystemInstruction?: string;
+      guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {

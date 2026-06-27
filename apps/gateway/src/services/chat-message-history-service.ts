@@ -6,6 +6,8 @@ import { buildConversationCompactionSummary, trimNewestContextMessagesForPromptC
 import type { LlmService } from "./llm-service.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 
+type ChatSystemInstructionContent = ChatCompletionRequest["messages"][number]["content"];
+
 const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
@@ -33,7 +35,7 @@ export async function buildLlmMessagesFromTranscript(
   options?: {
     providerId?: string;
     model?: string;
-    guidanceSystemInstruction?: string;
+    guidanceSystemInstruction?: ChatSystemInstructionContent;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -81,11 +83,12 @@ export async function buildLlmMessagesFromTranscript(
       }),
   );
   const messages = await compactTranscriptMessages(deps, sessionId, transcript, mapped, tokenMultiplier);
-  if (options?.guidanceSystemInstruction?.trim()) {
+  const guidanceSystemInstruction = normalizeGuidanceSystemInstruction(options?.guidanceSystemInstruction);
+  if (guidanceSystemInstruction) {
     return [
       {
         role: "system",
-        content: options.guidanceSystemInstruction.trim(),
+        content: guidanceSystemInstruction,
       },
       ...messages,
     ];
@@ -101,7 +104,7 @@ export async function buildLlmMessagesFromBranchPath(
   options?: {
     providerId?: string;
     model?: string;
-    guidanceSystemInstruction?: string;
+    guidanceSystemInstruction?: ChatSystemInstructionContent;
   },
   state?: ChatTurnSessionState,
 ): Promise<ChatCompletionRequest["messages"]> {
@@ -188,7 +191,7 @@ async function buildLlmMessagesFromRecords(
   options?: {
     providerId?: string;
     model?: string;
-    guidanceSystemInstruction?: string;
+    guidanceSystemInstruction?: ChatSystemInstructionContent;
     sessionId?: string;
     branchHeadTurnId?: string;
     branchTurnIds?: string[];
@@ -231,16 +234,44 @@ async function buildLlmMessagesFromRecords(
           tokenMultiplier,
         })
       : mapped;
-  if (!options?.guidanceSystemInstruction?.trim()) {
+  const guidanceSystemInstruction = normalizeGuidanceSystemInstruction(options?.guidanceSystemInstruction);
+  if (!guidanceSystemInstruction) {
     return messages;
   }
   return [
     {
       role: "system",
-      content: options.guidanceSystemInstruction.trim(),
+      content: guidanceSystemInstruction,
     },
     ...messages,
   ];
+}
+
+function normalizeGuidanceSystemInstruction(
+  input: ChatSystemInstructionContent | undefined,
+): ChatSystemInstructionContent | undefined {
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const blocks: Record<string, unknown>[] = [];
+  for (const block of input) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    const text = typeof block.text === "string" ? block.text.trim() : "";
+    if (text) {
+      blocks.push({ ...block, text });
+    }
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 async function compactTranscriptMessages(
