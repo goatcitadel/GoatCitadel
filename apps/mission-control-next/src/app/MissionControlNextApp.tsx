@@ -858,7 +858,8 @@ export function MissionControlNextApp() {
                   aria-label="Open approvals"
                   title="Open approvals"
                 >
-                  {pendingApprovals} approvals
+                  <span className="mc-next-badge-count">{pendingApprovals}</span>
+                  <span className="mc-next-badge-label">approvals</span>
                 </button>
               </div>
               <button

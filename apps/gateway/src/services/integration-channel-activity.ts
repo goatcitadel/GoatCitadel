@@ -1,4 +1,5 @@
 import type { ChannelActivityEffectResult, ChannelActivityInput, IntegrationConnection } from "@goatcitadel/contracts";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import type { IntegrationChannelPort } from "./integration-channel-service.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
@@ -315,7 +316,13 @@ async function postSlackReaction(
     body: JSON.stringify(body),
     signal,
   });
-  const payload = parseJsonRecord(await response.text());
+  const payload = parseJsonRecord(
+    await readBoundedResponseText(response, {
+      maxBytes: 128 * 1024,
+      timeoutMs: 5_000,
+      label: "Slack activity",
+    }),
+  );
   if (options.ignoreMissing && payload.error === "no_reaction") {
     return;
   }
@@ -372,7 +379,11 @@ async function discordReactionRequest(
     signal: input.signal,
   });
   if (!response.ok && !(method === "DELETE" && response.status === 404)) {
-    const bodyText = await response.text();
+    const bodyText = await readBoundedResponseText(response, {
+      maxBytes: 128 * 1024,
+      timeoutMs: 5_000,
+      label: "Discord activity",
+    });
     throw new Error(`discord.activity failed (${response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
 }
@@ -404,7 +415,13 @@ async function setTelegramReaction(
     }),
     signal: input.signal,
   });
-  const payload = parseJsonRecord(await response.text());
+  const payload = parseJsonRecord(
+    await readBoundedResponseText(response, {
+      maxBytes: 128 * 1024,
+      timeoutMs: 5_000,
+      label: "Telegram activity",
+    }),
+  );
   if (!response.ok || payload.ok === false) {
     throw new Error(
       `telegram.activity failed (${response.status})${payload.description ? `: ${payload.description}` : ""}`,
@@ -487,7 +504,11 @@ async function postWhatsAppMessage(
     body: JSON.stringify(payload),
     signal: input.signal,
   });
-  const bodyText = await response.text();
+  const bodyText = await readBoundedResponseText(response, {
+    maxBytes: 128 * 1024,
+    timeoutMs: 5_000,
+    label: "WhatsApp activity",
+  });
   const body = parseJsonRecord(bodyText);
   const errorBody = body.error && typeof body.error === "object" ? (body.error as Record<string, unknown>) : {};
   if (!response.ok || Object.keys(errorBody).length > 0) {

@@ -3,6 +3,7 @@ import type {
   IntegrationActionInvokeResult,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { IntegrationActionHost } from "./integration-action-service.js";
 
 const ACTION_ID = "check_run_status";
@@ -130,7 +131,11 @@ function buildActivepiecesFlowRunStatusUrl(apiBaseUrl: string, workflowRunId: st
 async function parseResponse(
   response: Response,
 ): Promise<{ message?: string; output?: Record<string, unknown> | unknown[] | string }> {
-  const raw = await response.text();
+  const raw = await readBoundedResponseText(response, {
+    maxBytes: 128 * 1024,
+    timeoutMs: 5_000,
+    label: "Activepieces run status",
+  });
   if (!raw.trim()) {
     return {};
   }

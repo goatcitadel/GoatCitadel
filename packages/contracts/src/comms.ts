@@ -115,7 +115,13 @@ export interface ChannelActivityResult {
   effects: ChannelActivityEffectResult[];
 }
 
-export type ChannelDeliveryStatus = "sent" | "retrying" | "degraded" | "blocked" | "not_available";
+export type ChannelDeliveryStatus =
+  | "sent"
+  | "retrying"
+  | "degraded"
+  | "blocked"
+  | "not_available"
+  | "manual_reconciliation_required";
 
 export type ChannelDeliveryChunkingMode = "none" | "unicode_safe";
 

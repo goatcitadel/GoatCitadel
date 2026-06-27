@@ -1,3 +1,5 @@
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
+
 export interface TelegramDiscoveredTarget {
   id: string;
   label: string;
@@ -13,7 +15,11 @@ export async function discoverTelegramTargets(input: {
   fetcher: (url: string, init?: RequestInit) => Promise<Response>;
 }): Promise<TelegramDiscoveredTarget[]> {
   const response = await input.fetcher(`https://api.telegram.org/bot${input.token}/getUpdates`);
-  const payload = (await response.json()) as unknown;
+  const payload = await readBoundedResponseJson(response, {
+    maxBytes: 256 * 1024,
+    timeoutMs: 5_000,
+    label: "Telegram getUpdates",
+  });
   if (response.status < 200 || response.status >= 300 || !isRecord(payload) || payload.ok === false) {
     const description = isRecord(payload) && typeof payload.description === "string" ? payload.description : undefined;
     throw new Error(description ?? `Telegram getUpdates failed with HTTP ${response.status}.`);

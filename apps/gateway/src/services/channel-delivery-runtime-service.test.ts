@@ -430,6 +430,42 @@ describe("ChannelDeliveryRuntimeService", () => {
     );
   });
 
+  it("marks post-boundary ambiguous sends for manual reconciliation without retrying", async () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(async () => {
+        throw new Error(
+          "partial_channel_delivery_sent: 1 of 2 chunks were sent before failure; manual retry required. network timeout",
+        );
+      }),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "telegram",
+      target: "chat-1",
+      payload: { message: "hello", messageParts: ["hello", "world"] },
+    });
+
+    const [failed] = await service.drainDue();
+
+    expect(failed).toMatchObject({
+      deliveryId: queued.deliveryId,
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      attempts: 1,
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      queued.deliveryId,
+      "partial_channel_delivery_sent: 1 of 2 chunks were sent before failure; manual retry required. network timeout",
+      "2026-05-05T00:00:00.000Z",
+      "manual_reconciliation_required",
+      undefined,
+    );
+  });
+
   it("marks retryable delivery failures final when max attempts are exhausted", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
@@ -702,7 +738,12 @@ describe("ChannelDeliveryRuntimeService", () => {
   it("classifies channel delivery failures for operator-facing fallback labels", () => {
     expect(classifyChannelDeliveryFailure("HTTP 429 temporarily unavailable")).toBe("degraded");
     expect(classifyChannelDeliveryFailure("permission denied")).toBe("blocked");
-    expect(classifyChannelDeliveryFailure("partial_channel_delivery_sent: manual retry required")).toBe("blocked");
+    expect(classifyChannelDeliveryFailure("partial_channel_delivery_sent: manual retry required")).toBe(
+      "manual_reconciliation_required",
+    );
+    expect(classifyChannelDeliveryFailure("unknown_external_outcome after provider send")).toBe(
+      "manual_reconciliation_required",
+    );
     expect(classifyChannelDeliveryFailure("missing webhook url")).toBe("not_available");
     expect(classifyChannelDeliveryFailure("connector does not support attachments")).toBe("not_available");
     expect(classifyChannelDeliveryFailure("unexpected provider error")).toBe("degraded");

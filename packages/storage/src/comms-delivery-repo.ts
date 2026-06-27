@@ -352,7 +352,12 @@ function parsePayload(value: string | null): Record<string, unknown> | undefined
 
 function isCommsDeliveryStatus(value: string | null): value is NonNullable<CommsSendResult["deliveryStatus"]> {
   return (
-    value === "sent" || value === "retrying" || value === "degraded" || value === "blocked" || value === "not_available"
+    value === "sent" ||
+    value === "retrying" ||
+    value === "degraded" ||
+    value === "blocked" ||
+    value === "not_available" ||
+    value === "manual_reconciliation_required"
   );
 }
 

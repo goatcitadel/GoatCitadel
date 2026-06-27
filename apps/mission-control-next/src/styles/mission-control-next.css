@@ -888,6 +888,9 @@
 
 .mc-next-badge-button {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
   cursor: pointer;
   font: inherit;
   flex: 0 0 auto;
@@ -2362,6 +2365,18 @@
 
   .mc-next-topbar-status {
     gap: 0.24rem;
+    min-width: 0;
+  }
+
+  .mc-next-topbar-status .mc-next-badge-button {
+    width: 1.65rem;
+    min-width: 1.65rem;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .mc-next-topbar-status .mc-next-badge-label {
+    display: none;
   }
 
   .mc-next-topbar-right > button.mc-next-start-button,

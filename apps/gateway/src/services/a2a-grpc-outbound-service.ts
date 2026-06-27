@@ -10,6 +10,7 @@ import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { buildOutboundHeaders, hashStableJson } from "./a2a-route-utils.js";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -121,9 +122,13 @@ async function discoverOutboundGrpcUrl(
     if (!response.ok) {
       throw new Error(`A2A Agent Card discovery returned HTTP ${response.status}.`);
     }
-    const card = (await response.json()) as {
+    const card = await readBoundedResponseJson<{
       supportedInterfaces?: Array<{ protocolBinding?: string; enabled?: boolean; url?: string }>;
-    };
+    }>(response, {
+      maxBytes: 256 * 1024,
+      timeoutMs: 5_000,
+      label: "A2A Agent Card",
+    });
     const grpc = card.supportedInterfaces?.find(
       (item) => item.protocolBinding === "GRPC" && item.enabled !== false && item.url,
     );

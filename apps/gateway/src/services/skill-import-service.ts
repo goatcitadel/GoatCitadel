@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import AdmZip from "adm-zip";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
+import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
 import {
@@ -1226,7 +1227,11 @@ export class SkillImportService {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const html = await response.text();
+      const html = await readBoundedResponseText(response, {
+        maxBytes: 512 * 1024,
+        timeoutMs: 9_000,
+        label: `${providerLabel} listing`,
+      });
       const items = extractMarketplaceLinks(provider, html)
         .map((url) => ({
           sourceProvider: provider,
@@ -2316,7 +2321,11 @@ async function resolveMarketplaceUpstream(sourceUrl: string): Promise<string | u
     if (!response.ok) {
       return undefined;
     }
-    const html = await response.text();
+    const html = await readBoundedResponseText(response, {
+      maxBytes: 512 * 1024,
+      timeoutMs: 9_000,
+      label: "Skill marketplace listing",
+    });
     const match = html.match(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/tree\/[^\s"'<>]+)?/i);
     return match?.[0];
   } catch {
@@ -2369,7 +2378,11 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
         }
         continue;
       }
-      const content = await response.text();
+      const content = await readBoundedResponseText(response, {
+        maxBytes: 512 * 1024,
+        timeoutMs: 9_000,
+        label: `Hosted skill bundle ${file.localName}`,
+      });
       await fs.writeFile(path.join(targetDir, file.localName), content, "utf8");
       if (file.required) {
         primaryFetched = true;
@@ -2422,7 +2435,13 @@ async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDi
     if (!response.ok) {
       throw new Error(`Failed to fetch hosted skill bundle asset ${normalized}: HTTP ${response.status}`);
     }
-    const content = Buffer.from(await response.arrayBuffer());
+    const content = Buffer.from(
+      await readBoundedResponseBytes(response, {
+        maxBytes: 2 * 1024 * 1024,
+        timeoutMs: 9_000,
+        label: `Hosted skill bundle asset ${normalized}`,
+      }),
+    );
     const targetPath = path.join(targetDir, ...normalized.split("/"));
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, content);

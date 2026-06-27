@@ -178,9 +178,9 @@
   }
 
   .mc-next-threaded-mobile-bar {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.6rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 0.45rem;
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-rail {

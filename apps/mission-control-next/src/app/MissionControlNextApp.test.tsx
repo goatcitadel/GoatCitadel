@@ -420,6 +420,7 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(".mc-next-topbar-more-menu {");
     expect(css).toContain("z-index: var(--z-dropdown);");
     expect(css).toContain("@media (max-width: 1180px) {");
+    expect(css).toContain(".mc-next-topbar-status .mc-next-badge-label {\n    display: none;");
     // Guardrail: the restored quick-glance status cluster (release scope /
     // degraded-realtime / approvals) must never be silently re-hidden.
     expect(css).not.toContain(".mc-next-topbar-status {\n  display: none;");

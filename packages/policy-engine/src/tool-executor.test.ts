@@ -173,7 +173,15 @@ describe("executeTool", () => {
         content: "deploy the gateway",
         timestamp: "2026-06-01T00:00:00.000Z",
         score: -1.2,
-        context: [{ messageId: "m1", role: "user", content: "deploy the gateway", timestamp: "2026-06-01T00:00:00.000Z", isHit: true }],
+        context: [
+          {
+            messageId: "m1",
+            role: "user",
+            content: "deploy the gateway",
+            timestamp: "2026-06-01T00:00:00.000Z",
+            isHit: true,
+          },
+        ],
       },
     ]);
     const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
@@ -5296,6 +5304,18 @@ describe("executeTool", () => {
 
     const gitDiffResult = await executeTool(toolRequest("git.diff", { staged: false }), policyConfig, storageStub);
     expect(gitDiffResult).toMatchObject({ staged: false, truncated: expect.any(Boolean) });
+  });
+
+  it("treats no-op filesystem writes as terminal tool failures with guidance", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const writePath = path.join(testWorkspaceRoot, "plain", "no-op-write.txt");
+    await fs.mkdir(path.dirname(writePath), { recursive: true });
+    await fs.writeFile(writePath, "already here", "utf8");
+
+    await expect(
+      executeTool(toolRequest("fs.write", { path: writePath, content: "already here" }), policyConfig, storageStub),
+    ).rejects.toThrow(/fs\.write made no changes/);
   });
 
   it("covers HTTP POST execution and sanitizes leaked tool output", async () => {

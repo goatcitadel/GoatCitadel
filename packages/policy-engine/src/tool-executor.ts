@@ -489,9 +489,30 @@ async function fsWrite(args: Record<string, unknown>, config: ToolPolicyConfig) 
   const content = String(args.content ?? "");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
   const full = path.resolve(p);
+  const existing = await readExistingUtf8File(full);
+  if (existing === content) {
+    throw new Error(
+      `fs.write made no changes to ${full}. The target already contains identical content; inspect the file or provide a concrete changed edit.`,
+    );
+  }
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, content, "utf8");
   return { path: full, bytesWritten: content.length };
+}
+
+async function readExistingUtf8File(full: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(full, "utf8");
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === code;
 }
 
 async function fsList(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
@@ -1413,7 +1434,9 @@ function normalizeEmbeddingProfileRequest(value: unknown): MemoryEmbeddingProfil
   const modelId = asString(input.modelId);
   const profileId = asString(input.profileId);
   const dimensions =
-    typeof input.dimensions === "number" && Number.isFinite(input.dimensions) ? Math.floor(input.dimensions) : undefined;
+    typeof input.dimensions === "number" && Number.isFinite(input.dimensions)
+      ? Math.floor(input.dimensions)
+      : undefined;
   if (!provider && !modelId && !profileId && dimensions === undefined) {
     return undefined;
   }
@@ -5539,6 +5562,14 @@ async function signalRpcRequest<T>(
   return body.result as T;
 }
 
+function safeJsonParse<T>(body: string, fallback: T): T {
+  try {
+    return body ? (JSON.parse(body) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 async function gmailRead(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -5565,7 +5596,7 @@ async function gmailRead(
   if (!res.response.ok) {
     throw new Error(`gmail.read failed (${res.response.status})`);
   }
-  return (JSON.parse(body) as { messages?: unknown[] }).messages ?? [];
+  return safeJsonParse<{ messages?: unknown[] }>(body, {}).messages ?? [];
 }
 
 async function gmailSend(
@@ -5607,7 +5638,7 @@ async function gmailSend(
   if (!res.response.ok) {
     throw new Error(`gmail.send failed (${res.response.status})`);
   }
-  return (JSON.parse(body) as { id?: string }).id ?? `gmail-${Date.now()}`;
+  return safeJsonParse<{ id?: string }>(body, {}).id ?? `gmail-${Date.now()}`;
 }
 
 async function calendarList(
@@ -5638,7 +5669,7 @@ async function calendarList(
   if (!res.response.ok) {
     throw new Error(`calendar.list failed (${res.response.status})`);
   }
-  return (JSON.parse(body) as { items?: unknown[] }).items ?? [];
+  return safeJsonParse<{ items?: unknown[] }>(body, {}).items ?? [];
 }
 
 async function calendarCreate(
@@ -5674,7 +5705,7 @@ async function calendarCreate(
   if (!res.response.ok) {
     throw new Error(`calendar.create_event failed (${res.response.status})`);
   }
-  return (JSON.parse(body) as { id?: string }).id ?? `calendar-${Date.now()}`;
+  return safeJsonParse<{ id?: string }>(body, {}).id ?? `calendar-${Date.now()}`;
 }
 
 async function fetchAllowlisted(

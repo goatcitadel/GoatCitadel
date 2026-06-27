@@ -121,7 +121,9 @@ export function AgenticRuntimeVisibilityPanel({
                       {" -> "}
                       {delivery.target}
                     </strong>
-                    <StatusChip tone={deliveryStatusTone(delivery.status)}>{delivery.status}</StatusChip>
+                    <StatusChip tone={deliveryStatusTone(delivery.status)}>
+                      {formatDeliveryStatus(delivery.status)}
+                    </StatusChip>
                   </div>
                   <p className="chat-cowork-step-meta">
                     Attempts {delivery.attempts}/{delivery.maxAttempts}
@@ -239,6 +241,11 @@ function runtimeStatusTone(status: AgenticCapabilityAvailabilityStatus, callable
 function deliveryStatusTone(status: AgenticChannelDeliveryRuntimeRecord["status"]): StatusTone {
   if (status === "sent") return "success";
   if (status === "failed" || status === "stale") return "critical";
+  if (status === "manual_reconciliation_required") return "warning";
   if (status === "queued" || status === "retrying" || status === "running") return "warning";
   return "muted";
+}
+
+function formatDeliveryStatus(status: AgenticChannelDeliveryRuntimeRecord["status"]): string {
+  return status === "manual_reconciliation_required" ? "manual reconciliation" : status;
 }

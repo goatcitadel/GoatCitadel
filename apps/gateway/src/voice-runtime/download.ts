@@ -5,6 +5,10 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
 import AdmZip from "adm-zip";
+import { readBoundedResponseBytes } from "../services/bounded-response-reader.js";
+
+const MAX_VOICE_RUNTIME_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const VOICE_RUNTIME_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function downloadFile(url: string, destinationPath: string, expectedSha256: string): Promise<void> {
   const response = await fetch(url, {
@@ -15,8 +19,13 @@ export async function downloadFile(url: string, destinationPath: string, expecte
   if (!response.ok) {
     throw new Error(`Download failed (${response.status} ${response.statusText}) for ${url}`);
   }
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  const buffer = Buffer.from(
+    await readBoundedResponseBytes(response, {
+      maxBytes: MAX_VOICE_RUNTIME_DOWNLOAD_BYTES,
+      timeoutMs: VOICE_RUNTIME_DOWNLOAD_TIMEOUT_MS,
+      label: "Voice runtime download",
+    }),
+  );
   const sha256 = createHash("sha256").update(buffer).digest("hex");
   if (sha256 !== expectedSha256) {
     throw new Error(

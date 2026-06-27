@@ -8,6 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { invokeActivepiecesRunStatusAction } from "./activepieces-run-status-action.js";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import {
   buildExternalSideEffectReplayOutput,
   type ExternalSideEffectRunStore,
@@ -887,10 +888,12 @@ function joinUrl(baseUrl: string, suffix: string): string {
 async function parseResponse(
   response: Response,
 ): Promise<{ message?: string; output?: Record<string, unknown> | unknown[] | string }> {
-  const raw = await response.text();
-  if (!raw.trim()) {
-    return {};
-  }
+  const raw = await readBoundedResponseText(response, {
+    maxBytes: 256 * 1024,
+    timeoutMs: 5_000,
+    label: "integration action response",
+  });
+  if (!raw.trim()) return {};
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isRecord(parsed)) {

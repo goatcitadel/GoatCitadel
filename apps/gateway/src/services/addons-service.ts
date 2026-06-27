@@ -14,6 +14,7 @@ import type {
   AddonUninstallResponse,
 } from "@goatcitadel/contracts";
 import { AddonSlotService } from "./addon-slot-service.js";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 
 export interface AddonsServiceOptions {
   slotService?: AddonSlotService;
@@ -698,7 +699,13 @@ async function readArenaHealth(url: string, timeoutMs: number): Promise<ArenaHea
     if (!response.ok) {
       return null;
     }
-    const payload = ArenaHealthPayloadSchema.safeParse(await response.json());
+    const payload = ArenaHealthPayloadSchema.safeParse(
+      await readBoundedResponseJson(response, {
+        maxBytes: 32 * 1024,
+        timeoutMs,
+        label: "Arena health",
+      }),
+    );
     if (!payload.success) {
       return null;
     }

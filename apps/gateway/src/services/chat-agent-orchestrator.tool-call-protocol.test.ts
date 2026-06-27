@@ -178,6 +178,66 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
     expect(result.assistantContent).toContain("stopped before executing tools");
   });
 
+  it("does not repair or execute tool calls from length-truncated provider turns", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "length",
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-truncated-docs",
+                  type: "function",
+                  function: { name: "docs_search", arguments: '{"query":"onboarding' },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-truncated-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-truncated-1",
+      content: "Find onboarding notes.",
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Find onboarding notes." }],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.completion).toMatchObject({
+      status: "interrupted",
+      finishReason: "length",
+      repaired: false,
+    });
+    expect(result.turnTrace.failure).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("tool calls were fully assembled"),
+        recommendedAction: "continue_from_partial",
+      }),
+    );
+  });
+
   it("P0-C: repairs a fuzzed tool name and executes the corrected call", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
@@ -204,7 +264,10 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
-          { index: 0, message: { role: "assistant", content: "The onboarding checklist covers accounts and hardware." } },
+          {
+            index: 0,
+            message: { role: "assistant", content: "The onboarding checklist covers accounts and hardware." },
+          },
         ],
       });
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
@@ -239,7 +302,10 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
     // The fuzzed name resolved to the canonical tool and executed.
     expect(invokeTool).toHaveBeenCalledTimes(1);
     expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "docs.search", args: expect.objectContaining({ query: "onboarding checklist" }) }),
+      expect.objectContaining({
+        toolName: "docs.search",
+        args: expect.objectContaining({ query: "onboarding checklist" }),
+      }),
     );
     expect(result.assistantContent).toContain("onboarding checklist covers accounts");
     // The repair is recorded honestly on the completion record.
@@ -252,7 +318,7 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
   });
 
   it("P0-C: salvages fenced + smart-quoted JSON arguments before executing", async () => {
-    const fencedArgs = '```json\n{ “query”: “quarterly report”, }\n```';
+    const fencedArgs = "```json\n{ “query”: “quarterly report”, }\n```";
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce({
@@ -513,8 +579,7 @@ describe("ChatAgentOrchestrator tool-call message protocol", () => {
       -1,
     );
     const synthesisInstructionIndex = secondRequestMessages.findIndex(
-      (message) =>
-        message.role === "system" && /tool budget|checkpoint/i.test(String(message.content)),
+      (message) => message.role === "system" && /tool budget|checkpoint/i.test(String(message.content)),
     );
     expect(synthesisInstructionIndex).toBeGreaterThan(lastToolResultIndex);
   });

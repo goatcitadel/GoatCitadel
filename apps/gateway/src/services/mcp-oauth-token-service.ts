@@ -1,5 +1,6 @@
 import type { McpOAuthConfig, McpOAuthReadiness, McpServerRecord } from "@goatcitadel/contracts";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
@@ -139,7 +140,11 @@ export class McpOAuthTokenService {
     if (!response.ok) {
       throw new Error(`MCP OAuth token endpoint for ${server.label} returned HTTP ${response.status}.`);
     }
-    const parsed = (await response.json()) as TokenResponse;
+    const parsed = await readBoundedResponseJson<TokenResponse>(response, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 5_000,
+      label: "MCP OAuth token",
+    });
     if (!parsed.access_token?.trim()) {
       throw new Error(`MCP OAuth token endpoint for ${server.label} did not return an access token.`);
     }

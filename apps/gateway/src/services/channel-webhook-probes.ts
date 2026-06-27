@@ -3,6 +3,7 @@ import type {
   ChannelSetupFailureCategory,
   ConnectorDiagnosticReport,
 } from "@goatcitadel/contracts";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 
 type WebhookChannelKey = "google-chat" | "teams";
 
@@ -179,7 +180,13 @@ function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: stri
 }
 
 async function readWebhookProbeDetail(response: Response): Promise<string | undefined> {
-  const text = (await response.text()).trim();
+  const text = (
+    await readBoundedResponseText(response, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 5_000,
+      label: "channel webhook probe",
+    })
+  ).trim();
   if (!text) {
     return undefined;
   }

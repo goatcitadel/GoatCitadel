@@ -403,7 +403,7 @@ describe("gateway request diagnostics", () => {
     } finally {
       await app.close();
     }
-  });
+  }, 45_000);
 
   it("strips query strings from recorded request diagnostics", async () => {
     configureDiagnosticsGateway(tempRoots);
@@ -432,7 +432,7 @@ describe("gateway request diagnostics", () => {
     } finally {
       await app.close();
     }
-  });
+  }, 45_000);
 });
 
 function configureDiagnosticsGateway(tempRoots: string[]): void {

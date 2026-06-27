@@ -6,6 +6,7 @@ import {
   SecretStoreUnavailableError,
   isSecretStoreUnavailableLikeError,
 } from "./secret-store-service.js";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
@@ -421,7 +422,11 @@ export class OpenAICodexOAuthService {
       body: params,
       redirect: "manual",
     });
-    const bodyText = await response.text();
+    const bodyText = await readBoundedResponseText(response, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 5_000,
+      label: "OpenAI Codex OAuth",
+    });
     if (!response.ok) {
       throw new Error(formatOpenAIAuthError(prefix, response, bodyText));
     }

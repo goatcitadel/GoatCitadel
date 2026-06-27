@@ -7,6 +7,7 @@ import type {
   DiscordRuntimeMode,
   DiscordRuntimeStatus,
 } from "@goatcitadel/contracts";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 
 type BotProbeChecks = { checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport };
 
@@ -1412,7 +1413,11 @@ function mapProbeStepsToChecks(steps: ChannelProbeReport["steps"]): ConnectorDia
 }
 
 async function readJsonResponse(response: Response): Promise<ProbeResponse> {
-  const text = await response.text();
+  const text = await readBoundedResponseText(response, {
+    maxBytes: 128 * 1024,
+    timeoutMs: 5_000,
+    label: "channel bot probe",
+  });
   const payload = parseJsonRecord(text);
   return {
     status: response.status,
@@ -1424,7 +1429,11 @@ async function readJsonResponse(response: Response): Promise<ProbeResponse> {
 async function readJsonValueResponse(
   response: Response,
 ): Promise<{ status: number; detail?: string; payload: unknown }> {
-  const text = await response.text();
+  const text = await readBoundedResponseText(response, {
+    maxBytes: 128 * 1024,
+    timeoutMs: 5_000,
+    label: "channel bot probe",
+  });
   const payload = parseJsonValue(text);
   return {
     status: response.status,

@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 
 const DEFAULT_SLACK_SCOPES = [
   "chat:write",
@@ -146,7 +147,11 @@ export async function exchangeSlackOAuthCode(input: {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  const payload = (await response.json()) as SlackOAuthTokenPayload;
+  const payload = await readBoundedResponseJson<SlackOAuthTokenPayload>(response, {
+    maxBytes: 64 * 1024,
+    timeoutMs: 5_000,
+    label: "Slack OAuth",
+  });
   if (response.status < 200 || response.status >= 300 || payload.ok === false) {
     throw new Error(
       payload.error ? `Slack OAuth failed: ${payload.error}` : `Slack OAuth failed with HTTP ${response.status}.`,

@@ -39,6 +39,7 @@ import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2APushNotificationService } from "./a2a-push-notification-service.js";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import {
   buildInboundIdempotencyKey,
   buildOutboundHeaders,
@@ -554,7 +555,11 @@ export class A2ARouteService {
             body: JSON.stringify(preview.envelope),
           },
         });
-        const payload = (await response.json().catch(() => undefined)) as unknown;
+        const payload = await readBoundedResponseJson(response, {
+          maxBytes: 256 * 1024,
+          timeoutMs: 5_000,
+          label: "A2A JSON-RPC response",
+        });
         if (!response.ok) {
           throw new Error(`A2A peer returned HTTP ${response.status}.`);
         }
@@ -925,9 +930,13 @@ export class A2ARouteService {
     if (!response.ok) {
       throw new Error(`A2A Agent Card discovery returned HTTP ${response.status}.`);
     }
-    const card = (await response.json()) as {
+    const card = await readBoundedResponseJson<{
       supportedInterfaces?: Array<{ protocolBinding?: string; enabled?: boolean; url?: string }>;
-    };
+    }>(response, {
+      maxBytes: 256 * 1024,
+      timeoutMs: 5_000,
+      label: "A2A Agent Card",
+    });
     const jsonRpc = card.supportedInterfaces?.find(
       (item) => item.protocolBinding === "JSONRPC" && item.enabled !== false && item.url,
     );

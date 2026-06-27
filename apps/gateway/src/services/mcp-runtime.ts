@@ -11,6 +11,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
 
 const log = logger.child("mcp-runtime");
@@ -1120,37 +1121,11 @@ function parseSseJsonRpcMessages(body: string): JsonRpcEnvelope[] {
 }
 
 async function readHttpResponseText(response: Response, maxBytes: number, timeoutMs: number): Promise<string> {
-  assertHttpResponseBodyWithinLimit(response, maxBytes);
-  if (!response.body) {
-    const body = await withTimeout(response.text(), timeoutMs);
-    if (Buffer.byteLength(body, "utf8") > maxBytes) {
-      throw createMcpHttpBodyLimitError(maxBytes);
-    }
-    return body;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const deadlineMs = Date.now() + timeoutMs;
-  let receivedBytes = 0;
-  let body = "";
-  try {
-    while (true) {
-      const chunk = await readBodyChunkWithDeadline(reader, deadlineMs);
-      if (chunk.done) {
-        body += decoder.decode();
-        return body;
-      }
-      receivedBytes += chunk.value.byteLength;
-      if (receivedBytes > maxBytes) {
-        await cancelBodyReader(reader);
-        throw createMcpHttpBodyLimitError(maxBytes);
-      }
-      body += decoder.decode(chunk.value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  return readBoundedResponseText(response, {
+    maxBytes,
+    timeoutMs,
+    label: "MCP HTTP",
+  });
 }
 
 function assertHttpResponseBodyWithinLimit(response: Response, maxBytes: number): void {
@@ -1182,22 +1157,6 @@ async function readBodyChunkWithDeadline(
           void cancelBodyReader(reader);
           reject(createMcpHttpBodyTimeoutError());
         }, remainingMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(createMcpHttpBodyTimeoutError()), timeoutMs);
       }),
     ]);
   } finally {

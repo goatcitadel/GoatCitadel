@@ -42,7 +42,14 @@ export interface AgenticRunsResponse {
   nextCursor?: string;
 }
 
-export type AgenticChannelDeliveryRuntimeStatus = "queued" | "running" | "retrying" | "sent" | "failed" | "stale";
+export type AgenticChannelDeliveryRuntimeStatus =
+  | "queued"
+  | "running"
+  | "retrying"
+  | "sent"
+  | "failed"
+  | "stale"
+  | "manual_reconciliation_required";
 
 export interface AgenticChannelDeliveryRuntimeRecord {
   deliveryId: string;

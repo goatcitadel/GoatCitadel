@@ -1,4 +1,5 @@
 import type { ChannelTypingResult } from "@goatcitadel/contracts";
+import { BoundedResponseReadError, readBoundedResponseJson } from "./bounded-response-reader.js";
 
 type TelegramTypingRequest = {
   connectionId: string;
@@ -25,7 +26,7 @@ export async function sendTelegramTypingIndicator(input: TelegramTypingRequest):
     }),
     signal: input.signal,
   });
-  const payload = parseJsonRecord(await response.text());
+  const payload = await readTelegramTypingPayload(response);
   if (!response.ok || payload.ok === false) {
     throw new Error(
       `telegram.typing failed (${response.status})${payload.description ? `: ${payload.description}` : ""}`,
@@ -65,13 +66,17 @@ function parseOptionalPositiveInt(value: unknown): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function parseJsonRecord(raw: string): Record<string, unknown> {
-  if (!raw.trim()) {
-    return {};
-  }
+async function readTelegramTypingPayload(response: Response): Promise<Record<string, unknown>> {
   try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
+    return await readBoundedResponseJson<Record<string, unknown>>(response, {
+      maxBytes: 64 * 1024,
+      timeoutMs: 5_000,
+      label: "Telegram typing",
+    });
+  } catch (error) {
+    if (error instanceof BoundedResponseReadError && (error.code === "body_parse" || error.code === "body_missing")) {
+      return {};
+    }
+    throw error;
   }
 }

@@ -175,18 +175,21 @@ describe("llama.cpp runtime helpers", () => {
     const fetch = vi.fn(async (url: URL | string) => {
       const target = String(url);
       if (target.endsWith("/health")) {
+        const payload = { model_alias: "health-alias" };
         return {
           ok: true,
           headers: new Headers({ "content-type": "application/json" }),
-          json: async () => ({ model_alias: "health-alias" }),
-          text: async () => "",
+          json: async () => payload,
+          text: async () => JSON.stringify(payload),
         } as Response;
       }
       if (target.endsWith("/v1/models")) {
+        const payload = { data: [{ id: "remote-ready", object: "model", created: 1, owned_by: "local" }] };
         return {
           ok: true,
           headers: new Headers({ "content-type": "application/json" }),
-          json: async () => ({ data: [{ id: "remote-ready", object: "model", created: 1, owned_by: "local" }] }),
+          json: async () => payload,
+          text: async () => JSON.stringify(payload),
         } as Response;
       }
       throw new Error(`Unexpected fetch ${target}`);

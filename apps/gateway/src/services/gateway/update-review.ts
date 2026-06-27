@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readBoundedResponseText } from "../bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "../security-utils.js";
 
 const execFileAsync = promisify(execFile);
@@ -287,7 +288,11 @@ export async function collectVendorChangelogDrift(
         continue;
       }
 
-      const body = await response.text();
+      const body = await readBoundedResponseText(response, {
+        maxBytes: 512 * 1024,
+        timeoutMs: 10_000,
+        label: `${source.sourceId} changelog`,
+      });
       const parsed = source.parser(body, response.headers);
       if (!parsed) {
         const message = "Unable to parse the latest changelog entry from the upstream source.";

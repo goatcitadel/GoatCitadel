@@ -12,7 +12,14 @@ import {
   type ChannelRichMessageDeliveryPlan,
 } from "@goatcitadel/gateway-core";
 
-export type ChannelDeliveryRuntimeStatus = "queued" | "running" | "retrying" | "sent" | "failed" | "stale";
+export type ChannelDeliveryRuntimeStatus =
+  | "queued"
+  | "running"
+  | "retrying"
+  | "sent"
+  | "failed"
+  | "stale"
+  | "manual_reconciliation_required";
 
 export interface ChannelDeliveryRuntimeRecord {
   deliveryId: string;
@@ -401,7 +408,12 @@ export class ChannelDeliveryRuntimeService {
     error: string,
     now: string,
   ): void {
-    delivery.record.status = deliveryStatus === "stale" ? "stale" : "failed";
+    delivery.record.status =
+      deliveryStatus === "stale"
+        ? "stale"
+        : deliveryStatus === "manual_reconciliation_required"
+          ? "manual_reconciliation_required"
+          : "failed";
     delivery.record.deliveryStatus = deliveryStatus === "stale" ? "degraded" : deliveryStatus;
     delivery.record.error = error;
     delivery.record.staleReason = deliveryStatus === "stale" ? error : undefined;
@@ -427,6 +439,20 @@ export class ChannelDeliveryRuntimeService {
 
 export function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {
   const normalized = message.toLowerCase();
+  if (
+    [
+      "partial_channel_delivery_sent",
+      "unknown_after_send",
+      "unknown external outcome",
+      "unknown_external_outcome",
+      "manual reconciliation",
+      "manual_reconciliation_required",
+      "may have been sent",
+      "external boundary may have been crossed",
+    ].some((term) => normalized.includes(term))
+  ) {
+    return "manual_reconciliation_required";
+  }
   if (
     ["408", "429", "502", "503", "504", "timeout", "temporarily", "network"].some((term) => normalized.includes(term))
   ) {
@@ -469,6 +495,9 @@ function mapPersistedStatus(
     return "sent";
   }
   if (status === "failed") {
+    if (deliveryStatus === "manual_reconciliation_required") {
+      return "manual_reconciliation_required";
+    }
     return "failed";
   }
   return deliveryStatus === "retrying" ? "retrying" : "queued";

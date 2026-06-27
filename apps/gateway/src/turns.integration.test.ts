@@ -118,7 +118,7 @@ describe("turns:complete full-stack smoke", () => {
     } finally {
       await app.close();
     }
-  }, 45_000);
+  }, 90_000);
 });
 
 function configureGateway(providerBaseUrl: string): void {

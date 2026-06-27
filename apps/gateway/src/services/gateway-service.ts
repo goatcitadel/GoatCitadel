@@ -2772,9 +2772,11 @@ export class GatewayService {
       (item) =>
         item.deliveryStatus === "blocked" ||
         item.deliveryStatus === "not_available" ||
-        item.deliveryStatus === "degraded",
+        item.deliveryStatus === "degraded" ||
+        item.deliveryStatus === "manual_reconciliation_required",
     );
     const retrying = deliveries.filter((item) => item.deliveryStatus === "retrying");
+    const manual = deliveries.filter((item) => item.deliveryStatus === "manual_reconciliation_required");
     const status = blocked.length > 0 ? "error" : retrying.length > 0 ? "warning" : "ok";
     return {
       status,
@@ -2782,9 +2784,10 @@ export class GatewayService {
       summary:
         status === "ok"
           ? "Channel delivery queue is clear."
-          : `${blocked.length} blocked/degraded and ${retrying.length} retrying channel delivery item(s).`,
+          : `${blocked.length} blocked/degraded/manual-reconciliation and ${retrying.length} retrying channel delivery item(s).`,
       details: {
         blockedCount: blocked.length,
+        manualReconciliationCount: manual.length,
         retryingCount: retrying.length,
         sampleDeliveryIds: [...blocked, ...retrying].slice(0, 10).map((item) => item.deliveryId),
       },
@@ -10774,6 +10777,9 @@ function mapPersistedChannelDeliveryRuntimeStatus(
     return "sent";
   }
   if (status === "failed") {
+    if (deliveryStatus === "manual_reconciliation_required") {
+      return "manual_reconciliation_required";
+    }
     return "failed";
   }
   return deliveryStatus === "retrying" ? "retrying" : "queued";

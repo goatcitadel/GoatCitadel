@@ -17,6 +17,7 @@ import {
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 const DEFAULT_HOOK_DELIVERY_RETRY_POLICY = {
@@ -521,7 +522,11 @@ export class HooksService {
         body,
         signal: controller.signal,
       });
-      const raw = await response.text();
+      const raw = await readBoundedResponseText(response, {
+        maxBytes: 256 * 1024,
+        timeoutMs: hook.timeoutMs,
+        label: "hook webhook",
+      });
       const parsed = raw.trim() ? safeJsonParse(raw) : {};
       if (!response.ok) {
         throw new Error(`Hook webhook responded with ${response.status}${raw ? `: ${raw}` : ""}`);

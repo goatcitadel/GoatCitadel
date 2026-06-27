@@ -18,6 +18,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { coerceHttpContentLength } from "@goatcitadel/contracts";
 import type { LlamaCppConfig } from "../config.js";
+import { readBoundedResponseJson, readBoundedResponseText } from "./bounded-response-reader.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_LLAMACPP_ALIAS = "gemma-4-local";
@@ -343,10 +344,14 @@ export class LlamaCppRuntimeService {
     if (!response.ok) {
       throw new Error(`llama.cpp model listing failed (${response.status})`);
     }
-    const payload = (await response.json()) as {
+    const payload = await readBoundedResponseJson<{
       data?: Array<Record<string, unknown>>;
       models?: Array<Record<string, unknown>>;
-    };
+    }>(response, {
+      maxBytes: 512 * 1024,
+      timeoutMs: this.options.config.server.requestTimeoutMs,
+      label: "llama.cpp models",
+    });
     const items = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
     return items
       .map((item) => ({
@@ -648,12 +653,20 @@ export class LlamaCppRuntimeService {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     let activeModelId = normalizeOptionalText(this.options.config.launch.alias);
     if (contentType.includes("json")) {
-      const payload = (await response.json()) as Record<string, unknown>;
+      const payload = await readBoundedResponseJson<Record<string, unknown>>(response, {
+        maxBytes: 128 * 1024,
+        timeoutMs: this.options.config.server.requestTimeoutMs,
+        label: "llama.cpp health",
+      });
       const modelAlias = typeof payload["model_alias"] === "string" ? payload["model_alias"] : undefined;
       const modelName = typeof payload["model"] === "string" ? payload["model"] : undefined;
       activeModelId = normalizeOptionalText(modelAlias) ?? normalizeOptionalText(modelName) ?? activeModelId;
     } else {
-      await response.text();
+      await readBoundedResponseText(response, {
+        maxBytes: 128 * 1024,
+        timeoutMs: this.options.config.server.requestTimeoutMs,
+        label: "llama.cpp health",
+      });
     }
 
     try {
