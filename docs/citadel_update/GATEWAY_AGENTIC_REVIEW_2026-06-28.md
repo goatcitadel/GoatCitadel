@@ -22,6 +22,13 @@ Four structural divergences explain ~all of the "slow and weak" feel. All verifi
 
 ---
 
+## Update (2026-06-28, post side-chat live-repo review)
+
+A parallel side-chat review of the live repos corroborated and **sharpened** this analysis. The canonical, reconciled action plan now lives in **[AGENTIC_FAST_LANE_PLAN.md](AGENTIC_FAST_LANE_PLAN.md)** (use that for execution; this doc remains the analysis of record). Two changes:
+
+1. **Cowork-streaming correction (verified).** Divergence #1 below is broader than the 200ms poll. The real cowork headline is **S1: cowork/code turns don't stream at all** — `chat-turn-stream-service.ts:1402` `await orchestrationResultPromise` then delivers `finalOutput` as a finished string (`:1405,1430-1441`); only `trace_update` progress events stream meanwhile, so TTFT ≈ whole turn. The shipped P0‑#1 (notify-on-append) removes the poll on the chat path but does **not** make cowork stream — S1 (stream the terminal orchestration step) is the open #1 win.
+2. **Shipped:** P0‑#1 (kill the 200ms poll) and P0‑#2 (in-prompt tool/skill catalog) are done on branch `feat/agentic-fast-lane-p0`. New findings folded into the plan: durable-wrapping short turns (S6), per-iteration trace-receipt cost (S5), regex-digest compaction, depth gated on mode, no real sub-agent fan-out, skill self-authoring dead-ends.
+
 ## Part 0 — What's good now (keep, don't churn)
 
 - **System-prompt content is strong** — identity, anti-fabrication, tool-first doctrine, output bar, real mode differentiation (`base-agent-system-prompt.ts:83-142`). The #1 gap from last time is genuinely fixed.
