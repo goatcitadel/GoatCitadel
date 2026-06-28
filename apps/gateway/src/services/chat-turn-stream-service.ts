@@ -15,6 +15,7 @@ import type {
   ChatOrchestrationSummary,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
+  ChatStreamChunk,
   ChatStreamChunkDraft,
   ChatSpecialistCandidateSuggestionRecord,
   ChatSessionCreateInput,
@@ -143,6 +144,12 @@ export interface ChatTurnStreamHost
     input: ChatSendMessageRequest,
     options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse>;
+  isFeatureEnabled(flag: string): boolean;
+  agentSendChatMessageStream(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): AsyncGenerator<ChatStreamChunk>;
   resolveToolPolicyContext?(input: {
     operatorId?: string;
     authActorId?: string;
@@ -318,6 +325,7 @@ export async function executePreparedModeOrchestration(
   signal?: AbortSignal,
   onProgress?: (summary: NonNullable<ChatTurnTraceRecord["orchestration"]>) => Promise<void> | void,
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+  finalDeltaSink?: FinalDeltaSink,
 ): Promise<
   OrchestrationExecutionResult & {
     summary: NonNullable<ChatTurnTraceRecord["orchestration"]>;
@@ -586,8 +594,15 @@ export async function executePreparedModeOrchestration(
           signal,
         });
       },
-      executeDelegatedStep: async ({ task, plan, priorSteps, step, stepIndex }) =>
-        executeDelegatedPlanStep(host, prepared, {
+      executeDelegatedStep: async ({ task, plan, priorSteps, step, stepIndex }) => {
+        const orchestrationMode = orchestration.routerInput.task.mode;
+        const streamTerminalStep =
+          Boolean(finalDeltaSink) &&
+          !host.isFeatureEnabled("orchestrationFinalStreamingV1Disabled") &&
+          (orchestrationMode === "cowork" || orchestrationMode === "code") &&
+          isTerminalSynthesisStep(plan, step) &&
+          typeof host.agentSendChatMessageStream === "function";
+        return executeDelegatedPlanStep(host, prepared, {
           task,
           plan,
           priorSteps,
@@ -602,7 +617,10 @@ export async function executePreparedModeOrchestration(
           policyContext: inputPolicyContext,
           localOperatorOverrideId: input.localOperatorOverrideId,
           fullWebAccess: input.fullWebAccess,
-        }),
+          streamTerminalStep,
+          finalDeltaSink: streamTerminalStep ? finalDeltaSink : undefined,
+        });
+      },
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
         const childToolRuns = step.childTurnId
@@ -844,6 +862,8 @@ export async function executeDelegatedPlanStep(
     localOperatorOverrideId?: string;
     policyContext?: ToolPolicyActorContext;
     fullWebAccess?: boolean;
+    streamTerminalStep?: boolean;
+    finalDeltaSink?: FinalDeltaSink;
   },
 ): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
@@ -972,34 +992,44 @@ export async function executeDelegatedPlanStep(
       providerId: input.step.providerId ?? prepared.prefs.providerId,
       model: input.step.model ?? prepared.prefs.model,
     });
-    const response = await host.agentSendChatMessage(
-      childSession.sessionId,
-      buildDelegatedChatSendRequest({
-        content,
-        providerId: input.step.providerId ?? prepared.prefs.providerId,
-        model: input.step.model ?? prepared.prefs.model,
-        mode: input.task.mode,
-        webMode: prepared.prefs.webMode,
-        memoryMode: prepared.prefs.memoryMode,
-        thinkingLevel: prepared.prefs.thinkingLevel,
-        speedMode: prepared.prefs.speedMode,
-        subagentPolicy: "off",
-        retrievalMode: prepared.autonomy.retrievalMode,
-        toolAutonomy: prepared.effectiveToolAutonomy,
-        normalizationProfile: prepared.normalized.normalizationProfile,
-        operatorId: input.operatorId,
-        authActorId: input.authActorId,
-        authActorSource: input.authActorSource,
-        permissionProfileId: inheritedPolicyContext?.permissionProfileId,
-        localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
-        policyRunId: input.runId,
-        policyTaskId: orchestrationTaskId,
-        fullWebAccess: input.fullWebAccess,
-        parentDelegationStepId: `${input.runId}:${input.step.stepId}`,
-        policyContext: inheritedPolicyContext,
-      }),
-      input.signal ? { abortSignal: input.signal } : undefined,
-    );
+    const delegatedSendRequest = buildDelegatedChatSendRequest({
+      content,
+      providerId: input.step.providerId ?? prepared.prefs.providerId,
+      model: input.step.model ?? prepared.prefs.model,
+      mode: input.task.mode,
+      webMode: prepared.prefs.webMode,
+      memoryMode: prepared.prefs.memoryMode,
+      thinkingLevel: prepared.prefs.thinkingLevel,
+      speedMode: prepared.prefs.speedMode,
+      subagentPolicy: "off",
+      retrievalMode: prepared.autonomy.retrievalMode,
+      toolAutonomy: prepared.effectiveToolAutonomy,
+      normalizationProfile: prepared.normalized.normalizationProfile,
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      permissionProfileId: inheritedPolicyContext?.permissionProfileId,
+      localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
+      policyRunId: input.runId,
+      policyTaskId: orchestrationTaskId,
+      fullWebAccess: input.fullWebAccess,
+      parentDelegationStepId: `${input.runId}:${input.step.stepId}`,
+      policyContext: inheritedPolicyContext,
+    });
+    const sendOptions = input.signal ? { abortSignal: input.signal } : undefined;
+    // S1: stream the terminal synthesizer child's live token deltas straight to
+    // the parent SSE (default-on, gated by the caller). Falls back to a buffered
+    // send only when the stream throws before the first delta, so the persisted
+    // result is byte-identical to today's behavior on any pre-token failure.
+    const response =
+      input.streamTerminalStep && typeof host.agentSendChatMessageStream === "function"
+        ? await driveTerminalDelegatedStream(host, {
+            childSessionId: childSession.sessionId,
+            request: delegatedSendRequest,
+            options: sendOptions,
+            finalDeltaSink: input.finalDeltaSink,
+          })
+        : await host.agentSendChatMessage(childSession.sessionId, delegatedSendRequest, sendOptions);
     delegatedResponseReceived = true;
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
@@ -1126,6 +1156,105 @@ export async function executeDelegatedPlanStep(
   }
 }
 
+/**
+ * Drive the terminal synthesizer child's live stream, forwarding each `delta`
+ * chunk to the parent SSE immediately (via `finalDeltaSink`) while reassembling
+ * the authoritative {@link ChatSendMessageResponse} the buffered child-send would
+ * have produced. The child's own answer-recovery happens at its `message_done`;
+ * we forward deltas live (never gating first-token on recovery) and reconcile the
+ * persisted/rendered string later through the parent's divergence guard.
+ *
+ * Fallback contract:
+ *  - throws BEFORE any delta was pushed → fall back to the buffered
+ *    `agentSendChatMessage` send so the result is byte-identical to today.
+ *  - throws AFTER ≥1 delta was pushed → do NOT re-send (that would duplicate
+ *    tokens); reconstruct from whatever terminal `message_done`/`trace_update`
+ *    was already seen so the engine can shape the step exactly as the buffered
+ *    branch (a failed/degraded child still yields the same downstream result).
+ */
+async function driveTerminalDelegatedStream(
+  host: ChatTurnStreamHost,
+  input: {
+    childSessionId: string;
+    request: ChatSendMessageRequest;
+    options?: { abortSignal?: AbortSignal };
+    finalDeltaSink?: FinalDeltaSink;
+  },
+): Promise<ChatSendMessageResponse> {
+  let accumulatedText = "";
+  let deltaCount = 0;
+  let terminalContent: string | undefined;
+  let terminalTrace: ChatTurnTraceRecord | undefined;
+  let terminalTurnId: string | undefined;
+  const citations: ChatCitationRecord[] = [];
+
+  try {
+    for await (const chunk of host.agentSendChatMessageStream(
+      input.childSessionId,
+      input.request,
+      input.options,
+    )) {
+      switch (chunk.type) {
+        case "delta": {
+          if (chunk.delta) {
+            accumulatedText += chunk.delta;
+            input.finalDeltaSink?.push(chunk.delta);
+            deltaCount += 1;
+            if (deltaCount === 1) {
+              input.finalDeltaSink?.markStreamed();
+            }
+          }
+          break;
+        }
+        case "message_done": {
+          terminalContent = chunk.content;
+          terminalTurnId = chunk.turnId;
+          break;
+        }
+        case "trace_update": {
+          terminalTrace = chunk.trace;
+          break;
+        }
+        case "citation": {
+          citations.push(chunk.citation);
+          break;
+        }
+        default:
+          // The child's message_start / tool_* / approval / done chunks belong to
+          // the child turn and must not be forwarded to the parent SSE.
+          break;
+      }
+    }
+  } catch (error) {
+    if (deltaCount === 0) {
+      // No token reached the parent yet: re-run buffered so behavior is
+      // byte-identical to the non-streaming path on any pre-token failure.
+      return host.agentSendChatMessage(input.childSessionId, input.request, input.options);
+    }
+    // Tokens already streamed: never re-send. Reconstruct from whatever terminal
+    // signals were seen; if none, surface the error trace so the engine shapes a
+    // failed step exactly as the buffered branch would have.
+    if (terminalContent === undefined && !terminalTrace) {
+      throw error;
+    }
+  }
+
+  const assistantContent = terminalContent ?? accumulatedText;
+  return {
+    sessionId: input.childSessionId,
+    userMessage: { messageId: terminalTurnId ?? input.childSessionId } as ChatSendMessageResponse["userMessage"],
+    assistantMessage: assistantContent
+      ? ({ messageId: terminalTurnId ?? input.childSessionId, content: assistantContent } as ChatSendMessageResponse["assistantMessage"])
+      : undefined,
+    transport: "llm",
+    model: terminalTrace?.model,
+    turnId: terminalTurnId ?? terminalTrace?.turnId,
+    trace: terminalTrace,
+    citations,
+    routing: terminalTrace?.routing,
+  };
+}
+
 function patchActiveDelegationStep(
   host: ChatTurnStreamHost,
   input: {
@@ -1192,6 +1321,52 @@ function createAsyncProgressQueue<T>(maxBufferedValues = 256) {
       });
     },
   };
+}
+
+/**
+ * Sink for forwarding the terminal synthesizer child's live token deltas up to
+ * the parent SSE stream. `push` emits a delta immediately as it arrives from the
+ * child; `markStreamed` is called once at least one delta has been forwarded so
+ * the parent can decide whether to skip the buffered synthetic-delta split.
+ */
+export interface FinalDeltaSink {
+  push(delta: string): void;
+  markStreamed(): void;
+}
+
+/**
+ * Conservative, pure predicate: is `step` the single terminal synthesizer step
+ * whose output becomes the orchestration `finalOutput`? Only such a step is safe
+ * to stream live to the parent SSE, because the engine short-circuits final
+ * synthesis on a completed synthesizer (no re-emit / repair pass). Any doubt
+ * returns `false` so the buffered path is used.
+ *
+ * True ONLY when ALL hold:
+ *  - `step.delegatedRole` is set (the step actually runs as a delegated child),
+ *  - `step.role` is the synthesizer,
+ *  - `step.stage` equals the maximum stage across all plan steps,
+ *  - `step` is the SOLE step occupying that maximum stage.
+ */
+export function isTerminalSynthesisStep(
+  plan: ModeOrchestrationPlan,
+  step: ModeOrchestrationPlan["steps"][number],
+): boolean {
+  if (!step.delegatedRole) {
+    return false;
+  }
+  if (step.role !== "synthesizer") {
+    return false;
+  }
+  const stages = plan.steps.map((candidate) => candidate.stage);
+  if (stages.length === 0) {
+    return false;
+  }
+  const maxStage = Math.max(...stages);
+  if (step.stage !== maxStage) {
+    return false;
+  }
+  const stepsInMaxStage = plan.steps.filter((candidate) => candidate.stage === maxStage);
+  return stepsInMaxStage.length === 1;
 }
 
 function buildDelegatedPriorStepContext(
@@ -1350,7 +1525,24 @@ export async function* streamPreparedAgentChatTurn(
 
       // eslint-disable-next-line prefer-const
       let executionPlanId: string | undefined;
-      const progressQueue = createAsyncProgressQueue<ChatTurnTraceRecord>();
+      // S1: a single tagged-union side-channel carries BOTH orchestration
+      // `trace` progress and the terminal synthesizer's live `delta` tokens,
+      // drained in one loop so their relative order is preserved on the parent
+      // SSE. The `finalDeltaSink` pushes real model deltas as they arrive.
+      const progressQueue = createAsyncProgressQueue<
+        { kind: "trace"; trace: ChatTurnTraceRecord } | { kind: "delta"; delta: string }
+      >();
+      let streamedFinalText = "";
+      let streamedRealFinalDeltas = false;
+      const finalDeltaSink: FinalDeltaSink = {
+        push(delta) {
+          streamedFinalText += delta;
+          progressQueue.push({ kind: "delta", delta });
+        },
+        markStreamed() {
+          streamedRealFinalDeltas = true;
+        },
+      };
       const orchestrationResultPromise = executePreparedModeOrchestration(
         host,
         prepared,
@@ -1381,22 +1573,33 @@ export async function* streamPreparedAgentChatTurn(
               modelRouter: prepared.modelRouterDecision,
             },
           });
-          progressQueue.push(progressTrace);
+          progressQueue.push({ kind: "trace", trace: progressTrace });
         },
         modeOrchestration,
+        finalDeltaSink,
       ).finally(() => {
         progressQueue.close();
       });
       while (true) {
-        const progressTrace = await progressQueue.next();
-        if (!progressTrace) {
+        const progressItem = await progressQueue.next();
+        if (!progressItem) {
           break;
+        }
+        if (progressItem.kind === "delta") {
+          yield {
+            type: "delta",
+            sessionId,
+            turnId,
+            messageId: assistantMessageId,
+            delta: progressItem.delta,
+          };
+          continue;
         }
         yield {
           type: "trace_update",
           sessionId,
           turnId,
-          trace: progressTrace,
+          trace: progressItem.trace,
         };
       }
       const orchestrationResult = await orchestrationResultPromise;
@@ -1406,6 +1609,15 @@ export async function* streamPreparedAgentChatTurn(
       if (!finalText) {
         finalText = buildEmptyAssistantTurnFallbackText();
       }
+      // Divergence guard: only treat the live-streamed deltas as the rendered
+      // final text when the terminal step completed AND the streamed concat
+      // exactly matches the authoritative `finalText`. If the child recovered,
+      // repaired, or returned empty (so the engine's finalOutput diverges), fall
+      // back to the synthetic split of `finalText` below — the persisted and
+      // rendered text always agree.
+      const terminalStepCompleted = orchestrationResult.finalStep?.status === "completed";
+      streamedRealFinalDeltas =
+        streamedRealFinalDeltas && terminalStepCompleted && streamedFinalText.trim() === finalText;
 
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
@@ -1514,14 +1726,19 @@ export async function* streamPreparedAgentChatTurn(
         toolRuns: orchestrationToolRuns,
       };
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-      for (const slice of splitIntoChunks(finalText, 120)) {
-        yield {
-          type: "delta",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-          delta: slice,
-        };
+      // Skip the synthetic post-hoc split when the real terminal-synthesizer
+      // tokens were already streamed live above and matched the authoritative
+      // final text (no double emit). Otherwise fall back to splitting finalText.
+      if (!streamedRealFinalDeltas) {
+        for (const slice of splitIntoChunks(finalText, 120)) {
+          yield {
+            type: "delta",
+            sessionId,
+            turnId,
+            messageId: assistantMessageId,
+            delta: slice,
+          };
+        }
       }
       yield {
         type: "message_done",

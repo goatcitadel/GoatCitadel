@@ -32,6 +32,7 @@ const {
   collectOrchestrationToolRuns,
   executeDelegatedPlanStep,
   executePreparedModeOrchestration,
+  isTerminalSynthesisStep,
   streamPreparedAgentChatTurn,
 } = await import("./chat-turn-stream-service.js");
 
@@ -759,6 +760,302 @@ describe("streamPreparedAgentChatTurn", () => {
   });
 });
 
+describe("isTerminalSynthesisStep", () => {
+  const plan = {
+    steps: [
+      { stepId: "a", role: "planner", stage: 0, delegatedRole: "Planner" },
+      { stepId: "b", role: "synthesizer", stage: 1, delegatedRole: "Synthesis" },
+    ],
+  } as never;
+
+  it("returns true for the sole delegated synthesizer in the top stage", () => {
+    expect(isTerminalSynthesisStep(plan, (plan as any).steps[1])).toBe(true);
+  });
+
+  it("returns false for a non-synthesizer sibling that shares the top stage", () => {
+    const tiePlan = {
+      steps: [
+        { stepId: "a", role: "worker", stage: 1, delegatedRole: "Worker" },
+        { stepId: "b", role: "synthesizer", stage: 1, delegatedRole: "Synthesis" },
+      ],
+    } as never;
+    // The synthesizer is NOT alone in the max stage, so even it is buffered.
+    expect(isTerminalSynthesisStep(tiePlan, (tiePlan as any).steps[1])).toBe(false);
+  });
+
+  it("returns false for a synthesizer that is not in the top stage", () => {
+    const midPlan = {
+      steps: [
+        { stepId: "a", role: "synthesizer", stage: 1, delegatedRole: "Synthesis" },
+        { stepId: "b", role: "critic", stage: 2, delegatedRole: "Critic" },
+      ],
+    } as never;
+    expect(isTerminalSynthesisStep(midPlan, (midPlan as any).steps[0])).toBe(false);
+  });
+
+  it("returns false for a synthesizer without a delegatedRole (e.g. chat mode)", () => {
+    const chatPlan = {
+      steps: [
+        { stepId: "a", role: "answerer", stage: 0 },
+        { stepId: "b", role: "synthesizer", stage: 1 },
+      ],
+    } as never;
+    expect(isTerminalSynthesisStep(chatPlan, (chatPlan as any).steps[1])).toBe(false);
+  });
+});
+
+describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
+  it("yields real terminal deltas (parent ids) before message_done and persists the matching finalText", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
+    host.agentSendChatMessage = plannerBufferedSendMock() as never;
+    const childStream = childStreamMock({
+      deltas: ["## Dinner Party Plan\n\n", "Final host-ready checklist."],
+    });
+    host.agentSendChatMessageStream = childStream as never;
+
+    const chunks: any[] = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createDelegatedModeOrchestrationResolution(),
+    )) {
+      chunks.push(chunk);
+    }
+
+    const finalText = "## Dinner Party Plan\n\nFinal host-ready checklist.";
+    const realDeltas = chunks.filter((chunk) => chunk.type === "delta");
+    const messageDoneIndex = chunks.findIndex((chunk) => chunk.type === "message_done");
+    const firstDeltaIndex = chunks.findIndex((chunk) => chunk.type === "delta");
+
+    // (a) the terminal child's real deltas were forwarded live, before done.
+    expect(childStream).toHaveBeenCalledTimes(1);
+    expect(firstDeltaIndex).toBeGreaterThan(0);
+    expect(firstDeltaIndex).toBeLessThan(messageDoneIndex);
+    // The forwarded deltas carry the PARENT turn + assistant message ids.
+    for (const delta of realDeltas) {
+      expect(delta.turnId).toBe("turn-1");
+      expect(delta.messageId).toBe("assistant-1");
+    }
+    // (b) no synthetic 120-char split: deltas are exactly the streamed pieces,
+    // and their concat equals finalText (one piece per streamed token group).
+    expect(realDeltas.map((delta) => delta.delta)).toEqual([
+      "## Dinner Party Plan\n\n",
+      "Final host-ready checklist.",
+    ]);
+    expect(realDeltas.map((delta) => delta.delta).join("")).toBe(finalText);
+    expect(chunks[messageDoneIndex].content).toBe(finalText);
+    // (c) persistence received the complete finalText.
+    expect(host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        message: expect.objectContaining({ role: "assistant", content: finalText }),
+      }),
+    );
+  });
+
+  it("uses the byte-identical buffered path when the kill switch is engaged", async () => {
+    const host = createHost();
+    host.isFeatureEnabled = vi.fn((flag: string) => flag === "orchestrationFinalStreamingV1Disabled") as never;
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
+    // Both delegated steps go through the buffered send; the synthesizer returns
+    // the final output. The stream API must NOT be consulted.
+    host.agentSendChatMessage = vi.fn(async (_sessionId: string, request: any) => ({
+      sessionId: "delegate-session",
+      userMessage: { messageId: "delegate-user" },
+      assistantMessage: {
+        messageId: "delegate-assistant",
+        content: /Delegated role:\s*Synthesis/.test(request.content) ? "Final buffered answer." : "Planner output.",
+      },
+      turnId: "delegate-turn",
+      trace: {
+        turnId: "delegate-turn",
+        sessionId: "delegate-session",
+        status: "completed",
+        model: "delegate-model",
+        routing: { effectiveProviderId: "delegate-provider" },
+      },
+      citations: [],
+      routing: { effectiveProviderId: "delegate-provider" },
+    })) as never;
+    const childStream = childStreamMock({ deltas: ["should not be used"] });
+    host.agentSendChatMessageStream = childStream as never;
+
+    const chunks: any[] = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createDelegatedModeOrchestrationResolution(),
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(childStream).not.toHaveBeenCalled();
+    const messageDone = chunks.find((chunk) => chunk.type === "message_done");
+    expect(messageDone?.content).toBe("Final buffered answer.");
+    // The buffered path emits the synthetic split (mocked to a single chunk).
+    const deltas = chunks.filter((chunk) => chunk.type === "delta");
+    expect(deltas.map((delta) => delta.delta)).toEqual(["Final buffered answer."]);
+  });
+
+  it("falls back to the synthetic split of finalText when the streamed concat diverges (recovery)", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
+    host.agentSendChatMessage = plannerBufferedSendMock() as never;
+    // The child streams partial tokens but recovers a DIFFERENT authoritative
+    // answer at message_done. The persisted/rendered text must be the recovered
+    // finalText (split path), not the diverging streamed concat.
+    const childStream = childStreamMock({
+      deltas: ["partial draft "],
+      doneContent: "Recovered authoritative final answer.",
+    });
+    host.agentSendChatMessageStream = childStream as never;
+
+    const chunks: any[] = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createDelegatedModeOrchestrationResolution(),
+    )) {
+      chunks.push(chunk);
+    }
+
+    const messageDone = chunks.find((chunk) => chunk.type === "message_done");
+    expect(messageDone?.content).toBe("Recovered authoritative final answer.");
+    const deltas = chunks.filter((chunk) => chunk.type === "delta");
+    const deltaTexts = deltas.map((delta) => delta.delta);
+    // The diverging live token ("partial draft ") may have streamed, but the
+    // authoritative finalText is (also) emitted via the synthetic split so the
+    // rendered transcript ends on the recovered answer.
+    expect(deltaTexts).toContain("Recovered authoritative final answer.");
+    expect(host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "Recovered authoritative final answer." }),
+      }),
+    );
+  });
+});
+
+describe("executeDelegatedPlanStep S1 streaming fallback", () => {
+  it("streams the terminal child and reconstructs the completed step result", async () => {
+    const host = createHost();
+    const childStream = childStreamMock({ deltas: ["Final ", "answer."] });
+    host.agentSendChatMessageStream = childStream as never;
+    const pushed: string[] = [];
+    let streamedMarked = false;
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      streamTerminalStep: true,
+      finalDeltaSink: {
+        push: (delta: string) => pushed.push(delta),
+        markStreamed: () => {
+          streamedMarked = true;
+        },
+      },
+    } as never);
+
+    expect(childStream).toHaveBeenCalledTimes(1);
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(pushed).toEqual(["Final ", "answer."]);
+    expect(streamedMarked).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(result.output).toBe("Final answer.");
+  });
+
+  it("falls back to the buffered send when the stream throws before any delta", async () => {
+    const host = createHost();
+    const childStream = vi.fn(async function* () {
+      throw new Error("stream exploded before first token");
+      // eslint-disable-next-line no-unreachable
+      yield undefined;
+    });
+    host.agentSendChatMessageStream = childStream as never;
+    host.agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "delegate-session",
+      userMessage: { messageId: "delegate-user" },
+      assistantMessage: { messageId: "delegate-assistant", content: "Buffered fallback answer." },
+      turnId: "delegate-turn",
+      trace: {
+        turnId: "delegate-turn",
+        sessionId: "delegate-session",
+        status: "completed",
+        model: "delegate-model",
+        routing: { effectiveProviderId: "delegate-provider" },
+      },
+      citations: [],
+      routing: { effectiveProviderId: "delegate-provider" },
+    })) as never;
+    const pushed: string[] = [];
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      streamTerminalStep: true,
+      finalDeltaSink: { push: (delta: string) => pushed.push(delta), markStreamed: () => {} },
+    } as never);
+
+    expect(childStream).toHaveBeenCalledTimes(1);
+    // Pre-token failure: the buffered send IS used and the result is identical.
+    expect(host.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    expect(pushed).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.output).toBe("Buffered fallback answer.");
+  });
+
+  it("does NOT re-send after a delta when the stream throws mid-flight", async () => {
+    const host = createHost();
+    const childStream = vi.fn(async function* () {
+      yield { type: "delta", sessionId: "delegate-session", turnId: "child-turn-1", messageId: "child-msg-1", delta: "partial " };
+      yield {
+        type: "trace_update",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        trace: {
+          turnId: "child-turn-1",
+          sessionId: "delegate-session",
+          status: "completed",
+          model: "delegate-model",
+          routing: { effectiveProviderId: "delegate-provider" },
+        },
+      };
+      yield {
+        type: "message_done",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        messageId: "child-msg-1",
+        content: "partial recovered",
+      };
+      throw new Error("stream exploded after message_done");
+    });
+    host.agentSendChatMessageStream = childStream as never;
+    host.agentSendChatMessage = vi.fn() as never;
+    const pushed: string[] = [];
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      streamTerminalStep: true,
+      finalDeltaSink: { push: (delta: string) => pushed.push(delta), markStreamed: () => {} },
+    } as never);
+
+    // A token already reached the parent → never re-send (would duplicate).
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(pushed).toEqual(["partial "]);
+    // Reconstructed from the terminal message_done/trace that was already seen.
+    expect(result.status).toBe("completed");
+    expect(result.output).toBe("partial recovered");
+  });
+});
+
 function createHost(): ChatTurnStreamHost & {
   storage: {
     chatTurnTraces: {
@@ -890,6 +1187,8 @@ function createHost(): ChatTurnStreamHost & {
     inheritDelegatedSessionToolGrants: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
     agentSendChatMessage: vi.fn(),
+    agentSendChatMessageStream: vi.fn(async function* () {}),
+    isFeatureEnabled: vi.fn(() => false),
     beginActiveChatTurnExecution: vi.fn(() => new AbortController()),
     endActiveChatTurnExecution: vi.fn(),
     steerService: new ChatSteerService(),
@@ -1109,4 +1408,76 @@ function createModeOrchestrationResolution() {
       })),
     },
   } as never;
+}
+
+// A resolution whose terminal synthesizer step carries a `delegatedRole`, so the
+// orchestration engine routes it through `executeDelegatedStep` and the S1
+// streaming branch (real terminal-token forwarding) can engage.
+function createDelegatedModeOrchestrationResolution() {
+  const resolution = createModeOrchestrationResolution() as any;
+  for (const step of resolution.orchestrationPlan.steps) {
+    step.delegatedRole = step.role === "synthesizer" ? "Synthesis" : (step.label ?? step.role);
+  }
+  return resolution;
+}
+
+// Builds a child `agentSendChatMessageStream` mock that yields real `delta`
+// chunks (child ids), then an authoritative completed `trace_update`, a
+// `message_done`, and a terminal `done` — the live shape the runtime emits.
+function childStreamMock(input: {
+  deltas: string[];
+  doneContent?: string;
+  traceStatus?: string;
+  childTurnId?: string;
+}) {
+  const childTurnId = input.childTurnId ?? "child-turn-1";
+  const doneContent = input.doneContent ?? input.deltas.join("");
+  return vi.fn(async function* () {
+    yield { type: "message_start", sessionId: "delegate-session", turnId: childTurnId, messageId: "child-msg-1" };
+    for (const delta of input.deltas) {
+      yield { type: "delta", sessionId: "delegate-session", turnId: childTurnId, messageId: "child-msg-1", delta };
+    }
+    yield {
+      type: "trace_update",
+      sessionId: "delegate-session",
+      turnId: childTurnId,
+      trace: {
+        turnId: childTurnId,
+        sessionId: "delegate-session",
+        status: input.traceStatus ?? "completed",
+        model: "delegate-model",
+        routing: { effectiveProviderId: "delegate-provider" },
+      },
+    };
+    yield {
+      type: "message_done",
+      sessionId: "delegate-session",
+      turnId: childTurnId,
+      messageId: "child-msg-1",
+      content: doneContent,
+    };
+    yield { type: "done", sessionId: "delegate-session", turnId: childTurnId, messageId: "child-msg-1" };
+  });
+}
+
+// Drives the orchestration delegated-step completion mock so the engine's
+// `executeDelegatedStep` callback resolves quickly: the planner step uses the
+// buffered child send (createChatCompletion is NOT used once delegatedRole is
+// set), so we stub `agentSendChatMessage` for the non-streamed planner step.
+function plannerBufferedSendMock() {
+  return vi.fn(async () => ({
+    sessionId: "delegate-session",
+    userMessage: { messageId: "delegate-user" },
+    assistantMessage: { messageId: "delegate-assistant", content: "Planner output." },
+    turnId: "planner-turn",
+    trace: {
+      turnId: "planner-turn",
+      sessionId: "delegate-session",
+      status: "completed",
+      model: "delegate-model",
+      routing: { effectiveProviderId: "delegate-provider" },
+    },
+    citations: [],
+    routing: { effectiveProviderId: "delegate-provider" },
+  }));
 }

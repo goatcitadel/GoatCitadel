@@ -231,6 +231,7 @@ function composeEntryExtras(
 ): Pick<
   ChatTurnRuntimeHost,
   | "agentSendChatMessage"
+  | "agentSendChatMessageStream"
   | "createChatSession"
   | "inheritDelegatedSessionToolGrants"
   | "isReplayScratchSession"
@@ -245,6 +246,8 @@ function composeEntryExtras(
 > {
   return {
     agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
+    agentSendChatMessageStream: (sessionId, input, options) =>
+      source.agentSendChatMessageStream(sessionId, input, options),
     createChatSession: (input) => source.createChatSession(input),
     inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
       source.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),

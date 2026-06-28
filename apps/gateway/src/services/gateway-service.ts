@@ -1823,6 +1823,8 @@ export class GatewayService {
       hooksService: this.hooksService,
       llmService: this.llmService,
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessageStream: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options),
       beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       beginDurableChatRun: (prepared, input, threadEventType) =>
@@ -1967,6 +1969,8 @@ export class GatewayService {
         this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessageStream: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options),
       beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
@@ -4914,6 +4918,14 @@ export class GatewayService {
     options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
     return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
+  }
+
+  public agentSendChatMessageStream(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): AsyncGenerator<ChatStreamChunk> {
+    return this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options);
   }
 
   private async retryChatTurnInScratchSession(
