@@ -178,7 +178,7 @@ describe("ChatThreadView", () => {
 
     expect(
       renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("") === "1 tool"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Details")).toBe(true);
   });
 

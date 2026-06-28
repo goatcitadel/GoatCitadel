@@ -193,14 +193,21 @@ describe("ChatThreadView tail coverage", () => {
     ).toHaveLength(0);
 
     const details = renderer.root.find(
-      (node) => node.type === "details" && node.props.className !== "mc-next-thread-action-menu",
+      (node) =>
+        node.type === "details" &&
+        node.props.className !== "mc-next-thread-action-menu" &&
+        !node.props.className?.includes("mc-next-turn-evidence-summary"),
     );
     TestRenderer.act(() => {
       details.props.onToggle({ currentTarget: { open: false } });
     });
     expect(
-      renderer.root.find((node) => node.type === "details" && node.props.className !== "mc-next-thread-action-menu")
-        .props.open,
+      renderer.root.find(
+        (node) =>
+          node.type === "details" &&
+          node.props.className !== "mc-next-thread-action-menu" &&
+          !node.props.className?.includes("mc-next-turn-evidence-summary"),
+      ).props.open,
     ).toBe(false);
   });
 
