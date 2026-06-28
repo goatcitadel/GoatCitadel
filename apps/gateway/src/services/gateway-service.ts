@@ -580,6 +580,7 @@ import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
+import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -1835,6 +1836,7 @@ export class GatewayService {
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
+      resolveBasePromptCapabilityCatalog: () => this.resolveBasePromptCapabilityCatalog(),
       closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -7095,6 +7097,39 @@ export class GatewayService {
   public listSkills(): SkillListItem[] {
     this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
     return this.capabilitySystemService.listSkills();
+  }
+
+  /**
+   * Callable tool/skill catalog for the base agent system prompt's
+   * "what you can do" index (P0-#2). Cheap, in-memory read of the callable
+   * capability catalog — NO per-tool policy evaluation (the prompt is advisory
+   * grounding; deny-wins enforcement stays inline at tool-call time). Best-effort:
+   * returns an empty toolset rather than throwing on the turn-prep critical path.
+   */
+  public resolveBasePromptCapabilityCatalog(): BaseAgentPromptToolset {
+    try {
+      const catalog = this.capabilitySystemService.listCatalog("callable");
+      const toolNames: string[] = [];
+      const skills: BaseAgentPromptSkill[] = [];
+      for (const entry of catalog) {
+        if (entry.kind === "tool") {
+          if (entry.toolName) {
+            toolNames.push(entry.toolName);
+          }
+          continue;
+        }
+        if (entry.kind === "skill") {
+          const summary = entry.summary?.trim();
+          skills.push(summary ? { name: entry.title, summary } : { name: entry.title });
+        }
+      }
+      return { toolNames, skills };
+    } catch (error) {
+      log.warn("resolveBasePromptCapabilityCatalog failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { toolNames: [] };
+    }
   }
 
   public listCuratorStatus() {

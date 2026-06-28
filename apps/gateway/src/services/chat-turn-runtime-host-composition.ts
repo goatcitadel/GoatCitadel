@@ -71,6 +71,7 @@ function composeSessionPreparation(
   | "patchSessionAutonomyPrefs"
   | "prepareAgentChatTurn"
   | "recordRuntimeDecision"
+  | "resolveBasePromptCapabilityCatalog"
   | "resolveRuntimeGuidance"
   | "resolveThreadKnowledgeContext"
   | "routeFromSession"
@@ -95,6 +96,9 @@ function composeSessionPreparation(
     patchSessionAutonomyPrefs: (sessionId, input) => source.patchSessionAutonomyPrefs(sessionId, input),
     prepareAgentChatTurn: (sessionId, input, options) => source.prepareAgentChatTurn(sessionId, input, options),
     recordRuntimeDecision: source.recordRuntimeDecision ? (input) => source.recordRuntimeDecision?.(input) : undefined,
+    resolveBasePromptCapabilityCatalog: source.resolveBasePromptCapabilityCatalog
+      ? () => source.resolveBasePromptCapabilityCatalog?.() ?? { toolNames: [] }
+      : undefined,
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
     resolveThreadKnowledgeContext: (sessionId, query) => source.resolveThreadKnowledgeContext(sessionId, query),
     routeFromSession: (session) => source.routeFromSession(session),

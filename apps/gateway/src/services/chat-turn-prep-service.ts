@@ -34,7 +34,11 @@ import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
-import { buildBaseAgentSystemPrompt, renderBaseAgentSystemPromptBlocks } from "./base-agent-system-prompt.js";
+import {
+  buildBaseAgentSystemPrompt,
+  renderBaseAgentSystemPromptBlocks,
+  type BaseAgentPromptToolset,
+} from "./base-agent-system-prompt.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -164,6 +168,16 @@ export interface ChatTurnPrepHost {
    * there is nothing to inject, and is only consulted when the base prompt is on.
    */
   composeFrozenOperatorProfileDigest?(workspaceId: string): string | undefined;
+  /**
+   * Callable tool/skill catalog for the base prompt's "what you can do" index
+   * (P0-#2). Previously the base prompt was built with an empty toolset, so the
+   * model was never told which tools or skills it had — a major cause of thin,
+   * generic responses. Optional + best-effort: the prompt is advisory grounding,
+   * so this lists the callable catalog cheaply (in-memory) and does NOT run
+   * per-tool policy evaluation — real deny-wins enforcement stays inline at call
+   * time. Returns empty names when unavailable; never throws on the prep path.
+   */
+  resolveBasePromptCapabilityCatalog?(): BaseAgentPromptToolset;
 }
 
 export interface PreparedAgentChatTurn {
@@ -384,6 +398,17 @@ export async function prepareAgentChatTurn(
         memoryDigest = undefined;
       }
     }
+    // Tell the model what it can actually do (P0-#2). Best-effort + cheap
+    // (in-memory callable catalog, no per-tool policy eval). Quick-web turns use
+    // a stub prefix that ignores the toolset, so skip the lookup for them.
+    let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
+    if (!quickWebTurn && host.resolveBasePromptCapabilityCatalog) {
+      try {
+        promptCapabilityCatalog = host.resolveBasePromptCapabilityCatalog();
+      } catch {
+        promptCapabilityCatalog = { toolNames: [] };
+      }
+    }
     baseAgentInstruction = renderBaseAgentSystemPromptBlocks(
       buildBaseAgentSystemPrompt({
         mode: effectiveMode,
@@ -402,7 +427,7 @@ export async function prepareAgentChatTurn(
           channel: route.channel,
           mode: effectiveMode,
         },
-        toolset: { toolNames: [] },
+        toolset: promptCapabilityCatalog,
         ...(memoryDigest ? { memoryDigest } : {}),
       }),
     );

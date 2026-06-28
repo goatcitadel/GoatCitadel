@@ -9,6 +9,14 @@ import {
   type ChatTurnPrepHost,
 } from "./chat-turn-prep-service.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
+import type { BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
+
+function withCapabilityCatalog(host: ChatTurnPrepHost, catalog: BaseAgentPromptToolset): () => BaseAgentPromptToolset {
+  const fn = vi.fn(() => catalog);
+  (host as unknown as { resolveBasePromptCapabilityCatalog: () => BaseAgentPromptToolset }).resolveBasePromptCapabilityCatalog =
+    fn;
+  return fn;
+}
 
 function createPrefs(
   mode: ChatSessionPrefsRecord["mode"],
@@ -233,6 +241,36 @@ describe("prepareAgentChatTurn personality overlay", () => {
     await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
     expect(cowork.readGuidance()).toContain("You are GoatCitadel");
     expect(cowork.readGuidance()).not.toContain("## Memory");
+  });
+
+  it("lists the callable tool/skill catalog in the base prompt so the model knows what it can do (P0-#2)", async () => {
+    const harness = createHost("cowork");
+    const resolve = withCapabilityCatalog(harness.host, {
+      toolNames: ["browser.search", "memory.write"],
+      skills: [{ name: "pdf-generator", summary: "Create PDF documents" }],
+    });
+
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+    const guidance = harness.readGuidance();
+    expect(guidance).toContain("## Tools available this turn");
+    expect(guidance).toContain("browser.search");
+    expect(guidance).toContain("memory.write");
+    expect(guidance).toContain("## Skills you can draw on");
+    expect(guidance).toContain("pdf-generator: Create PDF documents");
+  });
+
+  it("does not resolve the capability catalog for quick-web turns (they use a stub prefix)", async () => {
+    const harness = createHost("code", { mode: "code", toolAutonomy: "manual" });
+    const resolve = withCapabilityCatalog(harness.host, { toolNames: ["browser.search"], skills: [] });
+
+    await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi",
+    });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(harness.readGuidance()).not.toContain("## Tools available this turn");
   });
 
   it("does not consult the operator profile when the base prompt is disabled", async () => {
