@@ -877,3 +877,122 @@ describe("GatewayService retained stream facade behavior", () => {
     expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(false);
   });
 });
+
+describe("GatewayService live-tail stream notification (P0-#1)", () => {
+  it("resolves a waiting reader as soon as it is signalled, without waiting the poll timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const gateway = createGatewayHarness();
+      let resolved = false;
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
+        .call(gateway, "turn-1", 200)
+        .then(() => {
+          resolved = true;
+        });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      (GatewayService.prototype as any).signalChatStreamEvent.call(gateway, "turn-1");
+      await waitP;
+      // Resolved via the signal, not the timer (fake timers were never advanced).
+      expect(resolved).toBe(true);
+      // Waiter map entry is cleaned up after resolution.
+      expect((gateway as Record<string, any>).chatStreamEventWaiters?.get("turn-1")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the poll timeout when no signal arrives (liveness floor preserved)", async () => {
+    vi.useFakeTimers();
+    try {
+      const gateway = createGatewayHarness();
+      let resolved = false;
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
+        .call(gateway, "turn-1", 200)
+        .then(() => {
+          resolved = true;
+        });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await waitP;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves immediately when the abort signal is already aborted", async () => {
+    const gateway = createGatewayHarness();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      (GatewayService.prototype as any).waitForChatStreamEvent.call(gateway, "turn-1", 5000, controller.signal),
+    ).resolves.toBeUndefined();
+  });
+
+  it("wakes a live-tail waiter when persistChatStreamChunk appends a chunk for that turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const append = vi.fn();
+      const gateway = createGatewayHarness({
+        lastChatStreamPurgeAt: Date.now(),
+        chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+        storage: {
+          chatStreamEvents: {
+            getLatestSequence: vi.fn(() => 0),
+            append,
+            purgeBefore: vi.fn(),
+          },
+        },
+      });
+      let resolved = false;
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
+        .call(gateway, "turn-1", 200)
+        .then(() => {
+          resolved = true;
+        });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      GatewayService.prototype.persistChatStreamChunk.call(
+        gateway,
+        { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "hi" },
+        "run-1",
+      );
+
+      await waitP;
+      // The append signalled the waiter; fake timers were never advanced.
+      expect(resolved).toBe(true);
+      expect(append).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not wake waiters registered for a different turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const gateway = createGatewayHarness();
+      let resolved = false;
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
+        .call(gateway, "turn-1", 200)
+        .then(() => {
+          resolved = true;
+        });
+      await Promise.resolve();
+
+      (GatewayService.prototype as any).signalChatStreamEvent.call(gateway, "turn-2");
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // The turn-1 waiter still resolves via its own timeout floor.
+      await vi.advanceTimersByTimeAsync(200);
+      await waitP;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

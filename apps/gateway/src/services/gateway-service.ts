@@ -101,7 +101,6 @@ import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
-import { wait } from "./wait.js";
 import type {
   DatabaseCutoverProfile,
   DatabaseCutoverResponse,
@@ -3475,6 +3474,9 @@ export class GatewayService {
       payload: chatStreamChunkToRecord(enriched),
       createdAt: new Date().toISOString(),
     });
+    // Wake any live-tail reader immediately so it doesn't wait out the poll
+    // interval before forwarding this chunk to the client (P0-#1).
+    this.signalChatStreamEvent(chunk.turnId);
     this.purgeExpiredChatStreamEventsIfNeeded();
     return enriched;
   }
@@ -3542,8 +3544,73 @@ export class GatewayService {
       if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
         return;
       }
-      await wait(CHAT_STREAM_EVENT_POLL_INTERVAL_MS, options?.signal);
+      await this.waitForChatStreamEvent(turnId, CHAT_STREAM_EVENT_POLL_INTERVAL_MS, options?.signal);
     }
+  }
+
+  /**
+   * Live-tail token delivery (P0-#1). Historically the reader above polled SQLite
+   * every CHAT_STREAM_EVENT_POLL_INTERVAL_MS, adding up to that interval of latency
+   * to every token (including the first) before it reached the client. These two
+   * helpers let the producer (persistChatStreamChunk) wake a waiting reader the
+   * instant a chunk is appended. The timeout inside waitForChatStreamEvent preserves
+   * the old polling cadence as a liveness floor — covering cross-process producers
+   * and the rare register-after-append race — so worst-case behaviour is unchanged.
+   *
+   * The waiter map is created lazily (not a field initialiser) so it also works on
+   * instances built via Object.create(prototype) in tests.
+   */
+  private chatStreamEventWaiters?: Map<string, Set<() => void>>;
+
+  private signalChatStreamEvent(turnId: string): void {
+    const waiters = this.chatStreamEventWaiters?.get(turnId);
+    if (!waiters || waiters.size === 0) {
+      return;
+    }
+    // Each notify() removes itself from the set, so iterate a snapshot.
+    for (const notify of [...waiters]) {
+      notify();
+    }
+  }
+
+  private waitForChatStreamEvent(turnId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.resolve();
+    }
+    if (!this.chatStreamEventWaiters) {
+      this.chatStreamEventWaiters = new Map();
+    }
+    const waiters = this.chatStreamEventWaiters;
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let registeredSet = waiters.get(turnId);
+      if (!registeredSet) {
+        registeredSet = new Set<() => void>();
+        waiters.set(turnId, registeredSet);
+      }
+      const ownSet = registeredSet;
+      const settle = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        ownSet.delete(notify);
+        if (ownSet.size === 0 && waiters.get(turnId) === ownSet) {
+          waiters.delete(turnId);
+        }
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener("abort", settle);
+        }
+        resolve();
+      };
+      const notify = settle;
+      const timer = setTimeout(settle, timeoutMs);
+      ownSet.add(notify);
+      if (signal) {
+        signal.addEventListener("abort", settle, { once: true });
+      }
+    });
   }
 
   private isDurableTurnStillStreaming(turnId: string, options?: { includeInterrupts?: boolean }): boolean {
