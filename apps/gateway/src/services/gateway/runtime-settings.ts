@@ -103,6 +103,8 @@ export interface RuntimeSettings {
     improvementActivationV1Enabled: boolean;
     /** Kill switch for the P0 cowork runtime-quality layer (base prompt, answer-recovery, tool-call repair). Absent/false ⇒ features ON. */
     coworkRuntimeQualityV1Disabled?: boolean;
+    /** Kill switch for S1 live terminal-synthesizer token streaming. Absent/false ⇒ feature ON; `true` reverts cowork/code to buffered delivery. */
+    orchestrationFinalStreamingV1Disabled?: boolean;
     /** Master autonomy kill switch (Phase 1 proactivity / self-improvement). Absent/false ⇒ autonomy ON; `true` halts all autonomous loops. */
     autonomyV1Disabled?: boolean;
   };

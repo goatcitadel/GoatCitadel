@@ -73,6 +73,7 @@ export interface FeatureFlagsConfig {
   improvementLedgerV1Enabled: boolean;
   improvementActivationV1Enabled: boolean;
   coworkRuntimeQualityV1Disabled?: boolean;
+  orchestrationFinalStreamingV1Disabled?: boolean;
   autonomyV1Disabled?: boolean;
 }
 
@@ -661,6 +662,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["improvementLedgerV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED],
     ["improvementActivationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED],
     ["coworkRuntimeQualityV1Disabled", process.env.GOATCITADEL_FEATURE_COWORK_RUNTIME_QUALITY_V1_DISABLED],
+    [
+      "orchestrationFinalStreamingV1Disabled",
+      process.env.GOATCITADEL_FEATURE_ORCHESTRATION_FINAL_STREAMING_V1_DISABLED,
+    ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
@@ -1180,6 +1185,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
       coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
+      // Kill switch for S1 (live terminal-synthesizer token streaming). `*Disabled`
+      // + `?? false` means the feature is ON by default unless explicitly disabled.
+      orchestrationFinalStreamingV1Disabled: featuresInput.orchestrationFinalStreamingV1Disabled ?? false,
       // Intentional: autonomy (proactive turns) is ON by default. This is a
       // `*Disabled` master kill switch — `?? false` means "not disabled" unless
       // an operator explicitly sets it. Do NOT flip this default.

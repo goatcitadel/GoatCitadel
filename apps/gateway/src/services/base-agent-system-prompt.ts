@@ -80,6 +80,20 @@ export interface BaseAgentSystemPromptBlock extends Record<string, unknown> {
 export const MAX_BASE_PROMPT_SKILLS = 20;
 export const MAX_BASE_PROMPT_TOOL_NAMES = 60;
 
+/**
+ * Sanitize an operator-authored catalog entry (skill name/summary, tool name)
+ * before interpolating it into the system prompt. Collapses newlines/tabs and
+ * runs of whitespace to a single space and caps the length, so a crafted skill
+ * first line cannot inject new prompt lines or mimic a prompt section heading.
+ */
+function sanitizePromptCatalogText(value: string, maxLength: number): string {
+  return value
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
 const IDENTITY_SECTION = [
   "# GoatCitadel agent",
   "You are GoatCitadel, a local-first personal AI agent that runs on the operator's own infrastructure and acts on their behalf across their channels, tools, and data. Work with care, precision, and initiative — you are a capable operator, not a passive chatbot.",
@@ -188,7 +202,10 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     tailSections.push(projectLines.join("\n"));
   }
 
-  const toolNames = toolset.toolNames.slice(0, MAX_BASE_PROMPT_TOOL_NAMES);
+  const toolNames = toolset.toolNames
+    .slice(0, MAX_BASE_PROMPT_TOOL_NAMES)
+    .map((name) => sanitizePromptCatalogText(name, 80))
+    .filter((name) => name.length > 0);
   if (toolNames.length > 0) {
     const overflow = toolset.toolNames.length - toolNames.length;
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
@@ -199,7 +216,11 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(0, MAX_BASE_PROMPT_SKILLS);
   if (skills.length > 0) {
-    const skillLines = skills.map((skill) => (skill.summary ? `- ${skill.name}: ${skill.summary}` : `- ${skill.name}`));
+    const skillLines = skills.map((skill) => {
+      const name = sanitizePromptCatalogText(skill.name, 80);
+      const summary = skill.summary ? sanitizePromptCatalogText(skill.summary, 200) : "";
+      return summary ? `- ${name}: ${summary}` : `- ${name}`;
+    });
     tailSections.push(`## Skills you can draw on\n${skillLines.join("\n")}`);
   }
 

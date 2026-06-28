@@ -1186,6 +1186,7 @@ async function driveTerminalDelegatedStream(
   let terminalContent: string | undefined;
   let terminalTrace: ChatTurnTraceRecord | undefined;
   let terminalTurnId: string | undefined;
+  let terminalMessageId: string | undefined;
   const citations: ChatCitationRecord[] = [];
 
   try {
@@ -1209,6 +1210,7 @@ async function driveTerminalDelegatedStream(
         case "message_done": {
           terminalContent = chunk.content;
           terminalTurnId = chunk.turnId;
+          terminalMessageId = chunk.messageId;
           break;
         }
         case "trace_update": {
@@ -1240,11 +1242,15 @@ async function driveTerminalDelegatedStream(
   }
 
   const assistantContent = terminalContent ?? accumulatedText;
+  // Use the child's real assistant messageId from message_done when present;
+  // never substitute the session id (a different identifier namespace). These
+  // ids are not read by the delegated-step result shaping, but keeping them
+  // honest avoids confusing any downstream message lookup/dedup.
   return {
     sessionId: input.childSessionId,
-    userMessage: { messageId: terminalTurnId ?? input.childSessionId } as ChatSendMessageResponse["userMessage"],
+    userMessage: { messageId: terminalMessageId } as ChatSendMessageResponse["userMessage"],
     assistantMessage: assistantContent
-      ? ({ messageId: terminalTurnId ?? input.childSessionId, content: assistantContent } as ChatSendMessageResponse["assistantMessage"])
+      ? ({ messageId: terminalMessageId, content: assistantContent } as ChatSendMessageResponse["assistantMessage"])
       : undefined,
     transport: "llm",
     model: terminalTrace?.model,

@@ -8452,6 +8452,8 @@ export class GatewayService {
       // wipe a previously-stored value. The autonomy kill switch is toggled this
       // way, so its persistence depends on this line.
       coworkRuntimeQualityV1Disabled: patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
+      orchestrationFinalStreamingV1Disabled:
+        patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8485,6 +8487,8 @@ export class GatewayService {
         stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
       coworkRuntimeQualityV1Disabled:
         stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
+      orchestrationFinalStreamingV1Disabled:
+        stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
     };
   }
