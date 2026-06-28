@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatCompletionResponse,
   MemoryContextPack,
@@ -11,7 +11,26 @@ import type {
 import { generateEmbedding } from "@goatcitadel/policy-engine";
 import { MemoryContextService } from "./memory-context-service.js";
 
+// P0-#3: the ranker only counts the embedding signal when a real embedding
+// provider is active. Tests that exercise the semantic-vector path report a real
+// provider via this mock; the default stays "pseudo" so suppression is the norm.
+const embeddingMock = vi.hoisted(() => ({ provider: "pseudo" as "pseudo" | "remote" | "llamacpp" }));
+vi.mock("@goatcitadel/policy-engine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@goatcitadel/policy-engine")>();
+  return {
+    ...actual,
+    currentEmbeddingProfile: (request?: Parameters<typeof actual.currentEmbeddingProfile>[0]) => ({
+      ...actual.currentEmbeddingProfile(request),
+      provider: embeddingMock.provider,
+    }),
+  };
+});
+
 const tempRoots: string[] = [];
+
+beforeEach(() => {
+  embeddingMock.provider = "pseudo";
+});
 
 afterEach(async () => {
   for (const root of tempRoots.splice(0)) {
@@ -310,6 +329,7 @@ describe("MemoryContextService", () => {
   });
 
   it("includes active lifecycle memory items with semantic-vector retrieval signals", async () => {
+    embeddingMock.provider = "remote";
     const rootDir = await createWorkspaceRoot();
     const storage = createStorage({
       memoryItems: [
@@ -418,6 +438,7 @@ describe("MemoryContextService", () => {
   });
 
   it("generates a query embedding from the prompt and marks stored items as embedding-used (W1)", async () => {
+    embeddingMock.provider = "remote";
     const rootDir = await createWorkspaceRoot();
     const prompt = "Browser sessions require scoped grants before tool access.";
     // The stored item carries an embedding generated from identical content, so the
@@ -499,6 +520,7 @@ describe("MemoryContextService", () => {
   });
 
   it("degrades gracefully to lexical signals when the stored embedding dimensions mismatch (W1)", async () => {
+    embeddingMock.provider = "remote";
     const rootDir = await createWorkspaceRoot();
     const prompt = "How should browser sessions be governed before tool access?";
     const storage = createStorage({

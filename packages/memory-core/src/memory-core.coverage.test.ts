@@ -312,7 +312,7 @@ describe("memory ranking and citations", () => {
           timestamp: "2026-05-01T00:00:00.000Z",
         },
       ],
-      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z", queryEmbedding: [1, 0, 0] },
+      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z", queryEmbedding: [1, 0, 0], embeddingProviderIsReal: true },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:browser");

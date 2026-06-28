@@ -54,7 +54,12 @@ describe("rankMemoryCandidates", () => {
           embedding: [0, 1, 0],
         },
       ],
-      { maxCandidates: 2, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+      {
+        maxCandidates: 2,
+        queryEmbedding: [1, 0, 0],
+        embeddingProviderIsReal: true,
+        nowIso: "2026-05-07T12:00:00.000Z",
+      },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:embedding-match");
@@ -64,6 +69,37 @@ describe("rankMemoryCandidates", () => {
       embeddingDimensions: { query: 3, candidate: 3 },
       semanticVectorScore: 0.35,
     });
+  });
+
+  it("suppresses the embedding term under a pseudo provider so ranking stays lexical (P0-#3)", () => {
+    const ranked = rankMemoryCandidates(
+      "deployment rollout validation",
+      [
+        {
+          candidateId: "m:vector-only",
+          sourceType: "memory_item",
+          sourceRef: "vector-only",
+          // Unrelated lexically, but a perfect vector match to the query.
+          text: "Unrelated maintenance note.",
+          embedding: [1, 0, 0],
+        },
+        {
+          candidateId: "m:lexical-only",
+          sourceType: "memory_item",
+          sourceRef: "lexical-only",
+          text: "Deployment rollout validation notes.",
+          embedding: [0, 1, 0],
+        },
+      ],
+      // embeddingProviderIsReal omitted → pseudo default → embedding term suppressed.
+      { maxCandidates: 2, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    // With the pseudo embedding gated off, the genuine lexical match wins instead
+    // of the relevance-uncorrelated vector match.
+    expect(ranked[0]?.candidateId).toBe("m:lexical-only");
+    expect(ranked.every((candidate) => candidate.rankSignals.embeddingScore === undefined)).toBe(true);
+    expect(ranked.every((candidate) => candidate.rankSignals.embeddingStatus === "missing")).toBe(true);
   });
 
   it("falls back cleanly when embeddings are missing or incompatible", () => {
@@ -84,7 +120,12 @@ describe("rankMemoryCandidates", () => {
           embedding: [1, 0],
         },
       ],
-      { maxCandidates: 2, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+      {
+        maxCandidates: 2,
+        queryEmbedding: [1, 0, 0],
+        embeddingProviderIsReal: true,
+        nowIso: "2026-05-07T12:00:00.000Z",
+      },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:missing");
@@ -120,7 +161,12 @@ describe("rankMemoryCandidates", () => {
           embedding: [Number.NaN, 0, 1],
         },
       ],
-      { maxCandidates: 3, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+      {
+        maxCandidates: 3,
+        queryEmbedding: [1, 0, 0],
+        embeddingProviderIsReal: true,
+        nowIso: "2026-05-07T12:00:00.000Z",
+      },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:fresh-write");

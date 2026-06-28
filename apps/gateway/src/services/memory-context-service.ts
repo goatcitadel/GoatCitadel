@@ -29,7 +29,7 @@ import {
   type MemorySourceInput,
   type ParsedDistillation,
 } from "@goatcitadel/memory-core";
-import { assertWritePathInJail, generateEmbedding } from "@goatcitadel/policy-engine";
+import { assertWritePathInJail, currentEmbeddingProfile, generateEmbedding } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
@@ -129,7 +129,13 @@ export class MemoryContextService {
         maxMemoryItems: qmd.maxMemoryFiles,
         maxCharsPerCandidate: 1400,
       }),
-      { maxCandidates: 40, queryEmbedding },
+      {
+        maxCandidates: 40,
+        queryEmbedding,
+        // Only let embeddings influence rank when a real provider is active;
+        // the default pseudo-hash adds relevance-uncorrelated noise (see ranker).
+        embeddingProviderIsReal: currentEmbeddingProfile().provider !== "pseudo",
+      },
     );
 
     const sourcesHash = buildSourcesHash(candidates);
@@ -587,7 +593,10 @@ function resolveMemoryRetrievalMode(
   if (retrievalStrategies.includes("lexical_recency")) {
     return "lexical_recency";
   }
-  return "hybrid_rank";
+  // Honest default: with no observed semantic/hybrid strategy (e.g. the default
+  // pseudo provider, which no longer contributes an embedding score), report
+  // lexical_recency rather than implying a hybrid rerank that didn't happen.
+  return "lexical_recency";
 }
 
 function resolveMemoryFallbackMode(

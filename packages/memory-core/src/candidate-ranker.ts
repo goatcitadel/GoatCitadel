@@ -4,6 +4,15 @@ export interface CandidateRankerOptions {
   maxCandidates: number;
   nowIso?: string;
   queryEmbedding?: number[];
+  /**
+   * Whether the active embedding provider produces real semantic vectors. The
+   * default `pseudo` provider is a char-bucket hash with no semantic signal:
+   * its cosine between unrelated strings is high enough to clear the 0.65 gate,
+   * so counting it injects relevance-uncorrelated noise that degrades the BM25
+   * ordering. When this is not `true`, the embedding term contributes nothing
+   * (ranking stays lexical + recency). Defaults to off (safe) when omitted.
+   */
+  embeddingProviderIsReal?: boolean;
 }
 
 export function rankMemoryCandidates(
@@ -19,7 +28,11 @@ export function rankMemoryCandidates(
   const scored = candidates.map((candidate, index) => {
     const lexical = bm25[index] ?? 0;
     const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
-    const embedding = embeddingSignal(options.queryEmbedding, candidate.embedding);
+    const embedding = embeddingSignal(
+      options.queryEmbedding,
+      candidate.embedding,
+      options.embeddingProviderIsReal === true,
+    );
     const recency = recencyScore(now, candidate.timestamp);
     const diversity = sourceDiversityScore(candidate, sourceCounts);
     const rankScore = lexical + semanticHint + embedding.score + recency + diversity;
@@ -163,13 +176,21 @@ function calculateBm25Scores(queryTerms: string[], candidates: MemoryCandidate[]
 }
 
 function embeddingSignal(
-  queryEmbedding?: number[],
-  candidateEmbedding?: number[],
+  queryEmbedding: number[] | undefined,
+  candidateEmbedding: number[] | undefined,
+  providerIsReal: boolean,
 ): {
   score: number;
   status: "used" | "missing" | "invalid" | "dimension_mismatch";
   dimensions?: { query?: number; candidate?: number };
 } {
+  // The default pseudo-hash provider has no semantic signal — counting its
+  // cosine degrades the lexical ordering. Treat it as no usable embedding so the
+  // rank stays lexical + recency, and downstream reporting honestly avoids
+  // "semantic_vector"/"hybrid_rank" (those require embeddingScore > 0).
+  if (!providerIsReal) {
+    return { score: 0, status: "missing" };
+  }
   const queryPresent = Array.isArray(queryEmbedding) && queryEmbedding.length > 0;
   const candidatePresent = Array.isArray(candidateEmbedding) && candidateEmbedding.length > 0;
   if (!queryPresent || !candidatePresent) {
