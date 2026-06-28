@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import {
   fetchTrustPolicySnapshot,
   type TrustPolicyLastUseEvidence,
@@ -23,6 +23,12 @@ import {
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid } from "../../primitives";
+import {
+  TrustPolicyRowDetails,
+  hasDeclaredDependencies,
+  labelForKind,
+  normalizeDeclaredGovernance,
+} from "./TrustPolicyRowDetails";
 
 type TrustPolicyDashboardStatus =
   | "ready"
@@ -38,7 +44,7 @@ type TrustPolicyCallableState = "callable" | "inspectable" | "not_callable" | "a
 type TrustPolicyStatusFilter = TrustPolicyDashboardStatus | "all" | "needs_review";
 type TrustPolicyKindFilter = TrustPolicyEntryKind | "all";
 
-interface TrustPolicyMatrixRow {
+export interface TrustPolicyMatrixRow {
   id: string;
   kind: TrustPolicyEntryKind;
   label: string;
@@ -63,7 +69,7 @@ interface TrustPolicyMatrixRow {
   } | null;
 }
 
-interface TrustPolicyDeclaredGovernanceView {
+export interface TrustPolicyDeclaredGovernanceView {
   requiredEnv: Array<{ name: string; secret?: boolean }>;
   stateDirs: Array<{ path: string; writeable?: boolean }>;
   dependencies: {
@@ -314,11 +320,18 @@ function TrustPolicyFilters({
 }
 
 function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+
+  const toggleRow = (id: string) => {
+    setExpandedRows((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
   return (
     <div className="mc-next-trust-policy-table-wrap" data-native-scroll="true">
       <table className="mc-next-trust-policy-table">
         <thead>
           <tr>
+            <th scope="col" style={{ width: "32px" }}></th>
             <th scope="col">Capability / tool / source</th>
             <th scope="col">Status</th>
             <th scope="col">Trust state</th>
@@ -331,30 +344,64 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <th scope="row">
-                <strong>{row.label}</strong>
-                <span>
-                  {labelForKind(row.kind)}
-                  {row.source ? ` - ${row.source}` : ""}
-                </span>
-              </th>
-              <td data-label="Status">
-                <TrustPolicyStatusBadge status={normalizeTrustPolicyStatus(row.status)} />
-              </td>
-              <td data-label="Trust state">{row.trustState?.trim() || "Unknown"}</td>
-              <td data-label="Callable state">{labelForCallableState(row)}</td>
-              <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
-              <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
-              <td data-label="Declared governance">{renderDeclaredGovernance(row)}</td>
-              <td data-label="Owner action">
-                <strong>{row.owner ?? "Unknown owner"}</strong>
-                <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
-              </td>
-              <td data-label="Last-use evidence">{formatLastUse(row)}</td>
-            </tr>
-          ))}
+          {rows.flatMap((row) => {
+            const isExpanded = !!expandedRows[row.id];
+
+            return [
+              <tr
+                key={row.id}
+                className={isExpanded ? "is-expanded" : ""}
+                style={{ cursor: "pointer" }}
+                onClick={() => toggleRow(row.id)}
+              >
+                <td style={{ verticalAlign: "middle", textAlign: "center", padding: "0.25rem" }}>
+                  <button
+                    type="button"
+                    className="mc-next-trust-toggle-btn"
+                    aria-label={isExpanded ? "Collapse row" : "Expand row"}
+                    aria-expanded={isExpanded}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleRow(row.id);
+                    }}
+                  >
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                </td>
+                <th scope="row">
+                  <div className="mc-next-trust-row-header">
+                    <div>
+                      <strong>{row.label}</strong>
+                      <span>
+                        {labelForKind(row.kind)}
+                        {row.source ? ` - ${row.source}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                </th>
+                <td data-label="Status">
+                  <TrustPolicyStatusBadge status={normalizeTrustPolicyStatus(row.status)} />
+                </td>
+                <td data-label="Trust state">{row.trustState?.trim() || "Unknown"}</td>
+                <td data-label="Callable state">{labelForCallableState(row)}</td>
+                <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
+                <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
+                <td data-label="Declared governance">{renderDeclaredGovernance(row)}</td>
+                <td data-label="Owner action">
+                  <strong>{row.owner ?? "Unknown owner"}</strong>
+                  <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
+                </td>
+                <td data-label="Last-use evidence">{formatLastUse(row)}</td>
+              </tr>,
+              isExpanded && (
+                <tr key={`${row.id}-details`} className="mc-next-trust-policy-details-row">
+                  <td colSpan={10}>
+                    <TrustPolicyRowDetails row={row} />
+                  </td>
+                </tr>
+              ),
+            ];
+          })}
         </tbody>
       </table>
     </div>
@@ -406,10 +453,6 @@ function renderDeclaredGovernance(row: TrustPolicyMatrixRow): ReactNode {
       ))}
     </div>
   );
-}
-
-function hasDeclaredDependencies(deps: TrustPolicyDeclaredGovernanceView["dependencies"]): boolean {
-  return Boolean((deps.tools?.length ?? 0) || (deps.skillIds?.length ?? 0) || (deps.capabilities?.length ?? 0));
 }
 
 function TrustPolicyEmptyState({ hasIssues }: { hasIssues: boolean }) {
@@ -821,52 +864,6 @@ function declaredGovernanceSearchText(meta: TrustPolicySkillDeclaredMetadata | u
   return parts.length ? parts.join(" ") : undefined;
 }
 
-function normalizeDeclaredGovernance(
-  meta: TrustPolicySkillDeclaredMetadata | undefined,
-): TrustPolicyDeclaredGovernanceView | undefined {
-  if (!isRecord(meta)) {
-    return undefined;
-  }
-  const dependencies = isRecord(meta.dependencies) ? meta.dependencies : {};
-  return {
-    requiredEnv: readObjectArray(meta.requiredEnv)
-      .map((env) => ({
-        name: readString(env.name),
-        secret: env.secret === true,
-      }))
-      .filter((env): env is { name: string; secret: boolean } => Boolean(env.name)),
-    stateDirs: readObjectArray(meta.stateDirs)
-      .map((dir) => ({
-        path: readString(dir.path),
-        writeable: dir.writeable === true,
-      }))
-      .filter((dir): dir is { path: string; writeable: boolean } => Boolean(dir.path)),
-    dependencies: {
-      tools: readStringArray(dependencies.tools),
-      skillIds: readStringArray(dependencies.skillIds),
-      capabilities: readStringArray(dependencies.capabilities),
-    },
-  };
-}
-
-function readObjectArray(value: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => readString(item)).filter((item): item is string => Boolean(item))
-    : [];
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function normalizeTrustPolicyStatus(status: TrustPolicyDashboardStatus | undefined): TrustPolicyDashboardStatus {
   return STATUS_ORDER.includes(status as TrustPolicyDashboardStatus)
     ? (status as TrustPolicyDashboardStatus)
@@ -892,16 +889,6 @@ function labelForTrustPolicyStatus(status: TrustPolicyDashboardStatus): string {
     default:
       return "Unknown";
   }
-}
-
-function labelForKind(kind: TrustPolicyMatrixRow["kind"]): string {
-  if (kind === "capability") {
-    return "Capability";
-  }
-  if (kind === "tool") {
-    return "Tool";
-  }
-  return "Source";
 }
 
 function labelForCallableState(row: TrustPolicyMatrixRow): string {

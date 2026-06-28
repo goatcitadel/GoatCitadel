@@ -245,6 +245,7 @@ import {
 } from "./chat-agent-prompt-lab-taxonomy.js";
 export { defaultThinkingTokens } from "./chat-agent-budget.js";
 export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
+import { assertNoToolOutputInjection } from "./assembled-prompt-injection-guard.js";
 
 // Bounded ceiling for the final synthesis/repair completion pass. Matches the
 // largest per-mode completion timeout so a hung provider call cannot block the
@@ -3793,6 +3794,46 @@ export class ChatAgentOrchestrator {
   }
 
   private async executeToolCall(input: {
+    input: ChatAgentTurnInput;
+    turnId: string;
+    toolName: string;
+    rawArgs: Record<string, unknown>;
+    toolCallId?: string;
+    localFileIntent?: boolean;
+    priorToolRuns?: ChatToolRunRecord[];
+    turnBudgetDeadline?: number;
+  }): Promise<{
+    record: ChatToolRunRecord;
+    approvalExpiresAt?: string;
+    chunk?: ChatStreamChunkDraft;
+    userInputPrompt?: ChatUserInputPromptRecord;
+  }> {
+    const res = await this.executeToolCallInternal(input);
+    if (res.record.status === "executed" && res.record.result) {
+      try {
+        assertNoToolOutputInjection(res.record.result);
+      } catch (error) {
+        const updated = this.deps.storage.chatToolRuns.patch(res.record.toolRunId, {
+          status: "failed",
+          error: (error as Error).message,
+          failureGuidance: buildToolFailureGuidance({
+            toolName: res.record.toolName,
+            status: "failed",
+            args: res.record.args,
+            error: (error as Error).message,
+          }),
+          finishedAt: new Date().toISOString(),
+        });
+        res.record = updated;
+        if (res.chunk?.type === "tool_result") {
+          res.chunk.toolRun = updated;
+        }
+      }
+    }
+    return res;
+  }
+
+  private async executeToolCallInternal(input: {
     input: ChatAgentTurnInput;
     turnId: string;
     toolName: string;

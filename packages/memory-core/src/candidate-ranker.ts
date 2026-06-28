@@ -80,7 +80,7 @@ function semanticHintScore(terms: string[], hints?: string[]): number {
   }
   let hits = 0;
   for (const term of terms) {
-    if (hintTerms.some((hint) => hint.includes(term) || term.includes(hint))) {
+    if (hintTerms.some((hint) => hint.includes(term))) {
       hits += 1;
     }
   }
@@ -94,35 +94,72 @@ function calculateBm25Scores(queryTerms: string[], candidates: MemoryCandidate[]
   const uniqueQueryTerms = Array.from(new Set(queryTerms));
   const documents = candidates.map((candidate) => tokenize(candidate.text));
   const averageLength = documents.reduce((sum, doc) => sum + doc.length, 0) / documents.length || 1;
-  const documentFrequencies = new Map<string, number>();
-  for (const term of uniqueQueryTerms) {
-    documentFrequencies.set(
-      term,
-      documents.filter((doc) => doc.some((token) => token === term || token.includes(term) || term.includes(token)))
-        .length,
-    );
+
+  const N = candidates.length;
+  const termFreqs = Array.from({ length: N }, () => new Int32Array(uniqueQueryTerms.length));
+  const docFreqs = new Int32Array(uniqueQueryTerms.length);
+
+  for (let i = 0; i < N; i++) {
+    const doc = documents[i];
+    if (!doc || doc.length === 0) {
+      continue;
+    }
+    const freqs = termFreqs[i];
+    if (!freqs) {
+      continue;
+    }
+    for (let j = 0; j < uniqueQueryTerms.length; j++) {
+      const term = uniqueQueryTerms[j];
+      if (term === undefined) {
+        continue;
+      }
+      let count = 0;
+      for (let k = 0; k < doc.length; k++) {
+        const token = doc[k];
+        if (token !== undefined && (token === term || token.includes(term))) {
+          count++;
+        }
+      }
+      if (count > 0) {
+        freqs[j] = count;
+        const currentDf = docFreqs[j];
+        if (currentDf !== undefined) {
+          docFreqs[j] = currentDf + 1;
+        }
+      }
+    }
   }
+
   const k1 = 1.2;
   const b = 0.75;
-  return documents.map((doc) => {
-    if (doc.length === 0) {
-      return 0;
+  const scores = new Float64Array(N);
+
+  for (let i = 0; i < N; i++) {
+    const doc = documents[i];
+    if (!doc || doc.length === 0) {
+      scores[i] = 0;
+      continue;
+    }
+    const freqs = termFreqs[i];
+    if (!freqs) {
+      scores[i] = 0;
+      continue;
     }
     let rawScore = 0;
-    for (const term of uniqueQueryTerms) {
-      const termFrequency = doc.filter(
-        (token) => token === term || token.includes(term) || term.includes(token),
-      ).length;
+    for (let j = 0; j < uniqueQueryTerms.length; j++) {
+      const termFrequency = freqs[j] ?? 0;
       if (termFrequency === 0) {
         continue;
       }
-      const df = documentFrequencies.get(term) ?? 0;
-      const idf = Math.log(1 + (candidates.length - df + 0.5) / (df + 0.5));
+      const df = docFreqs[j] ?? 0;
+      const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
       rawScore +=
         idf * ((termFrequency * (k1 + 1)) / (termFrequency + k1 * (1 - b + b * (doc.length / averageLength))));
     }
-    return Math.min(1, rawScore / Math.max(1, uniqueQueryTerms.length * 1.5));
-  });
+    scores[i] = Math.min(1, rawScore / Math.max(1, uniqueQueryTerms.length * 1.5));
+  }
+
+  return Array.from(scores);
 }
 
 function embeddingSignal(

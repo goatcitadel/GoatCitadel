@@ -26,6 +26,9 @@ export interface SqliteOptions {
     cacheSizeKb?: number;
     tempStoreMemory?: boolean;
     walAutoCheckpointPages?: number;
+    synchronous?: "NORMAL" | "FULL" | "EXTRA" | "OFF";
+    mmapSizeBytes?: number;
+    journalSizeLimitBytes?: number;
   };
 }
 
@@ -105,7 +108,12 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
   });
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA synchronous = FULL;");
+  const syncMode = options.tuning?.synchronous ?? "FULL";
+  if (syncMode === "NORMAL" || syncMode === "FULL" || syncMode === "EXTRA" || syncMode === "OFF") {
+    db.exec(`PRAGMA synchronous = ${syncMode};`);
+  } else {
+    db.exec("PRAGMA synchronous = FULL;");
+  }
   db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
   if (options.tuning?.cacheSizeKb !== undefined) {
     db.exec(`PRAGMA cache_size = -${clampInt(options.tuning.cacheSizeKb, 4_096, 4_096, 262_144)};`);
@@ -115,6 +123,12 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
   }
   if (options.tuning?.walAutoCheckpointPages !== undefined) {
     db.exec(`PRAGMA wal_autocheckpoint = ${clampInt(options.tuning.walAutoCheckpointPages, 1_000, 1_000, 20_000)};`);
+  }
+  if (options.tuning?.mmapSizeBytes !== undefined) {
+    db.exec(`PRAGMA mmap_size = ${clampInt(options.tuning.mmapSizeBytes, 0, 0, 1073741824)};`);
+  }
+  if (options.tuning?.journalSizeLimitBytes !== undefined) {
+    db.exec(`PRAGMA journal_size_limit = ${clampInt(options.tuning.journalSizeLimitBytes, -1, -1, 268435456)};`);
   }
   migrate(db);
   return new SqliteDatabaseClient(db);

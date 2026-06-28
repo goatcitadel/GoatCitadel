@@ -195,6 +195,12 @@ function sanitizeLogValue(value: unknown, seen: WeakSet<object>): unknown {
       stack: value.stack ? redactSecretsInString(value.stack) : value.stack,
     };
   }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
   if (typeof value === "string") {
     return redactSecretsInString(value);
   }

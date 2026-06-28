@@ -947,3 +947,52 @@ test("P2-S4a SQLite blueprint and Postgres mirror exclude the chat_messages FTS 
   assert.doesNotMatch(postgresSql, /VIRTUAL TABLE/i);
   assert.doesNotMatch(postgresSql, /fts5/i);
 });
+
+test("createDatabase applies tuning options correctly", () => {
+  const tmpDir = path.join(os.tmpdir(), `citadel-test-${randomUUID()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const dbPath = path.join(tmpDir, "tuned.db");
+  try {
+    const client = createDatabase({
+      dbPath,
+      tuning: {
+        cacheSizeKb: 8192,
+        tempStoreMemory: true,
+        walAutoCheckpointPages: 2000,
+        synchronous: "NORMAL",
+        mmapSizeBytes: 536870912,
+        journalSizeLimitBytes: 134217728,
+      },
+    });
+    // Verify by fetching pragmas
+    const db = (client as any).db as DatabaseSync;
+    const syncResult = db.prepare("PRAGMA synchronous").get() as { synchronous: number };
+    // PRAGMA synchronous returns integer (0 = OFF, 1 = NORMAL, 2 = FULL, 3 = EXTRA)
+    assert.equal(syncResult.synchronous, 1);
+
+    const cacheResult = db.prepare("PRAGMA cache_size").get() as { cache_size: number };
+    // Cache size set to -8192 (negative means kibibytes)
+    assert.equal(cacheResult.cache_size, -8192);
+
+    const tempResult = db.prepare("PRAGMA temp_store").get() as { temp_store: number };
+    // temp_store MEMORY is typically represented as 2
+    assert.equal(tempResult.temp_store, 2);
+
+    const checkpointResult = db.prepare("PRAGMA wal_autocheckpoint").get() as { wal_autocheckpoint: number };
+    assert.equal(checkpointResult.wal_autocheckpoint, 2000);
+
+    const mmapResult = db.prepare("PRAGMA mmap_size").get() as { mmap_size: number };
+    assert.equal(mmapResult.mmap_size, 536870912);
+
+    const journalLimitResult = db.prepare("PRAGMA journal_size_limit").get() as { journal_size_limit: number };
+    assert.equal(journalLimitResult.journal_size_limit, 134217728);
+
+    client.close();
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+});

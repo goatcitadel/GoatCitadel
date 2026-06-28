@@ -741,8 +741,7 @@ export function planChannelRichMessageDelivery(
       index: plannedAttachments.length,
       source: "pending_attachment_id",
       mediaKind: "unknown",
-      disposition:
-        plannedAttachments.length < profile.providerAttachmentLimit ? "pending_hydration" : "blocked",
+      disposition: plannedAttachments.length < profile.providerAttachmentLimit ? "pending_hydration" : "blocked",
       reason:
         plannedAttachments.length < profile.providerAttachmentLimit
           ? "Attachment id will be hydrated before provider send."
@@ -756,7 +755,12 @@ export function planChannelRichMessageDelivery(
   ).length;
   const blockedAttachmentCount = plannedAttachments.filter((item) => item.disposition === "blocked").length;
   const pendingAttachmentIdCount = plannedAttachments.filter((item) => item.source === "pending_attachment_id").length;
-  const textPosture = resolveRichTextPosture(normalizedChannelKey, text, plannedAttachments, profile.captionMaxCodeUnits);
+  const textPosture = resolveRichTextPosture(
+    normalizedChannelKey,
+    text,
+    plannedAttachments,
+    profile.captionMaxCodeUnits,
+  );
   const status = blockedAttachmentCount > 0 ? "blocked" : resolveRichPlanStatus(textPosture, fallbackAttachmentCount);
   const notes = buildRichMessageNotes({
     channelKey: normalizedChannelKey,
@@ -883,13 +887,14 @@ function planRichAttachment(
         };
   }
   if (channelKey === "telegram") {
+    const isNativeMedia = mediaKind === "image" || mediaKind === "video" || mediaKind === "audio";
+    const providerKind =
+      mediaKind === "image" ? "photo" : mediaKind === "video" ? "video" : mediaKind === "audio" ? "audio" : "document";
     return {
       ...common,
-      providerKind: mediaKind === "image" ? "photo" : "document",
-      disposition: mediaKind === "image" ? "native_media" : "document_fallback",
-      ...(mediaKind === "image"
-        ? {}
-        : { reason: "Telegram non-image rich attachments use document delivery in this bridge." }),
+      providerKind,
+      disposition: isNativeMedia ? "native_media" : "document_fallback",
+      ...(isNativeMedia ? {} : { reason: "Telegram non-media rich attachments use document delivery in this bridge." }),
     };
   }
   if (channelKey === "whatsapp") {
@@ -898,9 +903,7 @@ function planRichAttachment(
       ...common,
       providerKind,
       disposition: mediaKind === "unknown" ? "document_fallback" : "native_media",
-      ...(mediaKind === "unknown"
-        ? { reason: "Unknown WhatsApp media type falls back to document delivery." }
-        : {}),
+      ...(mediaKind === "unknown" ? { reason: "Unknown WhatsApp media type falls back to document delivery." } : {}),
     };
   }
   return {
@@ -1005,7 +1008,9 @@ function buildRichMessageNotes(input: {
     );
   }
   if (input.pendingAttachmentIdCount > 0) {
-    notes.push(`${input.pendingAttachmentIdCount} attachment id${input.pendingAttachmentIdCount === 1 ? "" : "s"} will be hydrated before provider send.`);
+    notes.push(
+      `${input.pendingAttachmentIdCount} attachment id${input.pendingAttachmentIdCount === 1 ? "" : "s"} will be hydrated before provider send.`,
+    );
   }
   if (input.textPosture === "caption") {
     notes.push(`Message text fits the ${input.captionMaxCodeUnits} UTF-16 code unit caption limit.`);

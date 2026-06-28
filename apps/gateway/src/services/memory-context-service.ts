@@ -33,6 +33,7 @@ import { assertWritePathInJail, generateEmbedding } from "@goatcitadel/policy-en
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
+import { assertNoMemoryContextInjection } from "./assembled-prompt-injection-guard.js";
 
 export class MemoryContextService {
   public constructor(
@@ -43,6 +44,12 @@ export class MemoryContextService {
   ) {}
 
   public async compose(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
+    const pack = await this.composeInternal(input);
+    assertNoMemoryContextInjection(pack.contextText);
+    return pack;
+  }
+
+  private async composeInternal(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
     throwIfMemoryContextAborted(input.signal);
     const startedAt = Date.now();
     const memoryConfig = this.config.assistant.memory;

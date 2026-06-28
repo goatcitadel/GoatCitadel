@@ -60,6 +60,25 @@ export function assertNoAssembledPromptInjection(prompt: string): void {
   }
 }
 
+export function assertNoMemoryContextInjection(contextText: string): void {
+  const [finding] = scanPromptwareContent({ source: "memory_context", content: contextText });
+  if (finding) {
+    throw new Error(
+      `Memory context failed prompt-injection scan: ${finding.marker}; evidence=${finding.evidenceHash.slice(0, 12)}`,
+    );
+  }
+}
+
+export function assertNoToolOutputInjection(result: unknown): void {
+  const content = typeof result === "string" ? result : JSON.stringify(result);
+  const [finding] = scanPromptwareContent({ source: "tool_output", content });
+  if (finding) {
+    throw new Error(
+      `Tool output failed prompt-injection scan: ${finding.marker}; evidence=${finding.evidenceHash.slice(0, 12)}`,
+    );
+  }
+}
+
 function buildRedactedExcerpt(content: string, matchIndex: number, matchLength: number): string {
   // matchIndex/matchLength are offsets into the ORIGINAL content, so slice the window from the
   // original (then collapse whitespace) — slicing a pre-collapsed string with original offsets
@@ -67,9 +86,7 @@ function buildRedactedExcerpt(content: string, matchIndex: number, matchLength: 
   const start = Math.max(0, matchIndex - 48);
   const end = Math.min(content.length, matchIndex + matchLength + 96);
   const window = content.slice(start, end).replace(/\s+/g, " ").trim();
-  return redactPromptwareExcerpt(
-    `${start > 0 ? "..." : ""}${window}${end < content.length ? "..." : ""}`,
-  );
+  return redactPromptwareExcerpt(`${start > 0 ? "..." : ""}${window}${end < content.length ? "..." : ""}`);
 }
 
 function redactPromptwareExcerpt(value: string): string {

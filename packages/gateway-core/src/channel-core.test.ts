@@ -406,6 +406,41 @@ describe("describeChannelCapabilities", () => {
     expect(plan?.notes.join(" ")).toContain("caption limit");
   });
 
+  it("plans Telegram rich messages with native video and audio attachments", () => {
+    const plan = planChannelRichMessageDelivery("telegram", {
+      text: "Checkout the recording",
+      attachments: [
+        { url: "https://example.com/recording.mp4", mimeType: "video/mp4", title: "recording.mp4" },
+        { url: "https://example.com/audio.mp3", mimeType: "audio/mp3", title: "audio.mp3" },
+      ],
+    });
+
+    expect(plan).toMatchObject({
+      channelKey: "telegram",
+      provider: "telegram_bot_api",
+      status: "preserved",
+      attachmentCount: 2,
+      nativeAttachmentCount: 2,
+      fallbackAttachmentCount: 0,
+      attachments: [
+        {
+          index: 0,
+          source: "url",
+          mediaKind: "video",
+          providerKind: "video",
+          disposition: "native_media",
+        },
+        {
+          index: 1,
+          source: "url",
+          mediaKind: "audio",
+          providerKind: "audio",
+          disposition: "native_media",
+        },
+      ],
+    });
+  });
+
   it("blocks unsafe Telegram rich attachment shapes before provider send", () => {
     const metadataOnly = planChannelRichMessageDelivery("telegram", {
       text: "see attachment",
