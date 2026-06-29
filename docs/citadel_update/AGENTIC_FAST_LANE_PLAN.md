@@ -1,6 +1,6 @@
 # Plan: Close the GoatCitadel ↔ OpenClaw/Hermes agentic gap
 
-**Status:** Active · **Date:** 2026-06-28 · **Verified against:** main `c2973e7f4`
+**Status:** Active · **Date:** 2026-06-28 · **Verified against:** current branch through `80f654669` plus review fixes
 **Sources:** [GATEWAY_AGENTIC_REVIEW_2026-06-28.md](GATEWAY_AGENTIC_REVIEW_2026-06-28.md) (5-agent audit) + a live-repo side-chat review (3 audits) + the hand-verified [GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md](GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md). Two of the side-chat's load-bearing claims (S1 cowork buffering, S6 durable-wrap) were re-verified by hand for this plan.
 
 ## Objective
@@ -9,7 +9,7 @@ Match OpenClaw/Hermes **speed + liveness** without losing GoatCitadel's governan
 ## Thesis (corrected & merged)
 PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → synthesize → durable → govern** pipeline. The features are now present and mostly effective — but the integration **regressed liveness**: a cowork turn runs the whole orchestration to completion and then delivers a finished string, so time-to-first-token ≈ whole-turn. The competitors win with one lean streaming loop on a fast-routed model. The fix is not more features — it's **un-bury the streaming loop** and **switch on the features we shipped dead**.
 
-> **Correction from the side-chat review (verified):** the single biggest cowork win is **S1 — stream the terminal orchestration step**. The already-shipped P0‑#1 (notify-on-append, below) removes the chat-path 200ms poll but does **not** make cowork stream, because cowork has no model tokens to forward until `orchestrationResultPromise` resolves. S1 is still open and is the headline.
+> **Correction from the side-chat review (verified):** the single biggest cowork win was **S1 — stream the terminal orchestration step**. The already-shipped P0‑#1 (notify-on-append, below) removes the chat-path 200ms poll but does **not** make cowork stream, because cowork has no model tokens to forward until `orchestrationResultPromise` resolves. S1 is now implemented on this branch with a reversible kill switch and post-review guards for backpressure and partial child-stream failure.
 
 ## DO NOT REGRESS (verified-good from the overhaul)
 - Answer-recovery ladder + user-visible `degraded` footer — `chat-agent-orchestrator.ts:2448-2475,:3356-3375`
@@ -26,15 +26,17 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
 
 - [x] **P0‑#1 — kill the live-tail 200ms poll** (`adb1c4780`). `persistChatStreamChunk` now wakes live-tail readers on append; the loop awaits a per-turn signal instead of `wait(200ms)`, timeout kept as a liveness floor. Removes avg ~100ms/token on the **chat / single-loop** streaming path. +5 tests. *Scope note: necessary but NOT sufficient for cowork — see S1.*
 - [x] **P0‑#2 — populate the in-prompt tool/skill catalog** (`3f99e8583`). `resolveBasePromptCapabilityCatalog()` feeds the model its callable tools + skill summaries; `chat-turn-prep-service.ts:405` no longer passes `{ toolNames: [] }`. Cheap, cache-safe, no per-tool policy eval. +2 tests. *This is the side-chat's "flip the dead toolset/skills feature" — done.*
+- [x] **P0‑#3 — stop pseudo-embeddings poisoning ranking** (`d3ef48102` + review fix). Pseudo/fallback embeddings no longer contribute semantic-vector rank, and retrieval status no longer advertises hybrid rerank unless recent citations actually used it.
+- [x] **S1 — stream the terminal orchestration step's tokens to SSE** (`cf7230e82` + `80f654669` + review fixes). Cowork/code terminal synthesizer deltas can now flow live to the parent SSE when the final streamed text matches the authoritative final output; otherwise the parent falls back to the buffered final text. The operator kill switch is `orchestrationFinalStreamingV1Disabled`.
 
 ---
 
 ## P0 — make a single cowork turn feel alive (days, highest ROI)
 
-- [ ] **S1 (HEADLINE) — stream the terminal orchestration step's tokens to SSE** instead of `await orchestrationResultPromise` then delivering a finished string. Verified: cowork awaits the full orchestration (`chat-turn-stream-service.ts:1314,1390-1402`), takes `finalOutput` as a complete string (`:1405`), writes it as one message (`:1430-1441`); only `trace_update` progress events stream meanwhile. Forward the final step's deltas. Gate that forces cowork/code through orchestration: `model-router-decision-service.ts:96`. **TTFT: whole-turn → first chunk. #1 win.**
+- [x] **S1 (HEADLINE) — stream the terminal orchestration step's tokens to SSE** instead of `await orchestrationResultPromise` then delivering a finished string. Implemented with parent-SSE forwarding for the terminal delegated synthesizer, exact-match final-text reconciliation, a lossless progress queue, non-terminal stream-error failure handling, and a `orchestrationFinalStreamingV1Disabled` kill switch. **TTFT: whole-turn → first terminal-synthesizer chunk. #1 win.**
 - [ ] **S2 — de-block the planner.** Every cowork turn pays a mandatory ~1.5s non-streaming planner LLM, serial after prep (`chat-turn-prep-service.ts:715-820`). Run it on a fast/cheap model, truly parallel with prep, or skip for low-complexity turns. (Note: `2116cb43f` did **not** actually parallelize it — it only added a `Promise.race` timeout and lowered the bound 2500→1500ms.)
 - [ ] **S3 — real fast-model routing.** `selectedEngine` (`fast_local`, …) is a trace label only; the provider call always uses the session-default model (`chat-agent-orchestrator.ts:2199-2200`). Map the labels to actual models so a trivial turn uses a cheap fast model.
-- [ ] **P0‑#3 — stop pseudo-embeddings poisoning ranking, then ship a real default.** Short-term: gate the embedding term off when the provider is `pseudo` and report `lexical_recency` honestly (`candidate-ranker.ts:205-223`, `memory-context-service.ts:429`) so it stops *degrading* BM25. Medium-term: ship a real bundled local embedding default (e.g. `bge-small`/MiniLM via `@xenova/transformers`) at `local-embeddings.ts:290`, keeping pseudo only as offline fallback. Recall stack: noise → working with one dependency + a default change.
+- [x] **P0‑#3 — stop pseudo-embeddings poisoning ranking.** Short-term is complete: the embedding term is gated off when the actual generated query vector is pseudo/fallback, and status reports `lexical_recency` honestly unless semantic/hybrid evidence exists. Medium-term remains: ship a real bundled local embedding default (e.g. `bge-small`/MiniLM via `@xenova/transformers`) at `local-embeddings.ts:290`, keeping pseudo only as offline fallback. Recall stack: noise → working with one dependency + a default change.
 
 ## P1 — speed depth + quality (1–2 weeks)
 - [ ] **S4 — parallelize independent tool calls.** N calls from one model turn run `for…of` with `await` each = sum, not max; no `Promise.all` in the orchestrator (`chat-agent-orchestrator.ts:2619→:2730`). Use `Promise.allSettled` over side-effect-free calls behind a read-only/path-overlap safety gate.
@@ -51,10 +53,10 @@ PR #137 fixed "thin responses" by wrapping cowork in a **plan → execute → sy
 - [ ] **Warm the operator profile fast** (born empty, fills ~1 turn in 5) — `operator-profile-service.ts:120-123`.
 
 ## Done criteria
-- Cowork TTFT measured **first-chunk**, not whole-turn.
+- Cowork TTFT measured **first terminal-synthesizer chunk**, not whole-turn. ✅ (S1 implementation)
 - A trivial cowork turn uses a **fast model** (not the session default).
-- Memory recall returns **semantically-relevant** (not lexically-overlapping) items.
+- Memory recall stops letting pseudo vectors outrank BM25. Real semantic relevance still depends on a real default embedding provider.
 - Base prompt contains the live tool/skills index. ✅ (P0‑#2)
 
 ## Open follow-up — competitor-update survey (this session CAN do it)
-The side-chat couldn't pull a fresh competitor diff (read-only fork, out-of-root blocked). In a full session: `git -C F:\code\_external-review\hermes-agent fetch --unshallow` (it's a shallow clone), refresh openclaw, then re-verify their current loop/streaming/spawn code against today's GoatCitadel for a line-anchored port map. The loop now lives under `src/agents/embedded-agent-runner/run/attempt.ts`; OpenClaw's spawn tool relocated to `sessions-spawn-tool.ts`.
+The side-chat couldn't pull a fresh competitor diff (read-only fork, out-of-root blocked). In a full session: refresh the local Hermes and OpenClaw external review clones, then re-verify their current loop/streaming/spawn code against today's GoatCitadel for a line-anchored port map. The loop now lives under `src/agents/embedded-agent-runner/run/attempt.ts`; OpenClaw's spawn tool relocated to `sessions-spawn-tool.ts`.

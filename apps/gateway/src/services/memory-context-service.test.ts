@@ -14,7 +14,10 @@ import { MemoryContextService } from "./memory-context-service.js";
 // P0-#3: the ranker only counts the embedding signal when a real embedding
 // provider is active. Tests that exercise the semantic-vector path report a real
 // provider via this mock; the default stays "pseudo" so suppression is the norm.
-const embeddingMock = vi.hoisted(() => ({ provider: "pseudo" as "pseudo" | "remote" | "llamacpp" }));
+const embeddingMock = vi.hoisted(() => ({
+  provider: "pseudo" as "pseudo" | "remote" | "llamacpp",
+  generatedProvider: undefined as "pseudo" | "remote" | "llamacpp" | undefined,
+}));
 vi.mock("@goatcitadel/policy-engine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@goatcitadel/policy-engine")>();
   return {
@@ -23,6 +26,26 @@ vi.mock("@goatcitadel/policy-engine", async (importOriginal) => {
       ...actual.currentEmbeddingProfile(request),
       provider: embeddingMock.provider,
     }),
+    generateEmbedding: async (...args: Parameters<typeof actual.generateEmbedding>) => {
+      const generated = await actual.generateEmbedding(...args);
+      const provider = embeddingMock.generatedProvider ?? embeddingMock.provider;
+      if (provider === "pseudo") {
+        return generated;
+      }
+      return {
+        ...generated,
+        method: provider === "remote" ? "remote-embedding" : "llamacpp-embedding",
+        metadata: {
+          ...generated.metadata,
+          provider,
+          fallbackReason: undefined,
+        },
+        profile: {
+          ...generated.profile,
+          provider,
+        },
+      };
+    },
   };
 });
 
@@ -30,6 +53,7 @@ const tempRoots: string[] = [];
 
 beforeEach(() => {
   embeddingMock.provider = "pseudo";
+  embeddingMock.generatedProvider = undefined;
 });
 
 afterEach(async () => {
@@ -519,6 +543,83 @@ describe("MemoryContextService", () => {
     expect(memoryCitation?.provenance?.retrievalStrategy).toBe("hybrid_rank");
   });
 
+  it("does not count generated pseudo fallback vectors when a real embedding provider is configured", async () => {
+    embeddingMock.provider = "remote";
+    embeddingMock.generatedProvider = "pseudo";
+    const rootDir = await createWorkspaceRoot();
+    const prompt = "How should browser sessions be governed before tool access?";
+    const storage = createStorage({
+      memoryItems: [
+        {
+          itemId: "mem-fallback",
+          namespace: "workspace/default",
+          title: "Browser governance",
+          content: "Browser sessions require scoped grants before tool access.",
+          metadata: { embedding: [0.1, 0.2, 0.3] },
+          pinned: true,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-05-30T18:00:00.000Z",
+          updatedAt: "2026-05-30T18:05:00.000Z",
+        } as MemoryItemRecord,
+      ],
+    });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-fallback-embed",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Browser sessions need scoped grants.",
+                  facts: [{ text: "Browser sessions need scoped grants.", citationIds: ["m:mem-fallback"] }],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-fallback",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-fallback",
+                      snippet: "Browser sessions require scoped grants",
+                      score: 0.8,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt,
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    const memoryCitation = pack.citations.find((citation) => citation.candidateId === "m:mem-fallback");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingStatus).toBe("missing");
+    expect(memoryCitation?.provenance?.matchSignals?.embeddingScore).toBeUndefined();
+    expect(memoryCitation?.provenance?.matchSignals?.semanticVectorScore).toBeUndefined();
+    expect(memoryCitation?.provenance?.retrievalStrategy).toBe("lexical_recency");
+  });
+
   it("degrades gracefully to lexical signals when the stored embedding dimensions mismatch (W1)", async () => {
     embeddingMock.provider = "remote";
     const rootDir = await createWorkspaceRoot();
@@ -823,6 +924,27 @@ describe("MemoryContextService", () => {
         totalRuns: 1,
         fallbackRuns: 1,
         retrievalStrategies: ["hybrid_rank"],
+      },
+    });
+  });
+
+  it("reports lexical-only status without advertising hybrid rerank when no semantic strategy was observed", async () => {
+    const service = new MemoryContextService(
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+    );
+
+    expect(service.retrievalStatus(new Date("2026-05-15T00:10:00.000Z"))).toMatchObject({
+      enabled: true,
+      retrievalMode: "lexical_recency",
+      rerankAvailable: false,
+      rerankMode: "none",
+      fallbackMode: "available",
+      recent: {
+        totalRuns: 0,
+        retrievalStrategies: [],
       },
     });
   });

@@ -61,7 +61,13 @@ export class MemoryContextService {
     // Generate a query embedding for the prompt when the caller did not supply one,
     // so semantic-vector ranking can engage. Skipped on the short-circuit path
     // (disabled/short prompt never ranks, so the legacy behavior is preserved).
-    const queryEmbedding = shouldShortCircuit ? input.queryEmbedding : await this.resolveQueryEmbedding(input, prompt);
+    const resolvedQueryEmbedding = shouldShortCircuit
+      ? {
+          embedding: input.queryEmbedding,
+          providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
+        }
+      : await this.resolveQueryEmbedding(input, prompt);
+    const queryEmbedding = resolvedQueryEmbedding.embedding;
     const queryHash = buildQueryHash(prompt, queryEmbedding);
     if (shouldShortCircuit) {
       const fallback = composeFallbackContext([], maxContextTokens);
@@ -134,7 +140,7 @@ export class MemoryContextService {
         queryEmbedding,
         // Only let embeddings influence rank when a real provider is active;
         // the default pseudo-hash adds relevance-uncorrelated noise (see ranker).
-        embeddingProviderIsReal: currentEmbeddingProfile().provider !== "pseudo",
+        embeddingProviderIsReal: resolvedQueryEmbedding.providerIsReal,
       },
     );
 
@@ -420,6 +426,8 @@ export class MemoryContextService {
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const stats = this.storage.memoryQmdRuns.stats(from, checkedAt);
     const retrievalStrategies = collectRecentRetrievalStrategies(recentContexts);
+    const retrievalMode = resolveMemoryRetrievalMode(enabled, retrievalStrategies);
+    const rerankMode = resolveMemoryRerankMode(enabled, retrievalStrategies);
     const lastError = recentRuns.find((run) => run.errorText?.trim())?.errorText;
     const lastRefresh = recentRuns[0]?.createdAt ?? recentContexts[0]?.createdAt;
     const fallbackMode = resolveMemoryFallbackMode(
@@ -430,9 +438,9 @@ export class MemoryContextService {
     return {
       checkedAt,
       enabled,
-      retrievalMode: resolveMemoryRetrievalMode(enabled, retrievalStrategies),
-      rerankAvailable: enabled,
-      rerankMode: enabled ? "hybrid_rank" : "none",
+      retrievalMode,
+      rerankAvailable: rerankMode !== "none",
+      rerankMode,
       fallbackMode,
       lastRefresh,
       lastError,
@@ -459,27 +467,33 @@ export class MemoryContextService {
 
   /**
    * Resolve the query embedding used for semantic-vector ranking. Honors an
-   * explicit `input.queryEmbedding`; otherwise generates one from the prompt via
-   * the current embedding profile. Degrades to `undefined` on any generation
-   * failure so the ranker falls back to lexical/recency signals (the
-   * `dimension_mismatch`/`missing` paths already handle absent/incompatible
-   * vectors gracefully).
+   * explicit `input.queryEmbedding`; otherwise generates one from the prompt.
+   * The returned `providerIsReal` follows the actual generated vector metadata,
+   * not only the configured provider: real providers can fall back to pseudo
+   * vectors on network/config errors, and those fallback vectors must not affect
+   * semantic ranking.
    */
   private async resolveQueryEmbedding(
     input: MemoryContextComposeRequest,
     prompt: string,
-  ): Promise<number[] | undefined> {
+  ): Promise<{ embedding?: number[]; providerIsReal: boolean }> {
     if (input.queryEmbedding && input.queryEmbedding.length > 0) {
-      return input.queryEmbedding;
+      return {
+        embedding: input.queryEmbedding,
+        providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
+      };
     }
     if (!prompt) {
-      return undefined;
+      return { providerIsReal: false };
     }
     try {
       const generated = await generateEmbedding(prompt);
-      return generated.embedding.length > 0 ? generated.embedding : undefined;
+      return {
+        ...(generated.embedding.length > 0 ? { embedding: generated.embedding } : {}),
+        providerIsReal: generated.metadata.provider !== "pseudo",
+      };
     } catch {
-      return undefined;
+      return { providerIsReal: false };
     }
   }
 
@@ -597,6 +611,16 @@ function resolveMemoryRetrievalMode(
   // pseudo provider, which no longer contributes an embedding score), report
   // lexical_recency rather than implying a hybrid rerank that didn't happen.
   return "lexical_recency";
+}
+
+function resolveMemoryRerankMode(
+  enabled: boolean,
+  retrievalStrategies: MemoryRetrievalStrategy[],
+): MemoryRetrievalStatusResponse["rerankMode"] {
+  if (!enabled) {
+    return "none";
+  }
+  return retrievalStrategies.includes("hybrid_rank") ? "hybrid_rank" : "none";
 }
 
 function resolveMemoryFallbackMode(

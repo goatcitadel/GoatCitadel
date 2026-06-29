@@ -842,10 +842,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
     }
     // (b) no synthetic 120-char split: deltas are exactly the streamed pieces,
     // and their concat equals finalText (one piece per streamed token group).
-    expect(realDeltas.map((delta) => delta.delta)).toEqual([
-      "## Dinner Party Plan\n\n",
-      "Final host-ready checklist.",
-    ]);
+    expect(realDeltas.map((delta) => delta.delta)).toEqual(["## Dinner Party Plan\n\n", "Final host-ready checklist."]);
     expect(realDeltas.map((delta) => delta.delta).join("")).toBe(finalText);
     expect(chunks[messageDoneIndex].content).toBe(finalText);
     // (c) persistence received the complete finalText.
@@ -855,6 +852,46 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
         message: expect.objectContaining({ role: "assistant", content: finalText }),
       }),
     );
+  });
+
+  it("does not drop terminal deltas when the parent stream is backpressured", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
+    host.agentSendChatMessage = plannerBufferedSendMock() as never;
+    const deltas = Array.from({ length: 320 }, (_value, index) => `d${index}|`);
+    const finalText = deltas.join("");
+    host.agentSendChatMessageStream = childStreamMock({ deltas }) as never;
+
+    const iterator = streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createDelegatedModeOrchestrationResolution(),
+    )[Symbol.asyncIterator]();
+
+    const chunks: any[] = [];
+    while (!chunks.some((chunk) => chunk.type === "delta")) {
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      chunks.push(next.value);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) {
+        break;
+      }
+      chunks.push(next.value);
+    }
+
+    const streamedDeltas = chunks.filter((chunk) => chunk.type === "delta").map((chunk) => chunk.delta);
+    expect(streamedDeltas).toEqual(deltas);
+    expect(streamedDeltas.join("")).toBe(finalText);
+    expect(chunks.find((chunk) => chunk.type === "message_done")?.content).toBe(finalText);
   });
 
   it("uses the byte-identical buffered path when the kill switch is engaged", async () => {
@@ -977,7 +1014,6 @@ describe("executeDelegatedPlanStep S1 streaming fallback", () => {
     const host = createHost();
     const childStream = vi.fn(async function* () {
       throw new Error("stream exploded before first token");
-      // eslint-disable-next-line no-unreachable
       yield undefined;
     });
     host.agentSendChatMessageStream = childStream as never;
@@ -1015,7 +1051,13 @@ describe("executeDelegatedPlanStep S1 streaming fallback", () => {
   it("does NOT re-send after a delta when the stream throws mid-flight", async () => {
     const host = createHost();
     const childStream = vi.fn(async function* () {
-      yield { type: "delta", sessionId: "delegate-session", turnId: "child-turn-1", messageId: "child-msg-1", delta: "partial " };
+      yield {
+        type: "delta",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        messageId: "child-msg-1",
+        delta: "partial ",
+      };
       yield {
         type: "trace_update",
         sessionId: "delegate-session",
@@ -1053,6 +1095,47 @@ describe("executeDelegatedPlanStep S1 streaming fallback", () => {
     // Reconstructed from the terminal message_done/trace that was already seen.
     expect(result.status).toBe("completed");
     expect(result.output).toBe("partial recovered");
+  });
+
+  it("fails the delegated step when a post-delta stream error has no terminal child result", async () => {
+    const host = createHost();
+    const childStream = vi.fn(async function* () {
+      yield {
+        type: "trace_update",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        trace: {
+          turnId: "child-turn-1",
+          sessionId: "delegate-session",
+          status: "running",
+          model: "delegate-model",
+          routing: { effectiveProviderId: "delegate-provider" },
+        },
+      };
+      yield {
+        type: "delta",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        messageId: "child-msg-1",
+        delta: "partial ",
+      };
+      throw new Error("stream exploded before terminal result");
+    });
+    host.agentSendChatMessageStream = childStream as never;
+    host.agentSendChatMessage = vi.fn() as never;
+    const pushed: string[] = [];
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      streamTerminalStep: true,
+      finalDeltaSink: { push: (delta: string) => pushed.push(delta), markStreamed: () => {} },
+    } as never);
+
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(pushed).toEqual(["partial "]);
+    expect(result.status).toBe("failed");
+    expect(result.output).toBeUndefined();
+    expect(result.error).toBe("stream exploded before terminal result");
   });
 });
 

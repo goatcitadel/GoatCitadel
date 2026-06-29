@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-28
 **Companion to:** `GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md` (which produced PR #137, merged 2026-06-22).
-**Method:** 5 parallel investigation agents tracing the *current* code (post-#137 + the three perf commits), competitor contrast against full clones in `F:\code\_external-review\{openclaw,hermes-agent}`, load-bearing claims re-verified by hand.
+**Method:** 5 parallel investigation agents tracing the *current* code (post-#137 + the three perf commits), competitor contrast against local full-review clones of OpenClaw and Hermes, load-bearing claims re-verified by hand.
 **Scope the user asked for:** *match the speed, response, and capabilities of OpenClaw and Hermes — cowork still doesn't work well after the overhaul.*
 
 ---
@@ -28,6 +28,8 @@ A parallel side-chat review of the live repos corroborated and **sharpened** thi
 
 1. **Cowork-streaming correction (verified).** Divergence #1 below is broader than the 200ms poll. The real cowork headline is **S1: cowork/code turns don't stream at all** — `chat-turn-stream-service.ts:1402` `await orchestrationResultPromise` then delivers `finalOutput` as a finished string (`:1405,1430-1441`); only `trace_update` progress events stream meanwhile, so TTFT ≈ whole turn. The shipped P0‑#1 (notify-on-append) removes the poll on the chat path but does **not** make cowork stream — S1 (stream the terminal orchestration step) is the open #1 win.
 2. **Shipped:** P0‑#1 (kill the 200ms poll) and P0‑#2 (in-prompt tool/skill catalog) are done on branch `feat/agentic-fast-lane-p0`. New findings folded into the plan: durable-wrapping short turns (S6), per-iteration trace-receipt cost (S5), regex-digest compaction, depth gated on mode, no real sub-agent fan-out, skill self-authoring dead-ends.
+
+**Post-review implementation note (2026-06-28):** S1 and the short-term P0‑#3 pseudo-embedding fix are now implemented on the branch through `80f654669` plus review fixes. Use [AGENTIC_FAST_LANE_PLAN.md](AGENTIC_FAST_LANE_PLAN.md) for current execution status; this document remains the line-anchored analysis of why those fixes mattered.
 
 ## Part 0 — What's good now (keep, don't churn)
 

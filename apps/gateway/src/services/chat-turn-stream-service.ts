@@ -1190,11 +1190,7 @@ async function driveTerminalDelegatedStream(
   const citations: ChatCitationRecord[] = [];
 
   try {
-    for await (const chunk of host.agentSendChatMessageStream(
-      input.childSessionId,
-      input.request,
-      input.options,
-    )) {
+    for await (const chunk of host.agentSendChatMessageStream(input.childSessionId, input.request, input.options)) {
       switch (chunk.type) {
         case "delta": {
           if (chunk.delta) {
@@ -1233,10 +1229,11 @@ async function driveTerminalDelegatedStream(
       // byte-identical to the non-streaming path on any pre-token failure.
       return host.agentSendChatMessage(input.childSessionId, input.request, input.options);
     }
-    // Tokens already streamed: never re-send. Reconstruct from whatever terminal
-    // signals were seen; if none, surface the error trace so the engine shapes a
-    // failed step exactly as the buffered branch would have.
-    if (terminalContent === undefined && !terminalTrace) {
+    // Tokens already streamed: never re-send. Reconstruct only when a real
+    // terminal signal was seen; a stale/running trace plus partial deltas is not
+    // an authoritative child result and must flow through the delegated failure
+    // path instead of being promoted to a successful final answer.
+    if (terminalContent === undefined && !isTerminalDelegatedStreamTrace(terminalTrace)) {
       throw error;
     }
   }
@@ -1259,6 +1256,21 @@ async function driveTerminalDelegatedStream(
     citations,
     routing: terminalTrace?.routing,
   };
+}
+
+function isTerminalDelegatedStreamTrace(trace: ChatTurnTraceRecord | undefined): boolean {
+  switch (trace?.status) {
+    case "completed":
+    case "partial":
+    case "failed":
+    case "cancelled":
+    case "waiting_for_approval":
+    case "waiting_for_user_input":
+    case "waiting_for_tool":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function patchActiveDelegationStep(
@@ -1289,7 +1301,7 @@ function patchActiveDelegationStep(
   }
 }
 
-function createAsyncProgressQueue<T>(maxBufferedValues = 256) {
+function createAsyncProgressQueue<T>() {
   const values: T[] = [];
   const waiters: Array<(value: T | undefined) => void> = [];
   let closed = false;
@@ -1309,9 +1321,6 @@ function createAsyncProgressQueue<T>(maxBufferedValues = 256) {
       if (waiter) {
         waiter(value);
         return;
-      }
-      if (values.length >= maxBufferedValues) {
-        values.shift();
       }
       values.push(value);
     },

@@ -87,6 +87,35 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it("passes agentic kill-switch feature flags through the settings patch schema", async () => {
+    const updateSettings = vi.fn((input: Record<string, unknown>) => input);
+
+    app = Fastify();
+    app.decorate("services", { settings: { updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: {
+        features: {
+          coworkRuntimeQualityV1Disabled: true,
+          orchestrationFinalStreamingV1Disabled: true,
+          autonomyV1Disabled: true,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateSettings).toHaveBeenCalledWith({
+      features: {
+        coworkRuntimeQualityV1Disabled: true,
+        orchestrationFinalStreamingV1Disabled: true,
+        autonomyV1Disabled: true,
+      },
+    });
+  });
+
   it("returns settings hardening errors for remote hardened approval bypass", async () => {
     const updateSettings = vi.fn(() => {
       throw new Error("remote_hardened disables approval bypass.");

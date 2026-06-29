@@ -3,8 +3,8 @@
 **Scope:** Read-only re-verification of OpenClaw and Hermes streaming + agentic-loop + sub-agent spawn to validate our planned **S1** ("stream the terminal synthesizer step") via **Strategy B** (terminal synthesizer = delegated child turn; forward child deltas to parent SSE; recover-before-persist). Follows the hand-verified [GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md](GATEWAY_COMPETITIVE_TEARDOWN_2026-06-21.md). Plan under test: [AGENTIC_FAST_LANE_PLAN.md](AGENTIC_FAST_LANE_PLAN.md).
 
 **Repos (clones, refreshed today):**
-- OpenClaw `F:\code\_external-review\openclaw` — branch `main`, HEAD `a083c766` `fix(bedrock): honor adaptive model max tokens (#97343)`, latest commit **2026-06-28 12:15 -0700**. 1098 commits since 2026-06-21.
-- Hermes `F:\code\_external-review\hermes-agent` — branch `main`, HEAD `b699d27a4` (PR #54357, browser chromium autoinstall), latest commit **2026-06-28 12:36 -0500**. Fetched `--unshallow` (full history now local; 956 commits since 2026-06-21; tags through `v2026.6.19`).
+- OpenClaw external review clone — branch `main`, HEAD `a083c766` `fix(bedrock): honor adaptive model max tokens (#97343)`, latest commit **2026-06-28 12:15 -0700**. 1098 commits since 2026-06-21.
+- Hermes external review clone — branch `main`, HEAD `b699d27a4` (PR #54357, browser chromium autoinstall), latest commit **2026-06-28 12:36 -0500**. Fetched `--unshallow` (full history now local; 956 commits since 2026-06-21; tags through `v2026.6.19`).
 
 Both repos are live and were committing the **same day** as this review.
 

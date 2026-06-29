@@ -235,6 +235,9 @@ const updateSettingsSchema = z.object({
       codeModeV1Enabled: z.boolean().optional(),
       improvementLedgerV1Enabled: z.boolean().optional(),
       improvementActivationV1Enabled: z.boolean().optional(),
+      coworkRuntimeQualityV1Disabled: z.boolean().optional(),
+      orchestrationFinalStreamingV1Disabled: z.boolean().optional(),
+      autonomyV1Disabled: z.boolean().optional(),
     })
     .optional(),
 });
