@@ -6493,7 +6493,7 @@ export class GatewayService {
     // still win — this only changes the otherwise-"safe" fallback.
     const defaultPermissionProfileId =
       this.config.assistant.deploymentProfile !== "remote_hardened" &&
-      this.config.toolPolicy.tools?.approvalMode === "bypass"
+      this.config.toolPolicy?.tools?.approvalMode === "bypass"
         ? "trusted_local_power"
         : "safe";
     const resolved = syntheticPermissionProfile
