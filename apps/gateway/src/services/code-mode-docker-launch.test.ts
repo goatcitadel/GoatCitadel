@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CODE_MODE_DOCKER_CONTAINER_WORKDIR,
   buildDockerClientEnv,
+  isDigestPinnedImageRef,
   prepareCodeModeDockerLaunch,
   toContainerRunPath,
 } from "./code-mode-docker-launch.js";
@@ -105,6 +106,42 @@ describe("code-mode-docker-launch", () => {
         image: "goatcitadel/code mode",
       }),
     ).rejects.toThrow("Docker Code Mode image contains unsafe characters.");
+  });
+
+  it("recognizes digest-pinned image references", () => {
+    expect(isDigestPinnedImageRef(`ghcr.io/goatcitadel/code-mode-runner@sha256:${"a".repeat(64)}`)).toBe(true);
+    expect(isDigestPinnedImageRef("ghcr.io/goatcitadel/code-mode-runner:preview")).toBe(false);
+    expect(isDigestPinnedImageRef("ghcr.io/goatcitadel/code-mode-runner")).toBe(false);
+    // A digest in the middle (followed by a tag) is not a trailing pin.
+    expect(isDigestPinnedImageRef(`runner@sha256:${"a".repeat(64)}:tag`)).toBe(false);
+  });
+
+  it("fails closed on a tag-only image when digest pinning is required", async () => {
+    const root = await createTempRoot();
+    await expect(
+      prepareCodeModeDockerLaunch(launchInput(root), {
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        requireDigestPin: true,
+      }),
+    ).rejects.toThrow("must be pinned by digest");
+  });
+
+  it("accepts a digest-pinned image when digest pinning is required", async () => {
+    const root = await createTempRoot();
+    const image = `ghcr.io/goatcitadel/code-mode-runner@sha256:${"b".repeat(64)}`;
+    const launch = await prepareCodeModeDockerLaunch(launchInput(root), {
+      image,
+      requireDigestPin: true,
+    });
+    expect(launch.args).toContain(image);
+  });
+
+  it("still allows tag-only images when digest pinning is not required", async () => {
+    const root = await createTempRoot();
+    const launch = await prepareCodeModeDockerLaunch(launchInput(root), {
+      image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+    });
+    expect(launch.args).toContain("ghcr.io/goatcitadel/code-mode-runner:preview");
   });
 
   it("copies only Docker client environment needed to reach the daemon", () => {

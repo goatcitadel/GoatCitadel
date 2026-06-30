@@ -12,6 +12,24 @@ export interface CodeModeDockerLaunchOptions {
   dockerCommand?: string;
   nodeCommand?: string;
   hostEnv?: NodeJS.ProcessEnv;
+  /**
+   * When true, the image reference must be pinned by digest (`name@sha256:...`).
+   * Tag-only references are rejected fail-closed. `--pull never` blocks remote
+   * tag mutation, but it does not stop a *locally* re-tagged image from being
+   * substituted under the same tag; only a digest pin closes that gap.
+   */
+  requireDigestPin?: boolean;
+}
+
+const DIGEST_PINNED_IMAGE_PATTERN = /@sha(?:256|512):[0-9a-f]+$/;
+
+/**
+ * A Docker image reference is digest-pinned when it ends with a content-addressed
+ * digest (e.g. `ghcr.io/org/runner@sha256:<hex>`). Tag-only refs (`runner:preview`)
+ * are mutable and therefore not pinned.
+ */
+export function isDigestPinnedImageRef(image: string): boolean {
+  return DIGEST_PINNED_IMAGE_PATTERN.test(image.trim());
 }
 
 export async function prepareCodeModeDockerLaunch(
@@ -20,6 +38,11 @@ export async function prepareCodeModeDockerLaunch(
 ): Promise<CodeModeSandboxLaunchSpec> {
   await fs.mkdir(input.runTempRoot, { recursive: true });
   const image = normalizeDockerImageRef(options.image);
+  if (options.requireDigestPin && !isDigestPinnedImageRef(image)) {
+    throw new Error(
+      `Docker Code Mode image must be pinned by digest (name@sha256:...) when digest pinning is required; received tag-only reference "${image}".`,
+    );
+  }
   const dockerCommand = normalizeDockerCommand(options.dockerCommand ?? CODE_MODE_DOCKER_DEFAULT_COMMAND);
   const nodeCommand = normalizeContainerCommand(options.nodeCommand ?? CODE_MODE_DOCKER_DEFAULT_NODE_COMMAND);
   const containerHarnessPath = toContainerRunPath(input.runTempRoot, input.harnessPath);

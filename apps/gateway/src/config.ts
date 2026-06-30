@@ -97,6 +97,11 @@ export interface CodeModeDockerBackendConfig {
   image?: string;
   dockerCommand?: string;
   nodeCommand?: string;
+  /**
+   * When true, the configured Code Mode image must be pinned by digest
+   * (`name@sha256:...`); tag-only references are rejected at launch.
+   */
+  requireDigestPin: boolean;
 }
 
 export interface CodeModeAiderAdapterConfig {
@@ -861,6 +866,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (codeModeDockerCommand) {
     assistant.capabilities.codeModeDockerBackend.dockerCommand = codeModeDockerCommand;
   }
+  const codeModeDockerRequireDigest = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_DOCKER_REQUIRE_DIGEST);
+  if (codeModeDockerRequireDigest !== undefined) {
+    assistant.capabilities.codeModeDockerBackend.requireDigestPin = codeModeDockerRequireDigest;
+  }
   const codeModeDockerNodeCommand = process.env.GOATCITADEL_CODE_MODE_DOCKER_NODE_COMMAND?.trim();
   if (codeModeDockerNodeCommand) {
     assistant.capabilities.codeModeDockerBackend.nodeCommand = codeModeDockerNodeCommand;
@@ -966,6 +975,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         image: capabilitiesInput.codeModeDockerBackend?.image,
         dockerCommand: capabilitiesInput.codeModeDockerBackend?.dockerCommand,
         nodeCommand: capabilitiesInput.codeModeDockerBackend?.nodeCommand,
+        requireDigestPin: capabilitiesInput.codeModeDockerBackend?.requireDigestPin ?? false,
       },
       codeModeAiderAdapter: {
         enabled: capabilitiesInput.codeModeAiderAdapter?.enabled ?? false,
