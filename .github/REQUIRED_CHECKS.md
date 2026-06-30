@@ -17,6 +17,8 @@ pass**, then add these as required (also tick "Require branches to be up to date
 | --- | --- | --- |
 | **Code Quality** | `.github/workflows/code-quality.yml` | eslint `--max-warnings 0`, typecheck, Mission Control CSS guards |
 | **Verification Fast** | `.github/workflows/verification-fast.yml` | `pnpm test`, `docs:check`, `verify:fast`, **production coverage gate**, real-Postgres storage lane |
+| **Code Mode Sandbox Canary** | `.github/workflows/code-mode-sandbox-canary.yml` | Code Mode sandbox metadata/fail-closed proof on Linux |
+| **Code Mode Hostile Sandbox Canary** | `.github/workflows/code-mode-sandbox-canary.yml` | Windows AppContainer hostile-code canary proof and claim gating |
 | **Security Trivy** | `.github/workflows/security-trivy.yml` | vuln / secret / misconfig scan (HIGH/CRITICAL) |
 
 > ⚠️ **Verification Fast** is the only always-on workflow that runs the full test suite, `docs:check`,
@@ -38,6 +40,8 @@ gh api -X POST repos/<owner>/<repo>/rulesets \
   -F 'rules[][parameters][strict_required_status_checks_policy]=true' \
   -F 'rules[][parameters][required_status_checks][][context]=fast' \
   -F 'rules[][parameters][required_status_checks][][context]=code-quality' \
+  -F 'rules[][parameters][required_status_checks][][context]=Code Mode Sandbox Canary' \
+  -F 'rules[][parameters][required_status_checks][][context]=Code Mode Hostile Sandbox Canary' \
   -F 'rules[][parameters][required_status_checks][][context]=security-trivy'
 ```
 

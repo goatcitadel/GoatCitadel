@@ -612,6 +612,7 @@ export async function runCodeModeHostileSandboxLane(context) {
       subsystem: "gateway",
     },
     async () => {
+      await ensureGatewayWorkspaceBuild(context);
       const requiredCanaries = [
         "outside_root_read_denied",
         "outside_root_write_denied",

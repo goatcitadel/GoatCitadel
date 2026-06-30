@@ -136,27 +136,24 @@ function createIsolatedConfigRoot(providerBaseUrl: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-turns-smoke-"));
   const repoRoot = path.resolve(process.cwd(), "../..");
   fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "config", "llm-providers.json"),
-    `${JSON.stringify(
+  const llmConfig = {
+    activeProviderId: "fake-openai",
+    activeModel: "fake-chat",
+    providers: [
       {
-        activeProviderId: "fake-openai",
-        activeModel: "fake-chat",
-        providers: [
-          {
-            providerId: "fake-openai",
-            label: "Fake OpenAI",
-            baseUrl: providerBaseUrl,
-            apiStyle: "openai-chat-completions",
-            defaultModel: "fake-chat",
-          },
-        ],
+        providerId: "fake-openai",
+        label: "Fake OpenAI",
+        baseUrl: providerBaseUrl,
+        apiStyle: "openai-chat-completions",
+        defaultModel: "fake-chat",
       },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+    ],
+  };
+  const unifiedConfigPath = path.join(root, "config", "goatcitadel.json");
+  const unifiedConfig = JSON.parse(fs.readFileSync(unifiedConfigPath, "utf8")) as Record<string, unknown>;
+  unifiedConfig.llm = llmConfig;
+  fs.writeFileSync(unifiedConfigPath, `${JSON.stringify(unifiedConfig, null, 2)}\n`, "utf8");
+  fs.writeFileSync(path.join(root, "config", "llm-providers.json"), `${JSON.stringify(llmConfig, null, 2)}\n`, "utf8");
   tempRoots.push(root);
   return root;
 }

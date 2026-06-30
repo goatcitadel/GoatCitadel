@@ -23,6 +23,7 @@ permissions:
 
 jobs:
   code-mode-sandbox-canary:
+    name: Code Mode Sandbox Canary
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,6 +47,36 @@ jobs:
       - name: Run Code Mode required-sandbox lane
         run: pnpm verify:code-mode:sandbox
 
+      - name: Upload sandbox proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-mode-sandbox-canary-artifacts
+          path: artifacts/verification
+          if-no-files-found: error
+
+  code-mode-hostile-sandbox-canary:
+    name: Code Mode Hostile Sandbox Canary
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Run Code Mode hostile-sandbox canary lane
         run: pnpm verify:code-mode:hostile-sandbox
 
@@ -53,6 +84,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: code-mode-sandbox-canary-artifacts
+          name: code-mode-hostile-sandbox-canary-artifacts
           path: artifacts/verification
           if-no-files-found: error

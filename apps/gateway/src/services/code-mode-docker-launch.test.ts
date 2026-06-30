@@ -114,6 +114,8 @@ describe("code-mode-docker-launch", () => {
     expect(isDigestPinnedImageRef("ghcr.io/goatcitadel/code-mode-runner")).toBe(false);
     // A digest in the middle (followed by a tag) is not a trailing pin.
     expect(isDigestPinnedImageRef(`runner@sha256:${"a".repeat(64)}:tag`)).toBe(false);
+    expect(isDigestPinnedImageRef("runner@sha256:a")).toBe(false);
+    expect(isDigestPinnedImageRef(`runner@sha256:${"z".repeat(64)}`)).toBe(false);
     // Only sha256 is part of the documented contract; sha512 refs are not recognized.
     expect(isDigestPinnedImageRef(`ghcr.io/goatcitadel/code-mode-runner@sha512:${"a".repeat(128)}`)).toBe(false);
   });

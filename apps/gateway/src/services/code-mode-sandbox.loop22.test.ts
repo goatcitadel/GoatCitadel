@@ -128,7 +128,7 @@ function launchInput(runTempRoot: string): CodeModeSandboxLaunchInput {
     harnessPath: path.join(runTempRoot, "harness.mjs"),
     runTempRoot,
     heapMb: 512,
-    env: { NODE_ENV: "test" },
+    env: { GOATCITADEL_CODE_MODE: "1" },
   };
 }
 

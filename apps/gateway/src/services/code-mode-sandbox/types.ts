@@ -233,12 +233,30 @@ export function rejectUnsafeProfilePath(value: string): void {
   }
 }
 
-// Keys whose value is a host secret regardless of suffix. Extend conservatively.
-const CODE_MODE_FORBIDDEN_ENV_KEYS = new Set(["AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN"]);
-// Secret-bearing key suffixes. Synthetic launch envs only carry GOATCITADEL_CODE_MODE,
-// TZ, and platform path/dir passthrough keys, none of which match these.
-const CODE_MODE_FORBIDDEN_ENV_KEY_SUFFIX =
-  /(?:^|_)(?:KEY|TOKEN|SECRET|SECRETS|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|AUTH)$/i;
+const CODE_MODE_ALLOWED_ENV_KEYS = new Set(
+  [
+    "GOATCITADEL_CODE_MODE",
+    "GOATCITADEL_CODE_MODE_TRANSPORT",
+    "GOATCITADEL_FIREJAIL_SMOKE_OUTPUT",
+    "TZ",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ALLUSERSPROFILE",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+  ].map((key) => key.toUpperCase()),
+);
+const CODE_MODE_ALLOWED_ENV_PREFIXES = ["GOATCITADEL_HOSTILE_CANARY_"] as const;
+const CODE_MODE_FORBIDDEN_SYNTHETIC_ENV_KEYS = new Set(["GOATCITADEL_HOSTILE_CANARY_SECRET"]);
 
 /**
  * Defensive guard for the env handed to a Code Mode child launch. Production builds
@@ -246,18 +264,32 @@ const CODE_MODE_FORBIDDEN_ENV_KEY_SUFFIX =
  * verbatim into `spawn`. This invariant makes it impossible for a future caller to
  * accidentally pass `process.env` (or any env carrying host secrets) into a sandbox.
  *
- * Throws fail-closed if the env is the live `process.env` reference or contains any
- * key whose name signals a secret/credential.
+ * Throws fail-closed unless the env has the Code Mode marker and every key is
+ * one of the runtime's known synthetic keys or proof-only canary keys.
  */
 export function assertCodeModeSyntheticLaunchEnv(env: NodeJS.ProcessEnv): void {
   if (env === process.env) {
     throw new Error("Code Mode sandbox launch env must be a synthetic env, not the live process.env.");
   }
+  if (env.GOATCITADEL_CODE_MODE !== "1") {
+    throw new Error('Code Mode sandbox launch env must set GOATCITADEL_CODE_MODE="1".');
+  }
   for (const key of Object.keys(env)) {
-    if (CODE_MODE_FORBIDDEN_ENV_KEYS.has(key.toUpperCase()) || CODE_MODE_FORBIDDEN_ENV_KEY_SUFFIX.test(key)) {
-      throw new Error(`Code Mode sandbox launch env must not contain host secret-bearing key "${key}".`);
+    if (!isAllowedCodeModeLaunchEnvKey(key)) {
+      throw new Error(`Code Mode sandbox launch env contains non-synthetic key "${key}".`);
     }
   }
+}
+
+function isAllowedCodeModeLaunchEnvKey(key: string): boolean {
+  const normalized = key.toUpperCase();
+  if (CODE_MODE_FORBIDDEN_SYNTHETIC_ENV_KEYS.has(normalized)) {
+    return false;
+  }
+  return (
+    CODE_MODE_ALLOWED_ENV_KEYS.has(normalized) ||
+    CODE_MODE_ALLOWED_ENV_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  );
 }
 
 function buildFailClosedReason(platform: CodeModeSandboxPlatform, checksFailed: string[]): string {

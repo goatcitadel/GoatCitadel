@@ -60,7 +60,7 @@ describe("firejail profile (codex #18)", () => {
       harnessPath: runHarnessPath,
       runTempRoot,
       heapMb: 64,
-      env: {},
+      env: { GOATCITADEL_CODE_MODE: "1" },
     });
 
     expect(launch.args).toContain(`--private=${runTempRoot}`);
@@ -101,7 +101,8 @@ describe("firejail profile (codex #18)", () => {
       runTempRoot,
       heapMb: 64,
       env: {
-        ...process.env,
+        GOATCITADEL_CODE_MODE: "1",
+        TZ: process.env.TZ ?? "UTC",
         GOATCITADEL_FIREJAIL_SMOKE_OUTPUT: proofPath,
       },
     });

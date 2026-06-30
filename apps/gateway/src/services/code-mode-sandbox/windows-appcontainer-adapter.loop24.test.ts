@@ -84,7 +84,7 @@ describe("WindowsAppContainerSandboxAdapter loop24 tails", () => {
       harnessPath,
       runTempRoot,
       heapMb: 0,
-      env: {},
+      env: { GOATCITADEL_CODE_MODE: "1" },
     });
 
     expect(launch.transport).toBe("stdio_jsonrpc");

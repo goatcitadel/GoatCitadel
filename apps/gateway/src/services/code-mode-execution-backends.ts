@@ -6,6 +6,7 @@ import type {
   CodeModeSandboxMetadata,
 } from "@goatcitadel/contracts";
 import type { CodeModeAiderAdapterConfig, CodeModeDockerBackendConfig } from "../config.js";
+import { isDigestPinnedImageRef } from "./code-mode-docker-launch.js";
 
 export const CODE_MODE_HOST_BACKEND_ID = "trusted-code-host";
 export const CODE_MODE_DOCKER_BACKEND_ID = "docker-container";
@@ -153,24 +154,30 @@ function buildDockerBackend(
   const envFlag = "GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED";
   const enabled = dockerBackend?.enabled ?? isTruthyEnv(env[envFlag]);
   const image = dockerBackend?.image?.trim();
-  const callable = codeModeEnabled && enabled && Boolean(image);
+  const digestPinBlocked = Boolean(
+    enabled && image && dockerBackend?.requireDigestPin && !isDigestPinnedImageRef(image),
+  );
+  const callable = codeModeEnabled && enabled && Boolean(image) && !digestPinBlocked;
   return {
     backendId: CODE_MODE_DOCKER_BACKEND_ID,
     kind: "docker",
     label: "Docker execution backend",
-    status: callable ? "available" : "preview",
-    runtimeSupport: callable ? "active_runner" : "preview_only",
+    status: digestPinBlocked ? "blocked" : callable ? "available" : "preview",
+    runtimeSupport: digestPinBlocked ? "not_available" : callable ? "active_runner" : "preview_only",
     default: false,
     callable,
     description: callable
       ? "Configured container backend for approved Code Mode runs using stdio JSON-RPC transport."
-      : "Planned container backend for Code Mode runs after policy, artifact, and approval parity is wired.",
+      : digestPinBlocked
+        ? "Configured Docker backend is blocked because digest pinning is required but the image is tag-only."
+        : "Planned container backend for Code Mode runs after policy, artifact, and approval parity is wired.",
     blockers: [
       ...(!codeModeEnabled ? ["Code Mode v1 is disabled."] : []),
       ...(!enabled ? ["Docker backend is not enabled."] : []),
       ...(codeModeEnabled && enabled && !image
         ? ["Docker backend is enabled but no container image is configured."]
         : []),
+      ...(digestPinBlocked ? ["Docker backend requires a digest-pinned image (name@sha256:<64 hex chars>)."] : []),
     ],
     governance: [
       "Must preserve deny-wins policy, path jails, approval linkage, immutable artifact hashes, and runtime truth.",
@@ -206,13 +213,14 @@ function buildAiderAdapter(
   const envFlag = "GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED";
   const enabled = aiderAdapter?.enabled ?? isTruthyEnv(env[envFlag]);
   const image = aiderAdapter?.image?.trim();
+  const blockedByDocker = Boolean(codeModeEnabled && enabled && image && docker.status === "blocked");
   const callable = codeModeEnabled && enabled && docker.callable && Boolean(image);
   return {
     backendId: CODE_MODE_AIDER_ADAPTER_ID,
     kind: "aider_adapter",
     label: "Aider CLI adapter",
-    status: callable ? "available" : "preview",
-    runtimeSupport: callable ? "active_runner" : "preview_only",
+    status: blockedByDocker ? "blocked" : callable ? "available" : "preview",
+    runtimeSupport: blockedByDocker ? "not_available" : callable ? "active_runner" : "preview_only",
     adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
     default: false,
     callable,

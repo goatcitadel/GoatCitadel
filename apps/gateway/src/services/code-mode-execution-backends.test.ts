@@ -81,6 +81,45 @@ describe("code-mode-execution-backends", () => {
     });
   });
 
+  it("blocks Docker and dependent Aider catalog entries when digest pinning is required but the image is tag-only", () => {
+    const response = buildCodeModeExecutionBackends({
+      codeModeEnabled: true,
+      sandbox: sandboxMetadata(),
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        requireDigestPin: true,
+      },
+      aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+      env: {},
+    });
+
+    expect(response.activeBackendId).toBe("trusted-code-host");
+    expect(response.items.find((item) => item.backendId === "docker-container")).toMatchObject({
+      status: "blocked",
+      runtimeSupport: "not_available",
+      callable: false,
+      blockers: expect.arrayContaining(["Docker backend requires a digest-pinned image (name@sha256:<64 hex chars>)."]),
+    });
+    expect(response.items.find((item) => item.backendId === CODE_MODE_AIDER_ADAPTER_ID)).toMatchObject({
+      status: "blocked",
+      runtimeSupport: "not_available",
+      callable: false,
+      blockers: expect.arrayContaining(["Docker execution backend is not callable."]),
+    });
+    expect(() =>
+      buildCodeModeRunExecutionBackendRef(sandboxMetadata(), {
+        requestedBackendId: "docker-container",
+        dockerBackend: {
+          enabled: true,
+          image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+          requireDigestPin: true,
+        },
+        env: {},
+      }),
+    ).toThrow("Docker backend requires a digest-pinned image");
+  });
+
   it("includes unsupported backend candidates as evaluation-only metadata", () => {
     const response = buildCodeModeExecutionBackends({
       codeModeEnabled: true,

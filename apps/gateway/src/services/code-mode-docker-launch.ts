@@ -21,7 +21,7 @@ export interface CodeModeDockerLaunchOptions {
   requireDigestPin?: boolean;
 }
 
-const DIGEST_PINNED_IMAGE_PATTERN = /@sha256:[0-9a-f]+$/;
+const DIGEST_PINNED_IMAGE_PATTERN = /@sha256:[0-9a-f]{64}$/i;
 
 /**
  * A Docker image reference is digest-pinned when it ends with a content-addressed

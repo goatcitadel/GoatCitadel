@@ -34,7 +34,7 @@ describe("WindowsAppContainerSandboxAdapter loop32 diagnostics", () => {
         harnessPath: path.join(root, "harness.mjs"),
         runTempRoot: path.join(root, "run"),
         heapMb: 256,
-        env: {},
+        env: { GOATCITADEL_CODE_MODE: "1" },
       }),
     ).rejects.toThrow(/win32_powershell_missing|win32_appcontainer_os_unsupported|unavailable/i);
     await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
