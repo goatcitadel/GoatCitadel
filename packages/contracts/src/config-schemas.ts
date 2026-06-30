@@ -651,6 +651,7 @@ export const AssistantConfigInputSchema = z
             image: z.string().optional(),
             dockerCommand: z.string().optional(),
             nodeCommand: z.string().optional(),
+            requireDigestPin: z.boolean().optional(),
           })
           .passthrough()
           .optional(),

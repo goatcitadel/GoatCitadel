@@ -4075,6 +4075,7 @@ function buildCodeModeDockerLaunchOptions(config: CodeModeDockerBackendConfig):
       image: string;
       dockerCommand?: string;
       nodeCommand?: string;
+      requireDigestPin: boolean;
     }
   | undefined {
   const image = config.image?.trim();
@@ -4086,6 +4087,7 @@ function buildCodeModeDockerLaunchOptions(config: CodeModeDockerBackendConfig):
     image,
     dockerCommand: config.dockerCommand,
     nodeCommand: config.nodeCommand,
+    requireDigestPin: config.requireDigestPin,
   };
 }
 

@@ -517,6 +517,17 @@ describe("AssistantConfigInputSchema", () => {
     const result = AssistantConfigInputSchema.parse(input);
     expect((result as Record<string, unknown>).customPlugin).toEqual({ enabled: true });
   });
+
+  it("accepts a boolean codeModeDockerBackend.requireDigestPin", () => {
+    const input = { capabilities: { codeModeDockerBackend: { enabled: true, requireDigestPin: true } } };
+    const result = AssistantConfigInputSchema.parse(input);
+    expect(result.capabilities?.codeModeDockerBackend?.requireDigestPin).toBe(true);
+  });
+
+  it("rejects a non-boolean codeModeDockerBackend.requireDigestPin instead of passing it through truthy", () => {
+    const input = { capabilities: { codeModeDockerBackend: { requireDigestPin: "false" } } };
+    expect(() => AssistantConfigInputSchema.parse(input)).toThrow();
+  });
 });
 
 describe("CronJobsConfigSchema", () => {
