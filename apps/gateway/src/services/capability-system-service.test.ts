@@ -2564,6 +2564,97 @@ describe("CapabilitySystemService", () => {
     expect(wrapperSignal?.aborted).toBe(true);
   }, 25_000);
 
+  it("scopes wrapper invocations to the run's workspace and run identity", async () => {
+    const invokeTool = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "executed",
+        auditEventId: "audit-1",
+        result: { ok: true },
+      }),
+    );
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      invokeTool,
+    });
+    harness.storage.chatSessionMeta.patch("session-scope", { workspaceId: "workspace-scope" });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return await capabilities.tool.safe_read();",
+      requestedOutputIntent: "Exercise a scoped wrapper call.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-scope",
+    });
+
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    // A sandboxed run can only reach the parent tool boundary bound to its own
+    // run identity and workspace; it cannot invoke wrappers under another scope.
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "tool.safe_read",
+      workspaceId: "workspace-scope",
+      runId: run.runId,
+      taskId: run.runId,
+      agentId: `code-mode:${run.runId}`,
+    });
+  });
+
+  it("ignores child-supplied scope fields and binds wrappers to the stored run identity", async () => {
+    const invokeTool = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "executed",
+        auditEventId: "audit-1",
+        result: { ok: true },
+      }),
+    );
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      invokeTool,
+    });
+    harness.storage.chatSessionMeta.patch("session-scope", { workspaceId: "workspace-scope" });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      // The wrapper args payload is the only channel a sandboxed guest controls.
+      // Smuggle scope-looking keys through it to mimic a compromised/escaped child
+      // trying to invoke a wrapper under a forged workspace and run identity.
+      source:
+        'return await capabilities.tool.safe_read({ workspaceId: "forged-workspace", runId: "forged-run", taskId: "forged-task", agentId: "forged-agent", sessionId: "forged-session" });',
+      requestedOutputIntent: "Attempt to forge wrapper scope.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-scope",
+    });
+
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    const invocation = invokeTool.mock.calls[0]?.[0];
+    // The parent binds the invocation to the stored run/workspace identity and never
+    // honors caller-supplied scope values; the forged keys stay quarantined inside args.
+    expect(invocation).toMatchObject({
+      toolName: "tool.safe_read",
+      workspaceId: "workspace-scope",
+      runId: run.runId,
+      taskId: run.runId,
+      agentId: `code-mode:${run.runId}`,
+      args: {
+        workspaceId: "forged-workspace",
+        runId: "forged-run",
+        taskId: "forged-task",
+        agentId: "forged-agent",
+        sessionId: "forged-session",
+      },
+    });
+    expect(invocation?.workspaceId).not.toBe("forged-workspace");
+    expect(invocation?.runId).not.toBe("forged-run");
+    expect(invocation?.taskId).not.toBe("forged-task");
+    expect(invocation?.agentId).not.toBe("forged-agent");
+    expect(invocation?.sessionId).not.toBe("forged-session");
+  });
+
   it("does not pass provider or gateway secrets into Code Mode child environments", () => {
     const priorOpenAi = process.env.OPENAI_API_KEY;
     const priorGatewayToken = process.env.GOATCITADEL_AUTH_TOKEN;
