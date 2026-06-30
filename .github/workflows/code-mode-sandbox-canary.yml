@@ -4,25 +4,18 @@ name: Code Mode Sandbox Canary
 # hostile-code adversarial canary suite. Promoting these lanes to their own gate
 # (rather than only running inside verify:fast) keeps the sandbox claim-gating
 # logic and adapter posture from silently regressing as Code Mode traffic grows.
+#
+# This runs on EVERY push to main and EVERY pull request — intentionally with no
+# `paths` filter. As a required status check it must report a result on every PR;
+# a path-filtered workflow is skipped (never reported) on unrelated PRs, which
+# GitHub leaves as a perpetually-pending required check that blocks merge. The
+# lanes are fast static + proof-artifact assertions (no real firejail/Docker), so
+# running them unconditionally is cheap and deterministic.
 on:
   push:
     branches:
       - main
-    paths:
-      - "apps/gateway/src/services/code-mode-sandbox/**"
-      - "apps/gateway/src/services/code-mode-docker-launch.ts"
-      - "apps/gateway/src/code-mode-hostile-sandbox-proof.ts"
-      - "scripts/verification/lib/scenarios.mjs"
-      - "packages/contracts/src/capabilities.ts"
-      - ".github/workflows/code-mode-sandbox-canary.yml"
   pull_request:
-    paths:
-      - "apps/gateway/src/services/code-mode-sandbox/**"
-      - "apps/gateway/src/services/code-mode-docker-launch.ts"
-      - "apps/gateway/src/code-mode-hostile-sandbox-proof.ts"
-      - "scripts/verification/lib/scenarios.mjs"
-      - "packages/contracts/src/capabilities.ts"
-      - ".github/workflows/code-mode-sandbox-canary.yml"
   workflow_dispatch:
 
 permissions:
