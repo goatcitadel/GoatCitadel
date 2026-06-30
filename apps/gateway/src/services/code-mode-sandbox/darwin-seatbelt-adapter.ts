@@ -79,6 +79,9 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
   }
 }
 
+// Test-only export for darwin-seatbelt-adapter.security.test.ts.
+export const __buildSeatbeltProfileForTests = buildSeatbeltProfile;
+
 function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
   rejectUnsafeProfilePath(input.runTempRoot);
   rejectUnsafeProfilePath(input.harnessPath);
@@ -92,7 +95,18 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     "(allow mach-lookup)",
     `(allow file-read* ${literal(input.nodePath)})`,
     `(allow file-read* ${literal(input.harnessPath)})`,
-    '(allow file-read* (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/Library"))',
+    // SECURITY (#145): restrict read scope to the runtime essentials Node needs to
+    // start, instead of broad `/usr` + `/Library`. `/System` carries the OS
+    // frameworks and the dyld shared cache; `/usr/lib` carries dyld and the system
+    // dylibs; `/usr/share` carries ICU/zoneinfo/locale data. The broad `/Library`
+    // tree (third-party + admin-installed software, incl. `/Library/Keychains` and
+    // `/Library/Application Support`) and `/usr/local` (Homebrew configs) are not
+    // needed by a minimal Node runtime and can hold operator secrets, so they are
+    // no longer readable from inside the sandbox. `/bin` and `/sbin` are retained
+    // (OS binaries, no secret value) pending macOS canary confirmation that they
+    // can also be dropped; the hostile-canary proof lane is the verification path
+    // for any further narrowing.
+    '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/bin") (subpath "/sbin"))',
     `(allow file-read* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,
     `(allow file-write* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,
     '(allow file-write* (literal "/dev/null"))',
