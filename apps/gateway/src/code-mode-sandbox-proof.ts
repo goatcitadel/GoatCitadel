@@ -105,8 +105,13 @@ async function runLinuxFirejailLiveSmoke(
         harnessPath,
         runTempRoot,
         heapMb: 64,
+        // Build a minimal synthetic env mirroring production's createMinimalSyntheticEnv.
+        // Spreading process.env would carry host secrets and trip
+        // assertCodeModeSyntheticLaunchEnv, failing the live proof in any
+        // environment that has a secret-bearing key (e.g. GITHUB_TOKEN).
         env: {
-          ...process.env,
+          GOATCITADEL_CODE_MODE: "1",
+          TZ: process.env.TZ ?? "UTC",
           GOATCITADEL_FIREJAIL_SMOKE_OUTPUT: proofPath,
         },
       },

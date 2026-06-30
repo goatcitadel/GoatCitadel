@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodeModeSandboxConfig } from "../../config.js";
 import {
+  assertCodeModeSyntheticLaunchEnv,
   assertLaunchable,
   buildCommonProbeChecks,
   buildSandboxMetadata,
@@ -79,6 +80,7 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
       }),
     );
     const launchPowerShellPath = powershellPath as string;
+    assertCodeModeSyntheticLaunchEnv(input.env);
 
     rejectUnsafeProfilePath(input.runTempRoot);
     rejectUnsafeProfilePath(input.nodePath);
