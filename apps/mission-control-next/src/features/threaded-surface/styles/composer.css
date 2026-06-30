@@ -815,6 +815,33 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
 }
 
+.mc-next-composer-cowork-stop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+}
+
+.mc-next-composer-cowork-stop .mc-next-composer-cowork-stop-body {
+  display: grid;
+  gap: 0.2rem;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.mc-next-composer-cowork-stop .mc-next-composer-cowork-stop-body p {
+  margin: 0;
+}
+
+.mc-next-composer-cowork-stop .mc-next-composer-cowork-stop-note {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-composer-cowork-stop .mc-next-panel-button.danger {
+  margin-inline-start: auto;
+}
+
 .mc-next-thread-notices,
 .mc-next-context-list,
 .mc-next-workbench-helper-list,
