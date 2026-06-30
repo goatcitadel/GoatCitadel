@@ -37,3 +37,39 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile).toContain('(allow file-write* (subpath "/tmp/run-1"))');
   });
 });
+
+describe("darwin seatbelt runtime dependency prefix grant", () => {
+  it("grants the Homebrew (Intel) prefix when Node resolves under /usr/local", () => {
+    const profile = __buildSeatbeltProfileForTests({
+      ...baseInput,
+      nodePath: "/usr/local/Cellar/node/22.0.0/bin/node",
+    });
+    // dyld needs the linked dylibs (e.g. icu4c under /usr/local/opt) at startup.
+    expect(profile).toContain('(allow file-read* (subpath "/usr/local"))');
+  });
+
+  it("grants the Homebrew (Apple Silicon) prefix when Node resolves under /opt/homebrew", () => {
+    const profile = __buildSeatbeltProfileForTests({
+      ...baseInput,
+      nodePath: "/opt/homebrew/bin/node",
+    });
+    expect(profile).toContain('(allow file-read* (subpath "/opt/homebrew"))');
+  });
+
+  it("keeps the tight profile for a bundled/static Node outside any package-manager prefix", () => {
+    const profile = __buildSeatbeltProfileForTests({
+      ...baseInput,
+      nodePath: "/Applications/GoatCitadel.app/Contents/Resources/node",
+    });
+    expect(profile).not.toContain('(subpath "/usr/local")');
+    expect(profile).not.toContain('(subpath "/opt/homebrew")');
+  });
+
+  it("does not match a lookalike prefix that only shares a string boundary", () => {
+    const profile = __buildSeatbeltProfileForTests({
+      ...baseInput,
+      nodePath: "/usr/localhost/node",
+    });
+    expect(profile).not.toContain('(subpath "/usr/local")');
+  });
+});
