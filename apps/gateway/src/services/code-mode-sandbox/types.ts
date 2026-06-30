@@ -213,6 +213,7 @@ export function assertLaunchable(metadata: CodeModeSandboxMetadata): void {
 }
 
 export function buildAdvisoryUnsandboxedLaunchSpec(input: CodeModeSandboxLaunchInput): CodeModeSandboxLaunchSpec {
+  assertCodeModeSyntheticLaunchEnv(input.env);
   return {
     transport: "node_ipc",
     executable: input.nodePath,
@@ -229,6 +230,33 @@ export function buildAdvisoryUnsandboxedLaunchSpec(input: CodeModeSandboxLaunchI
 export function rejectUnsafeProfilePath(value: string): void {
   if (value.includes("\n") || value.includes("\r") || value.includes("\0")) {
     throw new Error("Code Mode sandbox path contains unsafe profile characters.");
+  }
+}
+
+// Keys whose value is a host secret regardless of suffix. Extend conservatively.
+const CODE_MODE_FORBIDDEN_ENV_KEYS = new Set(["AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN"]);
+// Secret-bearing key suffixes. Synthetic launch envs only carry GOATCITADEL_CODE_MODE,
+// TZ, and platform path/dir passthrough keys, none of which match these.
+const CODE_MODE_FORBIDDEN_ENV_KEY_SUFFIX =
+  /(?:^|_)(?:KEY|TOKEN|SECRET|SECRETS|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|AUTH)$/i;
+
+/**
+ * Defensive guard for the env handed to a Code Mode child launch. Production builds
+ * the child env via a minimal synthetic env, but host adapters pass `input.env`
+ * verbatim into `spawn`. This invariant makes it impossible for a future caller to
+ * accidentally pass `process.env` (or any env carrying host secrets) into a sandbox.
+ *
+ * Throws fail-closed if the env is the live `process.env` reference or contains any
+ * key whose name signals a secret/credential.
+ */
+export function assertCodeModeSyntheticLaunchEnv(env: NodeJS.ProcessEnv): void {
+  if (env === process.env) {
+    throw new Error("Code Mode sandbox launch env must be a synthetic env, not the live process.env.");
+  }
+  for (const key of Object.keys(env)) {
+    if (CODE_MODE_FORBIDDEN_ENV_KEYS.has(key.toUpperCase()) || CODE_MODE_FORBIDDEN_ENV_KEY_SUFFIX.test(key)) {
+      throw new Error(`Code Mode sandbox launch env must not contain host secret-bearing key "${key}".`);
+    }
   }
 }
 

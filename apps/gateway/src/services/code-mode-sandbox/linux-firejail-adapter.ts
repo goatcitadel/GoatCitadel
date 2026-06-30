@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodeModeSandboxConfig } from "../../config.js";
 import {
+  assertCodeModeSyntheticLaunchEnv,
   assertLaunchable,
   buildCommonProbeChecks,
   buildSandboxMetadata,
@@ -62,6 +63,7 @@ export class LinuxFirejailSandboxAdapter implements CodeModeHostSandboxAdapter {
     if (!firejailPath) {
       throw new Error("Code Mode Linux sandbox is unavailable: linux_firejail_missing.");
     }
+    assertCodeModeSyntheticLaunchEnv(input.env);
 
     await fs.mkdir(input.runTempRoot, { recursive: true });
     const profilePath = path.join(input.runTempRoot, "code-mode-firejail.profile");

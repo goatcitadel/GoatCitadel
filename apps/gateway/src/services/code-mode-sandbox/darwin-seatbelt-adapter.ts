@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodeModeSandboxConfig } from "../../config.js";
 import {
+  assertCodeModeSyntheticLaunchEnv,
   assertLaunchable,
   buildCommonProbeChecks,
   buildSandboxMetadata,
@@ -60,6 +61,7 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
     if (!sandboxExecPath) {
       throw new Error("Code Mode macOS sandbox is unavailable: darwin_sandbox_exec_missing.");
     }
+    assertCodeModeSyntheticLaunchEnv(input.env);
 
     await fs.mkdir(input.runTempRoot, { recursive: true });
     const profilePath = path.join(input.runTempRoot, "code-mode-seatbelt.sb");
