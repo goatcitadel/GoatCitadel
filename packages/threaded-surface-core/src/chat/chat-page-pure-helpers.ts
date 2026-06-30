@@ -18,6 +18,7 @@ import {
   type ChatSpecialistCandidateSuggestionRecord,
 } from "@goatcitadel/contracts";
 import type { ChatMessagesResponse } from "@goatcitadel/mission-control-shared/api/client";
+import type { CoworkAgenticControlItem } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import { normalizeComparableAssistantContent } from "./chat-page-normalizers";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
@@ -26,6 +27,29 @@ export type ChatRefreshPlan = {
   refreshSidebar: boolean;
   refreshSession: "none" | "light" | "full";
 };
+
+/**
+ * Resolve the cancel control to surface as a Stop affordance in the chat
+ * composer for an active cowork delegation run.
+ *
+ * The button is only meaningful while a delegation run is actively `running`
+ * on the cowork surface. A disabled cancel control is still returned so the
+ * caller can render it disabled (with its `note` as the reason) rather than
+ * hiding it. Returns `null` when there is nothing actionable to show.
+ */
+export function resolveCoworkComposerStopControl(input: {
+  mode: ChatMode;
+  delegationRunStatus: string | undefined;
+  controls: readonly CoworkAgenticControlItem[] | undefined;
+}): CoworkAgenticControlItem | null {
+  if (input.mode !== "cowork") {
+    return null;
+  }
+  if (input.delegationRunStatus !== "running") {
+    return null;
+  }
+  return input.controls?.find((control) => control.action === "cancel") ?? null;
+}
 
 export interface DelegatedSessionRailGroups<TSession> {
   topLevelSessions: TSession[];

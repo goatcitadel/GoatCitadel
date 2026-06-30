@@ -2,6 +2,7 @@ import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ThreadedComposer } from "./ThreadedComposer";
 
 vi.mock("@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu", async () => {
@@ -893,6 +894,89 @@ describe("ThreadedComposer", () => {
     });
     await click(findButton(renderer.root, "Stop turn"));
     expect(onStopActiveTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a cowork Stop run control beside the composer with honest state-only copy", async () => {
+    const onCoworkStopRun = vi.fn();
+    const renderer = await renderComposer({
+      mode: "cowork",
+      coworkStopRunControl: {
+        id: "cancel",
+        action: "cancel",
+        title: "Cancel",
+        enabled: true,
+        status: "available",
+        runtimeEffect: "state_only",
+        note: "Cowork run has no attached durable run; cancel records intent only.",
+      },
+      coworkStopRunPending: false,
+      onCoworkStopRun,
+    });
+
+    const text = collectText(renderer.root);
+    expect(text).toContain("Stop run");
+    // The disabled-reason from the control's `note` is surfaced as helper text.
+    expect(text).toContain("Cowork run has no attached durable run; cancel records intent only.");
+    // State-only runs must be honest that this only records operator stop intent.
+    expect(text).toContain("records operator stop intent");
+
+    // Clicking opens a confirm modal rather than firing the control directly.
+    await click(findButton(renderer.root, "Stop run"));
+    expect(onCoworkStopRun).not.toHaveBeenCalled();
+
+    const openConfirm = renderer.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(openConfirm).toBeTruthy();
+    expect(String(openConfirm?.props.message)).toContain("does not terminate the worker");
+    act(() => {
+      openConfirm?.props.onConfirm();
+    });
+    expect(onCoworkStopRun).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+  });
+
+  it("disables the cowork Stop run control when the control is not enabled and reflects pending state", async () => {
+    const onCoworkStopRun = vi.fn();
+    const disabledRenderer = await renderComposer({
+      mode: "cowork",
+      coworkStopRunControl: {
+        id: "cancel",
+        action: "cancel",
+        title: "Cancel",
+        enabled: false,
+        status: "disabled",
+        runtimeEffect: "state_only",
+        note: "No active run attached.",
+      },
+      onCoworkStopRun,
+    });
+    const disabledStop = findButton(disabledRenderer.root, "Stop run");
+    expect(disabledStop.props.disabled).toBe(true);
+    await click(disabledStop);
+    expect(disabledRenderer.root.findAllByType(ConfirmModal).find((modal) => modal.props.open)).toBeFalsy();
+
+    const pendingRenderer = await renderComposer({
+      mode: "cowork",
+      coworkStopRunPending: true,
+      coworkStopRunControl: {
+        id: "cancel",
+        action: "cancel",
+        title: "Cancel",
+        enabled: true,
+        status: "available",
+        runtimeEffect: "state_only",
+      },
+      onCoworkStopRun,
+    });
+    expect(collectText(pendingRenderer.root)).toContain("Stopping...");
+  });
+
+  it("omits the cowork Stop run control outside cowork or without an active control", () => {
+    expect(buildMarkup({ mode: "chat", coworkStopRunControl: null })).not.toContain("Stop run");
+    expect(
+      buildMarkup({
+        mode: "cowork",
+        coworkStopRunControl: null,
+      }),
+    ).not.toContain("Stop run");
   });
 
   it("falls back to authenticated image loading and surfaces preview failures", async () => {

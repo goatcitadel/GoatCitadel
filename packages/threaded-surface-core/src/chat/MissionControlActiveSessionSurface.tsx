@@ -17,6 +17,7 @@ import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shar
 import type { ChatQueueItemView } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { CoworkAgenticControlItem } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { PendingUserInputState } from "./useChatOutboundExecution";
 import type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat-streaming-preview";
@@ -219,4 +220,21 @@ export interface MissionControlActiveSessionSurfaceProps {
   onConfirmCodeTurn?: () => void;
   /** Dismiss the gate and send the message as Chat instead. */
   onSendAsChatInstead?: () => void;
+  /**
+   * Cowork: the active delegation run's `cancel` control, surfaced beside the
+   * composer so an operator can stop a running delegation from the chat window
+   * without opening the workflow/run-tree panel. `null` unless a running cowork
+   * delegation run exposes a cancel control. A disabled control is still passed
+   * (rendered disabled with its reason) rather than omitted.
+   */
+  coworkStopRunControl?: CoworkAgenticControlItem | null;
+  /**
+   * Record operator stop intent for the active delegation run via the existing
+   * agentic run control endpoint (`controlAgenticRun(runId, { action: "cancel" })`).
+   * For a cowork run with no attached durable run this is state-only: it records
+   * intent and does not terminate the worker.
+   */
+  onCoworkStopRun?: (control: CoworkAgenticControlItem) => void;
+  /** True while a cowork stop (cancel) control request is in flight. */
+  coworkStopRunPending?: boolean;
 }

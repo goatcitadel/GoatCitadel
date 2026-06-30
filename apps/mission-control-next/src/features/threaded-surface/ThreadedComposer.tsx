@@ -2,6 +2,7 @@ import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/thre
 import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import {
   ChatPendingApprovalPanel,
@@ -424,6 +425,60 @@ function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSession
   return null;
 }
 
+const COWORK_STOP_STATE_ONLY_NOTE =
+  "State-only: records operator stop intent in GoatCitadel state. It does not terminate the worker by itself — a live executor must honor the recorded stop before the run is treated as stopped.";
+
+function ComposerCoworkStop({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const control = props.coworkStopRunControl;
+  if (props.mode !== "cowork" || !control) {
+    return null;
+  }
+  const pending = Boolean(props.coworkStopRunPending);
+  const stateOnly = control.runtimeEffect === "state_only";
+  const reason = control.note?.trim() || undefined;
+  const disabled = !control.enabled || pending;
+  const confirmMessage = stateOnly
+    ? "This records operator stop intent for the active run. For a cowork run with no attached durable run, it only records intent and does not terminate the worker — the run keeps going until a live executor honors the recorded stop."
+    : "This cancels the active delegation run. Completed evidence stays available, and any live executor must honor the cancel before the run is treated as stopped.";
+
+  return (
+    <section className="mc-next-composer-banner mc-next-composer-cowork-stop" role="status">
+      <StatusChip tone="warning">Delegation running</StatusChip>
+      <div className="mc-next-composer-cowork-stop-body">
+        <p>{reason ?? "Stop the active delegation run."}</p>
+        {stateOnly ? <p className="mc-next-composer-cowork-stop-note">{COWORK_STOP_STATE_ONLY_NOTE}</p> : null}
+      </div>
+      <button
+        type="button"
+        className="mc-next-panel-button danger"
+        disabled={disabled}
+        title={reason}
+        onClick={() => {
+          if (!disabled) {
+            setConfirmOpen(true);
+          }
+        }}
+      >
+        {pending ? "Stopping..." : "Stop run"}
+      </button>
+      <ConfirmModal
+        open={confirmOpen}
+        title="Stop this delegation run?"
+        message={confirmMessage}
+        confirmLabel="Stop run"
+        danger
+        pending={pending}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          props.onCoworkStopRun?.(control);
+        }}
+      />
+    </section>
+  );
+}
+
 function ComposerCodeGate({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const gate = props.pendingCodeGate;
   if (!gate) {
@@ -780,6 +835,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       <ComposerDelegationApproval props={props} />
+
+      <ComposerCoworkStop props={props} />
 
       <div className="mc-next-composer-input-shell">
         <textarea

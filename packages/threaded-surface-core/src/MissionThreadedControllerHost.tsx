@@ -92,6 +92,7 @@ import {
   getDeleteSessionConfirmationMessage,
   parseQueueCommand,
   parseBtwCommand,
+  resolveCoworkComposerStopControl,
   resolveMidTurnDisposition,
   revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
@@ -3343,6 +3344,13 @@ export function MissionThreadedControllerHost({
         pendingCodeGate,
         onConfirmCodeTurn: () => resolveCodeGateWith("code"),
         onSendAsChatInstead: () => resolveCodeGateWith("chat"),
+        coworkStopRunControl: resolveCoworkComposerStopControl({
+          mode: messageMode,
+          delegationRunStatus: visibleDelegationRun?.status,
+          controls: coworkViewModel.agenticRuntime?.controls,
+        }),
+        onCoworkStopRun: (control) => void handleAgenticControl(control),
+        coworkStopRunPending: agenticControlPending === "cancel",
         pinnedGoal,
         midTurnDisposition: resolveMidTurnDisposition({
           hasActiveStream: Boolean(activeStreamRef.current),
