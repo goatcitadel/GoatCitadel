@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChatOrchestrationRouteDecision, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
@@ -286,4 +286,64 @@ describe("ChatDelegationRunRepository", () => {
     assert.match(repo.get("run-stale").stitchedOutput ?? "", /Superseded by later delegation run run-new/);
     assert.equal(repo.get("run-active-wait").status, "running");
   });
+
+  it("casts optional listRecent filters for postgres null parameters", () => {
+    const db = new DelegationRunSqlCaptureDatabase("postgres");
+    new ChatDelegationRunRepository(db);
+
+    const listSql = db.sql.find(
+      (sql) => sql.includes("FROM chat_delegation_runs runs") && sql.includes("LIMIT @limit"),
+    );
+    assert.ok(listSql);
+    // Bare `@param IS NULL` makes Postgres fail with "could not determine data type
+    // of parameter $1" when the value is NULL; the ::text casts anchor the type.
+    assert.match(listSql, /\(@workspaceId::text IS NULL OR meta\.workspace_id = @workspaceId::text\)/);
+    assert.match(listSql, /\(@sessionId::text IS NULL OR runs\.session_id = @sessionId::text\)/);
+    assert.match(listSql, /\(@parentRunId::text IS NULL OR runs\.parent_run_id = @parentRunId::text\)/);
+  });
+
+  it("leaves optional listRecent filters uncast on the sqlite dialect", () => {
+    const db = new DelegationRunSqlCaptureDatabase("sqlite");
+    new ChatDelegationRunRepository(db);
+
+    const listSql = db.sql.find(
+      (sql) => sql.includes("FROM chat_delegation_runs runs") && sql.includes("LIMIT @limit"),
+    );
+    assert.ok(listSql);
+    assert.doesNotMatch(listSql, /::text/);
+    assert.match(listSql, /\(@workspaceId IS NULL OR meta\.workspace_id = @workspaceId\)/);
+  });
 });
+
+class DelegationRunSqlCaptureDatabase implements DatabaseClient {
+  public readonly sql: string[] = [];
+
+  public constructor(public readonly dialect: DatabaseClient["dialect"]) {}
+
+  public prepare(sql: string): DbStatement {
+    this.sql.push(sql);
+    return new DelegationRunFakeStatement();
+  }
+
+  public exec(): void {}
+
+  public close(): void {}
+
+  public transaction<T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T {
+    return callback();
+  }
+}
+
+class DelegationRunFakeStatement implements DbStatement {
+  public run(): { changes: number } {
+    return { changes: 0 };
+  }
+
+  public get<T = unknown>(): T | undefined {
+    return undefined;
+  }
+
+  public all<T = unknown>(): T[] {
+    return [];
+  }
+}
