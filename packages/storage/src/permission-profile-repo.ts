@@ -5,6 +5,7 @@ import type {
   LocalOperatorOverrideScope,
   PermissionProfileActivationInput,
   PermissionProfileActivationRecord,
+  PermissionProfileBuiltinId,
   PermissionProfileCreateInput,
   PermissionProfileRecord,
   PermissionProfileScope,
@@ -79,6 +80,15 @@ export interface PermissionProfileContextQuery {
   profileId?: string;
   overrideId?: string;
   disableLocalOperatorOverrides?: boolean;
+  /**
+   * Builtin profile to fall back to when no explicit profileId and no matching
+   * activation resolve. Defaults to "safe" (approve-all). The gateway passes
+   * "trusted_local_power" for a local-first operator who configured
+   * `approvalMode: "bypass"`, so their default sessions aren't silently forced
+   * onto approve-all (which gates every tool and degrades cowork). Constrained to
+   * builtin ids so an unknown fallback can't slip through to a runtime not-found.
+   */
+  defaultProfileId?: PermissionProfileBuiltinId;
 }
 
 export interface ResolvedPermissionProfileContext {
@@ -498,7 +508,7 @@ export class PermissionProfileRepository {
         return profile;
       }
     }
-    return this.getProfile("safe");
+    return this.getProfile(input.defaultProfileId ?? "safe");
   }
 
   private resolveOverride(input: PermissionProfileContextQuery): LocalOperatorOverrideRecord | undefined {
