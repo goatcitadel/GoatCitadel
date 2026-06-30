@@ -6482,6 +6482,20 @@ export class GatewayService {
         message: `Non-persisted permission profile ${input.permissionProfileId} is unavailable for this runtime.`,
       });
     }
+    // Default permission profile for sessions with no explicit profile/activation.
+    // A local-first operator who configured `approvalMode: "bypass"` should not be
+    // silently forced onto the restrictive builtin "safe" (approve_all) default,
+    // which gates every otherwise-allowed tool and degrades cowork/code turns (the
+    // model packs its answer into a gated call → hard degrade). On any non-hardened
+    // deployment with a bypass config, honor that intent by defaulting to
+    // "trusted_local_power" (bypass). remote_hardened always stays on "safe" (the
+    // bypass guard below additionally enforces this). Explicit profileId/activation
+    // still win — this only changes the otherwise-"safe" fallback.
+    const defaultPermissionProfileId =
+      this.config.assistant.deploymentProfile !== "remote_hardened" &&
+      this.config.toolPolicy.tools?.approvalMode === "bypass"
+        ? "trusted_local_power"
+        : "safe";
     const resolved = syntheticPermissionProfile
       ? { permissionProfile: syntheticPermissionProfile, localOperatorOverride: undefined }
       : this.storage.permissionProfiles.resolveContext({
@@ -6494,6 +6508,7 @@ export class GatewayService {
           profileId: input.permissionProfileId,
           overrideId: input.localOperatorOverrideId,
           disableLocalOperatorOverrides: this.config.assistant.deploymentProfile === "remote_hardened",
+          defaultProfileId: defaultPermissionProfileId,
         });
     if (
       this.config.assistant.deploymentProfile === "remote_hardened" &&
