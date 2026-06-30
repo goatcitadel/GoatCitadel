@@ -314,6 +314,64 @@ describe("PermissionProfileRepository", () => {
       runOverride.overrideId,
     );
   });
+
+  it("falls back to the provided defaultProfileId when no profile or activation resolves", () => {
+    const { repo } = createStore();
+
+    // No explicit profileId and no matching activation: the built-in fallback is "safe".
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-z",
+        workspaceId: "workspace-z",
+        sessionId: "session-z",
+        surface: "cowork",
+      }).permissionProfile.profileId,
+      "safe",
+    );
+
+    // Same context with a caller-supplied default (the gateway's local + bypass case)
+    // flips the fallback to the bypass built-in instead of approve-all "safe".
+    const resolved = repo.resolveContext({
+      operatorId: "operator-z",
+      workspaceId: "workspace-z",
+      sessionId: "session-z",
+      surface: "cowork",
+      defaultProfileId: "trusted_local_power",
+    });
+    assert.equal(resolved.permissionProfile.profileId, "trusted_local_power");
+    assert.equal(resolved.permissionProfile.approvalMode, "bypass");
+  });
+
+  it("prefers an explicit activation over defaultProfileId (default only changes the fallback)", () => {
+    const { repo } = createStore();
+
+    const custom = repo.createProfile({
+      label: "Cowork Approve",
+      scope: "workspace",
+      scopeRef: "workspace-act",
+      approvalMode: "approve_all",
+      toolPatterns: ["*"],
+      createdBy: "operator-act",
+    });
+    repo.activateProfile({
+      profileId: custom.profileId,
+      workspaceId: "workspace-act",
+      surface: "cowork",
+      createdBy: "operator-act",
+    });
+
+    // A matching activation wins even when a bypass default is supplied.
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-act",
+        workspaceId: "workspace-act",
+        sessionId: "session-act",
+        surface: "cowork",
+        defaultProfileId: "trusted_local_power",
+      }).permissionProfile.profileId,
+      custom.profileId,
+    );
+  });
 });
 
 function createStore(): { db: DatabaseClient; repo: PermissionProfileRepository } {
