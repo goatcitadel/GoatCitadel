@@ -1,0 +1,58 @@
+name: Code Mode Sandbox Canary
+
+# Dedicated required gate for the Code Mode host-isolation posture and the
+# hostile-code adversarial canary suite. Promoting these lanes to their own gate
+# (rather than only running inside verify:fast) keeps the sandbox claim-gating
+# logic and adapter posture from silently regressing as Code Mode traffic grows.
+#
+# This runs on EVERY push to main and EVERY pull request — intentionally with no
+# `paths` filter. As a required status check it must report a result on every PR;
+# a path-filtered workflow is skipped (never reported) on unrelated PRs, which
+# GitHub leaves as a perpetually-pending required check that blocks merge. The
+# lanes are fast static + proof-artifact assertions (no real firejail/Docker), so
+# running them unconditionally is cheap and deterministic.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  code-mode-sandbox-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Code Mode required-sandbox lane
+        run: pnpm verify:code-mode:sandbox
+
+      - name: Run Code Mode hostile-sandbox canary lane
+        run: pnpm verify:code-mode:hostile-sandbox
+
+      - name: Upload sandbox proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-mode-sandbox-canary-artifacts
+          path: artifacts/verification
+          if-no-files-found: error
