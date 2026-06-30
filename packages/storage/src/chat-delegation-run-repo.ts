@@ -76,13 +76,15 @@ export class ChatDelegationRunRepository {
       ORDER BY started_at DESC
       LIMIT @limit
     `);
+    const optionalFilter = (column: string, param: string): string =>
+      buildOptionalTextFilterSql(db.dialect, column, param);
     this.listRecentStmt = db.prepare(`
       SELECT runs.*
       FROM chat_delegation_runs runs
       LEFT JOIN chat_session_meta meta ON meta.session_id = runs.session_id
-      WHERE (@workspaceId IS NULL OR meta.workspace_id = @workspaceId)
-        AND (@sessionId IS NULL OR runs.session_id = @sessionId)
-        AND (@parentRunId IS NULL OR runs.parent_run_id = @parentRunId)
+      WHERE ${optionalFilter("meta.workspace_id", "@workspaceId")}
+        AND ${optionalFilter("runs.session_id", "@sessionId")}
+        AND ${optionalFilter("runs.parent_run_id", "@parentRunId")}
       ORDER BY runs.started_at DESC, runs.run_id DESC
       LIMIT @limit
     `);
@@ -290,6 +292,17 @@ export class ChatDelegationRunRepository {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Postgres cannot infer the type of a bare bound parameter used as `@param IS NULL`
+// (the value is NULL with no column to anchor the type), so optional text filters must
+// cast on the Postgres dialect. SQLite is dynamically typed and needs no cast. Mirrors
+// buildOptionalTextFilterSql in evidence-envelope-repo / code-mode-run-repo.
+function buildOptionalTextFilterSql(dialect: DatabaseClient["dialect"], column: string, param: string): string {
+  if (dialect === "postgres") {
+    return `(${param}::text IS NULL OR ${column} = ${param}::text)`;
+  }
+  return `(${param} IS NULL OR ${column} = ${param})`;
 }
 
 function isChatDelegationRunRow(value: unknown): value is ChatDelegationRunRow {
