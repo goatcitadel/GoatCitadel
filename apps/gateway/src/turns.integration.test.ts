@@ -149,8 +149,15 @@ function createIsolatedConfigRoot(providerBaseUrl: string): string {
       },
     ],
   };
+  // Read the base from the tracked example template rather than the runtime
+  // config/goatcitadel.json, which is gitignored and absent in a fresh checkout
+  // (it is synced at gateway boot). Using the example keeps this hermetic and
+  // identical between local and CI.
   const unifiedConfigPath = path.join(root, "config", "goatcitadel.json");
-  const unifiedConfig = JSON.parse(fs.readFileSync(unifiedConfigPath, "utf8")) as Record<string, unknown>;
+  const baseConfigPath = fs.existsSync(unifiedConfigPath)
+    ? unifiedConfigPath
+    : path.join(root, "config", "goatcitadel.example.json");
+  const unifiedConfig = JSON.parse(fs.readFileSync(baseConfigPath, "utf8")) as Record<string, unknown>;
   unifiedConfig.llm = llmConfig;
   fs.writeFileSync(unifiedConfigPath, `${JSON.stringify(unifiedConfig, null, 2)}\n`, "utf8");
   fs.writeFileSync(path.join(root, "config", "llm-providers.json"), `${JSON.stringify(llmConfig, null, 2)}\n`, "utf8");
