@@ -10,6 +10,12 @@ const PERSONAL_PATH_SCAN_BYTES = 1 * 1024 * 1024;
 const LOCAL_SETTINGS_EXACT_PATHS = new Set([".claude/settings.local.json"]);
 const LOCAL_SETTINGS_SUFFIXES = [".local.json", ".local.toml", ".local.yaml", ".local.yml"];
 const GENERATED_ARTIFACT_PREFIXES = ["artifacts/"];
+const REQUIRED_GITATTRIBUTES_LINES = [
+  "* text=auto eol=lf",
+  "*.bat text eol=crlf",
+  "*.cmd text eol=crlf",
+  "*.ps1 text eol=crlf",
+];
 const INSTALLER_BINARY_EXTENSIONS = new Set([".appx", ".appxbundle", ".dmg", ".exe", ".msi", ".pkg"]);
 const ARCHIVE_BINARY_EXTENSIONS = new Set([".7z", ".gz", ".rar", ".tar", ".tgz", ".zip"]);
 const BINARY_SCAN_EXTENSIONS = new Set([
@@ -54,6 +60,11 @@ export function collectRepoHygieneFindings(input) {
   const fileInfoByPath = input.fileInfoByPath ?? new Map();
   const readTextFile = input.readTextFile;
   const findings = [];
+
+  if (readTextFile && trackedFiles.includes(".gitattributes")) {
+    const eolPolicyFindings = collectGitAttributesEolPolicyFindings(readTextFile(".gitattributes"));
+    findings.push(...eolPolicyFindings);
+  }
 
   for (const filePath of trackedFiles) {
     const info = fileInfoByPath.get(filePath);
@@ -111,6 +122,20 @@ export function collectRepoHygieneFindings(input) {
   }
 
   return findings;
+}
+
+function collectGitAttributesEolPolicyFindings(source) {
+  const configuredLines = new Set(
+    source
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#")),
+  );
+  return REQUIRED_GITATTRIBUTES_LINES.filter((line) => !configuredLines.has(line)).map((line) => ({
+    code: "MISSING_EOL_POLICY",
+    filePath: ".gitattributes",
+    message: `.gitattributes must include '${line}' so cross-platform scripts keep deterministic line endings.`,
+  }));
 }
 
 export function normalizeRepoPath(value) {

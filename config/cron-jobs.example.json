@@ -3,6 +3,7 @@
     {
       "jobId": "self_improvement_weekly_replay",
       "name": "Self-Improvement Weekly Replay",
+      "action": "improvement",
       "schedule": "0 2 * * 0 America/Los_Angeles",
       "description": "SECURITY (codex finding #27): disabled by default because it samples recent chat turn traces and tool runs (including args_json/result_json) and ships them to the configured LLM provider without a redaction pass. Enable explicitly only after reviewing what is sent.",
       "enabled": false
@@ -10,24 +11,28 @@
     {
       "jobId": "private_beta_backup_daily",
       "name": "Private Beta Daily Backup",
+      "action": "backup",
       "schedule": "30 2 * * * America/Los_Angeles",
       "enabled": true
     },
     {
       "jobId": "memory-flush-daily",
       "name": "Memory Flush Daily",
+      "action": "memory_flush",
       "schedule": "0 3 * * * America/Los_Angeles",
       "enabled": true
     },
     {
       "jobId": "cost-report-hourly",
       "name": "Cost Report Hourly",
+      "action": "cost_report",
       "schedule": "0 * * * * America/Los_Angeles",
       "enabled": true
     },
     {
       "jobId": "update-review-daily",
       "name": "Daily Update Review",
+      "action": "update_review",
       "schedule": "15 4 * * * America/Los_Angeles",
       "enabled": true
     }

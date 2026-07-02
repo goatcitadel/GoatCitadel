@@ -66,11 +66,13 @@ describe("onboarding TUI helpers", () => {
   it("keeps Windows command quoting and simple onboarding parsing deterministic", () => {
     expect(quoteWindowsCommandArg("")).toBe('""');
     expect(quoteWindowsCommandArg("simple")).toBe("simple");
-    expect(quoteWindowsCommandArg("C:\\Program Files\\pnpm.cmd")).toBe('"C:\\\\Program Files\\\\pnpm.cmd"');
-    expect(quoteWindowsCommandArg('value"quoted')).toBe('"value\\"quoted"');
+    expect(quoteWindowsCommandArg("C:\\Program Files\\pnpm.cmd")).toBe('"C:\\Program Files\\pnpm.cmd"');
     expect(buildWindowsCommand(["pnpm.cmd", "--dir", "C:\\Goat Citadel", "dev:gateway"])).toBe(
-      'pnpm.cmd --dir "C:\\\\Goat Citadel" dev:gateway',
+      'pnpm.cmd --dir "C:\\Goat Citadel" dev:gateway',
     );
+    expect(() => quoteWindowsCommandArg('value"quoted')).toThrow(/embedded quotes/);
+    expect(() => quoteWindowsCommandArg("%PATH%")).toThrow(/percent expansions/);
+    expect(() => quoteWindowsCommandArg("line\nbreak")).toThrow(/control characters/);
 
     expect(clampOption("power", ["saver", "balanced", "power"] as const, "balanced")).toBe("power");
     expect(clampOption("turbo", ["saver", "balanced", "power"] as const, "balanced")).toBe("balanced");

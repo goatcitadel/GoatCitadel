@@ -170,13 +170,22 @@ function buildWindowsCommand(command, args) {
 }
 
 function quoteWindowsArg(value) {
+  assertSafeWindowsArg(value);
   if (value.length === 0) {
     return '""';
   }
-  if (!/[ \t"&()^<>|]/.test(value)) {
+  if (!/[ \t&()^<>|]/.test(value)) {
     return value;
   }
-  return `"${value.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\+)$/g, "$1$1")}"`;
+  return `"${value}"`;
+}
+
+function assertSafeWindowsArg(value) {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
 }
 
 main().catch((error) => {

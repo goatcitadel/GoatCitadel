@@ -69,3 +69,31 @@ test("repo hygiene flags large tracked archives", () => {
     ["TRACKED_BINARY_ARTIFACT", "TRACKED_LARGE_FILE"].sort(),
   );
 });
+
+test("repo hygiene requires root EOL policy for cross-platform launchers", () => {
+  const findings = collectRepoHygieneFindings({
+    trackedFiles: [".gitattributes"],
+    ignoredTrackedFiles: [],
+    fileInfoByPath: new Map([[".gitattributes", { size: 64 }]]),
+    readTextFile: () => "* text=auto eol=lf\n*.cmd text eol=crlf\n*.ps1 text eol=crlf\n",
+  });
+
+  assert.deepEqual(findings.map((finding) => finding.code), ["MISSING_EOL_POLICY"]);
+  assert.match(findings[0]?.message ?? "", /\*\.bat text eol=crlf/);
+});
+
+test("repo hygiene accepts complete root EOL policy", () => {
+  const findings = collectRepoHygieneFindings({
+    trackedFiles: [".gitattributes"],
+    ignoredTrackedFiles: [],
+    fileInfoByPath: new Map([[".gitattributes", { size: 96 }]]),
+    readTextFile: () => [
+      "* text=auto eol=lf",
+      "*.bat text eol=crlf",
+      "*.cmd text eol=crlf",
+      "*.ps1 text eol=crlf",
+    ].join("\n"),
+  });
+
+  assert.equal(findings.length, 0);
+});

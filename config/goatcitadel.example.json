@@ -6,6 +6,22 @@
     "dataDir": "./data",
     "transcriptsDir": "./data/transcripts",
     "auditDir": "./data/audit",
+    "capabilities": {
+      "candidateRoot": "./data/capability-candidates",
+      "codeModeArtifactRoot": "./data/code-mode-artifacts",
+      "tempRoot": "./data/code-mode-temp",
+      "codeModeSandbox": {
+        "required": true,
+        "bestEffortHostEnabled": false
+      },
+      "codeModeDockerBackend": {
+        "enabled": false,
+        "requireDigestPin": true
+      },
+      "codeModeAiderAdapter": {
+        "enabled": false
+      }
+    },
     "workspaceDir": "./workspace",
     "worktreesDir": "./.worktrees",
     "auth": {
@@ -195,41 +211,48 @@
     }
   },
   "toolPolicy": {
-    "profiles": {
-      "minimal": ["session.status", "memory.read"],
-      "standard": ["session.status", "memory.read", "http.get", "fs.read", "fs.write"],
-      "coding": ["session.status", "memory.read", "fs.read", "fs.write", "shell.exec", "git.exec"],
-      "ops": ["session.status", "memory.read", "http.get", "http.post", "process.control", "logs.read"],
-      "research": [
-        "session.status",
-        "time.now",
-        "memory.read",
-        "browser.search",
-        "browser.navigate",
-        "browser.extract",
-        "browser.screenshot",
-        "http.get",
-        "citations.build"
-      ],
-      "chat-agent": [
-        "session.status",
-        "time.now",
-        "memory.read",
-        "memory.search",
-        "memory.write",
-        "memory.upsert",
-        "browser.search",
-        "browser.navigate",
-        "browser.extract",
-        "http.get",
-        "citations.build"
-      ],
-      "danger": ["*"]
-    },
     "tools": {
       "profile": "chat-agent",
-      "allow": [],
-      "deny": []
+      "approvalMode": "approve_risky",
+      "allow": [
+        "session.*",
+        "chat.*",
+        "memory.*",
+        "skills.*",
+        "fs.read",
+        "fs.list",
+        "fs.stat",
+        "file.read_range",
+        "file.find",
+        "code.search",
+        "docs.*",
+        "knowledge.*"
+      ],
+      "loopDetection": {
+        "enabled": true,
+        "historySize": 8,
+        "warningThreshold": 3,
+        "criticalThreshold": 4,
+        "globalThreshold": 6,
+        "detectors": {
+          "repeated_same_call": true,
+          "no_progress_polling": true,
+          "ping_pong": true
+        }
+      },
+      "deny": [
+        "fs.write",
+        "fs.delete",
+        "fs.copy",
+        "fs.move",
+        "shell.exec",
+        "mcp.invoke",
+        "browser.cookies.get",
+        "browser.storage.get",
+        "calendar.create",
+        "calendar.update",
+        "calendar.delete"
+      ]
     },
     "agents": {},
     "sandbox": {
@@ -259,7 +282,16 @@
         "localhost"
       ],
       "riskyShellPatterns": ["rm", "rmdir", "del", "format", "shutdown", "reboot", "git push", "git reset --hard"],
-      "requireApprovalForRiskyShell": true
+      "requireApprovalForRiskyShell": true,
+      "riskyArgumentPatterns": [
+        {
+          "toolNamePattern": "*",
+          "argumentPath": "command",
+          "valuePatterns": ["terraform destroy", "pulumi destroy", "cdk destroy"]
+        },
+        { "toolNamePattern": "terraform.*", "argumentPath": "action", "valuePatterns": ["destroy"] },
+        { "toolNamePattern": "pulumi.*", "argumentPath": "action", "valuePatterns": ["destroy"] }
+      ]
     }
   },
   "budgets": {
@@ -436,31 +468,36 @@
       {
         "jobId": "self_improvement_weekly_replay",
         "name": "Self-Improvement Weekly Replay",
+        "action": "improvement",
         "schedule": "0 2 * * 0 America/Los_Angeles",
-        "description": "Disabled by default because replay samples chat traces and tool payloads for LLM review. Enable only after operator review of redaction and provider scope.",
+        "description": "SECURITY (codex finding #27): disabled by default because it samples recent chat turn traces and tool runs (including args_json/result_json) and ships them to the configured LLM provider without a redaction pass. Enable explicitly only after reviewing what is sent.",
         "enabled": false
       },
       {
         "jobId": "private_beta_backup_daily",
         "name": "Private Beta Daily Backup",
+        "action": "backup",
         "schedule": "30 2 * * * America/Los_Angeles",
         "enabled": true
       },
       {
         "jobId": "memory-flush-daily",
         "name": "Memory Flush Daily",
+        "action": "memory_flush",
         "schedule": "0 3 * * * America/Los_Angeles",
         "enabled": true
       },
       {
         "jobId": "cost-report-hourly",
         "name": "Cost Report Hourly",
+        "action": "cost_report",
         "schedule": "0 * * * * America/Los_Angeles",
         "enabled": true
       },
       {
         "jobId": "update-review-daily",
         "name": "Daily Update Review",
+        "action": "update_review",
         "schedule": "15 4 * * * America/Los_Angeles",
         "enabled": true
       }

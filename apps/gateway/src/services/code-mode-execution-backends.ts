@@ -154,9 +154,8 @@ function buildDockerBackend(
   const envFlag = "GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED";
   const enabled = dockerBackend?.enabled ?? isTruthyEnv(env[envFlag]);
   const image = dockerBackend?.image?.trim();
-  const digestPinBlocked = Boolean(
-    enabled && image && dockerBackend?.requireDigestPin && !isDigestPinnedImageRef(image),
-  );
+  const requireDigestPin = dockerBackend?.requireDigestPin ?? true;
+  const digestPinBlocked = Boolean(enabled && image && requireDigestPin && !isDigestPinnedImageRef(image));
   const callable = codeModeEnabled && enabled && Boolean(image) && !digestPinBlocked;
   return {
     backendId: CODE_MODE_DOCKER_BACKEND_ID,

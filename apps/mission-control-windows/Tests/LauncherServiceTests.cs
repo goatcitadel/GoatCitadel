@@ -149,6 +149,9 @@ public sealed class LauncherServiceTests
         Assert.AreEqual("\"with space\"", LauncherService.QuoteWindowsCommandArg("with space"));
         Assert.AreEqual("\"a&b\"", LauncherService.QuoteWindowsCommandArg("a&b"));
         Assert.AreEqual("\"\"", LauncherService.QuoteWindowsCommandArg(""));
+        Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("value\"quoted"));
+        Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("%PATH%"));
+        Assert.ThrowsException<ArgumentException>(() => LauncherService.QuoteWindowsCommandArg("line\nbreak"));
     }
 
     private string CreateTempRoot()

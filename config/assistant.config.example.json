@@ -4,6 +4,22 @@
   "dataDir": "./data",
   "transcriptsDir": "./data/transcripts",
   "auditDir": "./data/audit",
+  "capabilities": {
+    "candidateRoot": "./data/capability-candidates",
+    "codeModeArtifactRoot": "./data/code-mode-artifacts",
+    "tempRoot": "./data/code-mode-temp",
+    "codeModeSandbox": {
+      "required": true,
+      "bestEffortHostEnabled": false
+    },
+    "codeModeDockerBackend": {
+      "enabled": false,
+      "requireDigestPin": true
+    },
+    "codeModeAiderAdapter": {
+      "enabled": false
+    }
+  },
   "workspaceDir": "./workspace",
   "worktreesDir": "./.worktrees",
   "auth": {

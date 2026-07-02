@@ -975,7 +975,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         image: capabilitiesInput.codeModeDockerBackend?.image,
         dockerCommand: capabilitiesInput.codeModeDockerBackend?.dockerCommand,
         nodeCommand: capabilitiesInput.codeModeDockerBackend?.nodeCommand,
-        requireDigestPin: capabilitiesInput.codeModeDockerBackend?.requireDigestPin ?? false,
+        requireDigestPin: capabilitiesInput.codeModeDockerBackend?.requireDigestPin ?? true,
       },
       codeModeAiderAdapter: {
         enabled: capabilitiesInput.codeModeAiderAdapter?.enabled ?? false,
@@ -1041,11 +1041,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     },
     web: {
       firecrawl: {
-        enabled: firecrawlInput.enabled ?? false,
+        enabled: firecrawlInput.enabled ?? true,
         baseUrl: firecrawlInput.baseUrl ?? "http://127.0.0.1:3002",
-        apiKeyEnv: normalizeFirecrawlApiKeyEnvName(firecrawlInput.apiKeyEnv),
+        apiKeyEnv: normalizeFirecrawlApiKeyEnvName(firecrawlInput.apiKeyEnv) ?? "FIRECRAWL_API_KEY",
         timeoutMs: clampInt(firecrawlInput.timeoutMs, 20_000, 1_000, 120_000),
-        defaultReadBackend: firecrawlInput.defaultReadBackend ?? "native",
+        defaultReadBackend: firecrawlInput.defaultReadBackend ?? "firecrawl",
         fallbackToNative: firecrawlInput.fallbackToNative ?? true,
       },
     },
