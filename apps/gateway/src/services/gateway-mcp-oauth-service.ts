@@ -1,4 +1,4 @@
-import type { McpServerRecord } from "@goatcitadel/contracts";
+import { redactSecretText, type McpServerRecord } from "@goatcitadel/contracts";
 import type { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
@@ -61,12 +61,5 @@ export class GatewayMcpOAuthService {
 }
 
 export function sanitizeMcpAuthError(message: string): string {
-  return message
-    .replace(
-      /\b(Bearer|token|api[-_]?key|authorization|client_secret)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi,
-      "$1=[REDACTED]",
-    )
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
-    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
-    .slice(0, 1024);
+  return redactSecretText(message).value.slice(0, 1024);
 }

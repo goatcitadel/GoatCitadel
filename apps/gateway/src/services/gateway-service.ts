@@ -7914,15 +7914,17 @@ export class GatewayService {
   public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
     // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
     // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
-    // correctly exempts internal servers. Enrich here so the gate sees the resolved workspaceId.
+    // internal servers. Enrich here so the gate sees the resolved workspaceId.
     return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input));
   }
 
   private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
-    // Guard: if the resolver was not constructed (e.g. test harness using Object.create),
-    // fail-open by allowing all.
     if (!this.capabilityScopeResolver) {
-      return;
+      throw new PolicyViolationError({
+        code: "POLICY_BLOCKED",
+        message: "MCP capability scope resolver is unavailable.",
+        details: { serverId: request.serverId, workspaceId: request.workspaceId ?? DEFAULT_WORKSPACE_ID },
+      });
     }
     const workspaceId = request.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const citadelId = this.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;

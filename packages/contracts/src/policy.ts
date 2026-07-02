@@ -13,7 +13,11 @@ export type ToolProfile = "minimal" | "standard" | "coding" | "ops" | "research"
 
 export type FilesystemReadAccessMode = "roots_only" | "approval_required" | "full_disk";
 
-export type PermissionProfileBuiltinId = "safe" | "trusted_local_power";
+export type PermissionProfileBuiltinId =
+  | "safe"
+  | "trusted_local_power"
+  | "scheduled-restricted"
+  | "heartbeat-restricted";
 export type PermissionProfileStatus = "active" | "archived";
 export type PermissionProfileScope = "global" | "operator" | "workspace";
 export type PermissionProfileCreateScope = Exclude<PermissionProfileScope, "global">;

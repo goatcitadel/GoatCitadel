@@ -1,3 +1,5 @@
+import { redactSecretText } from "./secret-redaction.js";
+
 const REASONING_BLOCK_TAGS = ["think", "thinking", "reasoning", "internal_reasoning", "analysis"];
 const INTERNAL_BLOCK_TAGS = ["tool_call", "tool_result", "tool_use", "internal_trace"];
 const INTERNAL_HTML_COMMENT_PREFIXES = ["reasoning", "thinking", "internal"];
@@ -180,28 +182,8 @@ function isInternalHtmlCommentBody(body: string): boolean {
 }
 
 function redactOutboundSecrets(message: string): { message: string; count: number } {
-  let count = 0;
-  const redacted = message
-    .replace(
-      /(["']?)\b([A-Za-z0-9-_]*(?:authorization|api[-_]?key|token|secret|password)[A-Za-z0-9-_]*)\b\1(\s*)([:=])(\s*)(?:"[A-Za-z0-9._~+/=-]{8,}"|'[A-Za-z0-9._~+/=-]{8,}'|[A-Za-z0-9._~+/=-]{8,})(?=$|[\s,;)"'\]}])/gi,
-      (_match, quote, label, beforeSeparator, separator, afterSeparator) => {
-        count += 1;
-        return `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}[REDACTED]`;
-      },
-    )
-    .replace(/\bBearer[ \t]+[A-Za-z0-9\-._~+/]+={0,}(?=$|[\s"',;)\]}])/gi, () => {
-      count += 1;
-      return "Bearer [REDACTED]";
-    })
-    .replace(/\bsk-[A-Za-z0-9-]{20,}/g, () => {
-      count += 1;
-      return "[REDACTED]";
-    })
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]+@/g, () => {
-      count += 1;
-      return "[REDACTED]@";
-    });
-  return { message: redacted, count };
+  const redacted = redactSecretText(message);
+  return { message: redacted.value, count: redacted.redactionCount };
 }
 
 function neutralizeOutboundMentions(message: string): { message: string; count: number } {

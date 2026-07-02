@@ -7,7 +7,6 @@ import {
   channelTargetDirectoryQuerySchema,
   connectionParamsSchema,
   readConfigString,
-  readEnvConfigString,
   resolveRoutePersonalityCatalog,
   telegramDiscoverTargetsSchema,
   telegramPairingApproveSchema,
@@ -170,5 +169,5 @@ function resolveTelegramDiscoveryToken(
   }
   const connection = fastify.services.integrations.getIntegrationConnection(input.connectionId);
   const config = connection.config;
-  return readConfigString(config, "botToken") ?? readEnvConfigString(config, "botTokenEnv");
+  return readConfigString(config, "botToken") ?? resolveAllowlistedEnvSecret(readConfigString(config, "botTokenEnv"));
 }

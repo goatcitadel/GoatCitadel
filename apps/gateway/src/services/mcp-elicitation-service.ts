@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   MCP_ELICITATION_LIMITS,
+  redactSecretText,
   type McpElicitationAuditMetadata,
   type McpElicitationBoundedJsonBody,
   type McpElicitationBoundedTextBody,
@@ -298,22 +299,8 @@ function sanitizeJsonValue(value: unknown, redaction: { count: number }): unknow
 }
 
 function redactSecrets(value: string): { value: string; count: number } {
-  let count = 0;
-  const replace = () => {
-    count += 1;
-    return "[REDACTED]";
-  };
-  const redacted = value
-    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, () => replace())
-    .replace(/\bauthorization\s*:\s*Bearer\s+\S+/gi, () => replace())
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, () => replace())
-    .replace(
-      /\b(?=[A-Za-z0-9_.-]*(?:secret|token|api[-_]?key))(?=[A-Za-z0-9_.-]*[-_])(?=[A-Za-z0-9_.-]{16,}\b)[A-Za-z0-9_.-]+\b/gi,
-      () => replace(),
-    )
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, () => `${replace()}@`)
-    .replace(/sk-[A-Za-z0-9]{20,}/g, () => replace());
-  return { value: redacted, count };
+  const redacted = redactSecretText(value);
+  return { value: redacted.value, count: redacted.redactionCount };
 }
 
 function normalizeOwner(owner: McpElicitationOwnerMetadata | undefined): McpElicitationOwnerMetadata {

@@ -151,6 +151,7 @@ export const BUILTIN_PERMISSION_PROFILES: PermissionProfileRecord[] = [
   SCHEDULED_RESTRICTED_PROFILE,
   HEARTBEAT_RESTRICTED_PROFILE,
 ];
+const BUILTIN_PERMISSION_PROFILE_IDS = new Set(BUILTIN_PERMISSION_PROFILES.map((profile) => profile.profileId));
 
 export class PermissionProfileRepository {
   private readonly createProfileStmt;
@@ -273,7 +274,7 @@ export class PermissionProfileRepository {
 
   public listProfiles(includeArchived = false): PermissionProfileRecord[] {
     const rows = this.listProfilesStmt.all() as PermissionProfileRow[];
-    const custom = rows.map(mapProfileRow);
+    const custom = rows.map(mapProfileRow).filter((profile) => !BUILTIN_PERMISSION_PROFILE_IDS.has(profile.profileId));
     const profiles = [...BUILTIN_PERMISSION_PROFILES, ...custom];
     return includeArchived ? profiles : profiles.filter((profile) => profile.status === "active");
   }

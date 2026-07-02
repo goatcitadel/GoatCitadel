@@ -1,4 +1,5 @@
 import type { McpServerCategory, McpServerPolicy, McpServerRecord } from "@goatcitadel/contracts";
+import { redactSecretText } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 
 export const DEFAULT_MCP_SERVER_POLICY: McpServerPolicy = {
@@ -47,10 +48,7 @@ export function applyMcpRedaction(
     return payload;
   }
   const serialized = JSON.stringify(payload);
-  const redacted = serialized.replace(
-    /\b(sk-[a-z0-9-]{16,}|ghp_[a-z0-9]{20,}|xox[baprs]-[a-z0-9-]{12,}|[A-Za-z0-9+/]{36,}={0,2})\b/gi,
-    "[REDACTED]",
-  );
+  const redacted = redactSecretText(serialized).value;
   const parsed = parseJsonWithFallback<Record<string, unknown>>(redacted, payload);
   if (mode === "strict") {
     return {

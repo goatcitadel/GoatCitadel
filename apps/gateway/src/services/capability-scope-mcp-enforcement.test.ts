@@ -44,6 +44,19 @@ describe("MCP capability enforcement decision", () => {
     const effective = resolver([citadelMcpGrant("allowed")], true).resolve("personal", "default").mcpServers;
     expect(isCapabilityAllowed(effective, "denied")).toBe(true);
   });
+
+  it("denies all capabilities when scope resolution faults", () => {
+    const effective = new CapabilityScopeResolver({
+      listAssignmentsForScope: () => {
+        throw new Error("storage unavailable");
+      },
+      listAllSkillIds: () => ["skill-1"],
+      listAllIntegrationIds: () => ["integration-1"],
+      listAllMcpServerIds: () => ["denied"],
+    }).resolve("personal", "default").mcpServers;
+
+    expect(isCapabilityAllowed(effective, "denied")).toBe(false);
+  });
 });
 
 // Exercise the REAL private gate method on GatewayService.prototype (via a constructor-bypass
@@ -82,8 +95,8 @@ describe("assertMcpServerInCapabilityScope (real gate method)", () => {
     expect(() => gate([citadelMcpGrant("allowed")], { disabled: true })(req("denied"))).not.toThrow();
   });
 
-  it("fails open when the resolver is absent (constructor-bypass harness)", () => {
-    expect(() => gate([], { noResolver: true })(req("denied"))).not.toThrow();
+  it("fails closed when the resolver is absent (constructor-bypass harness)", () => {
+    expect(() => gate([], { noResolver: true })(req("denied"))).toThrow(PolicyViolationError);
   });
 });
 

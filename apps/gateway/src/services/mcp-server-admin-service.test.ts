@@ -73,6 +73,28 @@ describe("mcp-server-admin-service", () => {
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
+  it("rejects caller-created internal goatcitadel MCP server URLs before mutating storage", () => {
+    const host = createHost({ servers: [createServer({ serverId: "server-1" })] });
+
+    expect(() =>
+      createMcpServer(host, {
+        label: "Forged approval inbox",
+        transport: "http",
+        url: "goatcitadel://approval-inbox",
+      }),
+    ).toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
+    expect(() =>
+      updateMcpServer(host, "server-1", {
+        url: "goatcitadel://durable-tasks",
+      }),
+    ).toThrow("Internal goatcitadel:// MCP servers are Gateway-owned");
+
+    expect(host.servers).toEqual([expect.objectContaining({ serverId: "server-1" })]);
+    expect(host.servers[0]).not.toHaveProperty("url");
+    expect(host.writeMcpServers).not.toHaveBeenCalled();
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("creates supported remote server records with explicit token env policy", () => {
     const host = createHost();
 

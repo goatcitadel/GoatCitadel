@@ -28,6 +28,21 @@ export function isAllowedMcpDefinitionForCreate(
   return isRuntimeSupportedMcpDefinition(input) || areExperimentalRemoteMcpTransportsEnabled(env);
 }
 
+export function isInternalMcpServerUrl(url: string | undefined): boolean {
+  return url?.trim().toLowerCase().startsWith("goatcitadel://") ?? false;
+}
+
+export function isAllowedMcpDefinitionForCallerCreate(
+  input: Pick<McpServerTemplateRecord, "transport" | "url">,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !isInternalMcpServerUrl(input.url) && isAllowedMcpDefinitionForCreate(input, env);
+}
+
+export function buildInternalMcpServerCreateBlockedMessage(): string {
+  return "Internal goatcitadel:// MCP servers are Gateway-owned and cannot be created or assigned by callers.";
+}
+
 export function areExperimentalRemoteMcpTransportsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(1|true|yes|on)$/i.test(env[EXPERIMENTAL_REMOTE_MCP_TRANSPORTS_ENV]?.trim() ?? "");
 }

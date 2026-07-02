@@ -187,6 +187,32 @@ describe("integrations Telegram route tails", () => {
     );
   });
 
+  it("does not resolve arbitrary saved Telegram botTokenEnv names during target-directory refresh", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    vi.stubEnv("DATABASE_URL", "postgres://secret-token-should-not-leave-process");
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      key: "telegram",
+      config: {
+        botTokenEnv: "DATABASE_URL",
+        targets: [{ label: "Pinned Room", chatId: "-100999" }],
+      },
+    }));
+    createApp({ getIntegrationConnection });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/channels/connections/11111111-1111-1111-1111-111111111111/target-directory?refresh=true",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().directory.entries).toEqual([
+      expect.objectContaining({ targetId: "-100999", displayLabel: "Pinned Room" }),
+    ]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("surfaces Telegram target directory service failures and personality catalogs", async () => {
     createApp(
       {

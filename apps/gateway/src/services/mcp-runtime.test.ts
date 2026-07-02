@@ -1007,7 +1007,7 @@ describe("mcp runtime", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("token=[REDACTED]");
+    expect(result.error).toContain("token: [REDACTED]");
     expect(result.error).toContain("[REDACTED]@example.test");
     expect(result.error).toContain("[REDACTED]");
     expect(result.error).not.toContain("secret-token-value");

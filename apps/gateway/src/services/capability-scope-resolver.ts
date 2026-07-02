@@ -18,6 +18,12 @@ export const ALL_CAPABILITIES: ResolvedCapabilities = {
   mcpServers: "ALL",
 };
 
+export const NO_CAPABILITIES: ResolvedCapabilities = {
+  skills: new Set<string>(),
+  integrations: new Set<string>(),
+  mcpServers: new Set<string>(),
+};
+
 /** Pure resolution algebra. Exported for table-driven tests.
  *  No rows for a scope = inherit the parent; rows present = allow-list of enabled refs.
  *  Returns "ALL" only when BOTH scopes inherit. Workspace is intersected with the
@@ -84,7 +90,7 @@ export class CapabilityScopeResolver {
       };
     } catch (error) {
       this.deps.onError?.(error);
-      return ALL_CAPABILITIES; // fail-open: never narrow a turn due to a fault
+      return NO_CAPABILITIES;
     }
   }
 

@@ -1,16 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactSecretText } from "@goatcitadel/contracts";
 import { getRequestAttribution } from "./request-attribution.js";
-
-const SECRET_PATTERNS: RegExp[] = [
-  /\bsk-[a-zA-Z0-9-]{20,}\b/g,
-  /\bkey-[a-zA-Z0-9]{20,}\b/g,
-  /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/g,
-  /\b(?:Authorization|Proxy-Authorization):\s*(?:Bearer|Basic)\s+[^\s,;]+/gi,
-  /([?&](?:api[-_]?key|apikey|key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/gi,
-  /\b[A-Z][A-Z0-9_]{2,}=\S{16,}\b/g,
-  /\bkeychain:[^\s"']+\b/g,
-];
 
 const SECRET_KEY_PATTERN =
   /^(?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|client[-_]?secret|secret|password|passwd|token|signature)$/i;
@@ -352,13 +343,5 @@ function shouldRedactAuditKey(key: string): boolean {
 }
 
 function sanitizeString(value: string): string {
-  let scrubbed = value;
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    scrubbed = scrubbed.replace(pattern, (...match) => {
-      const prefix = typeof match[1] === "string" ? match[1] : "";
-      return prefix ? `${prefix}[REDACTED]` : "[REDACTED]";
-    });
-  }
-  return scrubbed;
+  return redactSecretText(value, { redactEnvAssignmentsAsWhole: true }).value;
 }
