@@ -664,6 +664,34 @@ describe("DurableRunService", () => {
     },
   );
 
+  it("refuses to resume paused autonomous runs while the autonomy kill switch is engaged", () => {
+    const run = {
+      ...createRun("run-autonomous-paused", "paused", "chat.turn.execute"),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+        },
+      },
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, {
+        publishRealtime,
+        isFeatureEnabled: (feature) => feature === "autonomyV1Disabled",
+      }) as unknown as ServiceContext,
+    );
+
+    expect(() => service.resumeDurableRun(run.runId, "operator-1")).toThrow(/autonomy kill switch/i);
+    expect(runs.get(run.runId)?.status).toBe("paused");
+    expect(checkpoints).toEqual([]);
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("blocks pause continuation gates before workflow execution", async () => {
     const run = createRun("run-gated", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
@@ -1380,6 +1408,7 @@ function createContext(
       options?: Record<string, unknown>,
     ) => void;
     logger?: DurableRunServiceLogger;
+    isFeatureEnabled?: (feature: string) => boolean;
   },
 ) {
   const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
@@ -1616,7 +1645,7 @@ function createContext(
     logger: options?.logger,
     publishRealtime: options?.publishRealtime ?? (() => undefined),
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: () => true,
+    isFeatureEnabled: options?.isFeatureEnabled ?? (() => true),
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
   };
 }

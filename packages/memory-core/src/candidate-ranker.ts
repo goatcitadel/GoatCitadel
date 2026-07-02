@@ -68,7 +68,8 @@ export function rankMemoryCandidates(
     }
     return 0;
   });
-  return scored.slice(0, Math.max(1, options.maxCandidates));
+  const maxCandidates = Math.max(0, Math.floor(options.maxCandidates));
+  return maxCandidates === 0 ? [] : scored.slice(0, maxCandidates);
 }
 
 function roundScore(value: number): number {

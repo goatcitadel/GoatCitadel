@@ -312,7 +312,12 @@ describe("memory ranking and citations", () => {
           timestamp: "2026-05-01T00:00:00.000Z",
         },
       ],
-      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z", queryEmbedding: [1, 0, 0], embeddingProviderIsReal: true },
+      {
+        maxCandidates: 10,
+        nowIso: "2026-05-01T12:00:00.000Z",
+        queryEmbedding: [1, 0, 0],
+        embeddingProviderIsReal: true,
+      },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:browser");
@@ -323,7 +328,7 @@ describe("memory ranking and citations", () => {
     expect(ranked.find((item) => item.candidateId === "m:unrelated")?.rankSignals.semanticVectorScore).toBeUndefined();
   });
 
-  it("uses at least one candidate limit and supports no lexical terms", () => {
+  it("honors a zero candidate cap even when there are no lexical terms", () => {
     const ranked = rankMemoryCandidates(
       "a b",
       [
@@ -333,7 +338,7 @@ describe("memory ranking and citations", () => {
       { maxCandidates: 0, nowIso: "2026-05-01T00:00:00.000Z" },
     );
 
-    expect(ranked.map((item) => item.candidateId)).toEqual(["a"]);
+    expect(ranked).toEqual([]);
   });
 
   it("covers recency bands and exact candidate-id ties", () => {
@@ -403,6 +408,18 @@ describe("memory ranking and citations", () => {
     ).toEqual({
       valid: false,
       invalidIds: ["missing"],
+    });
+    expect(
+      validateCitations([{ candidateId: "one", sourceType: "file", sourceRef: "other.md", score: 1 }], candidates),
+    ).toEqual({
+      valid: false,
+      invalidIds: ["one"],
+    });
+    expect(
+      validateCitations([{ candidateId: "one", sourceType: "file", sourceRef: "one.md", score: 1.5 }], candidates),
+    ).toEqual({
+      valid: false,
+      invalidIds: ["one"],
     });
   });
 });

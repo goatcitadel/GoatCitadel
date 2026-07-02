@@ -705,6 +705,28 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
+  it("blocks autonomous connector delivery runs while the autonomy kill switch is engaged", async () => {
+    const run = {
+      ...buildRunWithPayload("connector.delivery", {
+        version: "connector.delivery.v1",
+        connectorId: "connector-slack",
+        action: "send",
+      }),
+      metadata: {
+        deliveryKind: "autonomous.assistant_message",
+        autonomous: true,
+      },
+    };
+    const host = {
+      isFeatureEnabled: vi.fn((feature: string) => feature === "autonomyV1Disabled"),
+      requireConnectorRecord: vi.fn(),
+    };
+
+    await expect(executeDurableConnectorDeliveryRun(host as never, run)).rejects.toThrow(/autonomy kill switch/i);
+    expect(host.requireConnectorRecord).not.toHaveBeenCalled();
+    expect(dispatchConnectorDelivery).not.toHaveBeenCalled();
+  });
+
   it("preserves approval delivery lineage from real remote-token connector payloads", async () => {
     vi.mocked(dispatchConnectorDelivery).mockResolvedValue({
       capabilityId: "outbound_messages",
@@ -999,6 +1021,35 @@ describe("durable-execution-service orchestration workflow", () => {
       undefined,
       { skipMessageStart: true, abortSignal: abortController.signal },
     );
+  });
+
+  it("blocks queued autonomous chat turns while the autonomy kill switch is engaged", async () => {
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        userMessageId: "user-1",
+        assistantMessageId: "assistant-1",
+        branchKind: "new",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "autonomous run" },
+      }),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+        },
+      },
+    };
+    const host = {
+      isFeatureEnabled: vi.fn((feature: string) => feature === "autonomyV1Disabled"),
+      prepareAgentChatTurn: vi.fn(),
+    };
+
+    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow(/autonomy kill switch/i);
+    expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
   });
 
   it("marks proactive tick workflows unrecoverable with durable and session links", async () => {
@@ -1475,6 +1526,27 @@ describe("maybeEnqueueAutonomousDelivery", () => {
         systemActorId: "system-cron",
       }),
     );
+  });
+
+  it("does not enqueue autonomous delivery while the autonomy kill switch is engaged", () => {
+    const enqueue = vi.fn(() => "delivery-run-1");
+    const host = {
+      ...buildDeliveryHost("Overnight summary ready.", enqueue),
+      isFeatureEnabled: vi.fn((feature: string) => feature === "autonomyV1Disabled"),
+    };
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", chatTurnPayload),
+      metadata: {
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram", target: "42" },
+        },
+      },
+    };
+
+    expect(maybeEnqueueAutonomousDelivery(host as never, run, chatTurnPayload)).toBeUndefined();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("is a no-op for non-autonomous turns", () => {

@@ -6,6 +6,7 @@ import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 
 export interface AutoRouteHost {
   surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
+  readChatSessionMode?(sessionId: string): ChatMode | undefined;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): void;
   normalizeWorkspaceId(workspaceId?: string): string;
   storage: {
@@ -25,6 +26,10 @@ export async function applyAutoRouteToInput(
 ): Promise<ChatSendMessageRequest> {
   if (!input.autoRoute || input.mode !== undefined || !host.surfaceRouter || !host.persistChatSessionMode) {
     return input;
+  }
+  const persistedMode = host.readChatSessionMode?.(sessionId);
+  if (persistedMode !== undefined) {
+    return { ...input, mode: persistedMode };
   }
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);

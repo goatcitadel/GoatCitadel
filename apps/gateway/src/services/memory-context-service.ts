@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   ChatCompletionResponse,
-  MemoryCitation,
   MemoryContextComposeRequest,
   MemoryContextPack,
-  MemoryFreshness,
   MemoryQmdStatsResponse,
   MemoryRelationScope,
   MemoryRetrievalMatchSignals,
@@ -33,7 +31,13 @@ import { assertWritePathInJail, currentEmbeddingProfile, generateEmbedding } fro
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
-import { assertNoMemoryContextInjection } from "./assembled-prompt-injection-guard.js";
+import {
+  enrichMemoryCitations,
+  enrichMemoryPack,
+  findInvalidFactCitationIds,
+  MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
+  sanitizeMemoryContextWrite,
+} from "./memory-context-safety.js";
 
 export class MemoryContextService {
   public constructor(
@@ -42,11 +46,9 @@ export class MemoryContextService {
     private readonly config: GatewayRuntimeConfig,
     private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => void,
   ) {}
-
   public async compose(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
     const pack = await this.composeInternal(input);
-    assertNoMemoryContextInjection(pack.contextText);
-    return pack;
+    return this.degradeUnsafeMemoryContext(input, pack);
   }
 
   private async composeInternal(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
@@ -291,6 +293,10 @@ export class MemoryContextService {
       if (!integrity.valid) {
         throw new Error(`distiller returned invalid citations: ${integrity.invalidIds.join(", ")}`);
       }
+      const invalidFactCitationIds = findInvalidFactCitationIds(parsed);
+      if (invalidFactCitationIds.length > 0) {
+        throw new Error(`distiller returned facts with invalid citations: ${invalidFactCitationIds.join(", ")}`);
+      }
 
       const composed = composeDistilledContext({
         payload: parsed.payload,
@@ -300,6 +306,14 @@ export class MemoryContextService {
 
       const candidateMap = toCandidateMap(candidates);
       const citations = enrichMemoryCitations(parsed.citations, relationScope, candidateMap);
+      const write = sanitizeMemoryContextWrite({
+        contextText: composed.contextText,
+        citations,
+        quality: {
+          status: "generated",
+        },
+        distilledTokenEstimate: composed.distilledTokenEstimate,
+      });
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
@@ -309,13 +323,11 @@ export class MemoryContextService {
         phaseId: input.phaseId,
         queryHash,
         sourcesHash,
-        contextText: composed.contextText,
-        citations,
-        quality: {
-          status: "generated",
-        },
+        contextText: write.contextText,
+        citations: write.citations,
+        quality: write.quality,
         originalTokenEstimate,
-        distilledTokenEstimate: composed.distilledTokenEstimate,
+        distilledTokenEstimate: write.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
       const enrichedGenerated = enrichMemoryPack(pack, relationScope, candidateMap);
@@ -326,7 +338,7 @@ export class MemoryContextService {
         taskId: input.taskId,
         runId: input.runId,
         phaseId: input.phaseId,
-        status: "generated",
+        status: write.promptInjectionDetected ? "fallback" : "generated",
         providerId,
         model,
         durationMs: Math.max(1, Date.now() - startedAt),
@@ -335,17 +347,32 @@ export class MemoryContextService {
         originalTokenEstimate,
         distilledTokenEstimate: enrichedGenerated.distilledTokenEstimate,
         savingsPercent: calculateSavings(originalTokenEstimate, enrichedGenerated.distilledTokenEstimate),
+        errorText: write.promptInjectionDetected
+          ? `${MEMORY_CONTEXT_PROMPT_INJECTION_REASON}:${write.evidenceHash?.slice(0, 12)}`
+          : undefined,
       });
 
-      this.publishRealtime("memory_qmd_generated", {
-        contextId: enrichedGenerated.contextId,
-        scope: input.scope,
-        sessionId: input.sessionId,
-        runId: input.runId,
-        phaseId: input.phaseId,
-        providerId,
-        model,
-      });
+      if (write.promptInjectionDetected) {
+        this.publishRealtime("memory_qmd_fallback", {
+          contextId: enrichedGenerated.contextId,
+          scope: input.scope,
+          sessionId: input.sessionId,
+          runId: input.runId,
+          phaseId: input.phaseId,
+          reason: MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
+          evidenceHash: write.evidenceHash?.slice(0, 12),
+        });
+      } else {
+        this.publishRealtime("memory_qmd_generated", {
+          contextId: enrichedGenerated.contextId,
+          scope: input.scope,
+          sessionId: input.sessionId,
+          runId: input.runId,
+          phaseId: input.phaseId,
+          providerId,
+          model,
+        });
+      }
       return enrichedGenerated;
     } catch (error) {
       if (isMemoryContextAbort(error, input.signal)) {
@@ -355,6 +382,15 @@ export class MemoryContextService {
       const candidateMap = toCandidateMap(candidates);
       const citations = enrichMemoryCitations(fallback.citations, relationScope, candidateMap);
       const message = truncate((error as Error).message, 500);
+      const write = sanitizeMemoryContextWrite({
+        contextText: fallback.contextText,
+        citations,
+        quality: {
+          status: "fallback",
+          reason: message,
+        },
+        distilledTokenEstimate: fallback.distilledTokenEstimate,
+      });
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
         scope: input.scope,
@@ -364,14 +400,11 @@ export class MemoryContextService {
         phaseId: input.phaseId,
         queryHash,
         sourcesHash,
-        contextText: fallback.contextText,
-        citations,
-        quality: {
-          status: "fallback",
-          reason: message,
-        },
+        contextText: write.contextText,
+        citations: write.citations,
+        quality: write.quality,
         originalTokenEstimate,
-        distilledTokenEstimate: fallback.distilledTokenEstimate,
+        distilledTokenEstimate: write.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
       const enrichedFallback = enrichMemoryPack(pack, relationScope, candidateMap);
@@ -390,12 +423,15 @@ export class MemoryContextService {
         originalTokenEstimate,
         distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
         savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
-        errorText: message,
+        errorText: write.promptInjectionDetected
+          ? `${MEMORY_CONTEXT_PROMPT_INJECTION_REASON}:${write.evidenceHash?.slice(0, 12)}`
+          : message,
       });
       this.publishRealtime("memory_qmd_fallback", {
         contextId: enrichedFallback.contextId,
         scope: input.scope,
-        reason: message,
+        reason: write.promptInjectionDetected ? MEMORY_CONTEXT_PROMPT_INJECTION_REASON : message,
+        ...(write.evidenceHash ? { evidenceHash: write.evidenceHash.slice(0, 12) } : {}),
       });
       return enrichedFallback;
     }
@@ -573,6 +609,50 @@ export class MemoryContextService {
     }
     return [...sessionIds];
   }
+
+  private degradeUnsafeMemoryContext(input: MemoryContextComposeRequest, pack: MemoryContextPack): MemoryContextPack {
+    const write = sanitizeMemoryContextWrite({
+      contextText: pack.contextText,
+      citations: pack.citations,
+      quality: pack.quality,
+      distilledTokenEstimate: pack.distilledTokenEstimate,
+    });
+    if (!write.promptInjectionDetected) {
+      return pack;
+    }
+    const degraded: MemoryContextPack = {
+      ...pack,
+      contextText: write.contextText,
+      citations: write.citations,
+      quality: write.quality,
+      distilledTokenEstimate: write.distilledTokenEstimate,
+    };
+    this.storage.memoryQmdRuns.append({
+      scope: input.scope,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      runId: input.runId,
+      phaseId: input.phaseId,
+      status: "fallback",
+      durationMs: 1,
+      candidateCount: pack.citations.length,
+      citationsCount: 0,
+      originalTokenEstimate: pack.originalTokenEstimate,
+      distilledTokenEstimate: write.distilledTokenEstimate,
+      savingsPercent: calculateSavings(pack.originalTokenEstimate, write.distilledTokenEstimate),
+      errorText: `${MEMORY_CONTEXT_PROMPT_INJECTION_REASON}:${write.evidenceHash?.slice(0, 12)}`,
+    });
+    this.publishRealtime("memory_qmd_fallback", {
+      contextId: pack.contextId,
+      scope: input.scope,
+      sessionId: input.sessionId,
+      runId: input.runId,
+      phaseId: input.phaseId,
+      reason: MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
+      evidenceHash: write.evidenceHash?.slice(0, 12),
+    });
+    return degraded;
+  }
 }
 
 function collectRecentRetrievalStrategies(recentContexts: MemoryContextPack[]): MemoryRetrievalStrategy[] {
@@ -644,105 +724,6 @@ function resolveMemoryFallbackMode(
   return "available";
 }
 
-function enrichMemoryPack(
-  pack: MemoryContextPack,
-  relationScope: MemoryRelationScope,
-  candidatesById: Map<
-    string,
-    {
-      sourceType: "transcript" | "file" | "memory_item";
-      timestamp?: string;
-      rankScore?: number;
-      rankSignals?: MemoryRetrievalMatchSignals;
-    }
-  >,
-): MemoryContextPack {
-  return {
-    ...pack,
-    relationScope,
-    citations: enrichMemoryCitations(pack.citations, relationScope, candidatesById),
-  };
-}
-
-function enrichMemoryCitations(
-  citations: MemoryCitation[],
-  relationScope: MemoryRelationScope,
-  candidatesById: Map<
-    string,
-    {
-      sourceType: "transcript" | "file" | "memory_item";
-      timestamp?: string;
-      rankScore?: number;
-      rankSignals?: MemoryRetrievalMatchSignals;
-    }
-  >,
-): MemoryCitation[] {
-  return citations.map((citation) => {
-    const candidate = candidatesById.get(citation.candidateId);
-    const selectionReason =
-      candidate?.rankSignals !== undefined
-        ? buildMemorySelectionReason(candidate.rankSignals)
-        : candidate?.rankScore !== undefined
-          ? `selected by lexical/recency retrieval score ${candidate.rankScore.toFixed(3)}`
-          : (citation.provenance?.selectionReason ?? "selected from reusable cached context");
-    return {
-      ...citation,
-      provenance: {
-        relationScope: citation.provenance?.relationScope ?? relationScope,
-        freshness: citation.provenance?.freshness ?? classifyMemoryFreshness(candidate?.timestamp),
-        selectionReason,
-        retrievalStrategy: citation.provenance?.retrievalStrategy ?? resolveCitationRetrievalStrategy(candidate),
-        matchSignals: citation.provenance?.matchSignals ?? candidate?.rankSignals,
-        sourceTimestamp: citation.provenance?.sourceTimestamp ?? candidate?.timestamp,
-      },
-    };
-  });
-}
-
-function buildMemorySelectionReason(signals: MemoryRetrievalMatchSignals): string {
-  const lexical = signals.lexicalBm25Score ?? signals.lexicalScore;
-  const embedding = signals.embeddingScore ?? signals.semanticVectorScore ?? 0;
-  const method =
-    embedding > 0 && lexical > 0
-      ? "hybrid retrieval"
-      : embedding > 0
-        ? "semantic-vector retrieval"
-        : signals.semanticHintScore > 0
-          ? "semantic-hint retrieval"
-          : "lexical/recency retrieval";
-  return [
-    `selected by ${method} score ${signals.totalScore.toFixed(3)} (BM25 ${lexical.toFixed(3)}`,
-    embedding > 0 ? `embedding ${embedding.toFixed(3)}` : undefined,
-    `semantic hint ${signals.semanticHintScore.toFixed(3)}`,
-    `recency ${signals.recencyScore.toFixed(3)}`,
-    `diversity ${signals.diversityScore.toFixed(3)})`,
-  ]
-    .filter(Boolean)
-    .join(", ");
-}
-
-function resolveCitationRetrievalStrategy(
-  candidate:
-    | {
-        rankSignals?: MemoryRetrievalMatchSignals;
-        rankScore?: number;
-      }
-    | undefined,
-): MemoryRetrievalStrategy | undefined {
-  if (candidate?.rankSignals) {
-    const lexical = candidate.rankSignals.lexicalBm25Score ?? candidate.rankSignals.lexicalScore;
-    const embedding = candidate.rankSignals.embeddingScore ?? candidate.rankSignals.semanticVectorScore ?? 0;
-    if (embedding > 0 && lexical > 0) {
-      return "hybrid_rank";
-    }
-    if (embedding > 0) {
-      return "semantic_vector";
-    }
-    return candidate.rankSignals.semanticHintScore > 0 ? "semantic_hints" : "lexical_recency";
-  }
-  return candidate?.rankScore !== undefined ? "lexical_recency" : undefined;
-}
-
 function toCandidateMap(
   candidates: Array<{
     candidateId: string;
@@ -804,24 +785,6 @@ function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryR
 function normalizeMemoryWorkspaceId(workspaceId?: string): string | undefined {
   const trimmed = workspaceId?.trim();
   return trimmed || undefined;
-}
-
-function classifyMemoryFreshness(timestamp?: string): MemoryFreshness {
-  if (!timestamp) {
-    return "unknown";
-  }
-  const parsed = Date.parse(timestamp);
-  if (Number.isNaN(parsed)) {
-    return "unknown";
-  }
-  const ageHours = Math.max(0, Date.now() - parsed) / (60 * 60 * 1000);
-  if (ageHours <= 1) {
-    return "fresh";
-  }
-  if (ageHours <= 24 * 7) {
-    return "recent";
-  }
-  return "stale";
 }
 
 async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {

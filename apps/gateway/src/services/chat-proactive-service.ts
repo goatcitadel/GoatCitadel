@@ -2162,6 +2162,11 @@ export class ChatProactiveService {
 
   async executeDurableProactiveTickRun(run: DurableRunRecord, context?: { signal?: AbortSignal }): Promise<void> {
     throwIfProactiveDurableRunAborted(context?.signal);
+    if (this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
+      throw new Error(
+        `Durable proactive tick ${run.runId} is blocked while the autonomy kill switch is engaged (autonomyV1Disabled).`,
+      );
+    }
     const payload = this.parseProactiveTickWorkflowPayload(run);
     if (!payload) {
       throw new Error("Durable proactive tick payload is invalid or incomplete.");

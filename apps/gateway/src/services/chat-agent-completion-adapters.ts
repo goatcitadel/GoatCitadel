@@ -192,7 +192,70 @@ export function parseSerializedToolCalls(content: string, modelToCanonical: Map<
       rawArguments,
     });
   }
+  const jsonToolCallMatches = Array.from(trimmed.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi));
+  for (const match of jsonToolCallMatches) {
+    const body = (match[1] ?? "").trim();
+    if (!body) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const record = parsed as Record<string, unknown>;
+    const functionRecord =
+      record.function && typeof record.function === "object" && !Array.isArray(record.function)
+        ? (record.function as Record<string, unknown>)
+        : undefined;
+    const rawToolName = readString(functionRecord?.name ?? record.name)?.trim();
+    if (!rawToolName) {
+      continue;
+    }
+    const toolName = resolveAllowedModelToolCallName(rawToolName, modelToCanonical);
+    if (!toolName) {
+      continue;
+    }
+    const { args, rawArguments } = parseSerializedArguments(functionRecord?.arguments ?? record.arguments);
+    calls.push({
+      id: readString(record.id) ?? `tool-${randomUUID()}`,
+      toolName,
+      args,
+      rawArguments,
+    });
+  }
   return calls;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseSerializedArguments(value: unknown): { args: Record<string, unknown>; rawArguments: string } {
+  if (value === undefined) {
+    return { args: {}, rawArguments: "{}" };
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const args = parsed as Record<string, unknown>;
+        return { args, rawArguments: JSON.stringify(args) };
+      }
+    } catch {
+      // Keep malformed arguments visible in rawArguments but non-executable.
+    }
+    return { args: {}, rawArguments: value };
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const args = value as Record<string, unknown>;
+    return { args, rawArguments: JSON.stringify(args) };
+  }
+  return { args: {}, rawArguments: JSON.stringify(value) ?? "{}" };
 }
 
 export function resolveAllowedModelToolCallName(

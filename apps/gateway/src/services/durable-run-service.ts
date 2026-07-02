@@ -29,6 +29,7 @@ export interface DurableRunServiceContext {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
 }
 
 export interface DurableRunServiceLogger {
@@ -495,6 +496,11 @@ export class DurableRunService {
     const current = this.ctx.storage.durableRuns.getRun(runId);
     if (current.status !== "paused") {
       throw new Error(`Durable run ${runId} cannot be resumed from ${current.status}`);
+    }
+    if (isAutonomousDurableRunForKillSwitch(current) && this.ctx.isFeatureEnabled("autonomyV1Disabled")) {
+      throw new Error(
+        `Autonomous durable run ${runId} cannot be resumed while the autonomy kill switch is engaged (autonomyV1Disabled).`,
+      );
     }
     let next!: DurableRunRecord;
     this.ctx.storage.runImmediateTransaction(() => {
@@ -1587,6 +1593,19 @@ function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {
     payload?.version === "chat.turn.execute.v1" &&
     payload.request?.mode === "cowork" &&
     payload.request?.normalizationProfile !== "prompt_pack_harness"
+  );
+}
+
+function isAutonomousDurableRunForKillSwitch(run: DurableRunRecord): boolean {
+  if (run.workflowKey === "proactive.tick") {
+    return true;
+  }
+  const metadata = run.metadata as Record<string, unknown> | undefined;
+  const autonomous = metadata?.autonomous;
+  return (
+    autonomous === true ||
+    (typeof autonomous === "object" && autonomous !== null) ||
+    metadata?.deliveryKind === "autonomous.assistant_message"
   );
 }
 
