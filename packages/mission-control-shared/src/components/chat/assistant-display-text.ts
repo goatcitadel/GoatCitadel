@@ -133,7 +133,8 @@ function splitMarkdownFenceSegments(content: string): MarkdownFenceSegment[] {
   let lineStart = 0;
 
   for (let index = 0; index <= content.length; index += 1) {
-    const atLineEnd = index === content.length || content[index] === "\n";
+    const hasLineBreak = index < content.length && content[index] === "\n";
+    const atLineEnd = index === content.length || hasLineBreak;
     if (!atLineEnd) {
       continue;
     }
@@ -141,7 +142,7 @@ function splitMarkdownFenceSegments(content: string): MarkdownFenceSegment[] {
     if (!inFence) {
       const opening = matchMarkdownFenceOpening(line);
       if (opening) {
-        const lineEnd = index + (content[index] === "\n" ? 1 : 0);
+        const lineEnd = index + (hasLineBreak ? 1 : 0);
         if (lineStart > textStart) {
           segments.push({ kind: "text", value: content.slice(textStart, lineStart) });
         }
@@ -157,7 +158,7 @@ function splitMarkdownFenceSegments(content: string): MarkdownFenceSegment[] {
         }
       }
     } else if (fenceChar && matchMarkdownFenceClosing(line, fenceChar, fenceLength)) {
-      const lineEnd = index + (content[index] === "\n" ? 1 : 0);
+      const lineEnd = index + (hasLineBreak ? 1 : 0);
       segments.push({ kind: "code", value: content.slice(codeStart, lineEnd) });
       textStart = lineEnd;
       codeStart = -1;

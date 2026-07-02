@@ -819,7 +819,6 @@ export async function streamAgentChatMessage(
       sessionId,
       route: path,
     });
-    terminalRecorded = true;
   } catch (error) {
     if (!terminalRecorded) {
       recordStreamTerminalFailure({ error, correlationId, sessionId, route: path });

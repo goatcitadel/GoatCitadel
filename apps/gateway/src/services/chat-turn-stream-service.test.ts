@@ -1012,10 +1012,15 @@ describe("executeDelegatedPlanStep S1 streaming fallback", () => {
 
   it("falls back to the buffered send when the stream throws before any delta", async () => {
     const host = createHost();
-    const childStream = vi.fn(async function* () {
-      throw new Error("stream exploded before first token");
-      yield undefined;
-    });
+    const childStream = vi.fn(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            throw new Error("stream exploded before first token");
+          },
+        };
+      },
+    }));
     host.agentSendChatMessageStream = childStream as never;
     host.agentSendChatMessage = vi.fn(async () => ({
       sessionId: "delegate-session",
