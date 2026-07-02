@@ -142,6 +142,55 @@
 }
 
 @media (width < 1180px) {
+  .mc-next-threaded-resize-handle {
+    display: none;
+  }
+
+  .mc-next-threaded-mobile-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .mc-next-threaded-surface.unified {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-rail {
+    position: fixed;
+    top: max(4.65rem, calc(env(safe-area-inset-top) + 0.75rem));
+    left: 0.9rem;
+    bottom: max(2.05rem, calc(env(safe-area-inset-bottom) + 0.9rem));
+    z-index: var(--z-mobile-rail);
+    width: min(22rem, calc(100vw - 1.8rem));
+    max-height: none;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--mc-border-subtle);
+    transform: translateX(-108%);
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+      transform var(--motion-slow) var(--motion-ease),
+      visibility 0s linear var(--motion-slow);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-rail.open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition: transform var(--motion-slow) var(--motion-ease);
+  }
+
+  .mc-next-threaded-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-side-sheet);
+    border: 0;
+    background: var(--bg-scrim);
+    cursor: default;
+  }
+
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context,
@@ -185,14 +234,19 @@
 
   .mc-next-threaded-surface.unified .mc-next-threaded-rail {
     position: fixed;
-    top: 5.2rem;
+    top: max(4.65rem, calc(env(safe-area-inset-top) + 0.75rem));
     left: 0.9rem;
-    bottom: 0.9rem;
+    bottom: max(2.05rem, calc(env(safe-area-inset-bottom) + 0.9rem));
     z-index: var(--z-mobile-rail);
     width: min(22rem, calc(100vw - 1.8rem));
     max-height: none;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--mc-border-subtle);
     transform: translateX(-108%);
-    transition: transform var(--motion-slow) var(--motion-ease);
+    visibility: hidden;
+    transition:
+      transform var(--motion-slow) var(--motion-ease),
+      visibility 0s linear var(--motion-slow);
     /*
      * When closed (no .open class), the rail is transformed off-screen but
      * still in the layout. Block pointer events so taps don't hit invisible
@@ -203,7 +257,9 @@
 
   .mc-next-threaded-surface.unified .mc-next-threaded-rail.open {
     transform: translateX(0);
+    visibility: visible;
     pointer-events: auto;
+    transition: transform var(--motion-slow) var(--motion-ease);
   }
 
   .mc-next-threaded-scrim.open {
@@ -213,6 +269,7 @@
     z-index: var(--z-side-sheet);
     border: 0;
     background: var(--bg-scrim);
+    cursor: default;
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-stage,
@@ -316,7 +373,6 @@
     width: 100%;
   }
 
-  .mc-next-threaded-surface.unified[data-mode="chat"] .mc-next-threaded-header-meta,
   .mc-next-threaded-surface.unified[data-mode="chat"] .mc-next-threaded-action-row:not(.has-priority-approval) {
     display: none;
   }

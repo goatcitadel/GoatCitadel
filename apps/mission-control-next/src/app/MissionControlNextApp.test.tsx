@@ -477,6 +477,9 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400, "personal");
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
     expect(appMocks.connectEventStream).toHaveBeenCalled();
+    expect(renderer.root.findByProps({ "aria-label": "Approvals: 2 pending" })).toBeDefined();
+    expect(renderer.root.findByProps({ "aria-label": "Sessions: 2 visible" })).toBeDefined();
+    expect(renderer.root.findByProps({ "aria-label": "Spend: $1.25" })).toBeDefined();
 
     await act(async () => {
       appMocks.streamCallbacks.onStateChange?.("open");

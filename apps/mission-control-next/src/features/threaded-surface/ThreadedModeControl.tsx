@@ -92,9 +92,10 @@ export function ThreadedModeControl(props: ThreadedModeControlProps) {
     `variant-${props.variant ?? "full"}`,
     `mode-${resolvedMode}`,
     autoRouting ? "is-auto" : "is-pinned",
+    props.interactive !== false && props.onOverride && !props.disabled ? "is-interactive" : "is-readonly",
   ].join(" ");
 
-  if (props.interactive === false) {
+  if (props.interactive === false || !props.onOverride || props.disabled) {
     return (
       <div className={controlClassName} data-mode={resolvedMode}>
         <span className="mc-next-threaded-mode-control-readout">
@@ -112,7 +113,6 @@ export function ThreadedModeControl(props: ThreadedModeControlProps) {
         type="button"
         className="mc-next-threaded-mode-trigger"
         onClick={() => setOpen((value) => !value)}
-        disabled={props.disabled}
         aria-haspopup="menu"
         aria-expanded={open}
       >

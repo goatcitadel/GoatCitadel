@@ -125,4 +125,16 @@ describe("ThreadedModeControl", () => {
     expect(findByText(renderer!.root, /auto -> code/i)).toBeDefined();
     expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
   });
+
+  it("renders a readonly status instead of a dead override trigger when no handler is wired", async () => {
+    let renderer: ReturnType<typeof create> | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedModeControl mode="cowork" />);
+    });
+
+    const control = renderer!.root.findByProps({ "data-mode": "cowork" });
+    expect(control.props.className).toContain("is-readonly");
+    expect(findByText(renderer!.root, /guided agentic work/i)).toBeDefined();
+    expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
+  });
 });

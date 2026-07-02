@@ -48,7 +48,7 @@ import {
   SheetTitle,
 } from "@goatcitadel/mission-control-shared/components/ui";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { ThreadedComposer } from "./ThreadedComposer";
+import { ThreadedComposer, computeUsageTotals, formatCostLabel, formatTokenLabel } from "./ThreadedComposer";
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedModeControl } from "./ThreadedModeControl";
@@ -215,7 +215,7 @@ export function ThreadedSurfacePage({
   permissionState?: ThreadedPermissionState;
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
-  const railDrawerLayout = useMediaQuery("(max-width: 1023px)");
+  const railDrawerLayout = useMediaQuery("(width < 1180px)");
   const railPane = useHorizontalPaneResize({
     direction: "right",
     initialWidth: PANE_WIDTHS.rail.initial,
@@ -236,6 +236,8 @@ export function ThreadedSurfacePage({
   });
   const railOpen = input.sessionRailOpen;
   const railDrawerOpen = railDrawerLayout && railOpen;
+  const railCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const railFocusReturnRef = useRef<HTMLElement | null>(null);
   const activeProps = input.activeSessionSurfaceProps;
   const [activeUtilityPanel, setActiveUtilityPanel] = useState<ThreadedUtilityPanelId | null>(null);
   const dockOpen = Boolean((input.dockOpen || activeUtilityPanel) && activeProps);
@@ -291,6 +293,34 @@ export function ThreadedSurfacePage({
     setActiveUtilityPanel(panel);
     input.onDockOpenChange(true);
   };
+  const closeSessionRail = useCallback(() => {
+    input.onSessionRailOpenChange(false);
+    if (!railDrawerLayout) {
+      return;
+    }
+    queueMicrotask(() => {
+      const target = railFocusReturnRef.current;
+      if (
+        target &&
+        typeof target.focus === "function" &&
+        (typeof document === "undefined" || !document.contains || document.contains(target))
+      ) {
+        target.focus();
+      }
+      railFocusReturnRef.current = null;
+    });
+  }, [input, railDrawerLayout]);
+  const openSessionRail = useCallback(() => {
+    if (
+      railDrawerLayout &&
+      typeof document !== "undefined" &&
+      typeof HTMLElement !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+    ) {
+      railFocusReturnRef.current = document.activeElement;
+    }
+    input.onSessionRailOpenChange(true);
+  }, [input, railDrawerLayout]);
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -305,6 +335,29 @@ export function ThreadedSurfacePage({
     setArchiveConfirmOpen(false);
     input.sessionRail.onConfirmArchiveWorkspace?.();
   };
+  useEffect(() => {
+    if (!railDrawerOpen) {
+      return;
+    }
+    queueMicrotask(() => {
+      railCloseButtonRef.current?.focus();
+    });
+  }, [railDrawerOpen]);
+  useEffect(() => {
+    if (!railDrawerOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      closeSessionRail();
+    };
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [closeSessionRail, railDrawerOpen]);
 
   return (
     <div
@@ -321,10 +374,11 @@ export function ThreadedSurfacePage({
         aria-label="Dismiss session rail"
         aria-hidden={!railDrawerOpen}
         tabIndex={railDrawerOpen ? 0 : -1}
-        onClick={() => input.onSessionRailOpenChange(false)}
+        onClick={closeSessionRail}
       />
 
       <aside
+        id="mc-next-threaded-session-rail"
         className={`mc-next-threaded-rail${railDrawerOpen ? " open" : ""}`}
         aria-label="Sessions"
         aria-hidden={railDrawerLayout && !railOpen}
@@ -337,9 +391,10 @@ export function ThreadedSurfacePage({
             <span>Chat, Cowork, and Code threads stay connected by project.</span>
           </div>
           <button
+            ref={railCloseButtonRef}
             type="button"
             className="mc-next-threaded-menu-button"
-            onClick={() => input.onSessionRailOpenChange(false)}
+            onClick={closeSessionRail}
             aria-label="Close session rail"
           >
             <PanelRight size={16} />
@@ -514,7 +569,9 @@ export function ThreadedSurfacePage({
             <button
               type="button"
               className="mc-next-threaded-menu-button"
-              onClick={() => input.onSessionRailOpenChange(true)}
+              onClick={openSessionRail}
+              aria-controls="mc-next-threaded-session-rail"
+              aria-expanded={railDrawerOpen}
             >
               <Menu size={16} />
               <span>Sessions</span>
@@ -675,6 +732,10 @@ function ThreadConversationSurface({
     policySummary: permissionSummary,
     policyOverrideActive: Boolean(permissionState?.localOperatorOverrideId),
   });
+  const usageTotals = computeUsageTotals(props.thread);
+  const routeSelectionSummary = props.routePreflight?.selectionSource
+    ? `Selection: ${props.routePreflight.selectionSource}`
+    : (props.trust.selectionSourceSummary ?? "Route pending");
 
   return (
     <div
@@ -692,7 +753,7 @@ function ThreadConversationSurface({
           <ThreadedModeControl
             mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
             preview={props.surfaceRoutePreview}
-            onOverride={(m) => props.onModeOverride?.(m)}
+            onOverride={props.onModeOverride}
           />
           <h1>{props.sessionTitle}</h1>
           <span>{props.summary}</span>
@@ -700,18 +761,48 @@ function ThreadConversationSurface({
 
         <div className="mc-next-threaded-header-meta">
           <div className="mc-next-threaded-chip-row">
-            <StatusChip tone="muted" title="Active provider and model for this session">
+            <StatusChip
+              tone="muted"
+              title="Active provider and model for this session"
+              ariaLabel={`Model: ${headerStatus.providerModelSummary}`}
+            >
               {headerStatus.providerModelSummary}
             </StatusChip>
-            <StatusChip tone={props.trust.runtimeTone ?? "muted"} title="Session runtime and active run state">
+            <StatusChip tone="muted" title="Route selection source" ariaLabel={`Route: ${routeSelectionSummary}`}>
+              {routeSelectionSummary}
+            </StatusChip>
+            <StatusChip
+              tone={props.trust.runtimeTone ?? "muted"}
+              title="Session runtime and active run state"
+              ariaLabel={`Runtime: ${headerStatus.runtimeRunSummary}`}
+            >
               {headerStatus.runtimeRunSummary}
             </StatusChip>
-            <StatusChip tone="muted" title="Pending tool and risk approvals waiting on you">
+            <StatusChip
+              tone="muted"
+              title="Conversation token usage"
+              ariaLabel={`Tokens: ${formatTokenLabel(usageTotals.tokens)}`}
+            >
+              {formatTokenLabel(usageTotals.tokens)}
+            </StatusChip>
+            <StatusChip
+              tone="muted"
+              title="Conversation estimated cost"
+              ariaLabel={`Cost: ${formatCostLabel(usageTotals.costUsd)}`}
+            >
+              {formatCostLabel(usageTotals.costUsd)}
+            </StatusChip>
+            <StatusChip
+              tone="muted"
+              title="Pending tool and risk approvals waiting on you"
+              ariaLabel={`Approvals: ${headerStatus.approvalsSummary}`}
+            >
               {headerStatus.approvalsSummary}
             </StatusChip>
             <StatusChip
               tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}
               title="Session policy posture"
+              ariaLabel={`Policy: ${headerStatus.compactPolicySummary}`}
             >
               {headerStatus.compactPolicySummary}
             </StatusChip>

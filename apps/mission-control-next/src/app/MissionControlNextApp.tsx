@@ -1331,6 +1331,7 @@ function StatusPill({
     ...(releaseStatus ? { "data-release-status": releaseStatus } : {}),
     ...(degraded ? { "data-status": "degraded" } : {}),
   };
+  const accessibleLabel = `${label}: ${value}${degraded ? " (unavailable)" : ""}`;
   if (onClick) {
     return (
       <button
@@ -1338,6 +1339,7 @@ function StatusPill({
         className="mc-next-status-pill mc-next-status-pill-action"
         onClick={onClick}
         title={degraded ? `${label} (unavailable)` : label}
+        aria-label={accessibleLabel}
         {...markerProps}
       >
         {content}
@@ -1345,7 +1347,7 @@ function StatusPill({
     );
   }
   return (
-    <div className="mc-next-status-pill" {...markerProps}>
+    <div className="mc-next-status-pill" aria-label={accessibleLabel} {...markerProps}>
       {content}
     </div>
   );

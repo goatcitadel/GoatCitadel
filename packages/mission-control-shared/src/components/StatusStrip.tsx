@@ -112,6 +112,7 @@ export function StatusStrip({
             <button
               type="button"
               className={`gc-nav-button gc-nav-tier-chip${approvalsCount > 0 ? " active" : ""}`}
+              aria-label={`Approvals: ${approvalsCount > 0 ? `${approvalsCount} decisions waiting` : "decisions clear"}`}
               onClick={onOpenApprovals}
             >
               {approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear"}
@@ -119,16 +120,23 @@ export function StatusStrip({
             <button
               type="button"
               className={`gc-nav-button gc-nav-tier-chip${activeAgentsCount > 0 ? " active" : ""}`}
+              aria-label={`Agents: ${activeAgentsCount > 0 ? `${activeAgentsCount} agents live` : "no active agents"}`}
               onClick={onOpenAgents}
             >
               {activeAgentsCount > 0 ? `${activeAgentsCount} agents live` : "No active agents"}
             </button>
-            <button type="button" className="gc-nav-button gc-nav-tier-chip" onClick={onOpenTasks}>
+            <button
+              type="button"
+              className="gc-nav-button gc-nav-tier-chip"
+              aria-label={`Tasks: ${openTasksCount > 0 ? `${openTasksCount} open tasks` : "no open tasks"}`}
+              onClick={onOpenTasks}
+            >
               {openTasksCount > 0 ? `${openTasksCount} open tasks` : "No open tasks"}
             </button>
             <button
               type="button"
               className={`gc-nav-button gc-nav-tier-chip${compactTone === "warning" ? " active" : ""}`}
+              aria-label={`Spend: ${formatUsd(dailyCostUsd)} today`}
               onClick={onOpenCosts}
             >
               {formatUsd(dailyCostUsd)} today

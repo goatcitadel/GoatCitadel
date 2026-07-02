@@ -187,6 +187,7 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
     onToggleDock: noop,
     onToggleArchiveSession: noop,
     onNavigateSurface: noop,
+    onModeOverride: noop,
     onRequestProviderChange: noop,
     onRequestModelChange: noop,
     loading: false,
@@ -368,7 +369,7 @@ afterEach(() => {
 
 describe("ThreadedSurfacePage", () => {
   it("keeps the persistent desktop session rail interactive when drawer state is closed", async () => {
-    setMediaQuery("(max-width: 1023px)", false);
+    setMediaQuery("(width < 1180px)", false);
     const input = buildInput() as any;
     input.sessionRailOpen = false;
     input.sessionRail.onCreateSession = vi.fn();
@@ -399,7 +400,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("only marks the mobile drawer rail inert while it is closed", async () => {
-    setMediaQuery("(max-width: 1023px)", true);
+    setMediaQuery("(width < 1180px)", true);
     const input = buildInput() as any;
     input.sessionRailOpen = false;
 
@@ -424,6 +425,74 @@ describe("ThreadedSurfacePage", () => {
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(0);
   });
 
+  it("closes the mobile drawer with Escape or scrim and restores focus to the opener", async () => {
+    setMediaQuery("(width < 1180px)", true);
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    const openerFocus = vi.fn();
+    class FakeHTMLElement {
+      focus = openerFocus;
+    }
+    const opener = new FakeHTMLElement();
+    vi.stubGlobal("HTMLElement", FakeHTMLElement);
+    vi.stubGlobal("document", {
+      activeElement: opener,
+      contains: (node: unknown) => node === opener,
+      addEventListener,
+      removeEventListener,
+    });
+
+    const input = buildInput() as any;
+    input.sessionRailOpen = false;
+    input.onSessionRailOpenChange = vi.fn();
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Sessions").props.onClick();
+    });
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
+
+    await act(async () => {
+      renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: true }} />);
+    });
+    const escapeHandler = addEventListener.mock.calls.find(([type]) => type === "keydown")?.[1] as
+      | ((event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => void)
+      | undefined;
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    await act(async () => {
+      escapeHandler?.({ key: "Escape", preventDefault, stopPropagation });
+      await Promise.resolve();
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+    expect(openerFocus).toHaveBeenCalledTimes(1);
+
+    input.onSessionRailOpenChange.mockClear();
+    openerFocus.mockClear();
+    await act(async () => {
+      renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: false }} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Sessions").props.onClick();
+    });
+    await act(async () => {
+      renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: true }} />);
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.onClick();
+      await Promise.resolve();
+    });
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+    expect(openerFocus).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps high-specificity context grid selectors in both responsive collapse blocks", () => {
     const css = readFileSync(new URL("./styles/mobile.css", import.meta.url), "utf8");
     const selectors = [
@@ -441,6 +510,28 @@ describe("ThreadedSurfacePage", () => {
         expect(block).toContain(selector);
       }
     }
+  });
+
+  it("keeps the mobile drawer and chat status chips visible at the active breakpoint", () => {
+    const css = readFileSync(new URL("./styles/mobile.css", import.meta.url), "utf8");
+    const breakpointStart = css.indexOf("@media (width < 1180px)");
+    const breakpointEnd = css.indexOf("@media", breakpointStart + 1);
+    const block = css.slice(breakpointStart, breakpointEnd === -1 ? undefined : breakpointEnd);
+
+    expect(breakpointStart).toBeGreaterThanOrEqual(0);
+    expect(block).toContain(".mc-next-threaded-surface.unified .mc-next-threaded-rail");
+    expect(block).toContain("position: fixed");
+    expect(block).toContain("visibility: hidden");
+    expect(block).toContain("pointer-events: none");
+    expect(block).toContain(".mc-next-threaded-surface.unified .mc-next-threaded-rail.open");
+    expect(block).toContain("visibility: visible");
+    expect(block).toContain("pointer-events: auto");
+    expect(block).toContain(".mc-next-threaded-scrim.open");
+    expect(block).toContain("z-index: var(--z-side-sheet)");
+    expect(block).toContain("background: var(--bg-scrim)");
+    expect(css).not.toContain(
+      '.mc-next-threaded-surface.unified[data-mode="chat"] .mc-next-threaded-header-meta {\n    display: none;',
+    );
   });
 
   it("collapses narrow Cowork side-panel sections before text can overlap", () => {
@@ -566,9 +657,18 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).not.toContain("Gateway ready");
     expect(markup).not.toContain("Gateway state unavailable");
     expect(markup).not.toContain("skips normal prompts");
-    const policyChipMatches = markup.match(/Policy: Trusted Local Power · override/g) ?? [];
+    const policyChipMatches = markup.match(/title="Session policy posture"/g) ?? [];
     expect(policyChipMatches.length).toBe(1);
+    expect(markup).toContain('aria-label="Model: OpenAI / gpt-test"');
+    expect(markup).toContain('aria-label="Route: Selection: session"');
+    expect(markup).toContain('aria-label="Runtime: Runtime ready · Run: completed"');
+    expect(markup).toContain('aria-label="Tokens: 0 tokens"');
+    expect(markup).toContain('aria-label="Cost: $0.00"');
+    expect(markup).toContain('aria-label="Approvals: Decisions clear"');
     expect(markup).toContain("OpenAI / gpt-test");
+    expect(markup).toContain("Selection: session");
+    expect(markup).toContain("0 tokens");
+    expect(markup).toContain("$0.00");
     expect(markup).toContain("Runtime ready");
     expect(markup).toContain("Decisions clear");
   });
@@ -592,7 +692,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("wires session rail filters, project creation, file upload, and archive confirmation", async () => {
-    setMediaQuery("(max-width: 1023px)", true);
+    setMediaQuery("(width < 1180px)", true);
     const input = buildInput() as any;
     input.onSessionRailOpenChange = vi.fn();
     input.dropTargetProps.onUploadFiles = vi.fn();

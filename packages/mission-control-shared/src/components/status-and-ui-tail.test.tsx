@@ -87,6 +87,12 @@ describe("shared status and UI branch tails", () => {
     expect(normalizedText(strip.root)).toContain("2 decisions waiting");
     expect(normalizedText(strip.root)).toContain("$125 today");
     const buttons = strip.root.findAllByType("button");
+    expect(buttons.slice(1).map((button) => button.props["aria-label"])).toEqual([
+      "Approvals: 2 decisions waiting",
+      "Agents: 3 agents live",
+      "Tasks: 1 open tasks",
+      "Spend: $125 today",
+    ]);
     act(() => buttons[0]!.props.onClick());
     act(() => buttons[1]!.props.onClick());
     act(() => buttons[2]!.props.onClick());
