@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import type {
-  OperatorProfileFact,
-  OperatorProfileFactKind,
-  OperatorProfileRecord,
-} from "@goatcitadel/contracts";
+import type { OperatorProfileFact, OperatorProfileFactKind, OperatorProfileRecord } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface OperatorProfileRow {
@@ -35,12 +31,7 @@ export interface OperatorProfileWriteResult {
   priorSnapshot?: OperatorProfileRecord;
 }
 
-const VALID_FACT_KINDS: ReadonlySet<OperatorProfileFactKind> = new Set([
-  "preference",
-  "goal",
-  "constraint",
-  "fact",
-]);
+const VALID_FACT_KINDS: ReadonlySet<OperatorProfileFactKind> = new Set(["preference", "goal", "constraint", "fact"]);
 
 /**
  * Persistence for the cross-session operator profile (P2-S4b).
@@ -73,7 +64,7 @@ export class OperatorProfileRepository {
         workspace_id = excluded.workspace_id,
         summary = excluded.summary,
         facts_json = excluded.facts_json,
-        revision = excluded.revision,
+        revision = operator_profiles.revision + 1,
         updated_at = excluded.updated_at
     `);
   }
@@ -123,24 +114,25 @@ export class OperatorProfileRepository {
   }
 
   private writeCapturingPrior(input: OperatorProfileUpsertInput, now: string): OperatorProfileWriteResult {
-    const prior = this.get(input.operatorProfileId);
-    const nextRevision = (prior?.revision ?? 0) + 1;
-    const createdAt = prior?.createdAt ?? now;
-    this.upsertStmt.run({
-      operatorProfileId: input.operatorProfileId,
-      workspaceId: input.workspaceId,
-      summary: input.summary,
-      factsJson: JSON.stringify(sanitizeFacts(input.facts)),
-      revision: nextRevision,
-      createdAt,
-      updatedAt: now,
+    return this.db.transaction("immediate", () => {
+      const prior = this.get(input.operatorProfileId);
+      const createdAt = prior?.createdAt ?? now;
+      this.upsertStmt.run({
+        operatorProfileId: input.operatorProfileId,
+        workspaceId: input.workspaceId,
+        summary: input.summary,
+        factsJson: JSON.stringify(sanitizeFacts(input.facts)),
+        revision: 1,
+        createdAt,
+        updatedAt: now,
+      });
+      const stored = this.get(input.operatorProfileId);
+      if (!stored) {
+        // Unreachable: the upsert above guarantees a row exists.
+        throw new Error(`operator profile upsert did not persist (id=${input.operatorProfileId})`);
+      }
+      return prior ? { record: stored, priorSnapshot: prior } : { record: stored };
     });
-    const stored = this.get(input.operatorProfileId);
-    if (!stored) {
-      // Unreachable: the upsert above guarantees a row exists.
-      throw new Error(`operator profile upsert did not persist (id=${input.operatorProfileId})`);
-    }
-    return prior ? { record: stored, priorSnapshot: prior } : { record: stored };
   }
 }
 

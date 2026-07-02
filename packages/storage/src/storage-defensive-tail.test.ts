@@ -187,6 +187,30 @@ describe("storage defensive tail coverage", () => {
     );
   });
 
+  it("uses savepoints for nested sqlite transaction rollback", () => {
+    const db = createDb("sqlite-nested-savepoints");
+    db.exec("CREATE TABLE tx_nested (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
+    db.transaction("immediate", () => {
+      db.prepare("INSERT INTO tx_nested (id, value) VALUES (?, ?)").run("outer-before", "ok");
+      assert.throws(
+        () =>
+          db.transaction("immediate", () => {
+            db.prepare("INSERT INTO tx_nested (id, value) VALUES (?, ?)").run("inner", "rolled-back");
+            throw new Error("inner rollback");
+          }),
+        /inner rollback/,
+      );
+      db.prepare("INSERT INTO tx_nested (id, value) VALUES (?, ?)").run("outer-after", "ok");
+    });
+
+    const rows = db.prepare("SELECT id FROM tx_nested ORDER BY id").all<{ id: string }>();
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      ["outer-after", "outer-before"],
+    );
+  });
+
   it("waits for failed transcript writes before deleting", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-transcript-tail-${randomUUID()}`);
     createdDirs.push(root);

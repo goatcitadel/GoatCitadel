@@ -42,10 +42,15 @@ const MAX_AUTH_TOKEN_LENGTH = 4096;
 const MAX_BASIC_CREDENTIAL_LENGTH = 8192;
 const MAX_ACTIVE_SSE_TOKENS = 10_000;
 const MAX_ACTIVE_SSE_TOKENS_PER_ACTOR = 50;
+const SSE_TOKEN_CLEANUP_INTERVAL_MS = 60_000;
 const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token";
 
 export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
+  const sseTokenCleanupTimer = setInterval(() => {
+    purgeExpiredSseTokens(sseTokens);
+  }, SSE_TOKEN_CLEANUP_INTERVAL_MS);
+  sseTokenCleanupTimer.unref?.();
   const configuredQueryParam = fastify.gatewayConfig.assistant.auth.token.queryParam?.trim();
   fastify.decorateRequest("authActorId", "anonymous");
   fastify.decorateRequest("authActorSource", "none");
@@ -332,6 +337,11 @@ export const authPlugin = fp(async (fastify) => {
         error: (error as Error).message,
       });
     }
+  });
+
+  fastify.addHook("onClose", async () => {
+    clearInterval(sseTokenCleanupTimer);
+    sseTokens.clear();
   });
 });
 

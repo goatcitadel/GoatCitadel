@@ -50,6 +50,32 @@ describe("TranscriptLog", () => {
     await assert.rejects(() => log.read(sessionId));
   });
 
+  it("prunes only aged transcript jsonl files after queued writes settle", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new TranscriptLog(root);
+
+    await log.append(buildEvent("old-session", 0));
+    await log.append(buildEvent("new-session", 1));
+    const oldPath = path.join(root, "old-session.jsonl");
+    const newPath = path.join(root, "new-session.jsonl");
+    const ignoredPath = path.join(root, "old-note.txt");
+    await fs.promises.writeFile(ignoredPath, "old but not transcript", "utf8");
+    const oldEpochSeconds = (Date.now() - 10 * 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(oldPath, oldEpochSeconds, oldEpochSeconds);
+    fs.utimesSync(ignoredPath, oldEpochSeconds, oldEpochSeconds);
+
+    const dryRun = await log.pruneOlderThan(Date.now() - 24 * 60 * 60 * 1000, { dryRun: true });
+    assert.equal(dryRun.removedFiles, 1);
+    assert.equal(fs.existsSync(oldPath), true);
+
+    const applied = await log.pruneOlderThan(Date.now() - 24 * 60 * 60 * 1000);
+    assert.equal(applied.removedFiles, 1);
+    assert.equal(fs.existsSync(oldPath), false);
+    assert.equal(fs.existsSync(newPath), true);
+    assert.equal(fs.existsSync(ignoredPath), true);
+  });
+
   it("keeps transcript files inside the transcript directory for unsafe session ids", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
     const escapedName = `goatcitadel-transcript-escape-${randomUUID()}`;

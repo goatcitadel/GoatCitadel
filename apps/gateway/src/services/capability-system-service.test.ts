@@ -986,6 +986,9 @@ describe("CapabilitySystemService", () => {
         }),
       }),
     });
+    await expect(fs.stat(path.join(harness.rootDir, "data", "code-mode-temp", run.runId))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("does not terminalize Code Mode runs when approval execution is interrupted before launch", async () => {
@@ -1360,7 +1363,7 @@ describe("CapabilitySystemService", () => {
     );
   });
 
-  it("stages the Code Mode harness inside the per-run temp root before launch", async () => {
+  it("stages the Code Mode harness inside the per-run temp root and cleans it after launch", async () => {
     const harness = await createHarness({
       sandboxConfig: {
         required: false,
@@ -1382,8 +1385,11 @@ describe("CapabilitySystemService", () => {
         status: "completed",
       }),
     });
-    const runHarnessPath = path.join(harness.rootDir, "data", "code-mode-temp", run.runId, "code-mode-harness.mjs");
-    await expect(fs.stat(runHarnessPath)).resolves.toBeTruthy();
+    const runTempRoot = path.join(harness.rootDir, "data", "code-mode-temp", run.runId);
+    await expect(fs.stat(runTempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(harness.rootDir, "data", "code-mode-temp", "code-mode-harness.mjs")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("records launch-time sandbox failure metadata when required host isolation becomes unavailable", async () => {

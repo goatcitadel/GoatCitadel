@@ -133,6 +133,36 @@ describe("BackupRetentionService", () => {
     expect(storage.realtimeEvents.pruneOlderThan).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the active transcript backend for retention when available", async () => {
+    const rootDir = await createRuntimeFixture();
+    const backupDir = await makeTempDir("gc-backups-");
+    vi.stubEnv("GOATCITADEL_BACKUP_DIR", backupDir);
+    const transcriptBackend = {
+      pruneOlderThan: vi.fn(async () => ({ removedFiles: 0, removedEvents: 4, reclaimedBytes: 0 })),
+    };
+    const storage = createStorageMock({
+      dialect: "postgres",
+      transcripts: transcriptBackend,
+      systemSetting: {
+        realtimeEventsDays: 2,
+        backupsKeep: 5,
+        transcriptsDays: 1,
+      },
+    });
+    const service = new BackupRetentionService({
+      storage,
+      config: createConfig(rootDir),
+    });
+
+    const result = await service.pruneRetention({ dryRun: false });
+
+    expect(result).toMatchObject({
+      applied: true,
+      removedTranscriptFiles: 4,
+    });
+    expect(transcriptBackend.pruneOlderThan).toHaveBeenCalledWith(expect.any(String), { dryRun: false });
+  });
+
   it("keeps backup paths jailed and reports manifest failures through offline verification", async () => {
     const backupDir = await makeTempDir("gc-backups-");
     const brokenBackup = path.join(backupDir, "broken.backup");
@@ -191,9 +221,18 @@ function createConfig(rootDir: string): GatewayRuntimeConfig {
   } as GatewayRuntimeConfig;
 }
 
-function createStorageMock(options?: { systemSetting?: unknown; realtimeCount?: number }) {
+function createStorageMock(options?: {
+  systemSetting?: unknown;
+  realtimeCount?: number;
+  dialect?: "sqlite" | "postgres";
+  transcripts?: unknown;
+}) {
   let stored = options?.systemSetting;
   return {
+    db: {
+      dialect: options?.dialect ?? "sqlite",
+    },
+    transcripts: options?.transcripts,
     gatewaySql: {
       exec: vi.fn(),
       prepare: vi.fn(() => ({

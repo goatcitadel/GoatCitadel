@@ -7,8 +7,13 @@ import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
 types.setTypeParser(20, (value) => Number(value));
 types.setTypeParser(21, (value) => Number(value));
 types.setTypeParser(23, (value) => Number(value));
+types.setTypeParser(1700, parsePostgresNumeric);
 types.setTypeParser(700, (value) => Number(value));
 types.setTypeParser(701, (value) => Number(value));
+
+export function parsePostgresNumeric(value: string): number {
+  return Number(value);
+}
 
 export interface PostgresSyncWorkerQueryExecutor {
   query<T extends Record<string, unknown> = Record<string, unknown>>(

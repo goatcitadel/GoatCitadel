@@ -203,8 +203,7 @@ export class CostLedgerRepository {
     const day = record.createdAt.slice(0, 10);
     const nextInsertCount = this.insertCount + 1;
     const shouldPrune = nextInsertCount % 50 === 0;
-    this.db.exec("SAVEPOINT cost_ledger_insert");
-    try {
+    this.db.transaction("immediate", () => {
       this.insertStmt.run({
         ...record,
         day,
@@ -219,13 +218,8 @@ export class CostLedgerRepository {
         const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
         this.pruneStmt.run({ cutoff });
       }
-      this.db.exec("RELEASE SAVEPOINT cost_ledger_insert");
-      this.insertCount = nextInsertCount;
-    } catch (error) {
-      this.db.exec("ROLLBACK TO SAVEPOINT cost_ledger_insert");
-      this.db.exec("RELEASE SAVEPOINT cost_ledger_insert");
-      throw error;
-    }
+    });
+    this.insertCount = nextInsertCount;
   }
 
   public summary(scope: CostSummary["scope"], fromIso: string, toIso: string): CostSummary[] {

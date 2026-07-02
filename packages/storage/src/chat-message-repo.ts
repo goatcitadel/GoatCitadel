@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+
 import type { DatabaseClient } from "./db.js";
 import type { ChatInputPart, ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
@@ -84,11 +85,16 @@ export function buildSafeFtsMatchQuery(rawQuery: string): string | null {
   if (typeof rawQuery !== "string") {
     return null;
   }
-  const tokens = rawQuery.match(/[\p{L}\p{N}]+/gu);
+  const tokens = extractSearchTokens(rawQuery);
   if (!tokens || tokens.length === 0) {
     return null;
   }
   return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+}
+
+export function buildSafePostgresSearchQuery(rawQuery: string): string | null {
+  const tokens = extractSearchTokens(rawQuery);
+  return tokens && tokens.length > 0 ? tokens.join(" ") : null;
 }
 
 export class ChatMessageRepository {
@@ -161,39 +167,8 @@ export class ChatMessageRepository {
       WHERE session_id = ? AND message_id = ?
       LIMIT 1
     `);
-    // P2-S4a session.search: BM25-ranked full-text recall over persisted messages.
-    // The join back to chat_messages resolves the canonical row (the FTS table is
-    // contentless). `bm25(chat_messages_fts)` returns ascending rank (lower = better).
-    this.searchStmt = db.prepare(`
-      SELECT
-        m.seq AS seq,
-        m.message_id AS message_id,
-        m.session_id AS session_id,
-        m.role AS role,
-        m.content AS content,
-        m.timestamp AS timestamp,
-        bm25(chat_messages_fts) AS score
-      FROM chat_messages_fts
-      JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
-      WHERE chat_messages_fts MATCH ?
-      ORDER BY score ASC
-      LIMIT ?
-    `);
-    this.searchScopedStmt = db.prepare(`
-      SELECT
-        m.seq AS seq,
-        m.message_id AS message_id,
-        m.session_id AS session_id,
-        m.role AS role,
-        m.content AS content,
-        m.timestamp AS timestamp,
-        bm25(chat_messages_fts) AS score
-      FROM chat_messages_fts
-      JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
-      WHERE chat_messages_fts MATCH ? AND m.session_id = ?
-      ORDER BY score ASC
-      LIMIT ?
-    `);
+    this.searchStmt = db.prepare(buildSearchSql(db.dialect, false));
+    this.searchScopedStmt = db.prepare(buildSearchSql(db.dialect, true));
     this.contextWindowStmt = db.prepare(`
       SELECT message_id, role, content, timestamp, seq
       FROM chat_messages
@@ -211,7 +186,8 @@ export class ChatMessageRepository {
    * FTS syntax error. Returns `[]` for an empty/no-token query or when nothing matches.
    */
   public searchMessages(query: string, options: SearchMessagesOptions = {}): ChatMessageSearchHit[] {
-    const matchExpression = buildSafeFtsMatchQuery(query);
+    const matchExpression =
+      this.db.dialect === "postgres" ? buildSafePostgresSearchQuery(query) : buildSafeFtsMatchQuery(query);
     if (matchExpression === null) {
       return [];
     }
@@ -300,9 +276,7 @@ export class ChatMessageRepository {
       "steered",
       "parent_delegation_step_id",
     ];
-    const savepointName = `chat_messages_upsert_many_${randomUUID().replaceAll("-", "_")}`;
-    this.db.exec(`SAVEPOINT ${savepointName}`);
-    try {
+    this.withAtomicBatchWrite(() => {
       for (let offset = 0; offset < messages.length; offset += BATCH_SIZE) {
         const chunk = messages.slice(offset, offset + BATCH_SIZE);
         const rowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
@@ -346,7 +320,20 @@ export class ChatMessageRepository {
         }
         this.db.prepare(sql).run(...params);
       }
+    });
+  }
+
+  private withAtomicBatchWrite<T>(work: () => T): T {
+    if (this.db.dialect !== "sqlite") {
+      return this.db.transaction("immediate", work);
+    }
+
+    const savepointName = `chat_messages_upsert_many_${randomUUID().replaceAll("-", "_")}`;
+    this.db.exec(`SAVEPOINT ${savepointName}`);
+    try {
+      const result = work();
       this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      return result;
     } catch (error) {
       this.db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
       this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
@@ -598,18 +585,22 @@ function toCountRow(value: unknown): { count?: number } | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  return typeof value.count === "number" || value.count === undefined
-    ? { count: value.count as number | undefined }
-    : undefined;
+  if (value.count === undefined) {
+    return { count: undefined };
+  }
+  const count = coerceNumber(value.count);
+  return count === undefined ? undefined : { count };
 }
 
 function toCursorRow(value: unknown): { seq?: number } | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  return typeof value.seq === "number" || value.seq === undefined
-    ? { seq: value.seq as number | undefined }
-    : undefined;
+  if (value.seq === undefined) {
+    return { seq: undefined };
+  }
+  const seq = coerceNumber(value.seq);
+  return seq === undefined ? undefined : { seq };
 }
 
 function clampSearchInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -617,23 +608,42 @@ function clampSearchInt(value: unknown, fallback: number, min: number, max: numb
   return Math.max(min, Math.min(max, numeric));
 }
 
-function isChatMessageSearchRow(value: unknown): value is ChatMessageSearchRow {
+function toSearchRow(value: unknown): ChatMessageSearchRow | undefined {
   if (!isRecord(value)) {
-    return false;
+    return undefined;
   }
-  return (
-    typeof value.seq === "number" &&
-    typeof value.message_id === "string" &&
-    typeof value.session_id === "string" &&
-    typeof value.role === "string" &&
-    typeof value.content === "string" &&
-    typeof value.timestamp === "string" &&
-    typeof value.score === "number"
-  );
+  const seq = coerceNumber(value.seq);
+  const score = coerceNumber(value.score);
+  if (
+    seq === undefined ||
+    score === undefined ||
+    typeof value.message_id !== "string" ||
+    typeof value.session_id !== "string" ||
+    typeof value.role !== "string" ||
+    typeof value.content !== "string" ||
+    typeof value.timestamp !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    seq,
+    message_id: value.message_id,
+    session_id: value.session_id,
+    role: value.role as ChatMessageRole,
+    content: value.content,
+    timestamp: value.timestamp,
+    score,
+  };
 }
 
 function toSearchRows(value: unknown): ChatMessageSearchRow[] {
-  return Array.isArray(value) ? value.filter(isChatMessageSearchRow) : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((row) => {
+    const parsed = toSearchRow(row);
+    return parsed ? [parsed] : [];
+  });
 }
 
 interface ChatMessageContextRow {
@@ -644,19 +654,98 @@ interface ChatMessageContextRow {
   seq: number;
 }
 
-function isChatMessageContextRow(value: unknown): value is ChatMessageContextRow {
+function toContextRow(value: unknown): ChatMessageContextRow | undefined {
   if (!isRecord(value)) {
-    return false;
+    return undefined;
   }
-  return (
-    typeof value.message_id === "string" &&
-    typeof value.role === "string" &&
-    typeof value.content === "string" &&
-    typeof value.timestamp === "string" &&
-    typeof value.seq === "number"
-  );
+  const seq = coerceNumber(value.seq);
+  if (
+    seq === undefined ||
+    typeof value.message_id !== "string" ||
+    typeof value.role !== "string" ||
+    typeof value.content !== "string" ||
+    typeof value.timestamp !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    message_id: value.message_id,
+    role: value.role as ChatMessageRole,
+    content: value.content,
+    timestamp: value.timestamp,
+    seq,
+  };
 }
 
 function toContextRows(value: unknown): ChatMessageContextRow[] {
-  return Array.isArray(value) ? value.filter(isChatMessageContextRow) : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((row) => {
+    const parsed = toContextRow(row);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function extractSearchTokens(rawQuery: string): string[] | null {
+  if (typeof rawQuery !== "string") {
+    return null;
+  }
+  return rawQuery.match(/[\p{L}\p{N}]+/gu);
+}
+
+function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): string {
+  if (dialect === "postgres") {
+    return `
+      WITH search_query AS (
+        SELECT plainto_tsquery('simple', ?) AS query
+      )
+      SELECT
+        m.seq AS seq,
+        m.message_id AS message_id,
+        m.session_id AS session_id,
+        m.role AS role,
+        m.content AS content,
+        m.timestamp AS timestamp,
+        -ts_rank_cd(m.content_search_vector, search_query.query) AS score
+      FROM chat_messages AS m
+      CROSS JOIN search_query
+      WHERE m.content_search_vector @@ search_query.query${scoped ? " AND m.session_id = ?" : ""}
+      ORDER BY score ASC, m.timestamp DESC, m.seq DESC
+      LIMIT ?
+    `;
+  }
+
+  // P2-S4a session.search: BM25-ranked full-text recall over persisted messages.
+  // The join back to chat_messages resolves the canonical row (the FTS table is
+  // contentless). `bm25(chat_messages_fts)` returns ascending rank (lower = better).
+  return `
+    SELECT
+      m.seq AS seq,
+      m.message_id AS message_id,
+      m.session_id AS session_id,
+      m.role AS role,
+      m.content AS content,
+      m.timestamp AS timestamp,
+      bm25(chat_messages_fts) AS score
+    FROM chat_messages_fts
+    JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
+    WHERE chat_messages_fts MATCH ?${scoped ? " AND m.session_id = ?" : ""}
+    ORDER BY score ASC
+    LIMIT ?
+  `;
+}
+
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }

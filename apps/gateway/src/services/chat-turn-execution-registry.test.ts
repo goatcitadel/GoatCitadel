@@ -61,4 +61,20 @@ describe("ChatTurnExecutionRegistry", () => {
     registry.closeActiveStream("turn-1");
     expect(registry.getActiveStream("turn-1")).toBeUndefined();
   });
+
+  it("aborts active executions and clears singleton state on close", () => {
+    const registry = new ChatTurnExecutionRegistry();
+    const controller = registry.beginActiveExecution("session-1", "turn-1", "agent-send");
+    registry.acquireWriteLease("session-1", "agent-send");
+    registry.registerActiveStream("session-1", "turn-1", 0, "run-1");
+
+    registry.close("shutdown");
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toBeInstanceOf(Error);
+    expect(registry.getActiveExecution("turn-1")).toBeUndefined();
+    expect(registry.getActiveStream("turn-1")).toBeUndefined();
+    expect(registry.hasAnyActiveChatTurnExecution()).toBe(false);
+    expect(() => registry.acquireWriteLease("session-1", "retry-turn")).not.toThrow();
+  });
 });

@@ -83,6 +83,18 @@ describe("Postgres runtime schema generation", () => {
     assert.match(autonomyHeartbeatMigration.sql, /ADD COLUMN IF NOT EXISTS active_hours_json TEXT/);
   });
 
+  it("adds a Postgres-native indexed search vector for chat messages", () => {
+    const searchMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "chat_messages_content_search_vector",
+    );
+
+    assert.ok(searchMigration, "expected Postgres migration for chat_messages content search");
+    assert.match(searchMigration.sql, /ADD COLUMN IF NOT EXISTS content_search_vector tsvector/);
+    assert.match(searchMigration.sql, /to_tsvector\('simple', COALESCE\(content, ''\)\)/);
+    assert.match(searchMigration.sql, /USING GIN \(content_search_vector\)/);
+    assert.match(searchMigration.sql, /idx_chat_messages_session_seq/);
+  });
+
   it("preserves SQLite partial-index WHERE predicates on the generated Postgres schema", () => {
     const sql = buildPostgresRuntimeSchemaSql();
 

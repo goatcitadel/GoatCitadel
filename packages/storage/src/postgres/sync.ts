@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { MessageChannel, Worker, receiveMessageOnPort } from "node:worker_threads";
-import type { DatabaseClient, DbRunResult, DbStatement, DbTransactionMode } from "../db.js";
+import {
+  assertSynchronousTransactionResult,
+  type DatabaseClient,
+  type DbRunResult,
+  type DbStatement,
+  type DbTransactionMode,
+} from "../db.js";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse, SerializedWorkerError } from "./protocol.js";
 
@@ -72,6 +78,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       this.activeTransactionId = txId;
       try {
         const result = callback();
+        assertSynchronousTransactionResult(result);
         this.requestSync({
           kind: "tx_commit",
           txId,
@@ -92,6 +99,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     this.exec(`SAVEPOINT ${savepointName}`);
     try {
       const result = callback();
+      assertSynchronousTransactionResult(result);
       this.exec(`RELEASE SAVEPOINT ${savepointName}`);
       return result;
     } catch (error) {

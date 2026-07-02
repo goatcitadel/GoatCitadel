@@ -5,9 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import type { ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
-import { ChatMessageRepository, buildSafeFtsMatchQuery } from "./chat-message-repo.js";
+import { ChatMessageRepository, buildSafeFtsMatchQuery, buildSafePostgresSearchQuery } from "./chat-message-repo.js";
 import { createDatabase } from "./sqlite.js";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 
 let messageCounter = 0;
 
@@ -48,6 +48,13 @@ function withDatabase(run: (db: DatabaseClient) => void): void {
   }
 }
 
+function expectSqlUsesPostgresSearch(preparedSql: string[]): void {
+  const searchSql = preparedSql.filter((sql) => sql.includes("content_search_vector")).join("\n");
+  assert.match(searchSql, /plainto_tsquery\('simple', \?\)/);
+  assert.match(searchSql, /content_search_vector @@ search_query\.query/);
+  assert.doesNotMatch(searchSql, /chat_messages_fts/);
+}
+
 test("buildSafeFtsMatchQuery quotes tokens and neutralizes FTS operators", () => {
   assert.equal(buildSafeFtsMatchQuery("deploy plan"), '"deploy" "plan"');
   // Operators and punctuation degrade to literal quoted terms (no syntax meaning).
@@ -60,6 +67,72 @@ test("buildSafeFtsMatchQuery quotes tokens and neutralizes FTS operators", () =>
   assert.equal(buildSafeFtsMatchQuery("   "), null);
   assert.equal(buildSafeFtsMatchQuery("***"), null);
   assert.equal(buildSafeFtsMatchQuery(""), null);
+});
+
+test("buildSafePostgresSearchQuery strips punctuation into plain tsquery input", () => {
+  assert.equal(buildSafePostgresSearchQuery("deploy plan"), "deploy plan");
+  assert.equal(buildSafePostgresSearchQuery('gateway AND (deploy OR "rollout")'), "gateway AND deploy OR rollout");
+  assert.equal(buildSafePostgresSearchQuery(""), null);
+  assert.equal(buildSafePostgresSearchQuery("***"), null);
+});
+
+test("searchMessages uses Postgres search vectors and coerces numeric rows", () => {
+  const preparedSql: string[] = [];
+  const searchCalls: unknown[][] = [];
+  const db: DatabaseClient = {
+    dialect: "postgres",
+    prepare(sql: string): DbStatement {
+      preparedSql.push(sql);
+      return {
+        run: () => ({ changes: 0 }),
+        get: () => undefined,
+        all: <T = unknown>(...params: unknown[]): T[] => {
+          if (sql.includes("content_search_vector")) {
+            searchCalls.push(params);
+            return [
+              {
+                seq: "7",
+                message_id: "msg-pg-hit",
+                session_id: "sess-pg",
+                role: "assistant",
+                content: "Gateway deploy rollout",
+                timestamp: "2026-06-01T00:00:07.000Z",
+                score: "-0.42",
+              },
+            ] as unknown as T[];
+          }
+          if (sql.includes("seq >= ?") && sql.includes("seq <= ?")) {
+            return [
+              {
+                seq: "7",
+                message_id: "msg-pg-hit",
+                role: "assistant",
+                content: "Gateway deploy rollout",
+                timestamp: "2026-06-01T00:00:07.000Z",
+              },
+            ] as unknown as T[];
+          }
+          return [];
+        },
+      };
+    },
+    exec: () => undefined,
+    close: () => undefined,
+    transaction: (_mode, callback) => callback(),
+  };
+
+  const repo = new ChatMessageRepository(db);
+  const hits = repo.searchMessages('gateway AND (deploy OR "rollout")', {
+    sessionId: "sess-pg",
+    limit: 3,
+    contextRadius: 1,
+  });
+
+  expectSqlUsesPostgresSearch(preparedSql);
+  assert.deepEqual(searchCalls[0], ["gateway AND deploy OR rollout", "sess-pg", 3]);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.score, -0.42);
+  assert.equal(hits[0]?.context[0]?.isHit, true);
 });
 
 test("searchMessages returns ranked hits and never throws on punctuation/operator input", () => {

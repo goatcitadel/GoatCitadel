@@ -352,6 +352,17 @@ export class PromptPackService {
     private readonly deps: PromptPackServiceDeps,
   ) {}
 
+  close(): void {
+    for (const [benchmarkRunId, controller] of this.activeBenchmarkAbortControllers.entries()) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error(`Prompt-pack benchmark ${benchmarkRunId} stopped because the gateway is closing.`));
+      }
+    }
+    this.activeBenchmarkAbortControllers.clear();
+    this.activeBenchmarkRunIds.clear();
+    this.cancelledBenchmarkRunIds.clear();
+  }
+
   private assertDurablePreflight(profile: PromptPackExecutionProfile): void {
     ensurePromptPackDurableReadiness(profile, {
       durable: this.ctx.config.assistant.durable,

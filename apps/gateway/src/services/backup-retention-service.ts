@@ -270,9 +270,15 @@ export class BackupRetentionService {
     if (policy.transcriptsDays !== undefined) {
       const transcriptsDir = path.resolve(this.config.rootDir, this.config.assistant.transcriptsDir);
       const cutoff = Date.now() - policy.transcriptsDays * 24 * 60 * 60 * 1000;
-      const pruned = await pruneFilesOlderThan(transcriptsDir, cutoff, dryRun);
-      removedTranscriptFiles = pruned.files;
-      reclaimedBytes += pruned.bytes;
+      const pruned = await pruneTranscriptsOlderThan(
+        this.storage.transcripts,
+        transcriptsDir,
+        cutoff,
+        dryRun,
+        this.storage.db.dialect,
+      );
+      removedTranscriptFiles = pruned.removedFiles + pruned.removedEvents;
+      reclaimedBytes += pruned.reclaimedBytes;
     }
 
     if (policy.auditDays !== undefined) {
@@ -335,6 +341,36 @@ export class BackupRetentionService {
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
+}
+
+interface TranscriptRetentionBackend {
+  pruneOlderThan(
+    cutoff: string | number,
+    options?: { dryRun?: boolean },
+  ): Promise<{ removedFiles: number; removedEvents: number; reclaimedBytes: number }>;
+}
+
+async function pruneTranscriptsOlderThan(
+  transcripts: unknown,
+  transcriptsDir: string,
+  cutoffEpochMs: number,
+  dryRun: boolean,
+  dialect: "sqlite" | "postgres",
+): Promise<{ removedFiles: number; removedEvents: number; reclaimedBytes: number }> {
+  if (hasTranscriptRetentionBackend(transcripts)) {
+    const cutoff = dialect === "postgres" ? new Date(cutoffEpochMs).toISOString() : cutoffEpochMs;
+    return transcripts.pruneOlderThan(cutoff, { dryRun });
+  }
+  const pruned = await pruneFilesOlderThan(transcriptsDir, cutoffEpochMs, dryRun);
+  return { removedFiles: pruned.files, removedEvents: 0, reclaimedBytes: pruned.bytes };
+}
+
+function hasTranscriptRetentionBackend(value: unknown): value is TranscriptRetentionBackend {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { pruneOlderThan?: unknown }).pruneOlderThan === "function"
+  );
 }
 
 // ── Module-level helpers ───────────────────────────────────────────────

@@ -167,6 +167,27 @@ test("PostgresTranscriptLog handles insert races, object payload rows, malformed
   assert.deepEqual(await log.read("sess-1"), []);
 });
 
+test("PostgresTranscriptLog prunes transcript events by retention cutoff", async () => {
+  const db = new InMemoryTranscriptDb();
+  const log = new PostgresTranscriptLog(db);
+  db.rows.push(
+    buildStoredRow({ event_id: "evt-old-1", event_sequence: 1, occurred_at: "2026-04-01T00:00:00.000Z" }),
+    buildStoredRow({ event_id: "evt-old-2", event_sequence: 2, occurred_at: "2026-04-02T00:00:00.000Z" }),
+    buildStoredRow({ event_id: "evt-new", event_sequence: 3, occurred_at: "2026-04-15T00:00:00.000Z" }),
+  );
+
+  const dryRun = await log.pruneOlderThan("2026-04-10T00:00:00.000Z", { dryRun: true });
+  assert.equal(dryRun.removedEvents, 2);
+  assert.equal(db.rows.length, 3);
+
+  const applied = await log.pruneOlderThan("2026-04-10T00:00:00.000Z");
+  assert.equal(applied.removedEvents, 2);
+  assert.deepEqual(
+    db.rows.map((row) => row.event_id),
+    ["evt-new"],
+  );
+});
+
 class InMemoryTranscriptDb implements DatabaseClient {
   public readonly dialect = "postgres" as const;
   public readonly rows: StoredTranscriptRow[] = [];
@@ -242,6 +263,30 @@ class InMemoryTranscriptDb implements DatabaseClient {
           this.rows
             .filter((row) => row.session_id === sessionId)
             .sort((left, right) => left.event_sequence - right.event_sequence) as T[],
+      };
+    }
+
+    if (sql.includes("COUNT(1) AS count") && sql.includes("occurred_at < ?")) {
+      return {
+        run: () => ({ changes: 0 }),
+        get: <T = unknown>(cutoff: unknown) =>
+          ({
+            count: this.rows.filter((row) => row.occurred_at < String(cutoff)).length,
+          }) as T,
+        all: () => [],
+      };
+    }
+
+    if (sql.includes("DELETE FROM transcript_events") && sql.includes("occurred_at < ?")) {
+      return {
+        run: (cutoff: unknown) => {
+          const before = this.rows.length;
+          const kept = this.rows.filter((row) => row.occurred_at >= String(cutoff));
+          this.rows.splice(0, this.rows.length, ...kept);
+          return { changes: before - this.rows.length };
+        },
+        get: () => undefined,
+        all: () => [],
       };
     }
 

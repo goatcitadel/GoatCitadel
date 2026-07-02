@@ -67,7 +67,17 @@ function createFailingBatchRepo(execLog: string[]): ChatMessageRepository {
       execLog.push(sql);
     },
     close: () => undefined,
-    transaction: (_mode, callback) => callback(),
+    transaction: (mode, callback) => {
+      execLog.push(`BEGIN ${mode}`);
+      try {
+        const result = callback();
+        execLog.push("COMMIT");
+        return result;
+      } catch (error) {
+        execLog.push("ROLLBACK");
+        throw error;
+      }
+    },
   };
   return new ChatMessageRepository(db);
 }
@@ -376,18 +386,10 @@ describe("ChatMessageRepository", () => {
 
     const execLog: string[] = [];
     assert.throws(() => createFailingBatchRepo(execLog).upsertMany([message()]), /insert failed/);
-    assert.equal(
-      execLog.some((entry) => entry.startsWith("SAVEPOINT chat_messages_upsert_many_")),
-      true,
-    );
-    assert.equal(
-      execLog.some((entry) => entry.startsWith("ROLLBACK TO SAVEPOINT chat_messages_upsert_many_")),
-      true,
-    );
-    assert.equal(
-      execLog.some((entry) => entry.startsWith("RELEASE SAVEPOINT chat_messages_upsert_many_")),
-      true,
-    );
+    assert.equal(execLog.length, 3);
+    assert.match(execLog[0] ?? "", /^SAVEPOINT chat_messages_upsert_many_/);
+    assert.match(execLog[1] ?? "", /^ROLLBACK TO SAVEPOINT chat_messages_upsert_many_/);
+    assert.match(execLog[2] ?? "", /^RELEASE SAVEPOINT chat_messages_upsert_many_/);
   });
 
   it("falls back on malformed count, cursor, and list rows", () => {
