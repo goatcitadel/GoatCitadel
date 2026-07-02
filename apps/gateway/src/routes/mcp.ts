@@ -10,8 +10,11 @@ import type {
 import { z } from "zod";
 import {
   areExperimentalRemoteMcpTransportsEnabled,
+  buildInternalMcpServerCreateBlockedMessage,
   buildUnsupportedMcpTransportMessage,
   isAllowedMcpDefinitionForCreate,
+  isAllowedMcpDefinitionForCallerCreate,
+  isInternalMcpServerUrl,
   isRuntimeSupportedMcpDefinition,
 } from "../services/mcp-template-visibility.js";
 import { MCP_APPROVAL_INBOX_URL } from "../services/mcp-approval-inbox.js";
@@ -34,6 +37,7 @@ import {
   isMcpServerModeCallPreviewAvailable,
   isServerModeDescriptorCallablePreview,
 } from "./mcp-server-mode.js";
+import { withRouteAccess } from "./route-access.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -201,16 +205,18 @@ const MUTATION_ROUTE_OPTIONS = {
 export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   // Shared elicitation store (also backs the approval-inbox respond/list tools) so either surface answers the other's requests.
   const mcpElicitations = fastify.services.mcp.elicitations;
+  const operatorReadRoute = withRouteAccess(fastify, "operator", READ_ROUTE_OPTIONS);
+  const operatorMutationRoute = withRouteAccess(fastify, "operator", MUTATION_ROUTE_OPTIONS);
 
-  fastify.get("/api/v1/mcp/servers", READ_ROUTE_OPTIONS, async (_request, reply) => {
+  fastify.get("/api/v1/mcp/servers", operatorReadRoute, async (_request, reply) => {
     return reply.send({ items: fastify.services.mcp.listMcpServers() });
   });
 
-  fastify.get("/api/v1/mcp/templates", READ_ROUTE_OPTIONS, async (_request, reply) => {
+  fastify.get("/api/v1/mcp/templates", operatorReadRoute, async (_request, reply) => {
     return reply.send({ items: fastify.services.mcp.listMcpTemplates() });
   });
 
-  fastify.get("/api/v1/mcp/templates/discovery", READ_ROUTE_OPTIONS, async (_request, reply) => {
+  fastify.get("/api/v1/mcp/templates/discovery", operatorReadRoute, async (_request, reply) => {
     try {
       return reply.send({ items: fastify.services.mcp.listMcpTemplateDiscovery() });
     } catch (error) {
@@ -218,7 +224,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/mcp/remote-preview", READ_ROUTE_OPTIONS, async (_request, reply) => {
+  fastify.get("/api/v1/mcp/remote-preview", operatorReadRoute, async (_request, reply) => {
     return reply.send(
       buildMcpRemotePreview({
         servers: fastify.services.mcp.listMcpServers(),
@@ -227,7 +233,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     );
   });
 
-  fastify.get("/api/v1/mcp/elicitations", READ_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.get("/api/v1/mcp/elicitations", operatorReadRoute, async (request, reply) => {
     const query = elicitationListQuerySchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
@@ -240,7 +246,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  fastify.post("/api/v1/mcp/elicitations", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/elicitations", operatorMutationRoute, async (request, reply) => {
     const parsed = elicitationCreateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -258,7 +264,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/elicitations/:elicitationId/respond", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/elicitations/:elicitationId/respond", operatorMutationRoute, async (request, reply) => {
     const params = elicitationParamsSchema.safeParse(request.params);
     const body = elicitationResponseSchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -281,7 +287,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/mcp/server-mode/manifest", READ_ROUTE_OPTIONS, async (_request, reply) => {
+  fastify.get("/api/v1/mcp/server-mode/manifest", operatorReadRoute, async (_request, reply) => {
     return reply.send(
       buildMcpServerModeManifest({
         inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
@@ -291,7 +297,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     );
   });
 
-  fastify.post("/api/v1/mcp/server-mode/call", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/server-mode/call", operatorMutationRoute, async (request, reply) => {
     const parsed = serverModeCallSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -378,13 +384,16 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/servers", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers", operatorMutationRoute, async (request, reply) => {
     const parsed = createServerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (!isAllowedMcpDefinitionForCreate(parsed.data)) {
-      return reply.code(400).send({ error: buildUnsupportedMcpTransportMessage(parsed.data.transport) });
+    if (!isAllowedMcpDefinitionForCallerCreate(parsed.data)) {
+      const error = isInternalMcpServerUrl(parsed.data.url)
+        ? buildInternalMcpServerCreateBlockedMessage()
+        : buildUnsupportedMcpTransportMessage(parsed.data.transport);
+      return reply.code(400).send({ error });
     }
     try {
       return reply.code(201).send(fastify.services.mcp.createMcpServer(parsed.data));
@@ -393,7 +402,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.patch("/api/v1/mcp/servers/:serverId", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.patch("/api/v1/mcp/servers/:serverId", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     const body = updateServerSchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -411,7 +420,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.delete("/api/v1/mcp/servers/:serverId", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.delete("/api/v1/mcp/servers/:serverId", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -419,7 +428,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.mcp.deleteMcpServer(params.data.serverId));
   });
 
-  fastify.post("/api/v1/mcp/servers/:serverId/connect", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers/:serverId/connect", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -431,7 +440,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/servers/:serverId/disconnect", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers/:serverId/disconnect", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -443,7 +452,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/servers/:serverId/oauth/start", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers/:serverId/oauth/start", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -455,7 +464,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/servers/:serverId/oauth/complete", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers/:serverId/oauth/complete", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     const body = oauthCompleteSchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -475,7 +484,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/mcp/servers/:serverId/tools", READ_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.get("/api/v1/mcp/servers/:serverId/tools", operatorReadRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -487,7 +496,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/invoke", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/invoke", operatorMutationRoute, async (request, reply) => {
     const parsed = invokeSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -547,7 +556,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.patch("/api/v1/mcp/servers/:serverId/policy", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.patch("/api/v1/mcp/servers/:serverId/policy", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     const body = policySchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -565,7 +574,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/mcp/servers/:serverId/health-check", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+  fastify.post("/api/v1/mcp/servers/:serverId/health-check", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });

@@ -29,6 +29,8 @@ describe("PermissionProfileRepository", () => {
     const builtins = repo.listProfiles();
     assert.equal(builtins.find((profile) => profile.profileId === "safe")?.approvalMode, "approve_all");
     assert.equal(builtins.find((profile) => profile.profileId === "trusted_local_power")?.approvalMode, "bypass");
+    assert.equal(builtins.find((profile) => profile.profileId === "scheduled-restricted")?.builtin, true);
+    assert.equal(builtins.find((profile) => profile.profileId === "heartbeat-restricted")?.builtin, true);
 
     const custom = repo.createProfile({
       label: "Code Review",
@@ -111,6 +113,33 @@ describe("PermissionProfileRepository", () => {
         }),
       /Custom permission profiles cannot use global scope/,
     );
+  });
+
+  it("does not let stored rows shadow builtin restricted permission profiles", () => {
+    const { db, repo } = createStore();
+    db.prepare(
+      `
+      INSERT INTO permission_profiles (
+        profile_id, label, description, builtin, status, scope, scope_ref, approval_mode, legacy_tool_profile,
+        tool_patterns_json, allow_json, deny_json, read_access_mode, default_for_surfaces_json,
+        created_by, created_at, updated_at, archived_at
+      ) VALUES (
+        @profileId, @label, NULL, 0, 'active', 'operator', 'operator-a', 'bypass', NULL,
+        '["*"]', '["*"]', '[]', 'full_disk', '[]',
+        'operator-a', '2026-06-30T00:00:00.000Z', '2026-06-30T00:00:00.000Z', NULL
+      )
+    `,
+    ).run({ profileId: "scheduled-restricted", label: "Stored Shadow" });
+
+    const scheduledProfiles = repo
+      .listProfiles(true)
+      .filter((profile) => profile.profileId === "scheduled-restricted");
+
+    assert.equal(scheduledProfiles.length, 1);
+    const scheduledProfile = scheduledProfiles[0];
+    assert.ok(scheduledProfile);
+    assert.equal(scheduledProfile.builtin, true);
+    assert.equal(scheduledProfile.label, "Scheduled (Restricted)");
   });
 
   it("reconciles active profile activations for exact owner context", () => {

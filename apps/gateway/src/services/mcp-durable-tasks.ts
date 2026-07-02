@@ -33,6 +33,10 @@ export interface McpDurableTasksPort {
   cancelRun: (runId: string) => DurableRunRecord;
 }
 
+interface McpDurableTaskScope {
+  workspaceId: string;
+}
+
 export function isInternalMcpDurableTasksServer(server: Pick<McpServerRecord, "url">): boolean {
   return server.url?.trim().toLowerCase() === MCP_DURABLE_TASKS_URL;
 }
@@ -101,22 +105,35 @@ export async function handleInternalMcpDurableTasksInvoke(
   if (!isInternalMcpDurableTasksServer(server)) {
     return { ok: false, error: `MCP server ${server.serverId} is not an internal durable-tasks server.` };
   }
+  const scope = resolveDurableTaskScope(input);
+  if (!scope) {
+    return { ok: false, error: "Durable task MCP tools require a resolved workspace scope." };
+  }
   try {
     switch (input.toolName) {
       case MCP_DURABLE_TASKS_LIST_TOOL_NAME: {
-        const limit = parseLimit(input.arguments?.limit);
-        return { ok: true, output: { tasks: deps.listRuns(limit).map(toDurableTaskView) } };
+        const limit = parseLimit(input.arguments?.limit) ?? 50;
+        const tasks = deps
+          .listRuns(200)
+          .filter((run) => durableRunMatchesScope(run, scope))
+          .slice(0, limit)
+          .map(toDurableTaskView);
+        return { ok: true, output: { tasks } };
       }
       case MCP_DURABLE_TASKS_GET_TOOL_NAME: {
         const taskId = requireNonEmptyString(input.arguments?.taskId, "taskId");
         const run = deps.getRun(taskId);
-        if (!run) {
+        if (!run || !durableRunMatchesScope(run, scope)) {
           return { ok: false, error: `Durable task ${taskId} not found.` };
         }
         return { ok: true, output: { task: toDurableTaskView(run) } };
       }
       case MCP_DURABLE_TASKS_CANCEL_TOOL_NAME: {
         const taskId = requireNonEmptyString(input.arguments?.taskId, "taskId");
+        const run = deps.getRun(taskId);
+        if (!run || !durableRunMatchesScope(run, scope)) {
+          return { ok: false, error: `Durable task ${taskId} not found.` };
+        }
         return { ok: true, output: { task: toDurableTaskView(deps.cancelRun(taskId)) } };
       }
       default:
@@ -132,6 +149,33 @@ function parseLimit(value: unknown): number | undefined {
     return undefined;
   }
   return Math.max(1, Math.min(200, Math.trunc(value)));
+}
+
+function resolveDurableTaskScope(input: McpInvokeRequest): McpDurableTaskScope | undefined {
+  const workspaceId = input.workspaceId?.trim();
+  return workspaceId ? { workspaceId } : undefined;
+}
+
+function durableRunMatchesScope(run: DurableRunRecord, scope: McpDurableTaskScope): boolean {
+  return readDurableRunString(run, "workspaceId") === scope.workspaceId;
+}
+
+function readDurableRunString(run: DurableRunRecord, key: string): string | undefined {
+  const direct = readRecordString(run.metadata, key) ?? readRecordString(run.payload, key);
+  if (direct) {
+    return direct;
+  }
+  const policyContext = readRecord(run.payload.policyContext) ?? readRecord(run.metadata?.policyContext);
+  return readRecordString(policyContext, key);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function readRecordString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function requireNonEmptyString(value: unknown, field: string): string {

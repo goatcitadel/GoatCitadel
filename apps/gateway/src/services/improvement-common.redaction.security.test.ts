@@ -12,36 +12,32 @@ import { redactSensitivePayload } from "./improvement-common.js";
 describe("redactSensitivePayload (codex #27)", () => {
   it("redacts OpenAI-shape keys", () => {
     expect(redactSensitivePayload("call ok with sk-proj-A1b2C3d4E5f6G7h8I9j0", {})).toBe(
-      "call ok with [REDACTED_LLM_KEY]",
+      "call ok with [REDACTED]",
     );
   });
 
   it("redacts Telegram bot tokens", () => {
     expect(redactSensitivePayload("token 1234567890:AAH0123456789012345678901234567890abc", {})).toBe(
-      "token [REDACTED_TELEGRAM_BOT_TOKEN]",
+      "token [REDACTED]",
     );
   });
 
   it("redacts Authorization Bearer header values", () => {
     expect(redactSensitivePayload("Authorization: Bearer abc123def456ghi789jkl", {})).toBe(
-      "Authorization: Bearer [REDACTED]",
+      "Authorization: [REDACTED]",
     );
   });
 
   it("redacts GitHub personal access tokens", () => {
-    expect(redactSensitivePayload("gh token ghp_aaaaaaaaaaaaaaaaaaaaaaaa", {})).toBe(
-      "gh token [REDACTED_GITHUB_TOKEN]",
-    );
+    expect(redactSensitivePayload("gh token ghp_aaaaaaaaaaaaaaaaaaaaaaaa", {})).toBe("gh token [REDACTED]");
   });
 
   it("redacts AWS access keys", () => {
-    expect(redactSensitivePayload("env AKIAIOSFODNN7EXAMPLE in args", {})).toBe(
-      "env [REDACTED_AWS_ACCESS_KEY] in args",
-    );
+    expect(redactSensitivePayload("env AKIAIOSFODNN7EXAMPLE in args", {})).toBe("env [REDACTED] in args");
   });
 
   it("redacts email addresses (PII)", () => {
-    expect(redactSensitivePayload("user alice@example.com requested", {})).toBe("user [REDACTED_EMAIL] requested");
+    expect(redactSensitivePayload("user alice@example.com requested", {})).toBe("user [REDACTED] requested");
   });
 
   it("redacts literal env-resolved values with the env-name marker", () => {

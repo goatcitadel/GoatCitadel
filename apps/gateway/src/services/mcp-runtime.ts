@@ -2,12 +2,13 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import type {
-  McpInvokeRequest,
-  McpNormalizedContentItem,
-  McpServerRecord,
-  McpToolRecord,
-  ToolPolicyActorContext,
+import {
+  redactSecretText,
+  type McpInvokeRequest,
+  type McpNormalizedContentItem,
+  type McpServerRecord,
+  type McpToolRecord,
+  type ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
@@ -1372,17 +1373,7 @@ function extractMcpContentPart(value: unknown): string {
 }
 
 function sanitizeMcpRuntimeError(value: string): string {
-  return value
-    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, "$1=[REDACTED]")
-    .replace(/\bauthorization\s*:\s*Bearer\s+\S+/gi, "authorization=[REDACTED]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
-    .replace(
-      /\b(?=[A-Za-z0-9_.-]*(?:secret|token|api[-_]?key))(?=[A-Za-z0-9_.-]*[-_])(?=[A-Za-z0-9_.-]{16,}\b)[A-Za-z0-9_.-]+\b/gi,
-      "[REDACTED]",
-    )
-    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
-    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
-    .slice(0, 4096);
+  return redactSecretText(value).value.slice(0, 4096);
 }
 
 function formatMcpFallbackText(label: string, fields: Record<string, string | undefined>): string {

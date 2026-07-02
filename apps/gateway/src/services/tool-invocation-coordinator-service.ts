@@ -1,19 +1,20 @@
 /* eslint-disable max-lines -- Tool invocation coordination keeps policy, MCP, audit, and grant evidence in one reviewable runtime seam. */
 import { randomUUID } from "node:crypto";
-import type {
-  ApprovalRequest,
-  AutonomousActivationGrantEvaluationInput,
-  AutonomousActivationGrantEvaluationResult,
-  AutonomousActivationRiskLevel,
-  AutonomousActivationRuntimeEvidence,
-  McpInvokeRequest,
-  McpInvokeResponse,
-  McpNormalizedContentItem,
-  McpServerRecord,
-  McpToolRecord,
-  RealtimeEvent,
-  ToolInvokeRequest,
-  ToolInvokeResult,
+import {
+  redactSecretText,
+  type ApprovalRequest,
+  type AutonomousActivationGrantEvaluationInput,
+  type AutonomousActivationGrantEvaluationResult,
+  type AutonomousActivationRiskLevel,
+  type AutonomousActivationRuntimeEvidence,
+  type McpInvokeRequest,
+  type McpInvokeResponse,
+  type McpNormalizedContentItem,
+  type McpServerRecord,
+  type McpToolRecord,
+  type RealtimeEvent,
+  type ToolInvokeRequest,
+  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
@@ -168,9 +169,8 @@ export interface ToolInvocationCoordinatorHost {
   readonly durableTasks: McpDurableTasksPort;
   readonly respondToMcpElicitation: RespondToMcpElicitation;
   readonly listMcpElicitations: ListMcpElicitations;
-  /** Optional capability-scope gate. Throws (PolicyViolationError) when the requested MCP
-   *  server is not available in the active workspace/citadel scope. Absent → no scoping
-   *  (fail-open). Invoked at the executeMcpRuntime choke point for external servers only. */
+  /** Required capability-scope gate. Throws when the requested MCP server is not
+   *  available in the active workspace/citadel scope. Missing wiring fails closed. */
   assertMcpServerInScope?: (request: McpInvokeRequest) => void;
   readonly policyEngine: {
     invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
@@ -922,10 +922,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
-    // invokeMcpTool). Internal servers (approval inbox, durable tasks) are infrastructure and
-    // are always allowed. When the host hook is absent, scoping is inert (fail-open).
-    if (!isInternalMcpApprovalInboxServer(server) && !isInternalMcpDurableTasksServer(server)) {
-      this.host.assertMcpServerInScope?.(input);
+    // invokeMcpTool). The gate is fail-closed and applies to internal MCP surfaces too,
+    // including durable tasks, because they expose operator runtime state.
+    const scopeFailure = this.enforceMcpServerScope(input);
+    if (scopeFailure) {
+      return scopeFailure;
     }
     const runtime = isInternalMcpApprovalInboxServer(server)
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
@@ -977,6 +978,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       server.policy.redactionMode,
       this.host.applyMcpRedaction,
     );
+    const sanitizedRuntimeError = redactMcpRuntimeError(runtime.error, server.policy.redactionMode);
 
     this.host.publishRealtime(
       "tool_invoked",
@@ -1018,7 +1020,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         trustTier: server.trustTier,
         autonomousActivation,
         ok: runtime.ok,
-        error: runtime.ok ? undefined : runtime.error,
+        error: runtime.ok ? undefined : sanitizedRuntimeError,
       },
     });
 
@@ -1031,10 +1033,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           transport: server.transport,
           degraded: runtimeDegraded,
           retryCount: runtimeRetryCount,
-          sanitizedError: runtime.error,
+          sanitizedError: sanitizedRuntimeError,
         },
         autonomousActivation,
-        error: runtime.error ?? `MCP tool ${input.toolName} failed.`,
+        error: sanitizedRuntimeError ?? `MCP tool ${input.toolName} failed.`,
       };
     }
 
@@ -1049,6 +1051,28 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       },
       autonomousActivation,
     };
+  }
+
+  private enforceMcpServerScope(input: McpInvokeRequest): McpInvokeResponse | undefined {
+    if (!this.host.assertMcpServerInScope) {
+      return {
+        ok: false,
+        error: "MCP capability scope enforcement is unavailable.",
+        policyReason: "blocked: MCP capability scope gate is not wired",
+        reasonCodes: ["mcp_capability_scope_unavailable"],
+      };
+    }
+    try {
+      this.host.assertMcpServerInScope(input);
+      return undefined;
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        policyReason: error instanceof Error ? error.message : String(error),
+        reasonCodes: ["mcp_capability_scope_denied"],
+      };
+    }
   }
 }
 
@@ -1123,4 +1147,14 @@ function redactMcpContentItems(
   }
   const redacted = applyRedaction({ contentItems }, mode).contentItems;
   return Array.isArray(redacted) ? (redacted as McpNormalizedContentItem[]) : contentItems;
+}
+
+function redactMcpRuntimeError(
+  error: string | undefined,
+  mode: McpServerRecord["policy"]["redactionMode"],
+): string | undefined {
+  if (!error || mode === "off") {
+    return error;
+  }
+  return redactSecretText(error).value;
 }

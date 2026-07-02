@@ -57,7 +57,7 @@ describe("mcp routes", () => {
     const service = createMcpService(overrides);
     app = Fastify();
     app.decorate("services", { mcp: service } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
     return service;
   }
 
@@ -78,9 +78,30 @@ describe("mcp routes", () => {
         (request as { authActorId?: string }).authActorId = actorId.trim();
       }
     });
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
     return service;
   }
+
+  async function registerMcpRoutesForTest(instance: FastifyInstance) {
+    instance.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await instance.register(mcpRoutes);
+  }
+
+  it("fails closed when MCP routes are registered without operator auth", async () => {
+    app = Fastify();
+    app.decorate("services", { mcp: createMcpService() } as never);
+    await app.register(mcpRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/mcp/servers",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: "Operator authentication is not installed for this route.",
+    });
+  });
 
   it("creates and lists MCP elicitation requests with bounded audit and evidence metadata", async () => {
     await registerMcpService();
@@ -336,7 +357,7 @@ describe("mcp routes", () => {
         content: {
           value: {
             track: "canary",
-            note: "[REDACTED]",
+            note: "token=[REDACTED]",
           },
           maxBytes: MCP_ROUTE_ELICITATION_LIMITS.responseContentMaxBytes,
           redactedSecretCount: 1,
@@ -558,7 +579,7 @@ describe("mcp routes", () => {
         updateMcpServerPolicy: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -785,7 +806,7 @@ describe("mcp routes", () => {
         updateMcpServerPolicy: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -825,7 +846,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -863,7 +884,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck,
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -901,7 +922,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck,
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -937,7 +958,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -986,7 +1007,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -1010,7 +1031,7 @@ describe("mcp routes", () => {
     );
   });
 
-  it("allows the built-in Approval Inbox template even though it uses an internal http transport", async () => {
+  it("rejects caller-created internal goatcitadel MCP servers", async () => {
     const createMcpServer = vi.fn((input) => ({
       serverId: "srv-approval-inbox",
       authType: "none",
@@ -1040,7 +1061,7 @@ describe("mcp routes", () => {
         runMcpServerHealthCheck: vi.fn(),
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",
@@ -1052,14 +1073,11 @@ describe("mcp routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(201);
-    expect(createMcpServer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "Approval Inbox",
-        transport: "http",
-        url: MCP_APPROVAL_INBOX_URL,
-      }),
-    );
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "Internal goatcitadel:// MCP servers are Gateway-owned and cannot be created or assigned by callers.",
+    });
+    expect(createMcpServer).not.toHaveBeenCalled();
   });
 
   it("serves MCP server, template, and discovery read routes", async () => {
@@ -1329,7 +1347,7 @@ describe("mcp routes", () => {
         listCapabilityCatalog,
       },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "GET",
@@ -1446,7 +1464,7 @@ describe("mcp routes", () => {
       tools: { resolveToolPolicyContext },
       toolsInvoke: { invokeTool },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const manifest = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
     expect(manifest.statusCode).toBe(200);
@@ -1549,7 +1567,7 @@ describe("mcp routes", () => {
       tools: { resolveToolPolicyContext: vi.fn(() => ({})) },
       toolsInvoke: { invokeTool: vi.fn() },
     } as never);
-    await app.register(mcpRoutes);
+    await registerMcpRoutesForTest(app);
 
     const response = await app.inject({
       method: "POST",

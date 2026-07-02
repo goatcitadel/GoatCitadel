@@ -111,6 +111,14 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
     ),
     scheduleApprovalExplanationById: vi.fn(),
     publishRealtime: vi.fn(),
+    assertMcpServerInScope: vi.fn(),
+    durableTasks: {
+      listRuns: vi.fn(() => []),
+      getRun: vi.fn(),
+      cancelRun: vi.fn(),
+    },
+    respondToMcpElicitation: vi.fn(),
+    listMcpElicitations: vi.fn(() => []),
     requireMcpServer: vi.fn(() => createMcpServer()),
     listMcpTools: vi.fn(() => [createMcpTool()]),
     matchesWildcard: vi.fn((value: string, pattern: string) => value === pattern),
@@ -1432,9 +1440,9 @@ describe("ToolInvocationCoordinatorService", () => {
         transport: "stdio",
         degraded: true,
         retryCount: 2,
-        sanitizedError: "upstream secret sk-abcdefghijklmnopqrstuvwx",
+        sanitizedError: "upstream secret [REDACTED]",
       },
-      error: "upstream secret sk-abcdefghijklmnopqrstuvwx",
+      error: "upstream secret [REDACTED]",
     });
     expect(JSON.stringify(response.output)).not.toContain("sk-abcdefghijklmnopqrstuvwx");
     expect(JSON.stringify(response.contentItems)).not.toContain("sk-abcdefghijklmnopqrstuvwx");
@@ -1450,7 +1458,7 @@ describe("ToolInvocationCoordinatorService", () => {
           taskId: "task-1",
           trustTier: "restricted",
           ok: false,
-          error: "upstream secret sk-abcdefghijklmnopqrstuvwx",
+          error: "upstream secret [REDACTED]",
         }),
       }),
     );
@@ -2004,17 +2012,25 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
     const host = createHost({ assertMcpServerInScope, invokeMcpRuntimeTool });
     const coordinator = new ToolInvocationCoordinatorService(host);
 
-    await expect(
-      coordinator.invokeApprovedMcpRuntime({ serverId: "srv-1", toolName: "tool.echo", workspaceId: "default" }),
-    ).rejects.toThrow(PolicyViolationError);
+    const result = await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      workspaceId: "default",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reasonCodes: ["mcp_capability_scope_denied"],
+      policyReason: "scoped out",
+    });
     expect(assertMcpServerInScope).toHaveBeenCalledTimes(1);
     // Denied before the external runtime ever executes.
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
-  it("does not capability-gate internal MCP servers (approval inbox)", async () => {
+  it("capability-gates internal MCP servers before approval-inbox dispatch", async () => {
     const assertMcpServerInScope = vi.fn(() => {
-      throw new PolicyViolationError({ code: "POLICY_BLOCKED", message: "must not gate internal infra" });
+      throw new PolicyViolationError({ code: "POLICY_BLOCKED", message: "internal infra scoped out" });
     });
     const host = createHost({
       assertMcpServerInScope,
@@ -2030,8 +2046,33 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
       toolName: MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
       workspaceId: "default",
     });
-    // Reached executeMcpRuntime, took the internal-approval-inbox branch, and skipped the gate.
-    expect(result.ok).toBe(true);
-    expect(assertMcpServerInScope).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: false,
+      reasonCodes: ["mcp_capability_scope_denied"],
+      policyReason: "internal infra scoped out",
+    });
+    expect(assertMcpServerInScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when MCP capability-scope wiring is unavailable", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "ok" } }));
+    const host = createHost({
+      assertMcpServerInScope: undefined,
+      invokeMcpRuntimeTool,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const result = await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      workspaceId: "default",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reasonCodes: ["mcp_capability_scope_unavailable"],
+      policyReason: "blocked: MCP capability scope gate is not wired",
+    });
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 });

@@ -12,8 +12,10 @@ import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 import {
+  buildInternalMcpServerCreateBlockedMessage,
   buildUnsupportedMcpTransportMessage,
-  isAllowedMcpDefinitionForCreate,
+  isAllowedMcpDefinitionForCallerCreate,
+  isInternalMcpServerUrl,
   isRuntimeSupportedMcpDefinition,
 } from "./mcp-template-visibility.js";
 
@@ -57,7 +59,10 @@ export interface McpServerAdminHost {
 }
 
 export function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): McpServerRecord {
-  if (!isAllowedMcpDefinitionForCreate(input)) {
+  if (isInternalMcpServerUrl(input.url)) {
+    throw new Error(buildInternalMcpServerCreateBlockedMessage());
+  }
+  if (!isAllowedMcpDefinitionForCallerCreate(input)) {
     throw new Error(buildUnsupportedMcpTransportMessage(input.transport));
   }
   const now = new Date().toISOString();
@@ -95,6 +100,9 @@ export function updateMcpServer(
   serverId: string,
   input: McpServerUpdateInput,
 ): McpServerRecord {
+  if (isInternalMcpServerUrl(input.url)) {
+    throw new Error(buildInternalMcpServerCreateBlockedMessage());
+  }
   const now = new Date().toISOString();
   let updated: McpServerRecord | undefined;
   const servers = host.readMcpServers().map((item) => {

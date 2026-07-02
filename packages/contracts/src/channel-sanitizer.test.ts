@@ -42,7 +42,8 @@ describe("sanitizeChannelOutboundMessage", () => {
     const bearerResult = sanitizeChannelOutboundMessage(`${noisyAuthorizationPrefix}Bearer abcDEF-._~+/== done`);
     const credentialResult = sanitizeChannelOutboundMessage(`${noisyUrlPrefix}user:p@example.test/path`);
 
-    expect(bearerResult.message).toContain("Bearer [REDACTED] done");
+    expect(bearerResult.message).toContain("Authorization: [REDACTED] done");
+    expect(bearerResult.message).not.toContain("abcDEF");
     expect(bearerResult.redactedSecretCount).toBe(1);
     expect(credentialResult.message).toContain("[REDACTED]@example.test/path");
     expect(credentialResult.redactedSecretCount).toBe(1);
