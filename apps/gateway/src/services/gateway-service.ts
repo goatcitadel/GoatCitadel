@@ -8955,6 +8955,8 @@ export class GatewayService {
     this.improvementService.stopScheduler();
     this.durableRunService.stopWorker();
     this.approvalEffectsService.stopWorker();
+    this.chatTurnExecutionRegistry.close("Gateway service is closing.");
+    this.promptPackService.close();
     if (this.maintenanceScheduler) {
       this.maintenanceScheduler.stop();
       this.maintenanceScheduler = undefined;

@@ -2189,4 +2189,19 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON capability_scope_assignments(scope_kind, scope_id, resource_type, enabled);
     `,
   },
+  {
+    version: 74,
+    name: "chat_messages_content_search_vector",
+    sql: `
+      ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS content_search_vector tsvector
+        GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(content, ''))) STORED;
+
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_content_search_vector
+        ON chat_messages USING GIN (content_search_vector);
+
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_session_seq
+        ON chat_messages(session_id, seq DESC);
+    `,
+  },
 ];

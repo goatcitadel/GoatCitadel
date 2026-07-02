@@ -117,6 +117,7 @@ export class OpenAICodexOAuthService {
 
   public async startDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
     this.assertKeychainAvailable();
+    this.purgeExpiredPendingFlows();
     await this.ensureCallbackServer();
 
     const flowId = randomUUID();
@@ -142,6 +143,7 @@ export class OpenAICodexOAuthService {
 
   public async pollDeviceFlow(flowId: string): Promise<OpenAICodexDevicePollResponse> {
     this.assertKeychainAvailable();
+    this.purgeExpiredPendingFlows();
     const flow = this.pendingFlows.get(flowId);
     if (!flow) {
       return {
@@ -209,6 +211,7 @@ export class OpenAICodexOAuthService {
   }
 
   public close(): void {
+    this.pendingFlows.clear();
     this.callbackServer?.close();
     this.callbackServer = null;
     this.callbackServerStart = null;
@@ -307,6 +310,7 @@ export class OpenAICodexOAuthService {
       }
 
       const state = trimNonEmptyString(url.searchParams.get("state"));
+      this.purgeExpiredPendingFlows();
       const flowEntry = state ? this.findPendingFlowByState(state) : undefined;
       if (!flowEntry) {
         writeOAuthHtml(response, 400, "OpenAI Codex login", "This login request is no longer active.");
@@ -354,6 +358,14 @@ export class OpenAICodexOAuthService {
       }
     }
     return undefined;
+  }
+
+  private purgeExpiredPendingFlows(now = Date.now()): void {
+    for (const [flowId, flow] of this.pendingFlows.entries()) {
+      if (now >= flow.expiresAt) {
+        this.pendingFlows.delete(flowId);
+      }
+    }
   }
 
   private buildAuthorizationUrl(params: { state: string; codeChallenge: string }): string {

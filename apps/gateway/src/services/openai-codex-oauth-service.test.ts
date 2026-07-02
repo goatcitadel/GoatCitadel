@@ -143,6 +143,22 @@ describe("OpenAICodexOAuthService", () => {
     });
   });
 
+  it("clears pending OAuth flows when the service is closed", async () => {
+    const port = await getFreePort();
+    service = new OpenAICodexOAuthService(createMemorySecretStore(), vi.fn() as unknown as typeof fetch, {
+      port,
+      redirectUri: `http://localhost:${port}/auth/callback`,
+    });
+
+    const flow = await service.startDeviceFlow();
+    service.close();
+
+    await expect(service.pollDeviceFlow(flow.flowId)).resolves.toMatchObject({
+      status: "expired",
+      requiresReauth: true,
+    });
+  });
+
   it("refreshes near-expired credentials and marks reauth when refresh fails", async () => {
     const secretStore = createMemorySecretStore();
     const staleToken = createJwt({ exp: Math.trunc(Date.now() / 1000) + 1, sub: "stale-user" });

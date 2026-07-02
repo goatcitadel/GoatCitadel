@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { clampInt, DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
-import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
+import {
+  assertSynchronousTransactionResult,
+  type DatabaseClient,
+  type DbStatement,
+  type DbTransactionMode,
+} from "./db.js";
 import { hashPromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -61,6 +66,8 @@ class SqliteStatementAdapter implements DbStatement {
 
 class SqliteDatabaseClient implements DatabaseClient {
   public readonly dialect = "sqlite" as const;
+  private transactionDepth = 0;
+  private savepointCounter = 0;
 
   public constructor(private readonly db: DatabaseSync) {}
 
@@ -79,24 +86,37 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
+    if (this.transactionDepth > 0) {
+      const savepointName = `gc_nested_${(this.savepointCounter += 1)}`;
+      this.db.exec(`SAVEPOINT ${savepointName}`);
+      this.transactionDepth += 1;
+      try {
+        const result = callback();
+        assertSynchronousTransactionResult(result);
+        this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+        return result;
+      } catch (error) {
+        this.db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+        throw error;
+      } finally {
+        this.transactionDepth = Math.max(0, this.transactionDepth - 1);
+      }
+    }
+
     const beginSql = mode === "exclusive" ? "BEGIN EXCLUSIVE" : mode === "deferred" ? "BEGIN" : "BEGIN IMMEDIATE";
     this.db.exec(beginSql);
+    this.transactionDepth = 1;
     try {
       const result = callback();
-      if (
-        (typeof result === "object" || typeof result === "function") &&
-        result !== null &&
-        typeof (result as { then?: unknown }).then === "function"
-      ) {
-        // A thenable would COMMIT before it resolves, running async work outside
-        // the transaction boundary. This transaction wrapper is synchronous only.
-        throw new TypeError("transaction() callback must be synchronous; it must not return a Promise");
-      }
+      assertSynchronousTransactionResult(result);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    } finally {
+      this.transactionDepth = 0;
     }
   }
 }

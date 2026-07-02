@@ -516,6 +516,22 @@ describe("auth plugin", () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it("clears SSE bridge token cleanup timer when the app closes", async () => {
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    app.issueSseToken("events:stream", 30_000);
+    await app.close();
+    app = null;
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
+  });
+
   it("accepts diagnostics SSE bridge tokens on the diagnostics stream", async () => {
     app = await buildApp({
       mode: "token",

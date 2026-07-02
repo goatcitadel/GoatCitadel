@@ -192,7 +192,6 @@ export class CapabilitySystemService {
   private readonly candidateRoot: string;
   private readonly artifactRoot: string;
   private readonly tempRoot: string;
-  private readonly harnessPath: string;
   private readonly resolveSandboxMetadata: (
     config: CapabilityRuntimeConfig["codeModeSandbox"],
   ) => CodeModeSandboxMetadata;
@@ -202,7 +201,6 @@ export class CapabilitySystemService {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
     this.artifactRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.codeModeArtifactRoot);
     this.tempRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.tempRoot);
-    this.harnessPath = path.join(this.tempRoot, "code-mode-harness.mjs");
     this.resolveSandboxMetadata =
       options.resolveSandboxMetadata ?? ((config) => resolveCodeModeSandboxMetadata(config));
     this.autonomousActivationGrants = new AutonomousActivationGrantService(
@@ -2278,7 +2276,6 @@ export class CapabilitySystemService {
     parentSessionId?: string;
     signal?: AbortSignal;
   }) {
-    await this.ensureHarnessFile();
     return this.executeChildHarness(input);
   }
 
@@ -2300,6 +2297,7 @@ export class CapabilitySystemService {
     stderr: BoundedCaptureState;
   }> {
     const aider = readPendingAiderRunRequest(input.pendingAiderRequest);
+    const runTempRoot = path.join(this.tempRoot, input.runId);
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
       sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
@@ -2311,26 +2309,30 @@ export class CapabilitySystemService {
     if (backendRunner.mode !== "aider_audit" || !backendRunner.executeAiderAdapter) {
       throw new Error("Selected Code Mode backend does not support Aider adapter execution.");
     }
-    const execution = await backendRunner.executeAiderAdapter({
-      runId: input.runId,
-      runTempRoot: path.join(this.tempRoot, input.runId),
-      language: input.language,
-      source: input.source,
-      requestMarkdown: aider.requestMarkdown,
-      repositoryRootRelPath: aider.repositoryRootRelPath,
-      model: aider.model,
-      persister: this.buildAiderArtifactPersister(),
-      signal: input.signal,
-    });
-    return {
-      result: execution.result,
-      error: execution.error,
-      errorCode: execution.errorCode,
-      errorDetails: execution.errorDetails,
-      failed: execution.failed,
-      stdout: toCaptureState(execution.stdout),
-      stderr: toCaptureState(execution.stderr),
-    };
+    try {
+      const execution = await backendRunner.executeAiderAdapter({
+        runId: input.runId,
+        runTempRoot,
+        language: input.language,
+        source: input.source,
+        requestMarkdown: aider.requestMarkdown,
+        repositoryRootRelPath: aider.repositoryRootRelPath,
+        model: aider.model,
+        persister: this.buildAiderArtifactPersister(),
+        signal: input.signal,
+      });
+      return {
+        result: execution.result,
+        error: execution.error,
+        errorCode: execution.errorCode,
+        errorDetails: execution.errorDetails,
+        failed: execution.failed,
+        stdout: toCaptureState(execution.stdout),
+        stderr: toCaptureState(execution.stderr),
+      };
+    } finally {
+      await this.cleanupCodeModeRunTempRoot(input.runId, runTempRoot);
+    }
   }
 
   private async executeChildHarness(input: {
@@ -2377,6 +2379,7 @@ export class CapabilitySystemService {
         env: createMinimalSyntheticEnv(),
       });
     } catch (error) {
+      await this.cleanupCodeModeRunTempRoot(input.runId, runTempRoot);
       if (error instanceof CodeModeExecutionBackendUnavailableError) {
         throw error;
       }
@@ -2722,17 +2725,31 @@ export class CapabilitySystemService {
       if (input.signal) {
         input.signal.removeEventListener("abort", abortListener);
       }
+      await this.cleanupCodeModeRunTempRoot(input.runId, runTempRoot);
     }
   }
 
-  private async ensureHarnessFile(): Promise<void> {
-    await fs.mkdir(this.tempRoot, { recursive: true });
-    const nextHash = sha256Text(CODE_MODE_CHILD_SOURCE);
-    const existing = fsSync.existsSync(this.harnessPath) ? await fs.readFile(this.harnessPath, "utf8") : undefined;
-    if (existing && sha256Text(existing) === nextHash) {
+  private async cleanupCodeModeRunTempRoot(runId: string, runTempRoot: string): Promise<void> {
+    const resolvedTempRoot = path.resolve(this.tempRoot);
+    const resolvedRunTempRoot = path.resolve(runTempRoot);
+    const relative = path.relative(resolvedTempRoot, resolvedRunTempRoot);
+    if (
+      relative === "" ||
+      relative.startsWith("..") ||
+      path.isAbsolute(relative) ||
+      !fsSync.existsSync(resolvedRunTempRoot)
+    ) {
       return;
     }
-    await fs.writeFile(this.harnessPath, CODE_MODE_CHILD_SOURCE, "utf8");
+    try {
+      await fs.rm(resolvedRunTempRoot, { recursive: true, force: true });
+    } catch (error) {
+      this.options.publishRealtime("code_mode_temp_cleanup_failed", "capabilities", {
+        runId,
+        path: resolvedRunTempRoot,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async prepareRunHarnessFile(runTempRoot: string): Promise<string> {

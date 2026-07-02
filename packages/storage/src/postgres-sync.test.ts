@@ -5,6 +5,7 @@ import { PostgresSyncDatabaseClient, __postgresSyncInternals } from "./postgres/
 import {
   buildPostgresSyncWorkerPoolConfig,
   handlePostgresSyncWorkerRequest,
+  parsePostgresNumeric,
   serializePostgresSyncWorkerError,
   type PostgresSyncWorkerRuntime,
 } from "./postgres/sync-worker.js";
@@ -135,6 +136,10 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
         }),
       /rollback me/,
     );
+    assert.throws(
+      () => client.transaction("immediate", () => Promise.resolve("async-leak") as never),
+      /callback must be synchronous/,
+    );
     client.close();
     client.close();
     assert.equal(internals.worker.terminate.mock.callCount(), 1);
@@ -158,6 +163,8 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
         "exec",
         "exec",
         "exec",
+        "tx_rollback",
+        "tx_begin",
         "tx_rollback",
         "tx_begin",
         "tx_rollback",
@@ -318,6 +325,8 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
   });
 
   it("covers sync-worker pool config defaults, cached server encoding, and transaction cleanup", async () => {
+    assert.equal(parsePostgresNumeric("42.125"), 42.125);
+
     const connectionStringConfig = buildPostgresSyncWorkerPoolConfig({
       connectionString: " postgres://user:pass@localhost:5432/db ",
       database: "db",

@@ -1,6 +1,7 @@
 import type { TranscriptEvent } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
+import type { TranscriptRetentionPruneResult } from "./transcript-log.js";
 
 interface TranscriptEventRow {
   event_id: string;
@@ -24,6 +25,8 @@ export class PostgresTranscriptLog {
   private readonly insertStmt;
   private readonly readStmt;
   private readonly deleteStmt;
+  private readonly countOlderThanStmt;
+  private readonly deleteOlderThanStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.nextSequenceStmt = db.prepare(`
@@ -93,14 +96,15 @@ export class PostgresTranscriptLog {
       ORDER BY event_sequence ASC, occurred_at ASC
     `);
     this.deleteStmt = db.prepare("DELETE FROM transcript_events WHERE session_id = ?");
+    this.countOlderThanStmt = db.prepare("SELECT COUNT(1) AS count FROM transcript_events WHERE occurred_at < ?");
+    this.deleteOlderThanStmt = db.prepare("DELETE FROM transcript_events WHERE occurred_at < ?");
   }
 
   public async append(event: TranscriptEvent): Promise<number> {
     return this.db.transaction("immediate", () => {
-      const existing = this.existingSequenceStmt.get(
-        event.sessionId,
-        event.eventId,
-      ) as { event_sequence?: number } | undefined;
+      const existing = this.existingSequenceStmt.get(event.sessionId, event.eventId) as
+        | { event_sequence?: number }
+        | undefined;
       if (typeof existing?.event_sequence === "number") {
         return existing.event_sequence;
       }
@@ -124,10 +128,9 @@ export class PostgresTranscriptLog {
         costUsd: event.costUsd ?? null,
       });
       if (insertResult.changes === 0) {
-        const replayed = this.existingSequenceStmt.get(
-          event.sessionId,
-          event.eventId,
-        ) as { event_sequence?: number } | undefined;
+        const replayed = this.existingSequenceStmt.get(event.sessionId, event.eventId) as
+          | { event_sequence?: number }
+          | undefined;
         return Number(replayed?.event_sequence ?? nextSequence);
       }
       return nextSequence;
@@ -146,9 +149,7 @@ export class PostgresTranscriptLog {
       type: row.event_type,
       actorType: row.actor_type,
       actorId: row.actor_id,
-      payload: typeof row.payload === "string"
-        ? safeJsonParse<Record<string, unknown>>(row.payload, {})
-        : row.payload,
+      payload: typeof row.payload === "string" ? safeJsonParse<Record<string, unknown>>(row.payload, {}) : row.payload,
       tokenInput: row.token_input ?? undefined,
       tokenOutput: row.token_output ?? undefined,
       costUsd: row.cost_usd ?? undefined,
@@ -158,6 +159,32 @@ export class PostgresTranscriptLog {
   public async delete(sessionId: string): Promise<void> {
     this.deleteStmt.run(sessionId);
   }
+
+  public async pruneOlderThan(
+    cutoffIso: string,
+    options: { dryRun?: boolean } = {},
+  ): Promise<TranscriptRetentionPruneResult> {
+    const row = this.countOlderThanStmt.get(cutoffIso) as { count?: unknown } | undefined;
+    const removedEvents = coerceCount(row?.count);
+    if (!options.dryRun && removedEvents > 0) {
+      this.deleteOlderThanStmt.run(cutoffIso);
+    }
+    return { removedFiles: 0, removedEvents, reclaimedBytes: 0 };
+  }
+}
+
+function coerceCount(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function sanitizeJsonValueForJsonb(value: unknown): unknown {
@@ -169,10 +196,7 @@ function sanitizeJsonValueForJsonb(value: unknown): unknown {
   }
   if (isPlainObject(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        sanitizeJsonbString(key),
-        sanitizeJsonValueForJsonb(item),
-      ]),
+      Object.entries(value).map(([key, item]) => [sanitizeJsonbString(key), sanitizeJsonValueForJsonb(item)]),
     );
   }
   return value;

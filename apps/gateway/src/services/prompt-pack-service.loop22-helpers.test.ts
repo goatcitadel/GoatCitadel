@@ -15,6 +15,7 @@ import {
   extractPromptPackDiagnosticMetadata,
   pickPromptPackAutoScoreRun,
   pickReplayBaselineScore,
+  PromptPackService,
   requiresPromptPackCitationEvidence,
   resolvePromptPackExecutionProfile,
   resolvePromptPackJudgeServiceTier,
@@ -23,6 +24,26 @@ import {
 } from "./prompt-pack-service.js";
 
 describe("prompt-pack service loop22 exported helper coverage", () => {
+  it("aborts active benchmark controllers and clears lifecycle maps on close", () => {
+    const service = new PromptPackService({} as never, {} as never);
+    const controller = new AbortController();
+    (
+      service as unknown as { activeBenchmarkAbortControllers: Map<string, AbortController> }
+    ).activeBenchmarkAbortControllers.set("benchmark-1", controller);
+    (service as unknown as { activeBenchmarkRunIds: Set<string> }).activeBenchmarkRunIds.add("benchmark-1");
+    (service as unknown as { cancelledBenchmarkRunIds: Set<string> }).cancelledBenchmarkRunIds.add("benchmark-2");
+
+    service.close();
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(
+      (service as unknown as { activeBenchmarkAbortControllers: Map<string, AbortController> })
+        .activeBenchmarkAbortControllers.size,
+    ).toBe(0);
+    expect((service as unknown as { activeBenchmarkRunIds: Set<string> }).activeBenchmarkRunIds.size).toBe(0);
+    expect((service as unknown as { cancelledBenchmarkRunIds: Set<string> }).cancelledBenchmarkRunIds.size).toBe(0);
+  });
+
   it("extracts diagnostic metadata while ignoring empty, duplicate, and unknown rows", () => {
     const extracted = extractPromptPackDiagnosticMetadata(
       [

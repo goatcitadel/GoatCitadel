@@ -148,4 +148,15 @@ export class ChatTurnExecutionRegistry {
   public listActiveStreamsForSession(sessionId: string): ActiveChatTurnStreamExecution[] {
     return [...this.activeStreams.values()].filter((stream) => stream.sessionId === sessionId && !stream.completed);
   }
+
+  public close(reason = "Chat turn execution registry closed."): void {
+    for (const execution of this.activeExecutions.values()) {
+      if (!execution.controller.signal.aborted) {
+        execution.controller.abort(new Error(reason));
+      }
+    }
+    this.activeExecutions.clear();
+    this.activeStreams.clear();
+    this.activeWriteLeases.clear();
+  }
 }

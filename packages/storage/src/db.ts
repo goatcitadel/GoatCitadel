@@ -20,3 +20,13 @@ export interface DatabaseClient {
   close(): void;
   transaction<T>(mode: DbTransactionMode, callback: () => T): T;
 }
+
+export function assertSynchronousTransactionResult(result: unknown): void {
+  if (
+    (typeof result === "object" || typeof result === "function") &&
+    result !== null &&
+    typeof (result as { then?: unknown }).then === "function"
+  ) {
+    throw new TypeError("transaction() callback must be synchronous; it must not return a Promise");
+  }
+}

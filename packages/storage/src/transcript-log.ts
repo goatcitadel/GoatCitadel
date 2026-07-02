@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { TranscriptEvent } from "@goatcitadel/contracts";
@@ -10,6 +11,12 @@ const SAFE_SESSION_FILENAME_RE = /^[A-Za-z0-9._-]+$/u;
 export interface TranscriptLogOptions {
   quarantine?: { record: (entry: QuarantineEntry) => unknown };
   logger?: { warn: (data: unknown, msg: string) => void };
+}
+
+export interface TranscriptRetentionPruneResult {
+  removedFiles: number;
+  removedEvents: number;
+  reclaimedBytes: number;
 }
 
 export class TranscriptLog {
@@ -92,6 +99,14 @@ export class TranscriptLog {
     await fs.rm(filePath, { force: true });
   }
 
+  public async pruneOlderThan(
+    cutoffEpochMs: number,
+    options: { dryRun?: boolean } = {},
+  ): Promise<TranscriptRetentionPruneResult> {
+    await Promise.allSettled([...this.writeQueues.values()]);
+    return pruneTranscriptFilesOlderThan(this.transcriptsDir, cutoffEpochMs, options.dryRun ?? false);
+  }
+
   private filePathForSession(sessionId: string): string {
     const fileName = transcriptFileName(sessionId);
     const root = path.resolve(this.transcriptsDir);
@@ -102,6 +117,52 @@ export class TranscriptLog {
     }
     return filePath;
   }
+}
+
+async function pruneTranscriptFilesOlderThan(
+  rootDir: string,
+  cutoffEpochMs: number,
+  dryRun: boolean,
+): Promise<TranscriptRetentionPruneResult> {
+  let removedFiles = 0;
+  let reclaimedBytes = 0;
+
+  async function visit(dir: string): Promise<void> {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(entryPath);
+      } catch {
+        continue;
+      }
+      if (stat.mtimeMs >= cutoffEpochMs) {
+        continue;
+      }
+      removedFiles += 1;
+      reclaimedBytes += stat.size;
+      if (!dryRun) {
+        await fs.rm(entryPath, { force: true });
+      }
+    }
+  }
+
+  await visit(rootDir);
+  return { removedFiles, removedEvents: 0, reclaimedBytes };
 }
 
 function transcriptFileName(sessionId: string): string {
