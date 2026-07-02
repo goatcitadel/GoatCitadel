@@ -6,6 +6,8 @@ import { env } from "../env.js";
 import { sendRouteError } from "./_error-handler.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
+export const CHAT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+
 export const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
 });
@@ -56,10 +58,18 @@ export async function streamSseReply(
   const controller = new AbortController();
   let closed = false;
   let finished = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  };
   const cleanup = () => {
     if (closed) {
       return;
     }
+    stopHeartbeat();
     closed = true;
     if (!controller.signal.aborted) {
       controller.abort(new Error("chat_sse_client_disconnected"));
@@ -87,6 +97,20 @@ export async function streamSseReply(
   await writeSseChunk(raw, ": connected\n\n", controller.signal);
   raw.on("close", cleanup);
   request.raw.on("aborted", cleanup);
+  heartbeatTimer = setInterval(() => {
+    if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+      stopHeartbeat();
+      return;
+    }
+    void writeSseChunk(raw, ": heartbeat\n\n", controller.signal)
+      .then((wrote) => {
+        if (!wrote) {
+          cleanup();
+        }
+      })
+      .catch(() => cleanup());
+  }, CHAT_SSE_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
 
   const send = async (payload: unknown): Promise<boolean> => {
     if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
@@ -132,6 +156,7 @@ export async function streamSseReply(
     if (!finished) {
       cleanup();
     }
+    stopHeartbeat();
     detach();
     if (!raw.destroyed && !raw.writableEnded) {
       raw.end();

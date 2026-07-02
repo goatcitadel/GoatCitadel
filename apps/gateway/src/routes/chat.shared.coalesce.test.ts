@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { coalesceStreamingDeltas } from "./chat.shared.js";
+import { EventEmitter } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CHAT_SSE_HEARTBEAT_INTERVAL_MS, coalesceStreamingDeltas, streamSseReply } from "./chat.shared.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("coalesceStreamingDeltas", () => {
   it("merges adjacent same-type deltas into one combined chunk within window", async () => {
@@ -63,5 +68,49 @@ describe("coalesceStreamingDeltas", () => {
     // The latest event's metadata wins (eventId/sequence from the last in group).
     expect(out[0]?.eventId).toBe("e3");
     expect(out[0]?.sequence).toBe(3);
+  });
+});
+
+describe("streamSseReply", () => {
+  it("keeps idle chat SSE streams alive with heartbeat comments", async () => {
+    vi.useFakeTimers();
+    const chunks: string[] = [];
+    const raw = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      flushHeaders: vi.fn(),
+      write: vi.fn((chunk: string) => {
+        chunks.push(chunk);
+        return true;
+      }),
+      end: vi.fn(function end(this: { writableEnded: boolean }) {
+        this.writableEnded = true;
+      }),
+    });
+    const requestRaw = new EventEmitter();
+    const reply = {
+      raw,
+      hijack: vi.fn(),
+      getHeader: vi.fn(() => undefined),
+      log: { error: vi.fn() },
+    };
+
+    async function* idleSource(signal: AbortSignal): AsyncGenerator<unknown> {
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield* [];
+    }
+
+    const stream = streamSseReply(reply as never, { raw: requestRaw as never }, "session-heartbeat", idleSource);
+    await vi.waitFor(() => expect(chunks).toContain(": connected\n\n"));
+
+    await vi.advanceTimersByTimeAsync(CHAT_SSE_HEARTBEAT_INTERVAL_MS);
+
+    expect(chunks).toContain(": heartbeat\n\n");
+    raw.emit("close");
+    await stream;
+    expect(raw.end).toHaveBeenCalledTimes(1);
   });
 });
