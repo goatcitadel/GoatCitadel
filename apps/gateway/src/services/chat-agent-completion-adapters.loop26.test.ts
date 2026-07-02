@@ -89,6 +89,43 @@ describe("chat-agent-completion-adapters edge cases", () => {
     ]);
   });
 
+  it("parses JSON tool_call tags only through the selected schema map", () => {
+    const canonical = new Map([
+      ["search_web", "browser.search"],
+      ["browser.search", "browser.search"],
+    ]);
+
+    expect(
+      parseSerializedToolCalls(
+        [
+          '<tool_call>{"id":"call-json-1","name":"search_web","arguments":{"query":"gateway"}}</tool_call>',
+          '<tool_call>{"name":"fs.write","arguments":{"path":"secret"}}</tool_call>',
+          '<tool_call>{"function":{"name":"browser.search","arguments":"{\\"query\\":\\"fallback\\"}"}}</tool_call>',
+        ].join(""),
+        canonical,
+      ),
+    ).toEqual([
+      {
+        id: "call-json-1",
+        toolName: "browser.search",
+        args: { query: "gateway" },
+        rawArguments: JSON.stringify({ query: "gateway" }),
+      },
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: { query: "fallback" },
+        rawArguments: JSON.stringify({ query: "fallback" }),
+      }),
+    ]);
+
+    expect(
+      parseSerializedToolCalls(
+        '<tool_call>{"name":"browser.search","arguments":{"query":"blocked without map"}}</tool_call>',
+        new Map(),
+      ),
+    ).toEqual([]);
+  });
+
   it("normalizes provider tool names without colliding with existing names", () => {
     expect(resolveAllowedModelToolCallName("browser.search", new Map())).toBeUndefined();
     expect(resolveAllowedModelToolCallName("blocked", new Map([["model_search", "browser.search"]]))).toBeUndefined();

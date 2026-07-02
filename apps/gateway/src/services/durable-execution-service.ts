@@ -214,7 +214,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
 
 type DurableProactiveTickWorkflowHost = Pick<
   DurableExecutionHost,
-  "chatProactiveService" | "gatewaySql" | "listChatSessionProactiveRuns" | "publishRealtime"
+  "chatProactiveService" | "gatewaySql" | "isFeatureEnabled" | "listChatSessionProactiveRuns" | "publishRealtime"
 >;
 
 type DurableApprovalWaitWorkflowHost = DurableWorkflowCompletionHost & Pick<DurableExecutionHost, "storage">;
@@ -229,6 +229,7 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
     | "commsUnsend"
     | "commsTyping"
     | "commsActivity"
+    | "isFeatureEnabled"
     | "invokeMcpTool"
     | "publishRealtime"
     | "resolveDurableRunHookWorkspaceId"
@@ -301,6 +302,35 @@ function buildConnectorDeliveryRealtimeLinks(input: {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isAutonomyKillSwitchEnabled(host: { isFeatureEnabled?(feature: string): boolean }): boolean {
+  return host.isFeatureEnabled?.("autonomyV1Disabled") === true;
+}
+
+function isAutonomousDurableRun(run: DurableRunRecord): boolean {
+  if (run.workflowKey === "proactive.tick") {
+    return true;
+  }
+  const metadata = run.metadata as Record<string, unknown> | undefined;
+  const autonomous = metadata?.autonomous;
+  return (
+    autonomous === true ||
+    (typeof autonomous === "object" && autonomous !== null) ||
+    metadata?.deliveryKind === "autonomous.assistant_message"
+  );
+}
+
+function assertAutonomousDurableRunAllowed(
+  host: { isFeatureEnabled?(feature: string): boolean },
+  run: DurableRunRecord,
+): void {
+  if (!isAutonomousDurableRun(run) || !isAutonomyKillSwitchEnabled(host)) {
+    return;
+  }
+  throw new Error(
+    `Autonomous durable workflow ${run.workflowKey} (${run.runId}) is blocked while the autonomy kill switch is engaged (autonomyV1Disabled).`,
+  );
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -557,7 +587,10 @@ export function buildDurableWorkflowExecutors(
       markUnrecoverable: (run, reason) => markDurableChatTurnUnrecoverable(hosts.chatTurn, run, reason),
     },
     "proactive.tick": {
-      execute: (run, context) => hosts.proactiveTick.chatProactiveService.executeDurableProactiveTickRun(run, context),
+      execute: (run, context) => {
+        assertAutonomousDurableRunAllowed(hosts.proactiveTick, run);
+        return hosts.proactiveTick.chatProactiveService.executeDurableProactiveTickRun(run, context);
+      },
       isRecoverable: (run) =>
         parseProactiveTickWorkflowPayload(run)
           ? { recoverable: true }
@@ -1027,6 +1060,7 @@ export async function executeDurableConnectorDeliveryRun(
   context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
   throwIfDurableWorkflowAborted(context);
+  assertAutonomousDurableRunAllowed(host, run);
   const payload = parseConnectorDeliveryWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable connector delivery payload is invalid or incomplete.");
@@ -1152,6 +1186,7 @@ export async function executeDurableChatTurnRun(
   context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
   throwIfDurableWorkflowAborted(context);
+  assertAutonomousDurableRunAllowed(host, run);
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
     throw new Error("Durable chat run payload is invalid or incomplete.");
@@ -1271,6 +1306,9 @@ export function maybeEnqueueAutonomousDelivery(
 ): string | undefined {
   const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
   if (!autonomous || typeof autonomous !== "object") {
+    return undefined;
+  }
+  if (isAutonomyKillSwitchEnabled(host)) {
     return undefined;
   }
   const deliveryChannel = autonomous.deliveryChannel;

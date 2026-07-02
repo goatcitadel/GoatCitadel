@@ -63,7 +63,7 @@ afterEach(async () => {
 });
 
 describe("MemoryContextService", () => {
-  it("throws an error if compiled memory context contains prompt injection", async () => {
+  it("withholds compiled memory context that contains prompt injection", async () => {
     const rootDir = await createWorkspaceRoot();
     await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
     await fs.writeFile(
@@ -73,20 +73,32 @@ describe("MemoryContextService", () => {
     );
     const storage = createStorage();
     const llmService = createLlmService();
+    const publishRealtime = vi.fn();
     const service = new MemoryContextService(
       storage as never,
       llmService as never,
       createConfig(rootDir) as never,
-      vi.fn(),
+      publishRealtime,
     );
 
-    await expect(
-      service.compose({
-        scope: "chat",
-        prompt: "The operator asked about memory note.",
-        sessionId: "session-1",
-      }),
-    ).rejects.toThrow(/Memory context failed prompt-injection scan/i);
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "The operator asked about memory note.",
+      sessionId: "session-1",
+    });
+
+    expect(pack.quality).toEqual({
+      status: "fallback",
+      reason: "prompt_injection_detected_in_memory_context",
+    });
+    expect(pack.contextText).toContain("Fallback Context");
+    expect(pack.contextText).not.toContain("disregard all previous instructions");
+    expect(pack.citations).toEqual([]);
+    expect(storage.memoryQmdRuns.list(5).map((run) => run.status)).toContain("fallback");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "memory_qmd_fallback",
+      expect.objectContaining({ reason: "prompt_injection_detected_in_memory_context" }),
+    );
   });
 
   it("short-circuits to fallback context when QMD is disabled or the prompt is too short", async () => {
@@ -350,6 +362,63 @@ describe("MemoryContextService", () => {
         errorText: "distiller returned invalid citations: missing-candidate",
       }),
     );
+  });
+
+  it("falls back when distilled facts reference citations the distiller did not return", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "workspace", "memory", "gamma.md"), "Gamma launch needs a QA gate.", "utf8");
+    const storage = createStorage();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService({
+        chatCompletions: vi.fn(
+          async (): Promise<ChatCompletionResponse> => ({
+            id: "chatcmpl-memory-invalid-fact",
+            object: "chat.completion",
+            created: 1,
+            model: "gpt-test",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    summary: "Gamma needs QA.",
+                    facts: [{ text: "Gamma launch needs a QA gate.", citationIds: ["missing-fact-citation"] }],
+                    citations: [
+                      {
+                        candidateId: "f:memory/gamma.md#0",
+                        sourceType: "file",
+                        sourceRef: "memory/gamma.md",
+                        score: 0.9,
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
+      }) as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "What does Gamma need before launch?",
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    expect(pack.quality).toEqual({
+      status: "fallback",
+      reason: "distiller returned facts with invalid citations: missing-fact-citation",
+    });
+    expect(pack.contextText).toContain("Fallback Context:");
+    expect(pack.contextText).not.toContain("missing-fact-citation");
   });
 
   it("includes active lifecycle memory items with semantic-vector retrieval signals", async () => {

@@ -52,7 +52,7 @@ export async function executeOrchestrationPlan(input: {
       completedSteps.push(execution);
       await input.callbacks.onStepResult?.(execution, [...completedSteps]);
     }
-    if (executions.some((execution) => execution.status === "running")) {
+    if (executions.some((execution) => isWaitingOrRunningStep(execution))) {
       break;
     }
     // A failed step that still produced usable output (e.g. a researcher whose
@@ -126,7 +126,13 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 function validateOrchestrationPlan(plan: OrchestrationPlan): void {
-  const byId = new Map(plan.steps.map((step) => [step.stepId, step]));
+  const byId = new Map<string, OrchestrationPlan["steps"][number]>();
+  for (const step of plan.steps) {
+    if (byId.has(step.stepId)) {
+      throw new Error(`Malformed orchestration plan: duplicate step id ${step.stepId}.`);
+    }
+    byId.set(step.stepId, step);
+  }
   const visiting = new Set<string>();
   const visited = new Set<string>();
 
@@ -163,6 +169,10 @@ function validateOrchestrationPlan(plan: OrchestrationPlan): void {
   for (const step of plan.steps) {
     visit(step.stepId, []);
   }
+}
+
+function isWaitingOrRunningStep(step: OrchestrationStepExecutionResult): boolean {
+  return step.status === "running" || step.waitStatus !== undefined;
 }
 
 function isUsableHandoffStep(step: OrchestrationStepExecutionResult | undefined): boolean {
@@ -587,7 +597,7 @@ function buildFinalOutput(
     return finalStep.output.trim();
   }
   const waitingLines = steps
-    .filter((step) => step.status === "running")
+    .filter((step) => isWaitingOrRunningStep(step))
     .map((step) => `- ${toTitleCase(step.role)}: ${step.output ?? step.summary ?? "waiting on delegated work"}`);
   if (waitingLines.length > 0) {
     return [
@@ -651,7 +661,7 @@ async function repairFinalOutputIfNeeded(input: {
   integritySignals?: string[];
 }> {
   const childFailureSignals = collectChildFailureIntegritySignals(input.steps);
-  if (input.steps.some((step) => step.status === "running")) {
+  if (input.steps.some((step) => isWaitingOrRunningStep(step))) {
     return {
       output: input.initialOutput,
       finalStep: input.finalStep,

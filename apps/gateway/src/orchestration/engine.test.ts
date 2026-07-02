@@ -313,6 +313,23 @@ describe("orchestration engine", () => {
     expect(createChatCompletion).not.toHaveBeenCalled();
   });
 
+  it("rejects orchestration plans with duplicate step ids before dependency resolution", async () => {
+    const plan = createPlan();
+    const createChatCompletion = vi.fn();
+
+    await expect(
+      executeOrchestrationPlan({
+        task: createTask(),
+        plan: {
+          ...plan,
+          steps: plan.steps.map((step) => (step.stepId === "step-2" ? { ...step, stepId: "step-1" } : step)),
+        },
+        callbacks: { createChatCompletion },
+      }),
+    ).rejects.toThrow(/duplicate step id step-1/i);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
   it("rejects orchestration plans with dependency cycles before execution", async () => {
     const plan = createPlan();
 
@@ -451,6 +468,73 @@ describe("orchestration engine", () => {
 
     expect(started).toEqual(["first", "second", "synthesis"]);
     expect(result.finalOutput).toBe("Merged synthesis");
+  });
+
+  it("pauses downstream stages when a delegated dependency is waiting", async () => {
+    const createChatCompletion = vi.fn();
+    const executeDelegatedStep = vi.fn(async () => ({
+      stepId: "step-1",
+      role: "researcher" as const,
+      label: "Research",
+      index: 0,
+      startedAt: NOW,
+      status: "running" as const,
+      waitStatus: "waiting_for_approval" as const,
+      output: "Delegate is waiting for approval.",
+      summary: "Waiting for approval.",
+      childRunId: "child-run-1",
+      childSessionId: "child-session-1",
+      childTurnId: "child-turn-1",
+      citations: [],
+    }));
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan: {
+        ...createPlan(),
+        workflowTemplate: "cowork.research.synthesize",
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "researcher",
+            label: "Research",
+            stage: 1,
+            objective: "Gather delegated evidence.",
+            parallelizable: false,
+            delegatedRole: "researcher",
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "synthesizer",
+            label: "Synthesis",
+            stage: 2,
+            objective: "Merge delegated evidence.",
+            parallelizable: false,
+            dependsOnStepIds: ["step-1"],
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+          },
+        ],
+      },
+      callbacks: {
+        createChatCompletion,
+        executeDelegatedStep,
+      },
+    });
+
+    expect(executeDelegatedStep).toHaveBeenCalledTimes(1);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(result.stepResults).toHaveLength(1);
+    expect(result.stepResults[0]).toMatchObject({
+      stepId: "step-1",
+      status: "running",
+      waitStatus: "waiting_for_approval",
+      childRunId: "child-run-1",
+    });
+    expect(result.finalOutput).toContain("orchestrated workflow is waiting");
+    expect(result.integritySignals).toContain("orchestration_waiting_on_child");
   });
 
   it("passes expanded labeled handoffs into workstream synthesis and repairs missing sections", async () => {

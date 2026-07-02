@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 const PROMPT_INJECTION_MARKERS = [
   /\bignore (?:all )?(?:previous|prior|above) (?:instructions|messages|rules)\b/i,
   /\bdisregard (?:all )?(?:previous|prior|above) (?:instructions|messages|rules)\b/i,
+  /\b(?:ignore|disregard|override) (?:the )?(?:system|developer) (?:prompt|message|instructions|rules)\b/i,
+  /\bdo not follow (?:the )?(?:system|developer|previous|prior|above) (?:prompt|message|instructions|rules)\b/i,
   /\boverride (?:the )?(?:system|developer) (?:prompt|message|instructions)\b/i,
   /\breveal (?:the )?(?:system|developer) (?:prompt|message|instructions)\b/i,
   /\byou are now (?:in|under) developer mode\b/i,

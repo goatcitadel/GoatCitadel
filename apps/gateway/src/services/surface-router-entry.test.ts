@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyAutoRouteToInput, applySurfaceRoutingPreflight, recordModeOverrideIfChanged, hashPromptFeatures } from "./surface-router-entry.js";
+import {
+  applyAutoRouteToInput,
+  applySurfaceRoutingPreflight,
+  recordModeOverrideIfChanged,
+  hashPromptFeatures,
+} from "./surface-router-entry.js";
 
 function makeHost(overrides: Record<string, unknown> = {}) {
   return {
     surfaceRouter: {
-      route: vi.fn(async () => ({ mode: "code", confidence: 0.85, source: "heuristic", rationale: "x", alternatives: [] })),
+      route: vi.fn(async () => ({
+        mode: "code",
+        confidence: 0.85,
+        source: "heuristic",
+        rationale: "x",
+        alternatives: [],
+      })),
     },
     readChatSessionMode: vi.fn(() => undefined),
     persistChatSessionMode: vi.fn(),
@@ -26,11 +37,12 @@ describe("applyAutoRouteToInput", () => {
     expect(host.surfaceRouter.route).toHaveBeenCalledTimes(1);
   });
 
-  it("auto-routes even if a mode was previously persisted (gated only by the autoRoute flag)", async () => {
+  it("reuses the persisted sticky mode instead of reclassifying later autoRoute turns", async () => {
     const host = makeHost({ readChatSessionMode: vi.fn(() => "cowork") });
     const out = await applyAutoRouteToInput(host as never, "s1", { content: "run tests in the repo", autoRoute: true });
-    expect(out.mode).toBe("code");
-    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "code");
+    expect(out.mode).toBe("cowork");
+    expect(host.surfaceRouter.route).not.toHaveBeenCalled();
+    expect(host.persistChatSessionMode).not.toHaveBeenCalled();
   });
 
   it("does nothing when autoRoute is not set", async () => {
@@ -97,7 +109,11 @@ describe("applySurfaceRoutingPreflight", () => {
 
   it("calls onError and returns original input when router throws", async () => {
     const host = makeHost({
-      surfaceRouter: { route: vi.fn(async () => { throw new Error("judge boom"); }) },
+      surfaceRouter: {
+        route: vi.fn(async () => {
+          throw new Error("judge boom");
+        }),
+      },
     });
     const onError = vi.fn();
     const original = { content: "run tests in the repo", autoRoute: true };

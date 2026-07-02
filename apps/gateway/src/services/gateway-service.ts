@@ -1670,6 +1670,7 @@ export class GatewayService {
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
+          isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
           listChatSessionProactiveRuns: (sessionId, limit) =>
             this.chatProactiveService.listChatSessionProactiveRuns(sessionId, limit),
           publishRealtime: (eventType, source, payload, options) => {
@@ -1695,6 +1696,7 @@ export class GatewayService {
           commsUnsend: (input) => this.commsUnsend(input),
           commsTyping: (input) => this.commsTyping(input),
           commsActivity: (input) => this.commsActivity(input),
+          isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
           invokeMcpTool: (input) => this.invokeMcpTool(input),
           resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
           publishRealtime: (eventType, source, payload, options) => {
@@ -5743,6 +5745,9 @@ export class GatewayService {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
     }
+    if (this.isFeatureEnabled("autonomyV1Disabled")) {
+      throw new Error("Autonomous chat turn execution is disabled while the autonomy kill switch is engaged.");
+    }
     const kind: AutonomousTurnKind = input.kind ?? "scheduled";
     const permissionProfileId =
       kind === "heartbeat" ? HEARTBEAT_PERMISSION_PROFILE_ID : SCHEDULED_TURN_PERMISSION_PROFILE_ID;
@@ -6875,6 +6880,9 @@ export class GatewayService {
     input: durableExecutionService.AutonomousChannelDeliveryRequest,
   ): string | undefined {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return undefined;
+    }
+    if (this.isFeatureEnabled("autonomyV1Disabled")) {
       return undefined;
     }
     const message = input.assistantText.trim();
