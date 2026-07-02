@@ -1,5 +1,6 @@
 import {
   memo,
+  useEffect,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -302,10 +303,24 @@ export function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) 
           <p className="mc-next-thread-meta">
             <strong>Notice</strong> · <ActorTimestamp timestamp={notice.timestamp} />
           </p>
-          <p>{notice.content}</p>
+          <NoticeContent content={notice.content} />
         </li>
       ))}
     </ul>
+  );
+}
+
+function NoticeContent({ content }: { content: string }) {
+  const lines = content.split(/\r?\n/);
+  return (
+    <p className="mc-next-thread-notice-content">
+      {lines.map((line, index) => (
+        <span key={index}>
+          {index > 0 ? <br /> : null}
+          {line}
+        </span>
+      ))}
+    </p>
   );
 }
 
@@ -352,6 +367,9 @@ function TurnEvidenceSummary({
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const [open, setOpen] = useState(expandedByDefault);
+  useEffect(() => {
+    setOpen(expandedByDefault);
+  }, [expandedByDefault, turn.turnId]);
   const summaryChips = [
     turn.trace.status,
     turn.toolRuns.length > 0 ? `${turn.toolRuns.length} tool${turn.toolRuns.length === 1 ? "" : "s"}` : null,
@@ -680,12 +698,11 @@ export function ChatThreadDelegationSummary({
   if (!delegationRun) {
     return null;
   }
-  const { completedCount, failedCount, skippedCount, runningCount, currentStep } = summarizeDelegationSteps(
-    delegationRun.steps,
-  );
+  const { completedCount, failedCount, pendingCount, skippedCount, runningCount, currentStep } =
+    summarizeDelegationSteps(delegationRun.steps);
   const isCowork = mode === "cowork";
   const formatStepLabel = (step: ChatDelegationStepView) => step.label?.trim() || toTitleCase(step.role);
-  const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
+  const countsLine = `Completed ${completedCount} · Running ${runningCount} · Pending ${pendingCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
   const runChips = buildDelegationRunChips(delegationRun);
 
   if (isCowork) {
@@ -764,7 +781,8 @@ export function ChatThreadDelegationSummary({
         </p>
         <p>{delegationRun.objective}</p>
         <p>
-          Completed {completedCount} · Running {runningCount} · Failed {failedCount} · Skipped {skippedCount}
+          Completed {completedCount} · Running {runningCount} · Pending {pendingCount} · Failed {failedCount} · Skipped{" "}
+          {skippedCount}
         </p>
         <ol className="mc-next-thread-step-list">
           {delegationRun.steps.map((step) => (

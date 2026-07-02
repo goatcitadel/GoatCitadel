@@ -447,6 +447,47 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.result.secondaryLoading).toBe(false);
   });
 
+  it("ignores stale selected-session loads after the selection clears", async () => {
+    let resolveThread!: (value: ChatThreadResponse) => void;
+    fetchChatThreadMock.mockReturnValueOnce(
+      new Promise<ChatThreadResponse>((resolve) => {
+        resolveThread = resolve;
+      }),
+    );
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-stale-load" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+
+    expect(fetchChatThreadMock).toHaveBeenCalledWith("session-1");
+    expect(latestHarness?.result.messagesLoading).toBe(true);
+
+    await act(async () => {
+      latestHarness?.setSelectedSessionId(null);
+      await flushEffects();
+    });
+
+    const applyCountAfterClear = latestHarness?.applyFetchedThread.mock.calls.length ?? 0;
+    expect(latestHarness?.result.thread).toBeNull();
+    expect(latestHarness?.result.prefs).toBeNull();
+    expect(latestHarness?.result.messagesLoading).toBe(false);
+
+    await act(async () => {
+      resolveThread(makeThread("session-1"));
+      await flushEffects(6);
+    });
+    renderer?.unmount();
+
+    expect(latestHarness?.applyFetchedThread).toHaveBeenCalledTimes(applyCountAfterClear);
+    expect(latestHarness?.result.thread).toBeNull();
+    expect(latestHarness?.result.prefs).toBeNull();
+    expect(latestHarness?.result.generatedArtifacts).toBeNull();
+    expect(latestHarness?.result.messagesLoading).toBe(false);
+    expect(latestHarness?.result.secondaryLoading).toBe(false);
+  });
+
   it("expires dev bootstrap cache entries and covers guarded/full refresh paths", async () => {
     vi.useFakeTimers();
     let resolveProjects!: (value: unknown) => void;

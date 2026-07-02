@@ -203,8 +203,10 @@ export default defineConfig(({ mode }) => {
             if (normalized.includes("/node_modules/three/")) {
               return "vendor-three";
             }
+            if (normalized.includes("/node_modules/@assistant-ui/")) {
+              return "vendor-assistant-ui";
+            }
             if (
-              normalized.includes("/node_modules/@assistant-ui/") ||
               normalized.includes("/node_modules/react-markdown/") ||
               normalized.includes("/node_modules/remark-gfm/")
             ) {

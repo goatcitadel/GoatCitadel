@@ -22,4 +22,24 @@ describe("mission-control-next vite config", () => {
       "dev.example.test",
     ]);
   });
+
+  it("splits assistant-ui and markdown renderer dependencies into focused lazy chunks", async () => {
+    const config =
+      typeof viteConfig === "function"
+        ? await viteConfig({ command: "build", mode: "production", isPreview: false, isSsrBuild: false })
+        : await viteConfig;
+    const output = config.build?.rollupOptions?.output;
+    const manualChunks = (Array.isArray(output) ? output[0] : output)?.manualChunks;
+
+    expect(typeof manualChunks).toBe("function");
+    expect(
+      (manualChunks as (id: string) => string | undefined)("C:/repo/node_modules/@assistant-ui/react/index.js"),
+    ).toBe("vendor-assistant-ui");
+    expect((manualChunks as (id: string) => string | undefined)("C:/repo/node_modules/react-markdown/index.js")).toBe(
+      "vendor-markdown",
+    );
+    expect((manualChunks as (id: string) => string | undefined)("C:/repo/node_modules/remark-gfm/index.js")).toBe(
+      "vendor-markdown",
+    );
+  });
 });

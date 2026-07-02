@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
 import TestRenderer from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThreadedTimeline } from "./ThreadedTimeline";
+import { ThreadedTimeline, resolveStreamingPreviewScrollSignal } from "./ThreadedTimeline";
 import {
   publishChannelActivityFromRealtimeEvent,
   resetChannelActivitySnapshots,
@@ -332,8 +332,29 @@ describe("ThreadedTimeline", () => {
     });
     TestRenderer.act(() => {
       publishChannelActivityFromRealtimeEvent({
-        eventId: "activity-1",
+        eventId: "activity-unrelated",
         sequence: 1,
+        eventType: "channel_activity_updated",
+        source: "channels",
+        timestamp: "2026-05-23T00:00:00.000Z",
+        payload: {
+          connectionId: "conn-2",
+          channelKey: "slack",
+          target: "chat-2",
+          messageId: "other-message",
+          phase: "sending",
+          emoji: "*",
+          label: "Other message sending",
+          sessionId: "other-session",
+        },
+      });
+    });
+    expect(renderedText(renderer)).not.toContain("Other message sending");
+
+    TestRenderer.act(() => {
+      publishChannelActivityFromRealtimeEvent({
+        eventId: "activity-1",
+        sequence: 2,
         eventType: "channel_activity_updated",
         source: "channels",
         timestamp: "2026-05-23T00:00:00.000Z",
@@ -357,6 +378,29 @@ describe("ThreadedTimeline", () => {
       resetChannelActivitySnapshots();
       renderer.unmount();
     });
+  });
+
+  it("preserves notice newlines in the transcript card", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedTimeline
+        props={
+          buildProps({
+            notices: [
+              {
+                id: "notice-lines",
+                tone: "warning",
+                content: "Tool queue is paused.\nResume it when approvals clear.",
+                timestamp: "2026-04-30T00:00:03.000Z",
+              },
+            ],
+          }) as any
+        }
+      />,
+    );
+
+    expect(markup).toContain("Tool queue is paused.");
+    expect(markup).toContain("Resume it when approvals clear.");
+    expect(markup).toContain("<br/>");
   });
 
   it("lets operators expand citation evidence beyond the compact first six", () => {
@@ -843,6 +887,14 @@ describe("ThreadedTimeline", () => {
             index: 1,
             error: "Could not validate source freshness.",
           },
+          {
+            stepId: "step-3",
+            role: "ops",
+            label: "Ops",
+            status: "pending",
+            index: 2,
+            summary: "Waiting for QA recovery.",
+          },
         ],
         stitchedOutput: "Final synthesis",
       },
@@ -873,6 +925,7 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("run-1");
     expect(renderedText(renderer)).toContain("Architect Lead");
     expect(renderedText(renderer)).toContain("Could not validate source freshness.");
+    expect(renderedText(renderer)).toContain("Pending 1");
     expect(renderedText(renderer)).toContain("Final synthesis");
     expect(renderedText(renderer)).toContain("Tool queue is backed up.");
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
@@ -953,7 +1006,50 @@ describe("ThreadedTimeline", () => {
     scrollIntoView.mockRestore();
   });
 
-  it("keeps auto-follow pinned as the visible streaming preview grows", async () => {
+  it("buckets streaming-preview growth before nudging auto-follow", () => {
+    const firstSignal = resolveStreamingPreviewScrollSignal(
+      {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "x".repeat(12),
+        visibleText: "x".repeat(12),
+        isRunning: true,
+        updatedAt: 1,
+      },
+      "turn-1",
+    );
+    const sameBucketSignal = resolveStreamingPreviewScrollSignal(
+      {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "x".repeat(80),
+        visibleText: "x".repeat(80),
+        isRunning: true,
+        updatedAt: 2,
+      },
+      "turn-1",
+    );
+    const nextBucketSignal = resolveStreamingPreviewScrollSignal(
+      {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "x".repeat(140),
+        visibleText: "x".repeat(140),
+        isRunning: true,
+        updatedAt: 3,
+      },
+      "turn-1",
+    );
+
+    expect(sameBucketSignal).toBe(firstSignal);
+    expect(nextBucketSignal).not.toBe(firstSignal);
+    expect(resolveStreamingPreviewScrollSignal(null, "turn-1")).toBe("turn-1");
+  });
+
+  it("keeps auto-follow pinned as meaningful visible streaming preview growth crosses buckets", async () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -996,6 +1092,26 @@ describe("ThreadedTimeline", () => {
                 ...props.streamingPreview,
                 visibleText: "Streaming answer with more visible text",
                 updatedAt: 2,
+              },
+            } as any
+          }
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline
+          props={
+            {
+              ...props,
+              streamingPreview: {
+                ...props.streamingPreview,
+                visibleText: "x".repeat(140),
+                updatedAt: 3,
               },
             } as any
           }
@@ -1144,7 +1260,7 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("used anthropic · claude-sonnet · messages");
     expect(text).toContain("requested openai · gpt-5");
     expect(text).toContain("fallback: primary rate limited");
-    expect(text).toContain("Completed 0 · Running 0 · Failed 0 · Skipped 0");
+    expect(text).toContain("Completed 0 · Running 0 · Pending 0 · Failed 0 · Skipped 0");
     expect(text).not.toContain("Now:");
   });
 
@@ -1168,6 +1284,49 @@ describe("ThreadedTimeline", () => {
 
     renderer.update(<ThreadedTimeline props={{ ...props, selectedTurnId: "turn-1" } as any} />);
     expect(renderedText(renderer)).not.toContain("used anthropic · claude-sonnet · messages");
+  });
+
+  it("resets evidence expansion when a streaming chat turn settles", () => {
+    const props = buildProps({
+      mode: "chat",
+      delegationRun: null,
+      streamStatus: "streaming",
+      activeStreamingTurnId: "turn-1",
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "Streaming answer",
+        visibleText: "Streaming answer",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+    props.thread.turns[0].trace.status = "running";
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const evidenceDetails = () =>
+      renderer.root.find(
+        (node) =>
+          node.type === "details" && String(node.props.className ?? "").startsWith("mc-next-turn-evidence-summary"),
+      );
+
+    expect(evidenceDetails().props.open).toBe(true);
+
+    const settledProps = buildProps({
+      mode: "chat",
+      delegationRun: null,
+      streamStatus: "idle",
+      activeStreamingTurnId: null,
+      streamingPreview: null,
+    });
+    settledProps.thread.turns[0].trace.status = "completed";
+
+    TestRenderer.act(() => {
+      renderer.update(<ThreadedTimeline props={settledProps as any} />);
+    });
+
+    expect(evidenceDetails().props.open).toBe(false);
   });
 
   it("windows long transcripts while keeping selected, context-pinned, streaming, and recent turns rendered", () => {
@@ -1289,8 +1448,15 @@ describe("ThreadedTimeline", () => {
           {
             stepId: "step-3",
             role: "ops",
-            status: "skipped",
+            status: "pending",
             index: 2,
+            summary: "Waiting for QA.",
+          },
+          {
+            stepId: "step-4",
+            role: "release",
+            status: "skipped",
+            index: 3,
             error: "Waiting for QA.",
           },
         ],
@@ -1300,7 +1466,7 @@ describe("ThreadedTimeline", () => {
 
     const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
     expect(renderedText(renderer)).toContain("Cowork activity");
-    expect(renderedText(renderer)).toContain("Completed 1 · Running 1 · Failed 0 · Skipped 1");
+    expect(renderedText(renderer)).toContain("Completed 1 · Running 1 · Pending 1 · Failed 0 · Skipped 1");
     expect(renderedText(renderer)).toContain("Now: QA");
 
     const openDetails = renderer.root.find(

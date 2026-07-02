@@ -1,6 +1,5 @@
 import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
 
-const FENCED_CODE_BLOCK_RE = /(```[\s\S]*?```)/g;
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
 const RAW_HTML_DANGLING_TAG_RE = /<[A-Za-z][^<\n]{0,1000}$/gm;
@@ -98,9 +97,9 @@ export function decodeJsonUnicodeEscapes(content: string): string {
 }
 
 function stripHtmlNoiseOutsideCode(content: string): string {
-  const parts = content.split(FENCED_CODE_BLOCK_RE);
+  const parts = splitMarkdownFenceSegments(content);
   const normalized = parts
-    .map((part) => (part.startsWith("```") ? part : stripHtmlNoise(part)))
+    .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value)))
     .join("")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -118,9 +117,113 @@ function stripHtmlNoise(content: string): string {
     .replace(RAW_HTML_TAG_RE, "")
     .replace(RAW_HTML_DANGLING_TAG_RE, "")
     .split("\n")
-    .map((line) => line.replace(/[ \t\f\v]+/g, " ").trimEnd())
-    .join("\n")
-    .replace(/[ \t\f\v]{2,}/g, " ");
+    .map(preserveMarkdownIndentation)
+    .join("\n");
+}
+
+type MarkdownFenceSegment = { kind: "text" | "code"; value: string };
+
+function splitMarkdownFenceSegments(content: string): MarkdownFenceSegment[] {
+  const segments: MarkdownFenceSegment[] = [];
+  let inFence = false;
+  let fenceChar: "`" | "~" | null = null;
+  let fenceLength = 0;
+  let textStart = 0;
+  let codeStart = -1;
+  let lineStart = 0;
+
+  for (let index = 0; index <= content.length; index += 1) {
+    const atLineEnd = index === content.length || content[index] === "\n";
+    if (!atLineEnd) {
+      continue;
+    }
+    const line = content.slice(lineStart, index);
+    if (!inFence) {
+      const opening = matchMarkdownFenceOpening(line);
+      if (opening) {
+        const lineEnd = index + (content[index] === "\n" ? 1 : 0);
+        if (lineStart > textStart) {
+          segments.push({ kind: "text", value: content.slice(textStart, lineStart) });
+        }
+        codeStart = lineStart;
+        if (hasSameLineFenceClose(line, opening.char, opening.length, opening.start + opening.length)) {
+          segments.push({ kind: "code", value: content.slice(codeStart, lineEnd) });
+          textStart = lineEnd;
+          codeStart = -1;
+        } else {
+          inFence = true;
+          fenceChar = opening.char;
+          fenceLength = opening.length;
+        }
+      }
+    } else if (fenceChar && matchMarkdownFenceClosing(line, fenceChar, fenceLength)) {
+      const lineEnd = index + (content[index] === "\n" ? 1 : 0);
+      segments.push({ kind: "code", value: content.slice(codeStart, lineEnd) });
+      textStart = lineEnd;
+      codeStart = -1;
+      inFence = false;
+      fenceChar = null;
+      fenceLength = 0;
+    }
+    lineStart = index + 1;
+  }
+
+  if (inFence && codeStart >= 0) {
+    segments.push({ kind: "code", value: content.slice(codeStart) });
+    textStart = content.length;
+  }
+  if (textStart < content.length) {
+    segments.push({ kind: "text", value: content.slice(textStart) });
+  }
+  return segments.length > 0 ? segments : [{ kind: "text", value: "" }];
+}
+
+function matchMarkdownFenceOpening(line: string): { char: "`" | "~"; length: number; start: number } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+  if (!match) {
+    return null;
+  }
+  const marker = match[2]!;
+  return { char: marker[0] as "`" | "~", length: marker.length, start: match[1]!.length };
+}
+
+function matchMarkdownFenceClosing(line: string, fenceChar: "`" | "~", fenceLength: number): boolean {
+  const marker = fenceChar.repeat(fenceLength);
+  const match = new RegExp(`^ {0,3}${escapeRegExp(marker)}+`).exec(line);
+  if (!match) {
+    return false;
+  }
+  return line.slice(match[0].length).trim().length === 0;
+}
+
+function hasSameLineFenceClose(line: string, fenceChar: "`" | "~", fenceLength: number, searchStart: number): boolean {
+  for (let index = searchStart; index <= line.length - fenceLength; index += 1) {
+    if (line[index] !== fenceChar) {
+      continue;
+    }
+    let markerLength = 0;
+    while (line[index + markerLength] === fenceChar) {
+      markerLength += 1;
+    }
+    if (markerLength >= fenceLength && line.slice(index + markerLength).trim().length === 0) {
+      return true;
+    }
+    index += Math.max(0, markerLength - 1);
+  }
+  return false;
+}
+
+function preserveMarkdownIndentation(line: string): string {
+  const indent = /^[ \t\f\v]*/.exec(line)?.[0] ?? "";
+  const rest = line
+    .slice(indent.length)
+    .replace(/[ \t\f\v]{2,}/g, " ")
+    .trimEnd();
+  return `${indent}${rest}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripRawHtmlComments(content: string): string {

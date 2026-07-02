@@ -193,11 +193,13 @@ export class ChatStreamingPreviewBuffer {
   }
 
   finish(options: ChatStreamingPreviewFinishOptions = {}): ChatStreamingPreview | null {
+    const finalTextDivergesFromVisiblePrefix =
+      options.finalText !== undefined && this.visibleText.length > 0 && !options.finalText.startsWith(this.visibleText);
     if (options.finalText !== undefined) {
       this.text = options.finalText;
     }
     const shouldClear = options.clear !== false;
-    const forceVisible = options.forceVisible ?? true;
+    const forceVisible = finalTextDivergesFromVisiblePrefix ? true : (options.forceVisible ?? true);
     const shouldDeferClear = shouldClear && !forceVisible;
     this.clearAfterVisible = shouldDeferClear;
     const snapshot = this.flush({ forceVisible });

@@ -20,7 +20,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
 import {
-  useChannelActivitySnapshots,
+  useChannelActivitySnapshot,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
@@ -48,11 +48,7 @@ function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot 
  * invalidates the memo of every visible turn card.
  */
 function TurnChannelActivityBadge({ sessionId, messageId }: { sessionId: string | null; messageId: string }) {
-  const activities = useChannelActivitySnapshots(sessionId);
-  const activity = useMemo(
-    () => activities.find((item) => item.messageId === messageId) ?? null,
-    [activities, messageId],
-  );
+  const activity = useChannelActivitySnapshot(sessionId, messageId);
   return <ChannelActivityBadge activity={activity} />;
 }
 
@@ -66,6 +62,7 @@ function isSafeCitationHref(url: string): boolean {
 }
 
 const GROUPING_WINDOW_MS = 2 * 60 * 1000;
+const STREAM_SCROLL_CHARACTER_BUCKET = 128;
 
 function isTurnGroupedWith(previous: ChatThreadTurnRecord, current: ChatThreadTurnRecord): boolean {
   const previousActor = previous.userMessage.actorId;
@@ -255,6 +252,18 @@ function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps
   ] as const;
 }
 
+export function resolveStreamingPreviewScrollSignal(
+  preview: MissionThreadedActiveSessionSurfaceProps["streamingPreview"],
+  activeStreamingTurnId: string | null | undefined,
+): string | null {
+  if (!preview) {
+    return activeStreamingTurnId ?? null;
+  }
+  const visibleLineCount = preview.visibleText.length > 0 ? preview.visibleText.split("\n").length : 0;
+  const visibleCharacterBucket = Math.floor(preview.visibleText.length / STREAM_SCROLL_CHARACTER_BUCKET);
+  return [preview.turnId, visibleLineCount, visibleCharacterBucket, preview.isRunning ? "running" : "idle"].join(":");
+}
+
 export function ThreadedTimeline({
   props,
   onOpenUniversalRunDetail,
@@ -329,13 +338,10 @@ export function ThreadedTimeline({
         : props.streamStatus === "connecting"
           ? `${toTitleCase(props.mode)} stream connecting.`
           : "");
-  const streamingPreviewSignal = props.streamingPreview
-    ? [
-        props.streamingPreview.turnId,
-        props.streamingPreview.visibleText.length,
-        props.streamingPreview.isRunning ? "running" : "idle",
-      ].join(":")
-    : (props.activeStreamingTurnId ?? null);
+  const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(
+    props.streamingPreview,
+    props.activeStreamingTurnId,
+  );
 
   const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
     followOutput: props.followOutput,

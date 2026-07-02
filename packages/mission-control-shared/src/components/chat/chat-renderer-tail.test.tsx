@@ -205,6 +205,42 @@ describe("chat rendering tail coverage", () => {
     expect(normalizeCitationDisplayText(content)).toBe("Visible");
   });
 
+  it("preserves markdown indentation and fenced code while stripping html outside code", () => {
+    const content = [
+      "Plan:",
+      "  - keep nested spacing",
+      "    - keep child spacing",
+      "",
+      "```html",
+      "<section>keep code html</section>",
+      "```",
+      "",
+      "<aside>Visible note</aside>",
+    ].join("\n");
+
+    const normalized = normalizeAssistantDisplayText(content);
+
+    expect(normalized).toContain("  - keep nested spacing");
+    expect(normalized).toContain("    - keep child spacing");
+    expect(normalized).toContain("```html\n<section>keep code html</section>\n```");
+    expect(normalized).toContain("Visible note");
+    expect(normalized).not.toContain("<aside>");
+  });
+
+  it("keeps single-line fences from swallowing later streaming paragraphs", () => {
+    const split = splitStreamingMarkdown('intro\n\n```json {"ok":true}```\n\noutro tail');
+
+    expect(split.stable).toBe('intro\n\n```json {"ok":true}```\n\n');
+    expect(split.tail).toBe("outro tail");
+  });
+
+  it("renders empty fenced code blocks as block code, not inline ticks", () => {
+    renderer = create(<AssistantMessageRenderer role="assistant" content={"```\n```"} />);
+
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(1);
+    expect(normalizedTextOf(renderer.toJSON())).toContain("code");
+  });
+
   it("renders assistant markdown fallback and copies decoded content through clipboard APIs", async () => {
     vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
