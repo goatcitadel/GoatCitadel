@@ -147,18 +147,30 @@ describe("GatewayService loop44 facade behavior", () => {
       },
     });
 
-    expect(GatewayService.prototype.listMcpServers.call(gateway)).toEqual([
-      expect.objectContaining({
-        serverId: "server-2",
-        category: "development",
-        trustTier: "restricted",
-        costTier: "unknown",
-        policy: expect.objectContaining({
-          requireFirstToolApproval: false,
-          redactionMode: "basic",
+    expect(GatewayService.prototype.listMcpServers.call(gateway)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-approval-inbox",
+          url: "goatcitadel://approval-inbox",
+          status: "connected",
         }),
-      }),
-    ]);
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-durable-tasks",
+          url: "goatcitadel://durable-tasks",
+          status: "connected",
+        }),
+        expect.objectContaining({
+          serverId: "server-2",
+          category: "development",
+          trustTier: "restricted",
+          costTier: "unknown",
+          policy: expect.objectContaining({
+            requireFirstToolApproval: false,
+            redactionMode: "basic",
+          }),
+        }),
+      ]),
+    );
     expect(GatewayService.prototype.listMcpTools.call(gateway, "server-2")).toEqual([
       { serverId: "server-2", toolName: "alpha.read", description: "Read" },
       { serverId: "server-2", toolName: "zeta.write", description: "Write" },

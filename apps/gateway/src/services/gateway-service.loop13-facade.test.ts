@@ -975,14 +975,26 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     systemSettingsStore.set("mcp_auth_state_v1", { "server-1": { connected: true } });
     systemSettingsStore.set("mcp_tool_first_approval_v1", { "server-1": ["a.tool"] });
 
-    expect(GatewayService.prototype.readMcpServers.call(gateway)).toEqual([
-      expect.objectContaining({
-        serverId: "server-1",
-        category: "development",
-        trustTier: "restricted",
-        costTier: "unknown",
-      }),
-    ]);
+    expect(GatewayService.prototype.readMcpServers.call(gateway)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-approval-inbox",
+          url: "goatcitadel://approval-inbox",
+          status: "connected",
+        }),
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-durable-tasks",
+          url: "goatcitadel://durable-tasks",
+          status: "connected",
+        }),
+        expect.objectContaining({
+          serverId: "server-1",
+          category: "development",
+          trustTier: "restricted",
+          costTier: "unknown",
+        }),
+      ]),
+    );
     expect(GatewayService.prototype.requireMcpServer.call(gateway, "server-1")).toMatchObject({ serverId: "server-1" });
     expect(() => GatewayService.prototype.requireMcpServer.call(gateway, "missing")).toThrow(/Unknown MCP server/);
     GatewayService.prototype.writeMcpServers.call(gateway, [{ serverId: "server-2" }] as never);
@@ -1000,7 +1012,11 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     expect(
       GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", { status: "error", lastError: "boom" }),
     ).toMatchObject({ serverId: "server-1", status: "error", lastError: "boom" });
-    expect(GatewayService.prototype.readMcpTools.call(gateway)).toEqual([
+    expect(
+      GatewayService.prototype.readMcpTools
+        .call(gateway)
+        .filter((tool: { serverId: string }) => tool.serverId === "server-1"),
+    ).toEqual([
       { serverId: "server-1", toolName: "z.tool" },
       { serverId: "server-1", toolName: "a.tool" },
     ]);
@@ -1020,7 +1036,9 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       { serverId: "server-1", toolName: "z.tool" },
       { serverId: "server-1", toolName: "a.tool" },
     ]);
-    expect(GatewayService.prototype.listMcpServers.call(gateway)).toHaveLength(1);
+    expect(GatewayService.prototype.listMcpServers.call(gateway)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ serverId: "server-1" })]),
+    );
     expect(
       GatewayService.prototype.listMcpTools
         .call(gateway, "server-1")

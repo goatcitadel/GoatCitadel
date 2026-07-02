@@ -326,14 +326,26 @@ describe("GatewayService loop 27 large service coverage", () => {
     ]);
     settings.set("mcp_tool_first_approval_v1", { "server-1": ["browser.search"] });
 
-    expect(GatewayService.prototype.readMcpServers.call(gateway)).toMatchObject([
-      expect.objectContaining({
-        serverId: "server-1",
-        category: "automation",
-        trustTier: "restricted",
-        costTier: "unknown",
-      }),
-    ]);
+    expect(GatewayService.prototype.readMcpServers.call(gateway)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-approval-inbox",
+          url: "goatcitadel://approval-inbox",
+          status: "connected",
+        }),
+        expect.objectContaining({
+          serverId: "goatcitadel-internal-durable-tasks",
+          url: "goatcitadel://durable-tasks",
+          status: "connected",
+        }),
+        expect.objectContaining({
+          serverId: "server-1",
+          category: "automation",
+          trustTier: "restricted",
+          costTier: "unknown",
+        }),
+      ]),
+    );
     expect(
       GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", { status: "connected" }),
     ).toMatchObject({

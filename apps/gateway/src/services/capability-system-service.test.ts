@@ -24,6 +24,8 @@ import { CapabilitySystemService, __internal } from "./capability-system-service
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
+const digestPinnedRunnerImage =
+  "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 afterEach(async () => {
   await Promise.all(
@@ -470,7 +472,7 @@ describe("CapabilitySystemService", () => {
       sandboxConfig: { bestEffortHostEnabled: true },
       dockerBackend: {
         enabled: true,
-        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        image: digestPinnedRunnerImage,
       },
       aiderAdapter: {
         enabled: true,
@@ -559,7 +561,7 @@ describe("CapabilitySystemService", () => {
     const harness = await createHarness({
       dockerBackend: {
         enabled: true,
-        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        image: digestPinnedRunnerImage,
         dockerCommand: "docker",
       },
     });
@@ -601,7 +603,7 @@ describe("CapabilitySystemService", () => {
       },
       dockerBackend: {
         enabled: true,
-        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        image: digestPinnedRunnerImage,
       },
     });
 

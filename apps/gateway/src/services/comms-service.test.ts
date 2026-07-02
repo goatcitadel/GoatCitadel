@@ -123,7 +123,7 @@ describe("comms service governance", () => {
       message: [
         "Visible answer.",
         "",
-        "authorization: Bearer [REDACTED]",
+        "authorization: [REDACTED]",
         "```xml",
         "",
         "@ everyone should not page from code fences",

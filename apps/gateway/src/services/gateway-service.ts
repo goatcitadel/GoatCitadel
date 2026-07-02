@@ -606,8 +606,16 @@ import {
   type CommsHost,
 } from "./comms-service.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
-import { createInternalMcpApprovalInboxTools, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
-import { createInternalMcpDurableTasksTools, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
+import {
+  MCP_APPROVAL_INBOX_URL,
+  createInternalMcpApprovalInboxTools,
+  isInternalMcpApprovalInboxServer,
+} from "./mcp-approval-inbox.js";
+import {
+  MCP_DURABLE_TASKS_URL,
+  createInternalMcpDurableTasksTools,
+  isInternalMcpDurableTasksServer,
+} from "./mcp-durable-tasks.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { applyMcpRedaction, inferMcpCategory, normalizeMcpPolicy, wildcardMatch } from "./mcp-server-policy.js";
@@ -622,6 +630,11 @@ export interface MemoryFileEntry {
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
 const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
+const GATEWAY_OWNED_MCP_CREATED_AT = "2026-05-26T00:00:00.000Z";
+const GATEWAY_OWNED_MCP_SERVER_IDS = new Set([
+  "goatcitadel-internal-approval-inbox",
+  "goatcitadel-internal-durable-tasks",
+]);
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
@@ -8715,12 +8728,11 @@ export class GatewayService {
 
   /** @internal */ public readMcpServers(): McpServerRecord[] {
     const stored = this.storage.systemSettings.get<McpServerRecord[]>(MCP_SERVERS_SETTING_KEY)?.value;
-    if (!Array.isArray(stored)) {
-      return [];
-    }
     const authRows = this.readMcpAuthState();
-    return stored
+    const persisted = Array.isArray(stored) ? stored : [];
+    const callerOwned = persisted
       .filter((item): item is McpServerRecord => Boolean(item?.serverId))
+      .filter((item) => !isGatewayOwnedMcpServerUrl(item.url) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(item.serverId))
       .map((item) => ({
         ...item,
         category: item.category ?? inferMcpCategory(item.transport),
@@ -8729,16 +8741,21 @@ export class GatewayService {
         policy: normalizeMcpPolicy(item.policy),
         authState: buildPublicMcpAuthState(item, authRows[item.serverId]),
       }));
+    return [...buildGatewayOwnedInternalMcpServers(authRows), ...callerOwned];
   }
 
   /** @internal */ public writeMcpServers(servers: McpServerRecord[]): void {
     this.storage.systemSettings.set(
       MCP_SERVERS_SETTING_KEY,
-      servers.map((server) => {
-        const persisted = { ...server };
-        delete persisted.authState;
-        return persisted;
-      }),
+      servers
+        .filter(
+          (server) => !isGatewayOwnedMcpServerUrl(server.url) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(server.serverId),
+        )
+        .map((server) => {
+          const persisted = { ...server };
+          delete persisted.authState;
+          return persisted;
+        }),
     );
   }
 
@@ -8811,14 +8828,19 @@ export class GatewayService {
 
   /** @internal */ public readMcpTools(): McpToolRecord[] {
     const stored = this.storage.systemSettings.get<McpToolRecord[]>(MCP_TOOLS_SETTING_KEY)?.value;
-    if (!Array.isArray(stored)) {
-      return [];
-    }
-    return stored.filter((item): item is McpToolRecord => Boolean(item?.serverId && item?.toolName));
+    const persisted = Array.isArray(stored) ? stored : [];
+    const callerOwned = persisted.filter(
+      (item): item is McpToolRecord =>
+        Boolean(item?.serverId && item?.toolName) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(item.serverId),
+    );
+    return [...buildGatewayOwnedInternalMcpTools(), ...callerOwned];
   }
 
   /** @internal */ public writeMcpTools(tools: McpToolRecord[]): void {
-    this.storage.systemSettings.set(MCP_TOOLS_SETTING_KEY, tools);
+    this.storage.systemSettings.set(
+      MCP_TOOLS_SETTING_KEY,
+      tools.filter((tool) => !GATEWAY_OWNED_MCP_SERVER_IDS.has(tool.serverId)),
+    );
   }
 
   /** @internal */ public readMcpAuthState(): Record<string, McpAuthStateRecord> {
@@ -8965,8 +8987,8 @@ export class GatewayService {
     this.improvementService.stopScheduler();
     this.durableRunService.stopWorker();
     this.approvalEffectsService.stopWorker();
-    this.chatTurnExecutionRegistry.close("Gateway service is closing.");
-    this.promptPackService.close();
+    this.chatTurnExecutionRegistry?.close("Gateway service is closing.");
+    this.promptPackService?.close();
     if (this.maintenanceScheduler) {
       this.maintenanceScheduler.stop();
       this.maintenanceScheduler = undefined;
@@ -9832,6 +9854,60 @@ interface McpAuthStateRecord {
   lastRefreshedAt?: string;
   error?: string;
   lastCodePreview?: string;
+}
+
+function buildGatewayOwnedInternalMcpServers(authRows: Record<string, McpAuthStateRecord>): McpServerRecord[] {
+  return [
+    buildGatewayOwnedInternalMcpServer("goatcitadel-internal-approval-inbox", MCP_APPROVAL_INBOX_URL, authRows),
+    buildGatewayOwnedInternalMcpServer("goatcitadel-internal-durable-tasks", MCP_DURABLE_TASKS_URL, authRows),
+  ].filter((server): server is McpServerRecord => Boolean(server));
+}
+
+function buildGatewayOwnedInternalMcpServer(
+  serverId: string,
+  url: string,
+  authRows: Record<string, McpAuthStateRecord>,
+): McpServerRecord | undefined {
+  const template = MCP_SERVER_TEMPLATES.find((item) => item.url === url);
+  if (!template) {
+    return undefined;
+  }
+  const server: McpServerRecord = {
+    serverId,
+    label: template.label,
+    transport: template.transport,
+    command: template.command,
+    args: template.args,
+    url: template.url,
+    authType: template.authType,
+    oauth: template.oauth,
+    enabled: true,
+    status: "connected",
+    category: template.category,
+    trustTier: template.trustTier,
+    costTier: template.costTier,
+    policy: normalizeMcpPolicy(template.policy),
+    verifiedAt: GATEWAY_OWNED_MCP_CREATED_AT,
+    lastConnectedAt: GATEWAY_OWNED_MCP_CREATED_AT,
+    createdAt: GATEWAY_OWNED_MCP_CREATED_AT,
+    updatedAt: GATEWAY_OWNED_MCP_CREATED_AT,
+  };
+  return {
+    ...server,
+    authState: buildPublicMcpAuthState(server, authRows[serverId]),
+  };
+}
+
+function buildGatewayOwnedInternalMcpTools(): McpToolRecord[] {
+  return [
+    ...createInternalMcpApprovalInboxTools("goatcitadel-internal-approval-inbox"),
+    ...createInternalMcpDurableTasksTools("goatcitadel-internal-durable-tasks"),
+  ];
+}
+
+function isGatewayOwnedMcpServerUrl(url: string | undefined): boolean {
+  const normalized = url?.trim().toLowerCase();
+  return normalized === MCP_APPROVAL_INBOX_URL || normalized === MCP_DURABLE_TASKS_URL;
 }
 
 function clamp01(value: number): number {

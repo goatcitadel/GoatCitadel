@@ -910,35 +910,16 @@ async function runAutonomousActivationGrantGovernanceScenario(context) {
         subsystem: "agentic",
       },
       async () => {
-        const server = await requestJson(stack.gatewayUrl, "/api/v1/mcp/servers", {
-          method: "POST",
-          body: {
-            label: "Verification approval inbox",
-            transport: "http",
-            url: "goatcitadel://approval-inbox",
-            authType: "none",
-            enabled: true,
-            trustTier: "trusted",
-            costTier: "free",
-            policy: {
-              requireFirstToolApproval: false,
-              redactionMode: "off",
-              allowedToolPatterns: [],
-              blockedToolPatterns: [],
-            },
-          },
-        });
-        assertOk(server, "create verification MCP approval inbox server");
-        const connected = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/mcp/servers/${encodeURIComponent(server.body.serverId)}/connect`,
-          { method: "POST", body: {} },
-        );
-        assertOk(connected, "connect verification MCP approval inbox server");
+        const servers = await requestJson(stack.gatewayUrl, "/api/v1/mcp/servers");
+        assertOk(servers, "list Gateway-owned MCP servers");
+        const server = servers.body?.items?.find((item) => item?.url === "goatcitadel://approval-inbox");
+        if (!server?.serverId || server.status !== "connected") {
+          throw new Error("Gateway-owned MCP approval inbox server is not connected.");
+        }
         const deniedBeforeGrant = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
           method: "POST",
           body: {
-            serverId: server.body.serverId,
+            serverId: server.serverId,
             toolName: "goatcitadel.approval.remote_action_inbox.list",
             workspaceId: "default",
             surface: "mcp",
@@ -986,7 +967,7 @@ async function runAutonomousActivationGrantGovernanceScenario(context) {
         const allowedInvoke = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
           method: "POST",
           body: {
-            serverId: server.body.serverId,
+            serverId: server.serverId,
             toolName: "goatcitadel.approval.remote_action_inbox.list",
             workspaceId: "default",
             surface: "mcp",
@@ -1032,7 +1013,7 @@ async function runAutonomousActivationGrantGovernanceScenario(context) {
         const deniedAfterRevoke = await requestJson(stack.gatewayUrl, "/api/v1/mcp/invoke", {
           method: "POST",
           body: {
-            serverId: server.body.serverId,
+            serverId: server.serverId,
             toolName: "goatcitadel.approval.remote_action_inbox.list",
             workspaceId: "default",
             surface: "mcp",
@@ -1048,7 +1029,7 @@ async function runAutonomousActivationGrantGovernanceScenario(context) {
         const artifactPath = path.join(context.artifactRoot, "diagnostics", "agentic-governance-autonomy-grants.json");
         await writeJson(artifactPath, {
           checkedAt: new Date().toISOString(),
-          server: server.body,
+          server,
           deniedBeforeGrant: deniedBeforeGrant.body,
           created: created.body,
           allowed: allowed.body,

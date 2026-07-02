@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CapabilityScopeAssignment } from "@goatcitadel/contracts";
-import {
-  CapabilityScopeResolver,
-  computeEffectiveSet,
-  isCapabilityAllowed,
-} from "./capability-scope-resolver.js";
+import { CapabilityScopeResolver, computeEffectiveSet, isCapabilityAllowed } from "./capability-scope-resolver.js";
 
 function row(
   scopeKind: "citadel" | "workspace",
@@ -94,7 +90,16 @@ describe("CapabilityScopeResolver", () => {
 
   it("scopes mcpServers by citadel grant", () => {
     const rows: CapabilityScopeAssignment[] = [
-      { assignmentId: "1", scopeKind: "citadel", scopeId: "personal", resourceType: "mcp_server", resourceRef: "m1", enabled: true, createdAt: "t", updatedAt: "t" },
+      {
+        assignmentId: "1",
+        scopeKind: "citadel",
+        scopeId: "personal",
+        resourceType: "mcp_server",
+        resourceRef: "m1",
+        enabled: true,
+        createdAt: "t",
+        updatedAt: "t",
+      },
     ];
     const r = makeResolver(rows).resolve("personal", "default");
     expect(r.mcpServers).not.toBe("ALL");
@@ -104,13 +109,22 @@ describe("CapabilityScopeResolver", () => {
 
   it("fail-open: returns ALL when the kill-switch disables scoping", () => {
     const rows: CapabilityScopeAssignment[] = [
-      { assignmentId: "1", scopeKind: "citadel", scopeId: "personal", resourceType: "mcp_server", resourceRef: "m1", enabled: true, createdAt: "t", updatedAt: "t" },
+      {
+        assignmentId: "1",
+        scopeKind: "citadel",
+        scopeId: "personal",
+        resourceType: "mcp_server",
+        resourceRef: "m1",
+        enabled: true,
+        createdAt: "t",
+        updatedAt: "t",
+      },
     ];
     const r = makeResolver(rows, { disabled: true }).resolve("personal", "default");
     expect(r.mcpServers).toBe("ALL");
   });
 
-  it("fail-open: returns ALL when a dependency throws", () => {
+  it("fail-closed: returns empty capability sets when a dependency throws", () => {
     const resolver = new CapabilityScopeResolver({
       listAssignmentsForScope: () => {
         throw new Error("boom");
@@ -121,7 +135,8 @@ describe("CapabilityScopeResolver", () => {
       isDisabled: () => false,
     });
     const r = resolver.resolve("personal", "default");
-    expect(r.skills).toBe("ALL");
-    expect(r.mcpServers).toBe("ALL");
+    expect([...(r.skills as Set<string>)]).toEqual([]);
+    expect([...(r.integrations as Set<string>)]).toEqual([]);
+    expect([...(r.mcpServers as Set<string>)]).toEqual([]);
   });
 });
