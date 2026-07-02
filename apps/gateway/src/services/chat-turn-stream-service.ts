@@ -55,7 +55,7 @@ import {
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
-import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { enqueueAgentEndHook, observeBeforeAssistantMessageWrite } from "./chat-turn-stream-events.js";
 import type {
@@ -1486,7 +1486,7 @@ export async function* streamPreparedAgentChatTurn(
   const assistantMessageId = prepared.assistantMessageId;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
-  host.steerService.registerActiveTurn({ sessionId, turnId });
+  host.steerService?.registerActiveTurn?.({ sessionId, turnId });
 
   try {
     if (!options?.skipMessageStart) {
@@ -1503,7 +1503,7 @@ export async function* streamPreparedAgentChatTurn(
 
     const modeOrchestration = resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared));
     if (modeOrchestration) {
-      const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+      const mode = resolvePreparedTurnMode(prepared);
       const initialTrace = createOrRefreshRunningChatTurnTrace(host, {
         turnId,
         sessionId,
@@ -1772,7 +1772,7 @@ export async function* streamPreparedAgentChatTurn(
       });
       const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
         sessionId,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        mode: resolvePreparedTurnMode(prepared),
         content: prepared.content,
         capabilitySuggestions: capabilityUpgradeSuggestions,
         trace: hydratedTrace,
@@ -1920,7 +1920,7 @@ export async function* streamPreparedAgentChatTurn(
         },
       ],
       signals: [
-        { source: "routing", key: "mode", value: prepared.normalized.mode ?? prepared.prefs.mode, weight: "strong" },
+        { source: "routing", key: "mode", value: resolvePreparedTurnMode(prepared), weight: "strong" },
         { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
         { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
         { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
@@ -1948,7 +1948,7 @@ export async function* streamPreparedAgentChatTurn(
       sourceTurnId: prepared.sourceTurnId,
       outputMessageId: assistantMessageId,
       content: prepared.content,
-      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      mode: resolvePreparedTurnMode(prepared),
       providerId: input.providerId ?? prepared.prefs.providerId,
       model: input.model ?? prepared.prefs.model,
       webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
@@ -2279,7 +2279,7 @@ export async function* streamPreparedAgentChatTurn(
       });
       const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
         sessionId,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        mode: resolvePreparedTurnMode(prepared),
         content: prepared.content,
         capabilitySuggestions: capabilityUpgradeSuggestions,
         trace: hydratedTrace,
@@ -2417,7 +2417,7 @@ export async function* streamPreparedAgentChatTurn(
     throw error;
   } finally {
     externalAbortListener?.();
-    host.steerService.unregisterActiveTurn({ sessionId, turnId });
+    host.steerService?.unregisterActiveTurn?.({ sessionId, turnId });
     host.endActiveChatTurnExecution(turnId, controller);
   }
 }

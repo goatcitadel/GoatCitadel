@@ -328,9 +328,11 @@ function assertAutonomousDurableRunAllowed(
   if (!isAutonomousDurableRun(run) || !isAutonomyKillSwitchEnabled(host)) {
     return;
   }
-  throw new Error(
+  const error = new Error(
     `Autonomous durable workflow ${run.workflowKey} (${run.runId}) is blocked while the autonomy kill switch is engaged (autonomyV1Disabled).`,
   );
+  error.name = "AutonomousDurableRunDisabledError";
+  throw error;
 }
 
 function isStringArray(value: unknown): value is string[] {

@@ -10,6 +10,7 @@ import {
   readLiveIntentThreshold,
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
+import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -96,8 +97,7 @@ describe("ImprovementService runtime coverage", () => {
     });
     expect(
       harness.published.some(
-        (event) =>
-          event.eventType === "improvement_autotune_applied" && event.payload.effectiveRuntimeValue === 0.65,
+        (event) => event.eventType === "improvement_autotune_applied" && event.payload.effectiveRuntimeValue === 0.65,
       ),
     ).toBe(true);
 
@@ -257,7 +257,7 @@ describe("ImprovementService runtime coverage", () => {
     // First-run default is disabled (codex finding #27) — operator opts in
     // from Mission Control settings before the weekly job ships chat/tool
     // traces to the LLM judge.
-    expect(harness.storage.cronJobs.get("improvement_weekly")).toMatchObject({
+    expect(harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID)).toMatchObject({
       enabled: false,
       schedule: "0 2 * * 0 America/Los_Angeles",
     });

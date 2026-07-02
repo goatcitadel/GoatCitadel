@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { buildTelegramTargetDirectory, resolveChannelTarget } from "../services/channel-target-directory.js";
 import { approveTelegramPairingCode } from "../services/telegram-channel-pairing.js";
 import { discoverTelegramTargets } from "../services/telegram-target-discovery.js";
-import { resolveAllowlistedEnvSecret } from "./integration-webhooks-shared.js";
+import { resolveTelegramBotTokenEnvSecret } from "./integration-webhooks-shared.js";
 import {
   channelTargetDirectoryQuerySchema,
   connectionParamsSchema,
@@ -159,15 +159,16 @@ function resolveTelegramDiscoveryToken(
     return input.botToken.trim();
   }
   if (input.botTokenEnv?.trim()) {
-    // The env-var NAME is request-supplied; only resolve allowlisted channel-secret
-    // names so an attacker cannot exfiltrate arbitrary process env (e.g. DATABASE_URL,
-    // AWS_SECRET_ACCESS_KEY) by routing it through the api.telegram.org bot-token path.
-    return resolveAllowlistedEnvSecret(input.botTokenEnv);
+    // The env-var NAME is request-supplied; only resolve Telegram bot-token-shaped
+    // names so generic GOATCITADEL_* / GC_* secrets cannot be routed to Telegram.
+    return resolveTelegramBotTokenEnvSecret(input.botTokenEnv);
   }
   if (!input.connectionId) {
     return undefined;
   }
   const connection = fastify.services.integrations.getIntegrationConnection(input.connectionId);
   const config = connection.config;
-  return readConfigString(config, "botToken") ?? resolveAllowlistedEnvSecret(readConfigString(config, "botTokenEnv"));
+  return (
+    readConfigString(config, "botToken") ?? resolveTelegramBotTokenEnvSecret(readConfigString(config, "botTokenEnv"))
+  );
 }

@@ -1019,6 +1019,67 @@ describe("DurableRunService", () => {
     }
   });
 
+  it("moves autonomy kill-switch blocked runs to waiting instead of failing them", async () => {
+    const run = {
+      ...createRun("run-autonomy-disabled", "queued", "chat.turn.execute"),
+      metadata: { autonomous: { kind: "scheduled" } },
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const context = createContext(runs, checkpoints, timeline, { publishRealtime });
+    const disabled = new Error(
+      "Autonomous durable workflow chat.turn.execute (run-autonomy-disabled) is blocked while the autonomy kill switch is engaged (autonomyV1Disabled).",
+    );
+    disabled.name = "AutonomousDurableRunDisabledError";
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(async () => {
+          throw disabled;
+        }),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.allSettled([...backgroundTasks]);
+
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "waiting",
+      leaseOwnerId: undefined,
+      leaseExpiresAt: undefined,
+      lastError: undefined,
+      metadata: expect.objectContaining({
+        waitForEvent: {
+          eventKey: "autonomy.v1.enabled",
+          correlationId: run.runId,
+        },
+        autonomyKillSwitch: expect.objectContaining({
+          reason: "autonomyV1Disabled",
+        }),
+      }),
+    });
+    expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_waiting");
+    expect(timeline.map((item) => item.eventType)).toContain("run_waiting");
+    expect(timeline.map((item) => item.eventType)).not.toContain("run_failed");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_waiting",
+        runId: run.runId,
+        reason: "autonomy_kill_switch",
+      }),
+      expect.objectContaining({
+        eventClass: "domain_fact",
+      }),
+    );
+  });
+
   it("fails timed-out prompt-pack Cowork chat turns instead of waiting for an operator resume", async () => {
     vi.useFakeTimers();
     try {

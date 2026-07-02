@@ -94,7 +94,7 @@ function semanticHintScore(terms: string[], hints?: string[]): number {
   }
   let hits = 0;
   for (const term of terms) {
-    if (hintTerms.some((hint) => hint.includes(term))) {
+    if (hintTerms.some((hint) => hint === term)) {
       hits += 1;
     }
   }
@@ -130,7 +130,7 @@ function calculateBm25Scores(queryTerms: string[], candidates: MemoryCandidate[]
       let count = 0;
       for (let k = 0; k < doc.length; k++) {
         const token = doc[k];
-        if (token !== undefined && (token === term || token.includes(term))) {
+        if (token !== undefined && token === term) {
           count++;
         }
       }

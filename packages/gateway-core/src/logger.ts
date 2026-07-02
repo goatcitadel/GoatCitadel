@@ -14,6 +14,8 @@
  *   log.error("tick failed", error);
  */
 
+import { redactSecretText } from "@goatcitadel/contracts";
+
 export interface LogContext {
   readonly [key: string]: unknown;
 }
@@ -28,25 +30,8 @@ export interface Logger {
 
 const REDACTED_LOG_VALUE = "[redacted]";
 
-/**
- * High-confidence secret shapes that are redacted wherever they appear inside a
- * string value (log message detail, error message/stack), independent of the key
- * name. The length floors keep these from matching benign content (a short
- * `sk-foo` slug or a bare `Bearer` word are left intact); this is defense-in-depth
- * on top of the key-based redaction, not a replacement for it.
- */
-const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
-  /sk-[A-Za-z0-9-]{20,}/g, // OpenAI-style API keys
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, // Authorization bearer tokens
-];
-
 export function redactSecretsInString(value: string): string {
-  let result = value;
-  for (const pattern of SECRET_VALUE_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, REDACTED_LOG_VALUE);
-  }
-  return result;
+  return redactSecretText(value, { marker: REDACTED_LOG_VALUE }).value;
 }
 
 /**

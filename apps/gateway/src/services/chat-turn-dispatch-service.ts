@@ -24,7 +24,7 @@ import {
   type PreparedChatExecutionPlanResolution,
 } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
-import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import type {
   ChatTurnDurableRunOwner,
@@ -61,7 +61,7 @@ export function shouldUseDurableExecution(
   if (prepared.normalized.normalizationProfile === "quick_web") {
     return false;
   }
-  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const mode = resolvePreparedTurnMode(prepared);
   if (mode === "chat" || mode === "cowork" || mode === "code") {
     return true;
   }
@@ -467,7 +467,7 @@ export async function sendPreparedIntegrationChatTurn(
     branchKind: prepared.branchKind,
     sourceTurnId: prepared.sourceTurnId,
     status: "running",
-    mode: prepared.normalized.mode ?? prepared.prefs.mode,
+    mode: resolvePreparedTurnMode(prepared),
     webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
     memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
     thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
@@ -502,7 +502,7 @@ export async function sendPreparedIntegrationChatTurn(
         runId: input.policyRunId,
         permissionProfileId: input.permissionProfileId,
         localOperatorOverrideId: input.localOperatorOverrideId,
-        surface: input.mode ?? prepared.normalized.mode ?? prepared.prefs.mode,
+        surface: input.mode ?? resolvePreparedTurnMode(prepared),
         signal: options?.abortSignal,
       }),
     );

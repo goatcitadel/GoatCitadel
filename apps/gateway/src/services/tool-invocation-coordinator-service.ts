@@ -680,6 +680,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
+    const finalPolicyCheck = await this.host.policyEngine.invoke({
+      ...normalizedRequest,
+      externalRuntime: true,
+    });
+    const overridePolicyFailure = buildPluginOverridePolicyFailure(finalPolicyCheck);
+    if (overridePolicyFailure) {
+      return overridePolicyFailure;
+    }
     const startedAt = Date.now();
     this.host.recordDevDiagnostic?.({
       level: "debug",
@@ -699,7 +707,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     });
     const result = await overrideHandler(
       normalizedRequest.args ?? {},
-      buildPluginToolExecutionContext(normalizedRequest, undefined, undefined),
+      buildPluginToolExecutionContext(normalizedRequest, finalPolicyCheck, undefined),
     );
     const permissionProfileId =
       normalizedRequest.policyContext?.permissionProfileId ?? normalizedRequest.permissionProfileId;

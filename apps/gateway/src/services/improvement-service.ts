@@ -12,6 +12,7 @@ import {
 import { logger } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
+import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 
 const log = logger.child("improvement-service");
 import type {
@@ -473,7 +474,7 @@ export class ImprovementService {
   // ── public API ───────────────────────────────────────────────────
 
   async runWeeklyImprovementSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
-    const job = this.ctx.storage.cronJobs.get("improvement_weekly");
+    const job = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
@@ -507,11 +508,11 @@ export class ImprovementService {
   }
 
   ensureWeeklyImprovementCronJob(): void {
-    const existing = this.ctx.storage.cronJobs.get("improvement_weekly");
+    const existing = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     const now = new Date().toISOString();
     this.ctx.storage.cronJobs.upsertIfChanged(
       {
-        jobId: "improvement_weekly",
+        jobId: IMPROVEMENT_WEEKLY_JOB_ID,
         name: "Self-Improvement Weekly Replay",
         action: "improvement",
         // SECURITY (codex finding #27): The weekly improvement run samples

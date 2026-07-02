@@ -142,9 +142,9 @@ describe("CoworkAgenticProjectionService", () => {
         expect.objectContaining({ code: "projection_status_drift", evidenceRef: "durable-run:durable-child" }),
       ]),
     );
-    expect(storage.chatTurnTraces.get("parent-turn").durable?.status).toBe("completed");
-    expect(storage.chatDelegationSteps.get("orch-91303:researcher").status).toBe("completed");
-    expect(storage.chatDelegationRuns.get("orch-91303").status).toBe("completed");
+    expect(storage.chatTurnTraces.get("parent-turn").durable?.status).toBe("queued");
+    expect(storage.chatDelegationSteps.get("orch-91303:researcher").status).toBe("running");
+    expect(storage.chatDelegationRuns.get("orch-91303").status).toBe("running");
     expect(tree?.controls.every((control) => control.enabled === false)).toBe(true);
   });
 
@@ -515,9 +515,9 @@ describe("CoworkAgenticProjectionService", () => {
         expect.objectContaining({ code: "stale_worker" }),
       ]),
     );
-    expect(storage.chatDelegationSteps.get("orch-missing-durable:researcher").status).toBe("completed");
-    expect(storage.chatDelegationSteps.get("orch-missing-durable:verifier").status).toBe("failed");
-    expect(storage.chatDelegationRuns.get("orch-missing-durable").status).toBe("partial");
+    expect(storage.chatDelegationSteps.get("orch-missing-durable:researcher").status).toBe("running");
+    expect(storage.chatDelegationSteps.get("orch-missing-durable:verifier").status).toBe("running");
+    expect(storage.chatDelegationRuns.get("orch-missing-durable").status).toBe("running");
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "run:orch-missing-durable", status: "blocked" })]),
     );
@@ -605,8 +605,8 @@ describe("CoworkAgenticProjectionService", () => {
         expect.objectContaining({ id: "subagent:orch-workspace-a:researcher", status: "completed" }),
       ]),
     );
-    expect(storage.chatDelegationSteps.get("orch-workspace-a:researcher").status).toBe("completed");
-    expect(storage.chatDelegationRuns.get("orch-workspace-a").status).toBe("completed");
+    expect(storage.chatDelegationSteps.get("orch-workspace-a:researcher").status).toBe("running");
+    expect(storage.chatDelegationRuns.get("orch-workspace-a").status).toBe("running");
   });
 
   it("preserves explicitly default-owned projected run trees", () => {
@@ -1062,7 +1062,7 @@ describe("CoworkAgenticProjectionService", () => {
     expect(tracePatch).not.toHaveBeenCalled();
   });
 
-  it("never overwrites an orchestrator-set final summary during reconciliation", () => {
+  it("projects completion without mutating an orchestrator-set final summary during reads", () => {
     const { storage, service } = createHarness();
     storage.chatSessionMeta.ensure("parent-session", "2026-06-22T00:00:00.000Z", "default");
     storage.chatSessionMeta.ensure("child-session", "2026-06-22T00:00:00.000Z", "default");
@@ -1100,14 +1100,15 @@ describe("CoworkAgenticProjectionService", () => {
 
     const tree = service.getAgenticRunTree("orch-summary-guard", { workspaceId: "default" });
 
-    // The run is reconciled to completed, but the orchestrator-authored summary is preserved verbatim.
-    const reconciledRun = storage.chatDelegationRuns.get("orch-summary-guard");
-    expect(reconciledRun.status).toBe("completed");
-    expect(reconciledRun.finalSummary).toBe("Authored by orchestrator; must survive reconciliation.");
+    // The tree projects completion, but the GET does not mutate stored run state or authored summary.
+    const storedRun = storage.chatDelegationRuns.get("orch-summary-guard");
+    expect(storedRun.status).toBe("running");
+    expect(storedRun.finalSummary).toBe("Authored by orchestrator; must survive reconciliation.");
     expect(tree?.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "run:orch-summary-guard",
+          status: "completed",
           summary: "Authored by orchestrator; must survive reconciliation.",
         }),
       ]),

@@ -69,36 +69,56 @@ export function resolveGenericChannelInboundSecret(config: Record<string, unknow
   );
 }
 
-const ALLOWED_SECRET_ENV_PREFIXES = [
-  "GOATCITADEL_",
-  "GC_",
-  "SLACK_",
-  "DISCORD_",
-  "TELEGRAM_",
-  "WHATSAPP_",
-  "LINE_",
-  "NEXTCLOUD_",
-  "WEBHOOK_SECRET",
-  "CHANNEL_SECRET",
+const CHANNEL_SECRET_ENV_PATTERNS: readonly RegExp[] = [
+  /^(?:SLACK|DISCORD|TELEGRAM|WHATSAPP|LINE|NEXTCLOUD)(?:_[A-Z0-9]+)*_(?:WEBHOOK_SECRET|SIGNING_SECRET|CHANNEL_SECRET|BOT_SECRET|APP_SECRET|VERIFY_TOKEN|SECRET_TOKEN|TOKEN|SECRET)$/,
+  /^(?:WEBHOOK_SECRET|CHANNEL_SECRET)(?:_[A-Z0-9]+)?$/,
+  /^(?:GOATCITADEL|GC)_(?:SLACK|DISCORD|TELEGRAM|WHATSAPP|LINE|NEXTCLOUD)(?:_[A-Z0-9]+)*_(?:WEBHOOK_SECRET|SIGNING_SECRET|CHANNEL_SECRET|BOT_SECRET|APP_SECRET|VERIFY_TOKEN|SECRET_TOKEN|TOKEN|SECRET)$/,
+];
+
+const TELEGRAM_BOT_TOKEN_ENV_PATTERNS: readonly RegExp[] = [
+  /^TELEGRAM_BOT_TOKEN$/,
+  /^TELEGRAM(?:_[A-Z0-9]+)*_TOKEN$/,
+  /^TELEGRAM_[A-Z0-9]+_BOT_TOKEN$/,
+  /^GOATCITADEL_TELEGRAM_BOT_TOKEN$/,
+  /^GOATCITADEL_TELEGRAM(?:_[A-Z0-9]+)*_TOKEN$/,
+  /^GOATCITADEL_TELEGRAM_[A-Z0-9]+_BOT_TOKEN$/,
+  /^GC_TELEGRAM_BOT_TOKEN$/,
+  /^GC_TELEGRAM(?:_[A-Z0-9]+)*_TOKEN$/,
+  /^GC_TELEGRAM_[A-Z0-9]+_BOT_TOKEN$/,
 ];
 
 export function isAllowedSecretEnvName(envName: string): boolean {
   const trimmedEnvName = envName.trim().toUpperCase();
-  return ALLOWED_SECRET_ENV_PREFIXES.some((prefix) => trimmedEnvName.startsWith(prefix));
+  return CHANNEL_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName));
+}
+
+export function isAllowedTelegramBotTokenEnvName(envName: string): boolean {
+  const trimmedEnvName = envName.trim().toUpperCase();
+  return TELEGRAM_BOT_TOKEN_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName));
 }
 
 /**
  * Resolve an environment-variable secret by name, but only when the name matches the
  * channel-secret allowlist. Use this whenever the env-var NAME can be influenced by a
- * request (never resolve a request-supplied env name without this guard, or arbitrary
- * process env — DATABASE_URL, AWS_SECRET_ACCESS_KEY, GOATCITADEL_*_SECRET, … — can be
- * exfiltrated to a third-party host).
+ * request. Keep generic GOATCITADEL_* / GC_* names out of this path; field-specific
+ * secrets must opt in to a narrower resolver such as resolveTelegramBotTokenEnvSecret.
  */
 export function resolveAllowlistedEnvSecret(envName: string | undefined): string | undefined {
   if (typeof envName !== "string" || envName.trim().length === 0) {
     return undefined;
   }
   if (!isAllowedSecretEnvName(envName)) {
+    return undefined;
+  }
+  const resolved = process.env[envName.trim()];
+  return resolved?.trim() ? resolved.trim() : undefined;
+}
+
+export function resolveTelegramBotTokenEnvSecret(envName: string | undefined): string | undefined {
+  if (typeof envName !== "string" || envName.trim().length === 0) {
+    return undefined;
+  }
+  if (!isAllowedTelegramBotTokenEnvName(envName)) {
     return undefined;
   }
   const resolved = process.env[envName.trim()];

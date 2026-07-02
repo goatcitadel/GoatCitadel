@@ -689,42 +689,39 @@ describe("ToolInvocationCoordinatorService", () => {
       readiness: "expired" as const,
       expectedErrorFragment: "its OAuth token has expired",
     },
-  ])(
-    "fails closed at the shared invoke chokepoint for a stale-auth $label before runtime",
-    async (scenario) => {
-      const invokeMcpRuntimeTool = vi.fn();
-      const coordinator = new ToolInvocationCoordinatorService(
-        createHost({
-          requireMcpServer: vi.fn(() =>
-            createMcpServer({
+  ])("fails closed at the shared invoke chokepoint for a stale-auth $label before runtime", async (scenario) => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() =>
+          createMcpServer({
+            authType: "oauth2",
+            authState: {
               authType: "oauth2",
-              authState: {
-                authType: "oauth2",
-                readiness: scenario.readiness,
-              },
-            }),
-          ),
-          invokeMcpRuntimeTool,
-        }),
-      );
+              readiness: scenario.readiness,
+            },
+          }),
+        ),
+        invokeMcpRuntimeTool,
+      }),
+    );
 
-      const response = await coordinator.invokeMcpTool({
-        serverId: "srv-1",
-        toolName: "tool.echo",
-        agentId: "agent-1",
-        sessionId: "session-1",
-        arguments: { value: "hello" },
-      });
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
 
-      expect(response).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("needs re-authentication"),
-      });
-      expect(response.error).toContain(scenario.expectedErrorFragment);
-      expect(response).not.toHaveProperty("output");
-      expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
-    },
-  );
+    expect(response).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("needs re-authentication"),
+    });
+    expect(response.error).toContain(scenario.expectedErrorFragment);
+    expect(response).not.toHaveProperty("output");
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -1658,7 +1655,7 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(recordApprovedExternalRuntimeToolResult).not.toHaveBeenCalled();
   });
 
-  it("runs approved plugin override replay through the plugin handler without a new policy prompt", async () => {
+  it("runs approved plugin override replay through a final policy check before the plugin handler", async () => {
     const pluginHandler = vi.fn(
       async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -1676,7 +1673,14 @@ describe("ToolInvocationCoordinatorService", () => {
       claimedAt: "2026-05-15T00:00:00.000Z",
     });
     overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const policyInvoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>();
+    const policyInvoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { policy: { requiresApproval: false } },
+        auditEventId: "evt-policy-pass",
+        policyReason: "allowed by runtime policy",
+      }),
+    );
     const coordinator = new ToolInvocationCoordinatorService(
       createHost({
         policyEngine: {
@@ -1694,7 +1698,53 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(result.outcome).toBe("executed");
     expect(result.result).toEqual({ source: "plugin", echoed: { q: "approved" } });
     expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" }, expect.any(Object));
-    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(policyInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "web_search", args: { q: "approved" }, externalRuntime: true }),
+    );
+  });
+
+  it("blocks approved plugin override replay when the final policy check denies it", async () => {
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-approved-plugin",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "blocked",
+        policyReason: "blocked by runtime policy",
+        auditEventId: "evt-policy-block",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: false, requiresApproval: false, reasonCodes: ["blocked"] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+
+    const result = await coordinator.invokeApprovedExternalRuntimeTool(
+      createToolRequest({ toolName: "web_search", args: { q: "blocked" } }),
+    );
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toBe("blocked by runtime policy");
+    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("keeps Code Mode wrapper invocations on the approved tool path without hooks or plugin overrides", async () => {

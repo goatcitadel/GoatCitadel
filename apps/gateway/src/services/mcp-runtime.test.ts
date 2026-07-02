@@ -377,6 +377,18 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("wraps Windows command shims through cmd.exe for stdio MCP process launch", () => {
+    const spec = __internal.resolveSpawnSpec("npx.cmd", ["--yes", "@modelcontextprotocol/server-filesystem"], "win32");
+
+    expect(spec.command.toLowerCase()).toContain("cmd.exe");
+    expect(spec.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(spec.args[3]).toBe("npx.cmd --yes @modelcontextprotocol/server-filesystem");
+    expect(__internal.resolveSpawnSpec("node", ["server.js"], "linux")).toEqual({
+      command: "node",
+      args: ["server.js"],
+    });
+  });
+
   it("selects approved browser fallback tools and prefers Playwright targets", () => {
     const now = new Date().toISOString();
     const baseServer = createTestServer("");

@@ -8,7 +8,11 @@
  */
 
 import type { RuntimeDecisionTraceAppendInput } from "@goatcitadel/contracts";
-import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import {
+  resolvePreparedTurnMode,
+  type ChatTurnPrepHost,
+  type PreparedAgentChatTurn,
+} from "./chat-turn-prep-service.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 
 export function recordPreparedTurnDecisions(
@@ -24,7 +28,7 @@ export function recordPreparedTurnDecisions(
   if (!host.recordRuntimeDecision) {
     return;
   }
-  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const mode = resolvePreparedTurnMode(prepared);
   const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
   const memoryMode = prepared.normalized.memoryMode ?? prepared.prefs.memoryMode;
   const executionProfile = executionProfileFromNormalizationProfile(prepared.normalized.normalizationProfile);

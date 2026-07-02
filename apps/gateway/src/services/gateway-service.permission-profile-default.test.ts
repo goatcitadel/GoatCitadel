@@ -6,6 +6,10 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+} from "./gateway/autonomous-turn-policy.js";
 
 /**
  * resolveToolPolicyContext should pick the permission-profile fallback from the
@@ -29,8 +33,49 @@ function createGatewayHarness(config: {
     const approvalMode = profileId === "trusted_local_power" ? "bypass" : "approve_all";
     return { permissionProfile: { profileId, approvalMode }, localOperatorOverride: undefined };
   });
-  gateway.storage = { permissionProfiles: { resolveContext } };
-  return { gateway, resolveContext };
+  const getProfile = vi.fn((profileId: string) => {
+    if (profileId === "trusted_local_power") {
+      return {
+        profileId,
+        builtin: true,
+        status: "active",
+        scope: "global",
+        approvalMode: "bypass",
+        createdBy: "system",
+      };
+    }
+    if (profileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID || profileId === HEARTBEAT_PERMISSION_PROFILE_ID) {
+      return {
+        profileId,
+        builtin: true,
+        status: "active",
+        scope: "global",
+        approvalMode: "approve_all",
+        createdBy: "system",
+      };
+    }
+    if (profileId === "safe") {
+      return {
+        profileId,
+        builtin: true,
+        status: "active",
+        scope: "global",
+        approvalMode: "approve_all",
+        createdBy: "system",
+      };
+    }
+    return {
+      profileId,
+      builtin: false,
+      status: "active",
+      scope: "operator",
+      scopeRef: "operator-1",
+      approvalMode: "approve_risky",
+      createdBy: "operator-1",
+    };
+  });
+  gateway.storage = { permissionProfiles: { getProfile, resolveContext } };
+  return { gateway, getProfile, resolveContext };
 }
 
 describe("GatewayService resolveToolPolicyContext default permission profile", () => {
@@ -95,5 +140,74 @@ describe("GatewayService resolveToolPolicyContext default permission profile", (
     gateway.resolveToolPolicyContext({ surface: "cowork" });
 
     expect(resolveContext.mock.calls[0][0].defaultProfileId).toBe("safe");
+  });
+
+  it("rejects explicit request selection of the powerful global trusted profile", () => {
+    const { gateway, resolveContext } = createGatewayHarness({
+      deploymentProfile: "local_dev",
+      approvalMode: "approve_all",
+    });
+
+    expect(() =>
+      gateway.resolveToolPolicyContext({
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        surface: "tools",
+        permissionProfileId: "trusted_local_power",
+      }),
+    ).toThrow(/cannot be selected directly by request/i);
+    expect(resolveContext).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit scoped custom profiles only for their owner scope", () => {
+    const { gateway, resolveContext } = createGatewayHarness({
+      deploymentProfile: "local_dev",
+      approvalMode: "approve_all",
+    });
+
+    gateway.resolveToolPolicyContext({
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      surface: "tools",
+      permissionProfileId: "operator-profile",
+    });
+
+    expect(resolveContext.mock.calls[0][0].profileId).toBe("operator-profile");
+    expect(() =>
+      gateway.resolveToolPolicyContext({
+        operatorId: "operator-2",
+        workspaceId: "workspace-1",
+        surface: "tools",
+        permissionProfileId: "operator-profile",
+      }),
+    ).toThrow(/not selectable/i);
+  });
+
+  it("allows system-owned restricted autonomous profiles without making them user-selectable", () => {
+    const { gateway, resolveContext } = createGatewayHarness({
+      deploymentProfile: "local_dev",
+      approvalMode: "approve_all",
+    });
+
+    gateway.resolveToolPolicyContext({
+      operatorId: "system-cron",
+      authActorId: "system-cron",
+      authActorSource: "none",
+      workspaceId: "workspace-1",
+      surface: "background",
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    });
+
+    expect(resolveContext.mock.calls[0][0].profileId).toBe(SCHEDULED_TURN_PERMISSION_PROFILE_ID);
+    expect(() =>
+      gateway.resolveToolPolicyContext({
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+        workspaceId: "workspace-1",
+        surface: "tools",
+        permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID,
+      }),
+    ).toThrow(/cannot be selected directly by request/i);
   });
 });

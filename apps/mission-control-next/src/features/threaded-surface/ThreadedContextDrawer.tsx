@@ -11,7 +11,7 @@ import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/Ch
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { StatusChip } from "../native-routes/primitives";
-import { shortId } from "./ThreadedWorkflowPanel";
+import { shortId } from "./workflow/format";
 
 type DrawerTab = "context" | "trace" | "assist" | "session";
 

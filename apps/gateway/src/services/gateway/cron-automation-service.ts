@@ -19,6 +19,13 @@ import {
   normalizeNoAgentCronActionConfig,
   runNoAgentCronJob,
 } from "./cron-no-agent-support.js";
+import {
+  COST_REPORT_HOURLY_JOB_ID,
+  IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_FLUSH_DAILY_JOB_ID,
+  PRIVATE_BETA_BACKUP_JOB_ID,
+  UPDATE_REVIEW_DAILY_JOB_ID,
+} from "./cron-job-ids.js";
 
 export {
   buildNoAgentCronDisabledMessage,
@@ -26,11 +33,13 @@ export {
   isExperimentalNoAgentCronEnabled,
 } from "./cron-no-agent-support.js";
 
-export const IMPROVEMENT_WEEKLY_JOB_ID = "self_improvement_weekly_replay";
-export const PRIVATE_BETA_BACKUP_JOB_ID = "private_beta_backup_daily";
-export const MEMORY_FLUSH_DAILY_JOB_ID = "memory-flush-daily";
-export const COST_REPORT_HOURLY_JOB_ID = "cost-report-hourly";
-export const UPDATE_REVIEW_DAILY_JOB_ID = "update-review-daily";
+export {
+  COST_REPORT_HOURLY_JOB_ID,
+  IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_FLUSH_DAILY_JOB_ID,
+  PRIVATE_BETA_BACKUP_JOB_ID,
+  UPDATE_REVIEW_DAILY_JOB_ID,
+} from "./cron-job-ids.js";
 
 interface CronReviewRow {
   item_id: string;

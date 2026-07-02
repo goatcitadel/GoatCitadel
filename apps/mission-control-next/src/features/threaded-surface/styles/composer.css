@@ -951,7 +951,7 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   line-height: 1.25;
 }
 
-.mc-next-composer-delegation-head > span:not(.status-chip) {
+.mc-next-composer-delegation-head > span:not(.status-chip):not(.mc-next-status-chip) {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   font-weight: 700;

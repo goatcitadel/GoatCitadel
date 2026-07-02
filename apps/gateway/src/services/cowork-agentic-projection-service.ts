@@ -70,12 +70,17 @@ export class CoworkAgenticProjectionService {
     const ctx = new ProjectionReadContext(this.storage, traceMap, durableMap, toolRunMap);
     const items: AgenticRunListItem[] = [];
     for (const run of runs) {
-      const surface = this.resolveRunSurface(run, ctx);
+      const initialSteps = readOptional(() => this.storage.chatDelegationSteps?.listByRun(run.runId)) ?? [];
+      const runCtx = initialSteps.length > 0 ? this.buildReadContext(run, initialSteps) : ctx;
+      const surface = this.resolveRunSurface(run, runCtx);
       if (input.surface && surface !== input.surface) {
         continue;
       }
-      const parentTrace = this.resolveParentTurnTrace(run, ctx);
-      const status = mapDelegationRunStatus(run.status, run, parentTrace);
+      const diagnostics: AgenticDiagnosticSignal[] = [];
+      diagnostics.push(...this.reconcileParentDurableTrace(run, runCtx));
+      const steps = this.reconcileRunSteps(run, initialSteps, diagnostics, runCtx);
+      const parentTrace = this.resolveParentTurnTrace(run, runCtx);
+      const status = mapDelegationRunStatus(run.status, run, parentTrace, steps);
       if (input.status && status !== input.status) {
         continue;
       }
@@ -94,7 +99,10 @@ export class CoworkAgenticProjectionService {
         surface,
         parentSessionId: run.sessionId,
         updatedAt: run.finishedAt ?? run.startedAt,
-        diagnostics: this.deriveStoredRunDiagnostics(run, [], parentTrace, ctx),
+        diagnostics: dedupeDiagnostics([
+          ...diagnostics,
+          ...this.deriveStoredRunDiagnostics(run, steps, parentTrace, runCtx),
+        ]),
       });
     }
     return items;
@@ -126,7 +134,7 @@ export class CoworkAgenticProjectionService {
     const diagnostics: AgenticDiagnosticSignal[] = [];
     diagnostics.push(...this.reconcileParentDurableTrace(run, ctx));
     const steps = this.reconcileRunSteps(run, initialSteps, diagnostics, ctx);
-    const currentRun = ctx.runChanged ? (readOptional(() => this.storage.chatDelegationRuns!.get(runId)) ?? run) : run;
+    const currentRun = run;
     const parentTrace = this.resolveParentTurnTrace(currentRun, ctx);
     const status = mapDelegationRunStatus(currentRun.status, currentRun, parentTrace, steps);
     const rootNodeId = `run:${currentRun.runId}`;
@@ -397,18 +405,10 @@ export class CoworkAgenticProjectionService {
   ): AgenticDiagnosticSignal[] {
     const trace = this.resolveParentTurnTrace(run, ctx);
     const durableRun = ctx.getDurableRun(trace?.durable?.runId);
-    // Idempotency guard: skip the write entirely when the stored status already matches.
     if (!trace?.durable?.runId || !durableRun || trace.durable.status === durableRun.status) {
       return [];
     }
     const now = new Date().toISOString();
-    const patched = this.storage.chatTurnTraces.patch(trace.turnId, {
-      durable: {
-        ...trace.durable,
-        status: durableRun.status,
-      },
-    });
-    ctx.recordTraceWrite(patched);
     return [
       {
         signalId: `projection-status-drift-${run.runId}-${durableRun.runId}`,
@@ -430,32 +430,19 @@ export class CoworkAgenticProjectionService {
   ): ChatDelegationStepRecord[] {
     const reconciled = steps.map((step) => this.reconcileStep(step, diagnostics, ctx));
     const activeCount = reconciled.filter((step) => step.status === "running" || step.status === "pending").length;
-    if (run.status === "running" && activeCount === 0 && reconciled.length > 0 && this.storage.chatDelegationRuns) {
+    if (run.status === "running" && activeCount === 0 && reconciled.length > 0) {
       const completedCount = reconciled.filter((step) => step.status === "completed").length;
       const nextStatus: ChatDelegationRunStatus =
         completedCount === reconciled.length ? "completed" : completedCount > 0 ? "partial" : "failed";
-      // P3-T4b: reload the run immediately before patching so an orchestrator-set summary written
-      // since this GET began is not clobbered, and only supply the reconciler's fallback summary
-      // when the run has none. The "running"-only gate already keeps this a one-time transition.
-      const fresh = readOptional(() => this.storage.chatDelegationRuns!.get(run.runId)) ?? run;
-      if (fresh.status !== "running") {
-        return reconciled;
-      }
-      const patched = readOptional(() =>
-        this.storage.chatDelegationRuns!.patch(run.runId, {
-          status: nextStatus,
-          finalSummary:
-            fresh.finalSummary ??
-            (nextStatus === "completed"
-              ? "All delegated steps completed after projection reconciliation."
-              : "Delegation reconciled from child runtime state."),
-          stitchedOutput: fresh.stitchedOutput ?? buildStitchedOutputFromSteps(reconciled),
-          finishedAt: new Date().toISOString(),
-        }),
-      );
-      if (patched) {
-        ctx.runChanged = true;
-      }
+      diagnostics.push({
+        signalId: `projection-run-status-drift-${run.runId}`,
+        code: "projection_status_drift",
+        severity: nextStatus === "completed" ? "info" : "warning",
+        title: "Delegation run status projected",
+        summary: `Delegation run remained ${run.status}, but child runtime state projects it as ${nextStatus}.`,
+        evidenceRef: `delegation-run:${run.runId}`,
+        createdAt: new Date().toISOString(),
+      });
     }
     return reconciled;
   }
@@ -480,7 +467,8 @@ export class CoworkAgenticProjectionService {
           now,
         }),
       );
-      return this.storage.chatDelegationSteps!.patch(step.stepId, {
+      return {
+        ...step,
         status: mapDurableStatusToStepStatus(childDurableRun.status),
         summary:
           step.summary ??
@@ -497,7 +485,7 @@ export class CoworkAgenticProjectionService {
             : step.failureGuidance,
         finishedAt: step.finishedAt ?? childDurableRun.finishedAt ?? now,
         durationMs: step.durationMs ?? durationMs(step.startedAt, childDurableRun.finishedAt ?? now),
-      });
+      };
     }
     if (childDurableRun) {
       return step;
@@ -517,14 +505,15 @@ export class CoworkAgenticProjectionService {
         evidenceRef: `chat-turn:${step.childTurnId}`,
         createdAt: now,
       });
-      return this.storage.chatDelegationSteps!.patch(step.stepId, {
+      return {
+        ...step,
         status:
           childTrace.status === "cancelled" ? "cancelled" : childTrace.status === "failed" ? "failed" : "completed",
         summary: step.summary ?? `Child turn ${childTrace.status}; step state was reconciled.`,
         error: childTrace.status === "failed" ? (childTrace.failure?.message ?? step.error) : step.error,
         finishedAt: step.finishedAt ?? now,
         durationMs: step.durationMs ?? durationMs(step.startedAt, now),
-      });
+      };
     }
 
     if (!childDurableRun && step.output?.trim()) {
@@ -537,12 +526,13 @@ export class CoworkAgenticProjectionService {
         evidenceRef: step.childTurnId ? `chat-turn:${step.childTurnId}` : `delegation-step:${step.stepId}`,
         createdAt: now,
       });
-      return this.storage.chatDelegationSteps!.patch(step.stepId, {
+      return {
+        ...step,
         status: "completed",
         summary: step.summary ?? step.output.slice(0, 180),
         finishedAt: step.finishedAt ?? now,
         durationMs: step.durationMs ?? durationMs(step.startedAt, now),
-      });
+      };
     }
 
     if (!childDurableRun && Date.now() - Date.parse(step.startedAt) > STALE_ACTIVE_STEP_MS) {
@@ -555,14 +545,15 @@ export class CoworkAgenticProjectionService {
         evidenceRef: `delegation-step:${step.stepId}`,
         createdAt: now,
       });
-      return this.storage.chatDelegationSteps!.patch(step.stepId, {
+      return {
+        ...step,
         status: "failed",
         summary: "Step blocked: runtime evidence was lost.",
         error: "Delegation step had no durable run, terminal trace, or handoff output after the stale window.",
         failureGuidance: "Continue from gathered evidence or restart this child step with a narrower source target.",
         finishedAt: now,
         durationMs: step.durationMs ?? durationMs(step.startedAt, now),
-      });
+      };
     }
 
     return step;
@@ -748,6 +739,19 @@ function mapDelegationRunStatus(
       return "blocked";
     }
     return run.stitchedOutput || run.finalSummary ? "checkpointing" : "blocked";
+  }
+  if (status === "running" && steps.length > 0) {
+    const activeCount = steps.filter((step) => step.status === "running" || step.status === "pending").length;
+    if (activeCount === 0) {
+      const completedCount = steps.filter((step) => step.status === "completed").length;
+      if (completedCount === steps.length) {
+        return "completed";
+      }
+      if (steps.some(stepProjectsBlockedRuntimeLoss)) {
+        return "blocked";
+      }
+      return run.stitchedOutput || run.finalSummary ? "checkpointing" : "blocked";
+    }
   }
   return "running";
 }
@@ -1303,16 +1307,6 @@ function renderRunTitle(run: ChatDelegationRunRecord): string {
   const objective = run.objective.replace(/\s+/g, " ").trim();
   const label = objective.length > 120 ? `${objective.slice(0, 117)}...` : objective;
   return run.workflowTemplate ? `${run.workflowTemplate}: ${label}` : `Cowork: ${label}`;
-}
-
-function buildStitchedOutputFromSteps(steps: ChatDelegationStepRecord[]): string {
-  return steps
-    .map((step) => {
-      const body = step.output?.trim() || step.error?.trim() || step.summary?.trim() || `Step ${step.status}.`;
-      return `### ${step.label ?? step.role}\n${body}`;
-    })
-    .join("\n\n")
-    .trim();
 }
 
 function buildProjectionDriftDiagnostic(input: {

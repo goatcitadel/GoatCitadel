@@ -191,6 +191,7 @@ export interface PreparedAgentChatTurn {
   prefs: ChatSessionPrefsRecord;
   autonomy: SessionAutonomyPrefsRecord;
   normalized: NormalizedAgentInputFromSend;
+  effectiveMode: ChatSessionPrefsRecord["mode"];
   modelRouterDecision: NonNullable<ChatTurnTraceRecord["routing"]["modelRouter"]>;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
   threadKnowledgeCitations: ChatCitationRecord[];
@@ -203,6 +204,12 @@ export interface PreparedAgentChatTurn {
   branchKind: ChatTurnBranchKind;
   sourceTurnId?: string;
   effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
+}
+
+export function resolvePreparedTurnMode(
+  prepared: Pick<PreparedAgentChatTurn, "effectiveMode" | "prefs" | "normalized">,
+): ChatSessionPrefsRecord["mode"] {
+  return prepared.effectiveMode ?? prepared.prefs.mode ?? prepared.normalized.mode ?? "chat";
 }
 
 export const DEFAULT_GOAL_TURN_BUDGET = 20;
@@ -514,6 +521,7 @@ export async function prepareAgentChatTurn(
     prefs,
     autonomy,
     normalized,
+    effectiveMode,
     modelRouterDecision,
     retrievalTrace,
     threadKnowledgeCitations: threadKnowledgeContext.citations,
@@ -592,7 +600,7 @@ export async function resolvePreparedTurnOrchestration(
   host: ChatTurnPrepHost,
   prepared: PreparedAgentChatTurn,
 ): Promise<PreparedChatExecutionPlanResolution | undefined> {
-  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const mode = prepared.effectiveMode;
   const runtime = host.llmService.getRuntimeConfig({
     useCache: true,
   });
@@ -666,7 +674,7 @@ export function applyApprovedSpecialistsToPlan(
   prepared: PreparedAgentChatTurn,
   plan: ReturnType<typeof buildOrchestrationPlan>,
 ): ReturnType<typeof buildOrchestrationPlan> {
-  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const mode = prepared.effectiveMode;
   if (!chatModeAllowsDynamicTeamGrowth(mode)) {
     return plan;
   }

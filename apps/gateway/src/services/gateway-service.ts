@@ -704,6 +704,8 @@ const PIPELINE_TEMPLATES: Record<string, string[]> = {
   release: ["qa", "ops", "product"],
 };
 export const DEFAULT_WORKSPACE_ID = "default";
+const SYNTHETIC_PERMISSION_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
+const SYNTHETIC_PERMISSION_PROFILE_MAX_ENTRIES = 500;
 const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
 type SessionAutonomyPrefs = SessionAutonomyPrefsRecord;
 
@@ -5731,7 +5733,41 @@ export class GatewayService {
     if (!profile.profileId.startsWith("scheduled-intersection:")) {
       return;
     }
-    this.syntheticPermissionProfiles.set(profile.profileId, profile);
+    const syntheticProfiles = this.getSyntheticPermissionProfileMap();
+    if (!syntheticProfiles) {
+      return;
+    }
+    this.pruneSyntheticPermissionProfiles();
+    syntheticProfiles.set(profile.profileId, profile);
+  }
+
+  private pruneSyntheticPermissionProfiles(nowMs = Date.now()): void {
+    const syntheticProfiles = this.getSyntheticPermissionProfileMap();
+    if (!syntheticProfiles) {
+      return;
+    }
+    for (const [profileId, profile] of syntheticProfiles.entries()) {
+      const updatedAtMs = Date.parse(profile.updatedAt || profile.createdAt);
+      if (Number.isFinite(updatedAtMs) && nowMs - updatedAtMs > SYNTHETIC_PERMISSION_PROFILE_TTL_MS) {
+        syntheticProfiles.delete(profileId);
+      }
+    }
+    if (syntheticProfiles.size <= SYNTHETIC_PERMISSION_PROFILE_MAX_ENTRIES) {
+      return;
+    }
+    const entries = [...syntheticProfiles.entries()].sort(
+      ([, left], [, right]) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+    );
+    for (const [profileId] of entries.slice(
+      0,
+      Math.max(0, entries.length - SYNTHETIC_PERMISSION_PROFILE_MAX_ENTRIES),
+    )) {
+      syntheticProfiles.delete(profileId);
+    }
+  }
+
+  private getSyntheticPermissionProfileMap(): Map<string, PermissionProfileRecord> | undefined {
+    return this.syntheticPermissionProfiles instanceof Map ? this.syntheticPermissionProfiles : undefined;
   }
 
   /**
@@ -5786,7 +5822,7 @@ export class GatewayService {
         this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
       ),
       metadata: {
-        surface: prepared.normalized.mode ?? prepared.prefs.mode,
+        surface: chatTurnPrepService.resolvePreparedTurnMode(prepared),
         objective: prepared.content,
         autonomous: {
           kind,
@@ -5994,7 +6030,7 @@ export class GatewayService {
       branchKind: prepared.branchKind,
       sourceTurnId: prepared.sourceTurnId,
       status: "running",
-      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      mode: chatTurnPrepService.resolvePreparedTurnMode(prepared),
       model: input.model ?? prepared.prefs.model,
       webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
       memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
@@ -6437,7 +6473,7 @@ export class GatewayService {
     const workspaceId =
       input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const existing = input.policyContext;
-    if (existing?.permissionProfile && existing.approvedCodeModeRunId) {
+    if (existing?.permissionProfile) {
       this.assertResolvedToolPolicyContextAllowed(existing);
       return {
         ...input,
@@ -6492,12 +6528,15 @@ export class GatewayService {
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
-    const syntheticPermissionProfile = input.permissionProfileId
-      ? this.syntheticPermissionProfiles.get(input.permissionProfileId)
+    this.pruneSyntheticPermissionProfiles();
+    const requestedPermissionProfileId = this.resolveCallerSelectablePermissionProfileId(input);
+    const syntheticProfiles = this.getSyntheticPermissionProfileMap();
+    const syntheticPermissionProfile = requestedPermissionProfileId
+      ? syntheticProfiles?.get(requestedPermissionProfileId)
       : undefined;
-    if (input.permissionProfileId?.startsWith("scheduled-intersection:") && !syntheticPermissionProfile) {
+    if (requestedPermissionProfileId?.startsWith("scheduled-intersection:") && !syntheticPermissionProfile) {
       throw new ConflictError({
-        message: `Non-persisted permission profile ${input.permissionProfileId} is unavailable for this runtime.`,
+        message: `Non-persisted permission profile ${requestedPermissionProfileId} is unavailable for this runtime.`,
       });
     }
     // Default permission profile for sessions with no explicit profile/activation.
@@ -6523,7 +6562,7 @@ export class GatewayService {
           taskId: input.taskId,
           runId: input.runId,
           surface: input.surface,
-          profileId: input.permissionProfileId,
+          profileId: requestedPermissionProfileId,
           overrideId: input.localOperatorOverrideId,
           disableLocalOperatorOverrides: this.config.assistant.deploymentProfile === "remote_hardened",
           defaultProfileId: defaultPermissionProfileId,
@@ -6550,6 +6589,60 @@ export class GatewayService {
       localOperatorOverrideId: resolved.localOperatorOverride?.overrideId,
       localOperatorOverride: resolved.localOperatorOverride,
     };
+  }
+
+  private resolveCallerSelectablePermissionProfileId(input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    workspaceId?: string;
+    permissionProfileId?: string;
+  }): string | undefined {
+    const profileId = input.permissionProfileId?.trim();
+    if (!profileId) {
+      return undefined;
+    }
+    if (profileId === "safe") {
+      return profileId;
+    }
+    if (profileId === "trusted_local_power" && this.config.assistant.deploymentProfile === "remote_hardened") {
+      return profileId;
+    }
+    const synthetic = this.getSyntheticPermissionProfileMap()?.get(profileId);
+    const readProfile = this.storage.permissionProfiles.getProfile;
+    const profile =
+      synthetic ??
+      (typeof readProfile === "function" ? readProfile.call(this.storage.permissionProfiles, profileId) : undefined);
+    if (!profile) {
+      throw new ConflictError({
+        message: `Permission profile ${profileId} is not selectable for the requested operator/workspace scope.`,
+      });
+    }
+    if (isSystemOwnedRestrictedPermissionProfileRequest(profile.profileId, input)) {
+      return profileId;
+    }
+    if (profile.scope === "global") {
+      throw new ConflictError({
+        message: `Permission profile ${profile.profileId} cannot be selected directly by request.`,
+      });
+    }
+    if (
+      profile.scope === "operator" &&
+      profile.scopeRef === input.operatorId &&
+      profile.createdBy === input.operatorId
+    ) {
+      return profileId;
+    }
+    if (
+      profile.scope === "workspace" &&
+      profile.scopeRef === input.workspaceId &&
+      profile.createdBy === input.operatorId
+    ) {
+      return profileId;
+    }
+    throw new ConflictError({
+      message: `Permission profile ${profile.profileId} is not selectable for the requested operator/workspace scope.`,
+    });
   }
 
   private buildRuntimeExposureSnapshot(): Record<string, unknown> {
@@ -7940,6 +8033,9 @@ export class GatewayService {
   }
 
   private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
+    if (GATEWAY_OWNED_MCP_SERVER_IDS.has(request.serverId)) {
+      return;
+    }
     if (!this.capabilityScopeResolver) {
       throw new PolicyViolationError({
         code: "POLICY_BLOCKED",
@@ -10810,6 +10906,30 @@ function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string
     localOperatorOverrideId: input.localOperatorOverrideId,
     surface: input.surface,
   };
+}
+
+function isSystemOwnedRestrictedPermissionProfileRequest(
+  profileId: string,
+  input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+  },
+): boolean {
+  if (profileId !== SCHEDULED_TURN_PERMISSION_PROFILE_ID && profileId !== HEARTBEAT_PERMISSION_PROFILE_ID) {
+    return false;
+  }
+  if (input.authActorSource !== "none") {
+    return false;
+  }
+  const operatorId = input.operatorId?.trim();
+  const authActorId = input.authActorId?.trim();
+  return Boolean(
+    operatorId &&
+    authActorId &&
+    operatorId === authActorId &&
+    (operatorId === "system-cron" || operatorId === "system"),
+  );
 }
 
 function getChannelDeliveryChunkLimit(channelKey: string): number {

@@ -23,6 +23,13 @@ describe("classifyArgumentRisk", () => {
     expect(decision.matchedPattern).toBe("terraform destroy");
   });
 
+  it("flags risky content beyond the first 8 KiB of an argument value", () => {
+    const longPrefix = "x".repeat(9000);
+    const decision = classifyArgumentRisk("shell.exec", { command: `${longPrefix} terraform destroy` }, IAC_PATTERNS);
+    expect(decision.risky).toBe(true);
+    expect(decision.matchedPattern).toBe("terraform destroy");
+  });
+
   it("matches on a tool-name-scoped pattern via a nested argument path", () => {
     const decision = classifyArgumentRisk("terraform.run", { action: "destroy" }, IAC_PATTERNS);
     expect(decision.risky).toBe(true);

@@ -12,6 +12,7 @@ import {
   readLiveIntentThreshold,
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
+import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -452,7 +453,7 @@ describe("ImprovementService ledger lifecycle", () => {
     harness.service.stopScheduler();
 
     harness.service.ensureWeeklyImprovementCronJob();
-    const cronJob = harness.storage.cronJobs.get("improvement_weekly");
+    const cronJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     // First-run default is disabled (codex finding #27): the weekly job ships
     // sampled chat/tool traces to the LLM judge and must not start running
     // until an operator explicitly opts in from Mission Control settings.
@@ -870,8 +871,7 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
     },
     createChatCompletion: async () => ({ id: "mock", choices: [] }) as never,
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
-    readEffectiveBlockerTemplateStrictness: () =>
-      readBlockerTemplateStrictness(storage.systemSettings),
+    readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(storage.systemSettings),
     readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(storage.systemSettings),
     readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(storage.systemSettings),
     readTranscriptOrEmpty: async () => [],

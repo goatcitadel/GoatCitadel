@@ -40,7 +40,11 @@ import {
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
-import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import {
+  resolvePreparedTurnMode,
+  type ChatTurnPrepHost,
+  type PreparedAgentChatTurn,
+} from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
@@ -272,6 +276,7 @@ async function runAgentSendChatMessageLlmPath(
 ): Promise<ChatSendMessageResponse> {
   const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
+  const mode = resolvePreparedTurnMode(prepared);
   try {
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
@@ -282,7 +287,7 @@ async function runAgentSendChatMessageLlmPath(
       branchKind: prepared.branchKind,
       sourceTurnId: prepared.sourceTurnId,
       content: prepared.content,
-      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      mode,
       providerId: input.providerId ?? prepared.prefs.providerId,
       model: input.model ?? prepared.prefs.model,
       webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
@@ -349,7 +354,7 @@ async function runAgentSendChatMessageLlmPath(
         branchKind: "retry",
         sourceTurnId: turnId,
         content: retryPrompt,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        mode,
         providerId: input.providerId ?? prepared.prefs.providerId,
         model: input.model ?? prepared.prefs.model,
         webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
@@ -527,7 +532,7 @@ async function runAgentSendChatMessageLlmPath(
     });
     const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
       sessionId,
-      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      mode,
       content: prepared.content,
       capabilitySuggestions: capabilityUpgradeSuggestions,
       trace: hydratedTrace,

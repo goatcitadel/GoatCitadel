@@ -102,6 +102,39 @@ describe("rankMemoryCandidates", () => {
     expect(ranked.every((candidate) => candidate.rankSignals.embeddingStatus === "missing")).toBe(true);
   });
 
+  it("does not treat substring token matches as lexical or semantic-hint hits", () => {
+    const ranked = rankMemoryCandidates(
+      "mem",
+      [
+        {
+          candidateId: "partial",
+          sourceType: "memory_item",
+          sourceRef: "partial",
+          text: "Memory memoir memoization notes.",
+          retrievalHints: ["memory memoir"],
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+        {
+          candidateId: "exact",
+          sourceType: "memory_item",
+          sourceRef: "exact",
+          text: "Use the mem budget for local context.",
+          retrievalHints: ["mem budget"],
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+      ],
+      { maxCandidates: 2, nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("exact");
+    expect(ranked.find((candidate) => candidate.candidateId === "partial")?.rankSignals).toMatchObject({
+      lexicalScore: 0,
+      lexicalBm25Score: 0,
+      semanticHintScore: 0,
+    });
+    expect(ranked.find((candidate) => candidate.candidateId === "exact")?.rankSignals.lexicalScore).toBeGreaterThan(0);
+  });
+
   it("falls back cleanly when embeddings are missing or incompatible", () => {
     const ranked = rankMemoryCandidates(
       "approval evidence",

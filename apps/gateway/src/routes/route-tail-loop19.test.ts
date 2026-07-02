@@ -9,6 +9,7 @@ import {
   readConfigSecret,
   resolveLineChannelSecret,
   resolveNextcloudTalkSecret,
+  resolveTelegramBotTokenEnvSecret,
   resolveTelegramWebhookSecret,
   resolveWhatsAppAppSecret,
   resolveWhatsAppVerifyToken,
@@ -480,12 +481,17 @@ describe("Loop 19 webhook shared secret resolution tails", () => {
     process.env.WHATSAPP_VERIFY_TOKEN = " env-verify ";
     process.env.NEXTCLOUD_TALK_TOKEN = " env-nextcloud ";
     process.env.LINE_CHANNEL_SECRET = " env-line ";
+    process.env.GOATCITADEL_POSTGRES_PASSWORD = "do-not-send-to-telegram";
+    process.env.GOATCITADEL_TELEGRAM_BOT_TOKEN = " env-telegram-bot ";
     process.env.NOT_ALLOWED_SECRET = "do-not-read";
 
     expect(readConfigSecret({ token: " direct " }, "token", "tokenEnv")).toBe("direct");
     expect(readConfigSecret({ tokenEnv: "NOT_ALLOWED_SECRET" }, "token", "tokenEnv")).toBeUndefined();
+    expect(readConfigSecret({ tokenEnv: "GOATCITADEL_POSTGRES_PASSWORD" }, "token", "tokenEnv")).toBeUndefined();
     expect(readConfigSecret({ tokenEnv: "TELEGRAM_WEBHOOK_SECRET" }, "token", "tokenEnv")).toBe("env-telegram");
     expect(readConfigSecret({ tokenEnv: "TELEGRAM_MISSING" }, "token", "tokenEnv")).toBeUndefined();
+    expect(resolveTelegramBotTokenEnvSecret("GOATCITADEL_POSTGRES_PASSWORD")).toBeUndefined();
+    expect(resolveTelegramBotTokenEnvSecret("GOATCITADEL_TELEGRAM_BOT_TOKEN")).toBe("env-telegram-bot");
     expect(resolveTelegramWebhookSecret({ webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET" })).toBe("env-telegram");
     expect(resolveTelegramWebhookSecret({ secretToken: "direct-telegram" })).toBe("direct-telegram");
     expect(resolveTelegramWebhookSecret({ botSecret: "bot-telegram" })).toBe("bot-telegram");

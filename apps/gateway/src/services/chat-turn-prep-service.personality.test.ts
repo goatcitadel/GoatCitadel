@@ -196,6 +196,16 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(cowork.readGuidance()).toContain("Prefers metric units.");
   });
 
+  it("keeps the sticky session mode as the prepared effective mode when the request omits mode", async () => {
+    const harness = createHost("cowork");
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "continue the task" });
+
+    expect(prepared.normalized.mode).toBe("chat");
+    expect(prepared.effectiveMode).toBe("cowork");
+    expect(harness.readGuidance()).toContain("Mode: cowork");
+  });
+
   it("keeps the stable base prompt block first and appends goal/runtime guidance as volatile blocks", async () => {
     const harness = createHost("cowork");
     vi.mocked(harness.host.storage.chatSessionMeta.ensure).mockReturnValue({
@@ -566,6 +576,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       workspaceId: "default",
       content: "Research release evidence",
       normalized: { mode: "cowork" },
+      effectiveMode: "cowork",
       prefs: createPrefs("cowork"),
     };
 
@@ -685,6 +696,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       workspaceId: "default",
       content: "Research release evidence",
       normalized: { mode: "cowork" },
+      effectiveMode: "cowork",
       prefs: createPrefs("cowork"),
     };
 
@@ -1295,6 +1307,7 @@ function createPreparedTurnForOrchestration(overrides: {
     conversationMessages: [],
     history: [],
     normalized: { mode: "chat" },
+    effectiveMode: "chat",
     prefs: createPrefs("chat", { planningMode: overrides.planningMode }),
     modelRouterDecision: routeWithModelRouter({ prompt: content }),
   };

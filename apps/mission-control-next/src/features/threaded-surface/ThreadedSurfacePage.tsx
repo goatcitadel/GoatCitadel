@@ -2,9 +2,11 @@
 import {
   useCallback,
   useEffect,
+  lazy,
   useMemo,
   useRef,
   useState,
+  Suspense,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -53,7 +55,6 @@ import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { ThreadedTimeline } from "./ThreadedTimeline";
-import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
 import "./styles/rail.css";
 import "./styles/header.css";
 import "./styles/timeline-frame.css";
@@ -64,6 +65,11 @@ import "./styles/composer.css";
 import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";
 import "./styles/generated-artifact.css";
+
+const LazyThreadedWorkflowPanel = lazy(async () => {
+  const module = await import("./ThreadedWorkflowPanel");
+  return { default: module.ThreadedWorkflowPanel };
+});
 
 const MODE_META: Record<
   ChatMode,
@@ -238,6 +244,8 @@ export function ThreadedSurfacePage({
   const railDrawerOpen = railDrawerLayout && railOpen;
   const railCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const railFocusReturnRef = useRef<HTMLElement | null>(null);
+  const contextPanelRef = useRef<HTMLElement | null>(null);
+  const contextFocusReturnRef = useRef<HTMLElement | null>(null);
   const activeProps = input.activeSessionSurfaceProps;
   const [activeUtilityPanel, setActiveUtilityPanel] = useState<ThreadedUtilityPanelId | null>(null);
   const dockOpen = Boolean((input.dockOpen || activeUtilityPanel) && activeProps);
@@ -285,14 +293,51 @@ export function ThreadedSurfacePage({
       }) as CSSProperties,
     [contextPane.width, workbenchPane.width],
   );
-  const handleDockOpenChange = (next: boolean) => {
-    setActiveUtilityPanel(null);
-    input.onDockOpenChange(next);
-  };
-  const handleSelectUtilityPanel = (panel: ThreadedUtilityPanelId) => {
-    setActiveUtilityPanel(panel);
-    input.onDockOpenChange(true);
-  };
+  const captureContextFocusReturn = useCallback(() => {
+    if (
+      typeof document !== "undefined" &&
+      typeof HTMLElement !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+    ) {
+      contextFocusReturnRef.current = document.activeElement;
+    }
+  }, []);
+  const restoreContextFocusReturn = useCallback(() => {
+    queueMicrotask(() => {
+      const target = contextFocusReturnRef.current;
+      if (
+        target &&
+        typeof target.focus === "function" &&
+        (typeof document === "undefined" || !document.contains || document.contains(target))
+      ) {
+        target.focus();
+      }
+      contextFocusReturnRef.current = null;
+    });
+  }, []);
+  const handleDockOpenChange = useCallback(
+    (next: boolean) => {
+      if (next && !dockOpen) {
+        captureContextFocusReturn();
+      }
+      if (!next) {
+        restoreContextFocusReturn();
+      }
+      setActiveUtilityPanel(null);
+      input.onDockOpenChange(next);
+    },
+    [captureContextFocusReturn, dockOpen, input, restoreContextFocusReturn],
+  );
+  const handleSelectUtilityPanel = useCallback(
+    (panel: ThreadedUtilityPanelId) => {
+      if (!dockOpen) {
+        captureContextFocusReturn();
+      }
+      setActiveUtilityPanel(panel);
+      input.onDockOpenChange(true);
+    },
+    [captureContextFocusReturn, dockOpen, input],
+  );
   const closeSessionRail = useCallback(() => {
     input.onSessionRailOpenChange(false);
     if (!railDrawerLayout) {
@@ -358,6 +403,34 @@ export function ThreadedSurfacePage({
     document.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [closeSessionRail, railDrawerOpen]);
+  useEffect(() => {
+    if (!dockOpen) {
+      return;
+    }
+    queueMicrotask(() => {
+      contextPanelRef.current?.focus();
+    });
+  }, [activeUtilityPanel, dockOpen]);
+  useEffect(() => {
+    if (
+      !dockOpen ||
+      railDrawerOpen ||
+      typeof document === "undefined" ||
+      typeof document.addEventListener !== "function"
+    ) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      handleDockOpenChange(false);
+    };
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [dockOpen, handleDockOpenChange, railDrawerOpen]);
 
   return (
     <div
@@ -637,12 +710,20 @@ export function ThreadedSurfacePage({
               onPointerDown={workbenchPane.handlePointerDown}
               width={workbenchPane.width}
             />
-            <ThreadedWorkflowPanel panel={workflowPanel} />
+            <Suspense fallback={<div className="mc-next-threaded-panel-loading">Loading workflow panel...</div>}>
+              <LazyThreadedWorkflowPanel panel={workflowPanel} />
+            </Suspense>
           </aside>
         ) : null}
 
         {dockOpen && input.contextDockProps ? (
-          <aside className={`mc-next-threaded-context-panel${activeUtilityPanel ? " utility" : ""}`}>
+          <aside
+            ref={contextPanelRef}
+            className={`mc-next-threaded-context-panel${activeUtilityPanel ? " utility" : ""}`}
+            role="complementary"
+            aria-label={activeUtilityPanel ? "Thread utility drawer" : "Thread context drawer"}
+            tabIndex={-1}
+          >
             <PaneResizeHandle
               ariaLabel="Resize right drawer"
               className="panel"

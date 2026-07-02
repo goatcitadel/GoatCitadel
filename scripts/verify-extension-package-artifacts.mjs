@@ -22,6 +22,7 @@ const packageManifestPath = path.join(
   "goatcitadel.integration-plugin.json",
 );
 const distValidatorPath = path.join(packageDir, "dist", "integration-plugins.js");
+let gnuTarCache;
 
 if (!fs.existsSync(distValidatorPath)) {
   fail("extensions-sdk dist is missing; run `pnpm --filter @goatcitadel/extensions-sdk build` first.");
@@ -61,7 +62,7 @@ try {
   const tarball = findPackedTarball(tempDir, pack.stdout);
   const extractDir = path.join(tempDir, "extract");
   fs.mkdirSync(extractDir, { recursive: true });
-  const tar = spawnSync("tar", ["-xzf", tarball, "-C", extractDir], {
+  const tar = spawnSync("tar", tarExtractArgs(tarball, extractDir), {
     encoding: "utf8",
     shell: false,
   });
@@ -215,7 +216,7 @@ function verifyPortableSkillBundlePackageSurvivesExtraction(tempDir) {
   );
 
   const tarball = path.join(tempDir, "portable-skill-bundle.tgz");
-  const pack = spawnSync("tar", ["-czf", tarball, "-C", bundleDir, "."], {
+  const pack = spawnSync("tar", tarCreateArgs(tarball, bundleDir), {
     encoding: "utf8",
     shell: false,
   });
@@ -227,7 +228,7 @@ function verifyPortableSkillBundlePackageSurvivesExtraction(tempDir) {
   }
 
   fs.mkdirSync(extractDir, { recursive: true });
-  const extract = spawnSync("tar", ["-xzf", tarball, "-C", extractDir], {
+  const extract = spawnSync("tar", tarExtractArgs(tarball, extractDir), {
     encoding: "utf8",
     shell: false,
   });
@@ -291,6 +292,27 @@ function resolvePnpmPackArgs(tempDir) {
     return ["pack", "--pack-destination", tempDir, "--json"];
   }
   return ["/d", "/s", "/c", `pnpm pack --pack-destination ${quoteCmdSafeArg(tempDir)} --json`];
+}
+
+function tarExtractArgs(tarball, extractDir) {
+  return maybeForceLocalTarArgs(["-xzf", tarball, "-C", extractDir]);
+}
+
+function tarCreateArgs(tarball, sourceDir) {
+  return maybeForceLocalTarArgs(["-czf", tarball, "-C", sourceDir, "."]);
+}
+
+function maybeForceLocalTarArgs(args) {
+  return process.platform === "win32" && isGnuTar() ? ["--force-local", ...args] : args;
+}
+
+function isGnuTar() {
+  if (gnuTarCache !== undefined) {
+    return gnuTarCache;
+  }
+  const result = spawnSync("tar", ["--version"], { encoding: "utf8", shell: false });
+  gnuTarCache = /gnu tar/i.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+  return gnuTarCache;
 }
 
 function quoteCmdSafeArg(value) {

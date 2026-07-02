@@ -61,6 +61,7 @@ const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
 const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
 const COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT = "cowork.turn.operator_resume";
+const AUTONOMY_KILL_SWITCH_RESUME_EVENT = "autonomy.v1.enabled";
 
 class DurableWorkflowTimeoutError extends Error {
   public constructor(
@@ -977,6 +978,8 @@ export class DurableRunService {
       } catch (error) {
         if (isDurableWorkflowTimeoutError(error) && isCoworkDurableChatTurnRun(run)) {
           await this.markCoworkRunWaitingForOperator(run, error);
+        } else if (isAutonomousDurableRunDisabledError(error)) {
+          await this.markAutonomousRunWaitingForKillSwitch(run, error);
         } else {
           await this.failWorkflowRun(
             run,
@@ -1182,6 +1185,71 @@ export class DurableRunService {
         type: "durable_run_waiting",
         runId: waiting.runId,
         reason: "cowork_workflow_timeout",
+        waitForEvent,
+      },
+      buildDurableRealtimeOptions(waiting.runId),
+    );
+  }
+
+  private async markAutonomousRunWaitingForKillSwitch(run: DurableRunRecord, error: Error): Promise<void> {
+    const now = new Date().toISOString();
+    const waitForEvent = {
+      eventKey: AUTONOMY_KILL_SWITCH_RESUME_EVENT,
+      correlationId: run.runId,
+    };
+    const checkpointState = {
+      workflowKey: run.workflowKey,
+      reason: "autonomy_kill_switch",
+      message: error.message,
+      waitForEvent,
+    };
+    const waiting = this.retryDurableRunUpdate(run.runId, (current) => {
+      if (this.isTerminalRunStatus(current.status)) {
+        return current;
+      }
+      if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        return current;
+      }
+      let next!: DurableRunRecord;
+      this.ctx.storage.runImmediateTransaction(() => {
+        next = this.ctx.storage.durableRuns.updateRun({
+          runId: current.runId,
+          status: "waiting",
+          clearFinishedAt: true,
+          clearLease: true,
+          clearLastError: true,
+          updatedAt: now,
+          metadata: {
+            ...current.metadata,
+            waitForEvent,
+            autonomyKillSwitch: {
+              reason: "autonomyV1Disabled",
+              blockedAt: now,
+              message: error.message,
+            },
+          },
+          expectedVersion: current.version,
+        });
+        this.ctx.storage.durableRuns.createCheckpoint({
+          runId: next.runId,
+          checkpointKind: "run_waiting",
+          state: checkpointState,
+          createdAt: now,
+        });
+        this.recordDurableTimelineEvent(next.runId, "run_waiting", checkpointState);
+      });
+      return next;
+    });
+    if (waiting.status !== "waiting") {
+      return;
+    }
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_waiting",
+        runId: waiting.runId,
+        reason: "autonomy_kill_switch",
         waitForEvent,
       },
       buildDurableRealtimeOptions(waiting.runId),
@@ -1574,6 +1642,10 @@ export function resolveDurableWorkflowTimeoutMs(_run: DurableRunRecord, defaultT
 
 function isDurableWorkflowTimeoutError(error: unknown): error is DurableWorkflowTimeoutError {
   return error instanceof DurableWorkflowTimeoutError;
+}
+
+function isAutonomousDurableRunDisabledError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "AutonomousDurableRunDisabledError";
 }
 
 function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {

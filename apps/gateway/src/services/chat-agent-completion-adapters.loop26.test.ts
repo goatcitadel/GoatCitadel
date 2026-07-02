@@ -61,6 +61,23 @@ describe("chat-agent-completion-adapters edge cases", () => {
         rawArguments: "{not-json",
       },
     ]);
+    expect(
+      readToolCalls(
+        {
+          tool_calls: [],
+          content:
+            '<tool_call>{"id":"serialized-1","function":{"name":"search_web","arguments":"{\\"query\\":\\"empty array fallback\\"}"}}</tool_call>',
+        },
+        canonical,
+      ),
+    ).toEqual([
+      {
+        id: "serialized-1",
+        toolName: "browser.search",
+        args: { query: "empty array fallback" },
+        rawArguments: '{"query":"empty array fallback"}',
+      },
+    ]);
 
     expect(
       parseSerializedToolCalls(
@@ -141,6 +158,38 @@ describe("chat-agent-completion-adapters edge cases", () => {
     expect(toProviderToolFunctionName("browser/search", existing)).toBe("browser_search_3");
     expect(toProviderToolFunctionName("123", existing)).toBe("tool_123");
     expect(toProviderToolFunctionName("!!!", existing)).toBe("tool_fn");
+  });
+
+  it("aggregates full-message stream tool calls when no delta tool_calls are present", () => {
+    const aggregate = createCompletionStreamAggregate();
+
+    expect(
+      absorbCompletionStreamChunk(aggregate, {
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-message",
+                  type: "function",
+                  function: { name: "browser_search", arguments: '{"query":"from message"}' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toEqual({ delta: undefined, sawToolCall: true });
+
+    expect(buildCompletionFromAggregate(aggregate).choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: "call-message",
+        type: "function",
+        function: { name: "browser_search", arguments: '{"query":"from message"}' },
+      },
+    ]);
   });
 
   it("reports invalid provider tool-call protocol without treating phantom tools as callable", () => {

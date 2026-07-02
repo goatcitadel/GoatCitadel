@@ -66,12 +66,20 @@ describe("gateway-core logger", () => {
     logger.info("outbound call", {
       detail: "responded 401 for Bearer sk-LIVE1234567890abcdefABCDEF token",
       note: "key=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      github: "token ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+      slack: "failed xoxb-123456789012-secret-token",
+      aws: "access AKIA1234567890ABCDEF",
+      url: "https://user:password-secret@example.com/path",
       safe: "model claude-sonnet-4-5 returned ok",
     });
 
     const output = String(writeSpy.mock.calls.at(-1)?.[0] ?? "");
     expect(output).not.toContain("sk-LIVE1234567890abcdefABCDEF");
     expect(output).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    expect(output).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz1234567890");
+    expect(output).not.toContain("xoxb-123456789012-secret-token");
+    expect(output).not.toContain("AKIA1234567890ABCDEF");
+    expect(output).not.toContain("user:password-secret@example.com");
     expect(output).toContain("[redacted]");
     // Benign values (and short sk-like tokens) are preserved — no over-redaction.
     expect(output).toContain("claude-sonnet-4-5");

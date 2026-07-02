@@ -1,7 +1,7 @@
 import { lookup as nodeDnsLookup } from "node:dns";
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { isIP } from "node:net";
-import type { EgressDecision } from "@goatcitadel/contracts";
+import { redactSecretText, type EgressDecision } from "@goatcitadel/contracts";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { Dispatcher } from "undici";
 
@@ -488,8 +488,20 @@ async function fetchGuardedOnce(
     if (cause instanceof Error && cause.message.includes("resolved address is blocked")) {
       throw cause;
     }
-    throw error;
+    throw redactFetchError(error);
   }
+}
+
+function redactFetchError(error: unknown): Error {
+  if (!(error instanceof Error)) {
+    return new Error(redactSecretText(String(error)).value);
+  }
+  const redacted = new Error(redactSecretText(error.message).value);
+  redacted.name = error.name;
+  if (error.stack) {
+    redacted.stack = redactSecretText(error.stack).value;
+  }
+  return redacted;
 }
 
 function resolveFetchBodyReadLimits(options: FetchAllowlistedOptions): FetchBodyReadLimits {

@@ -13,6 +13,7 @@ import {
   readLiveIntentThreshold,
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
+import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 
 interface Harness {
   rootDir: string;
@@ -41,7 +42,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
     harness.service.ensureWeeklyImprovementCronJob();
-    const enabledJob = harness.storage.cronJobs.get("improvement_weekly");
+    const enabledJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     expect(enabledJob).toBeDefined();
     harness.storage.cronJobs.upsert(
       {
@@ -74,7 +75,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     // First-run default is disabled (codex finding #27). Opt the operator in
     // before forcing the run, since the scheduler skips disabled jobs even
     // when force=true (matches the first loop43 test in this file).
-    const created = harness.storage.cronJobs.get("improvement_weekly");
+    const created = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
@@ -105,7 +106,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
       queuedRecommendations: [],
     });
 
-    const cronJob = harness.storage.cronJobs.get("improvement_weekly");
+    const cronJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     expect(cronJob).toMatchObject({
       lastRunAt: "2026-05-17T09:30:00.000Z",
       nextRunAt: "2026-05-24T09:30:00.000Z",

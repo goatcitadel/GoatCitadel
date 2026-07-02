@@ -47,7 +47,7 @@ export function readToolCalls(
 ): ParsedToolCall[] {
   const raw = message.tool_calls;
   const out: ParsedToolCall[] = [];
-  if (Array.isArray(raw)) {
+  if (Array.isArray(raw) && raw.length > 0) {
     for (const value of raw) {
       const toolCall = value as Record<string, unknown>;
       const id = typeof toolCall.id === "string" ? toolCall.id : `tool-${randomUUID()}`;
@@ -389,19 +389,28 @@ export function absorbCompletionStreamChunk(
       aggregate.finishReason = choice.finish_reason.trim();
     }
     const message = choice.message as Record<string, unknown> | undefined;
+    const delta = choice.delta as Record<string, unknown> | undefined;
+    const deltaToolCalls =
+      delta && typeof delta === "object" && Array.isArray(delta.tool_calls)
+        ? (delta.tool_calls as Array<Record<string, unknown>>)
+        : [];
     if (message && typeof message === "object") {
       const messageDelta = extractMessageContent(message);
       if (messageDelta) {
         aggregate.content += messageDelta;
         textDelta += messageDelta;
       }
-      const fullToolCalls = readToolCalls(message, new Map<string, string>());
+      const fullToolCalls = readStructuredMessageToolCalls(message);
       if (fullToolCalls.length > 0) {
         sawToolCall = true;
+        if (deltaToolCalls.length === 0) {
+          for (const toolCall of fullToolCalls) {
+            mergeCompletionToolCall(aggregate, toolCall);
+          }
+        }
       }
     }
 
-    const delta = choice.delta as Record<string, unknown> | undefined;
     if (!delta || typeof delta !== "object") {
       continue;
     }
@@ -420,30 +429,10 @@ export function absorbCompletionStreamChunk(
       aggregate.content += deltaText;
       textDelta += deltaText;
     }
-    const deltaToolCalls = Array.isArray(delta.tool_calls) ? (delta.tool_calls as Array<Record<string, unknown>>) : [];
     if (deltaToolCalls.length > 0) {
       sawToolCall = true;
       for (const toolCall of deltaToolCalls) {
-        const index = typeof toolCall.index === "number" ? toolCall.index : aggregate.toolCalls.size;
-        const current = aggregate.toolCalls.get(index) ?? {
-          functionArguments: "",
-        };
-        if (typeof toolCall.id === "string" && toolCall.id.trim()) {
-          current.id = toolCall.id.trim();
-        }
-        if (typeof toolCall.type === "string" && toolCall.type.trim()) {
-          current.type = toolCall.type.trim();
-        }
-        const fn = toolCall.function as Record<string, unknown> | undefined;
-        if (fn && typeof fn === "object") {
-          if (typeof fn.name === "string" && fn.name.trim()) {
-            current.functionName = fn.name.trim();
-          }
-          if (typeof fn.arguments === "string") {
-            current.functionArguments += fn.arguments;
-          }
-        }
-        aggregate.toolCalls.set(index, current);
+        mergeCompletionToolCall(aggregate, toolCall);
       }
     }
   }
@@ -451,6 +440,47 @@ export function absorbCompletionStreamChunk(
     delta: textDelta || undefined,
     sawToolCall,
   };
+}
+
+function readStructuredMessageToolCalls(message: Record<string, unknown>): Array<Record<string, unknown>> {
+  const raw = message.tool_calls;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [];
+  }
+  return raw.filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+  );
+}
+
+function mergeCompletionToolCall(aggregate: CompletionStreamAggregate, toolCall: Record<string, unknown>): void {
+  const index = typeof toolCall.index === "number" ? toolCall.index : nextCompletionToolCallIndex(aggregate);
+  const current = aggregate.toolCalls.get(index) ?? {
+    functionArguments: "",
+  };
+  if (typeof toolCall.id === "string" && toolCall.id.trim()) {
+    current.id = toolCall.id.trim();
+  }
+  if (typeof toolCall.type === "string" && toolCall.type.trim()) {
+    current.type = toolCall.type.trim();
+  }
+  const fn = toolCall.function as Record<string, unknown> | undefined;
+  if (fn && typeof fn === "object") {
+    if (typeof fn.name === "string" && fn.name.trim()) {
+      current.functionName = fn.name.trim();
+    }
+    if (typeof fn.arguments === "string") {
+      current.functionArguments += fn.arguments;
+    }
+  }
+  aggregate.toolCalls.set(index, current);
+}
+
+function nextCompletionToolCallIndex(aggregate: CompletionStreamAggregate): number {
+  let index = 0;
+  while (aggregate.toolCalls.has(index)) {
+    index += 1;
+  }
+  return index;
 }
 
 export function extractContentTextFromDelta(content: unknown): string {

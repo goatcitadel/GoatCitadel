@@ -10,7 +10,7 @@ import type {
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
 export type ChatDurableThreadEventType =
   | "chat_thread_turn_appended"
@@ -106,7 +106,7 @@ export function beginDurableChatRun(
   if (!deps.shouldUseDurableExecution) {
     return undefined;
   }
-  const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+  const mode = resolvePreparedTurnMode(prepared);
   const run = deps.createDurableRun({
     workflowKey: "chat.turn.execute",
     payload: deps.buildDurablePayloadRecord(prepared, input, threadEventType),

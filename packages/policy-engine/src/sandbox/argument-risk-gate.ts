@@ -8,7 +8,6 @@ export interface ArgumentRiskDecision {
 }
 
 const MAX_ARG_RISK_PATTERN_LENGTH = 512;
-const MAX_ARG_VALUE_LENGTH = 8192;
 
 /**
  * Generalizes the shell-risk gate to arbitrary tools: a tool is allowed in general
@@ -27,10 +26,7 @@ export function classifyArgumentRisk(
     if (!matchesToolName(toolName, pattern.toolNamePattern)) {
       continue;
     }
-    const normalizedValue = normalizeRiskText(resolveArgumentValue(args, pattern.argumentPath)).slice(
-      0,
-      MAX_ARG_VALUE_LENGTH,
-    );
+    const normalizedValue = normalizeRiskText(resolveArgumentValue(args, pattern.argumentPath));
     if (normalizedValue.length === 0) {
       continue;
     }

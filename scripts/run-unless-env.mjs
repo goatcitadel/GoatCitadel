@@ -13,7 +13,8 @@ if (isTruthyEnv(process.env[envName])) {
   process.exit(0);
 }
 
-const child = spawn(resolveCommand(command), args, {
+const spawnSpec = resolveSpawnSpec(command, args);
+const child = spawn(spawnSpec.command, spawnSpec.args, {
   cwd: process.cwd(),
   env: process.env,
   stdio: "inherit",
@@ -36,9 +37,36 @@ function isTruthyEnv(value) {
   return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
 }
 
-function resolveCommand(commandName) {
-  if (process.platform === "win32" && commandName === "pnpm") {
-    return "pnpm.cmd";
+function resolveSpawnSpec(commandName, commandArgs) {
+  const resolvedCommand = process.platform === "win32" && commandName === "pnpm" ? "pnpm.cmd" : commandName;
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(resolvedCommand)) {
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", buildWindowsCommand([resolvedCommand, ...commandArgs])],
+    };
   }
-  return commandName;
+  return { command: resolvedCommand, args: commandArgs };
+}
+
+function buildWindowsCommand(parts) {
+  return parts.map((value) => quoteWindowsCommandArg(String(value))).join(" ");
+}
+
+function quoteWindowsCommandArg(value) {
+  assertSafeWindowsCommandArg(value);
+  if (value.length === 0) {
+    return "\"\"";
+  }
+  if (!/[\s&()^<>|]/.test(value)) {
+    return value;
+  }
+  return `"${value}"`;
+}
+
+function assertSafeWindowsCommandArg(value) {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
 }

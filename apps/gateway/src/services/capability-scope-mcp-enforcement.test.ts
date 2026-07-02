@@ -71,9 +71,9 @@ function gate(
   }
   svc.storage = { workspaces: { find: () => ({ citadelId: "personal" }) } };
   return (request) =>
-    (svc as unknown as { assertMcpServerInCapabilityScope: (r: McpInvokeRequest) => void }).assertMcpServerInCapabilityScope(
-      request,
-    );
+    (
+      svc as unknown as { assertMcpServerInCapabilityScope: (r: McpInvokeRequest) => void }
+    ).assertMcpServerInCapabilityScope(request);
 }
 
 const req = (serverId: string): McpInvokeRequest => ({ serverId, toolName: "t", workspaceId: "default" });
@@ -97,6 +97,11 @@ describe("assertMcpServerInCapabilityScope (real gate method)", () => {
 
   it("fails closed when the resolver is absent (constructor-bypass harness)", () => {
     expect(() => gate([], { noResolver: true })(req("denied"))).toThrow(PolicyViolationError);
+  });
+
+  it("keeps internal approval and durable-task MCP servers available through the scope gate", () => {
+    expect(() => gate([citadelMcpGrant("allowed")])(req("goatcitadel-internal-approval-inbox"))).not.toThrow();
+    expect(() => gate([], { noResolver: true })(req("goatcitadel-internal-durable-tasks"))).not.toThrow();
   });
 });
 

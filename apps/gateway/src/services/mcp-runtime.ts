@@ -655,7 +655,8 @@ async function withStdioMcpClient<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const command = resolveSpawnCommand(server.command ?? "");
-  const child = spawn(command, server.args ?? [], {
+  const spawnSpec = resolveSpawnSpec(command, server.args ?? []);
+  const child = spawn(spawnSpec.command, spawnSpec.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: process.cwd(),
     env: buildMcpChildEnv(server),
@@ -1243,6 +1244,43 @@ function resolveSpawnCommand(
   return command;
 }
 
+function resolveSpawnSpec(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", buildWindowsCommand([command, ...args])],
+    };
+  }
+  return { command, args };
+}
+
+function buildWindowsCommand(parts: string[]): string {
+  return parts.map((value) => quoteWindowsCommandArg(value)).join(" ");
+}
+
+function quoteWindowsCommandArg(value: string): string {
+  assertSafeWindowsCommandArg(value);
+  if (value.length === 0) {
+    return '""';
+  }
+  if (!/[\s&()^<>|]/.test(value)) {
+    return value;
+  }
+  return `"${value}"`;
+}
+
+function assertSafeWindowsCommandArg(value: string): void {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
+}
+
 function normalizeMcpContentItems(content: unknown[], result: Record<string, unknown>): McpNormalizedContentItem[] {
   const items: McpNormalizedContentItem[] = [];
   for (const item of content) {
@@ -1435,6 +1473,7 @@ export const __internal = {
   attachChildStdinErrorHandler,
   isChildStdinWritable,
   resolveSpawnCommand,
+  resolveSpawnSpec,
   terminateChild,
   writeToChildStdin,
 };
