@@ -4,7 +4,7 @@ Goal: fix or explicitly retire all 99 verified GoatCitadel review findings with 
 
 Baseline:
 
-- Source report: `C:/Users/spurn/Desktop/FINDINGS_REPORT.html`
+- Source report: `%USERPROFILE%/Desktop/FINDINGS_REPORT.html`
 - Base commit: `67c3adb64a4abb271df7a20a4529c36c3bf669cc`
 - Integration branch: `codex/fix-review-findings`
 - Current main checkout remains dirty and must not be used for implementation.
