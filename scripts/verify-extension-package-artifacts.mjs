@@ -48,7 +48,8 @@ for (const relativeManifestPath of packageTemplateManifests) {
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ext-pack-"));
 try {
-  const pack = spawnSync(resolvePnpmPackCommand(), resolvePnpmPackArgs(tempDir), {
+  const pnpmPack = resolvePnpmPackInvocation(tempDir);
+  const pack = spawnSync(pnpmPack.command, pnpmPack.args, {
     cwd: packageDir,
     encoding: "utf8",
     shell: false,
@@ -283,15 +284,14 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function resolvePnpmPackCommand() {
-  return process.platform === "win32" ? "cmd.exe" : "pnpm";
-}
-
-function resolvePnpmPackArgs(tempDir) {
+function resolvePnpmPackInvocation(tempDir) {
   if (process.platform !== "win32") {
-    return ["pack", "--pack-destination", tempDir, "--json"];
+    return { command: "pnpm", args: ["pack", "--pack-destination", tempDir, "--json"] };
   }
-  return ["/d", "/s", "/c", `pnpm pack --pack-destination ${quoteCmdSafeArg(tempDir)} --json`];
+  return {
+    command: "cmd.exe",
+    args: ["/d", "/s", "/c", `pnpm pack --pack-destination ${assertCmdSafeArg(tempDir)} --json`],
+  };
 }
 
 function tarExtractArgs(tarball, extractDir) {
@@ -315,7 +315,7 @@ function isGnuTar() {
   return gnuTarCache;
 }
 
-function quoteCmdSafeArg(value) {
+function assertCmdSafeArg(value) {
   if (/[\s"]/u.test(value)) {
     fail(
       "Temporary pack destination contains whitespace or quote characters unsupported by the Windows pnpm pack verifier.",

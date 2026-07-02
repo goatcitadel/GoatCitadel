@@ -170,6 +170,8 @@ export class ChatDelegationRunRepository {
     },
   ): ChatDelegationRunRecord {
     const current = this.get(runId);
+    const nextRouteDecision = input.routeDecision !== undefined ? input.routeDecision : current.routeDecision;
+    const nextTrace = input.trace !== undefined ? input.trace : current.trace;
     this.patchStmt.run({
       runId,
       status: input.status ?? current.status,
@@ -177,11 +179,11 @@ export class ChatDelegationRunRepository {
       workflowTemplate:
         input.workflowTemplate !== undefined ? input.workflowTemplate : (current.workflowTemplate ?? null),
       executionPlanId: input.executionPlanId !== undefined ? input.executionPlanId : (current.executionPlanId ?? null),
-      routeDecisionJson: JSON.stringify(input.routeDecision ?? current.routeDecision ?? null),
+      routeDecisionJson: stringifyOptionalRecord(nextRouteDecision),
       finalSummary: input.finalSummary !== undefined ? input.finalSummary : (current.finalSummary ?? null),
       stitchedOutput: input.stitchedOutput !== undefined ? input.stitchedOutput : (current.stitchedOutput ?? null),
       citationsJson: JSON.stringify(input.citations ?? current.citations),
-      traceJson: JSON.stringify(input.trace ?? current.trace ?? {}),
+      traceJson: stringifyOptionalRecord(nextTrace),
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
     });
     return this.get(runId);
@@ -292,6 +294,10 @@ export class ChatDelegationRunRepository {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringifyOptionalRecord(value: unknown): string | null {
+  return isRecord(value) ? JSON.stringify(value) : null;
 }
 
 // Postgres cannot infer the type of a bare bound parameter used as `@param IS NULL`

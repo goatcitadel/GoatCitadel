@@ -603,7 +603,7 @@ describe("storage branch-tail matrices", () => {
     assert.equal(emptyPreserved.finalSummary, undefined);
     assert.equal(emptyPreserved.finishedAt, undefined);
     assert.deepEqual(emptyPreserved.routeDecision, undefined);
-    assert.deepEqual(emptyPreserved.trace, {});
+    assert.equal(emptyPreserved.trace, undefined);
   });
 
   it("covers agent profile nullish create/update defaults without seeding hidden arrays", () => {

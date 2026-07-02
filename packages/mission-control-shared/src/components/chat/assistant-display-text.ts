@@ -79,12 +79,20 @@ export function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | 
   }
   return [
     formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
-    provenance.relationScope,
-    provenance.freshness,
+    readNonEmptyString(provenance.relationScope),
+    readNonEmptyString(provenance.freshness),
     provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
   ]
-    .filter((value): value is string => Boolean(value))
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join(" · ");
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function decodeJsonUnicodeEscapes(content: string): string {

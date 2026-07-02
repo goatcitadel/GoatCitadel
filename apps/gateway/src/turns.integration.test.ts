@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -118,7 +119,7 @@ describe("turns:complete full-stack smoke", () => {
     } finally {
       await app.close();
     }
-  }, 90_000);
+  }, 90_000); // Full gateway boot plus fake provider startup can exceed Vitest's default timeout on CI.
 });
 
 function configureGateway(providerBaseUrl: string): void {
@@ -134,7 +135,7 @@ function configureGateway(providerBaseUrl: string): void {
 
 function createIsolatedConfigRoot(providerBaseUrl: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-turns-smoke-"));
-  const repoRoot = path.resolve(process.cwd(), "../..");
+  const repoRoot = findRepoRoot();
   fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
   const llmConfig = {
     activeProviderId: "fake-openai",
@@ -154,13 +155,25 @@ function createIsolatedConfigRoot(providerBaseUrl: string): string {
   // (it is synced at gateway boot). Using the example keeps this hermetic and
   // identical between local and CI.
   const unifiedConfigPath = path.join(root, "config", "goatcitadel.json");
-  const baseConfigPath = fs.existsSync(unifiedConfigPath)
-    ? unifiedConfigPath
-    : path.join(root, "config", "goatcitadel.example.json");
+  const baseConfigPath = path.join(root, "config", "goatcitadel.example.json");
   const unifiedConfig = JSON.parse(fs.readFileSync(baseConfigPath, "utf8")) as Record<string, unknown>;
   unifiedConfig.llm = llmConfig;
   fs.writeFileSync(unifiedConfigPath, `${JSON.stringify(unifiedConfig, null, 2)}\n`, "utf8");
   fs.writeFileSync(path.join(root, "config", "llm-providers.json"), `${JSON.stringify(llmConfig, null, 2)}\n`, "utf8");
   tempRoots.push(root);
   return root;
+}
+
+function findRepoRoot(): string {
+  let current = path.dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    if (fs.existsSync(path.join(current, "config", "goatcitadel.example.json"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error("Unable to locate repository root: missing config/goatcitadel.example.json in ancestors.");
+    }
+    current = parent;
+  }
 }

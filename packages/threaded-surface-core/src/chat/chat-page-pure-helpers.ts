@@ -423,10 +423,20 @@ export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"
   return action === "send" && content.trim().startsWith("/");
 }
 
+/**
+ * Parsed representation of a `/btw` command.
+ *
+ * "Btw" means "by the way"; the command captures side-note text that should be
+ * handled separately from a normal chat send.
+ */
 export interface BtwCommand {
   text: string;
 }
 
+/**
+ * Parses `/btw` input, accepting leading whitespace and preserving optional
+ * multi-line note text after the command.
+ */
 export function parseBtwCommand(draft: string): BtwCommand | null {
   const match = draft.trimStart().match(/^\/btw(?:\s+([\s\S]*))?$/i);
   if (!match) {
@@ -435,8 +445,17 @@ export function parseBtwCommand(draft: string): BtwCommand | null {
   return { text: (match[1] ?? "").trim() };
 }
 
+/**
+ * How submitted input should be handled while a turn may be streaming:
+ * `idle` sends normally, `steer` updates the active stream, and `queue` stores a
+ * deferred follow-up requested with `/queue followup` or `/queue collect`.
+ */
 export type MidTurnDisposition = "idle" | "steer" | "queue";
 
+/**
+ * Resolves whether a draft is a normal send, an in-flight steering message, or
+ * a queued follow-up when submitted during an active assistant stream.
+ */
 export function resolveMidTurnDisposition(input: { hasActiveStream: boolean; draft: string }): MidTurnDisposition {
   if (!input.hasActiveStream) {
     return "idle";
@@ -451,8 +470,17 @@ export function resolveMidTurnDisposition(input: { hasActiveStream: boolean; dra
   return "steer";
 }
 
+/**
+ * Parsed `/goal` command:
+ * `/goal` and `/goal status` read the goal, `/goal clear` clears it, and
+ * `/goal <text>` sets a new goal.
+ */
 export type GoalCommand = { kind: "set"; text: string } | { kind: "status" } | { kind: "clear" };
 
+/**
+ * Parses `/goal` input case-insensitively while leaving non-goal slash commands
+ * for other local command handlers.
+ */
 export function parseGoalCommand(draft: string): GoalCommand | null {
   const match = draft.trimStart().match(/^\/goal(?:\s+(.*))?$/i);
   if (!match) {

@@ -60,6 +60,21 @@ function setRawField(db: DatabaseClient, runId: string, field: string, value: un
   db.prepare(`UPDATE chat_delegation_runs SET ${field} = ? WHERE run_id = ?`).run(value, runId);
 }
 
+function readStructuredPatchFields(
+  db: DatabaseClient,
+  runId: string,
+): { route_decision_json: unknown; trace_json: unknown } {
+  const row = db
+    .prepare("SELECT route_decision_json, trace_json FROM chat_delegation_runs WHERE run_id = ?")
+    .get(runId);
+  assert.ok(row && typeof row === "object");
+  const fields = row as { route_decision_json: unknown; trace_json: unknown };
+  return {
+    route_decision_json: fields.route_decision_json,
+    trace_json: fields.trace_json,
+  };
+}
+
 describe("ChatDelegationRunRepository", () => {
   it("creates, patches, lists, and preserves optional run metadata", () => {
     const { repo } = createStore();
@@ -130,6 +145,45 @@ describe("ChatDelegationRunRepository", () => {
     );
     assert.throws(() => repo.get("missing-run"), /Delegation run missing-run not found/);
     assert.throws(() => repo.patch("missing-run", { status: "failed" }), /Delegation run missing-run not found/);
+  });
+
+  it("keeps unset and cleared optional patch records as SQL null", () => {
+    const { db, repo } = createStore();
+    repo.create({
+      runId: "run-null-records",
+      sessionId: "session-null-records",
+      taskId: "task-null-records",
+      objective: "Preserve nullable structured fields",
+      roles: ["QA"],
+      mode: "sequential",
+      startedAt: "2026-03-26T00:00:01.000Z",
+    });
+
+    const unchanged = repo.patch("run-null-records", {});
+    assert.equal(unchanged.routeDecision, undefined);
+    assert.equal(unchanged.trace, undefined);
+    assert.deepEqual(readStructuredPatchFields(db, "run-null-records"), {
+      route_decision_json: null,
+      trace_json: null,
+    });
+
+    const populated = repo.patch("run-null-records", {
+      routeDecision: routeDecision(),
+      trace: trace(),
+    });
+    assert.equal(populated.routeDecision?.triggerReason, "operator requested delegation");
+    assert.equal(populated.trace?.effectiveModel, "gpt-5.4");
+
+    const cleared = repo.patch("run-null-records", {
+      routeDecision: null as never,
+      trace: null as never,
+    });
+    assert.equal(cleared.routeDecision, undefined);
+    assert.equal(cleared.trace, undefined);
+    assert.deepEqual(readStructuredPatchFields(db, "run-null-records"), {
+      route_decision_json: null,
+      trace_json: null,
+    });
   });
 
   it("lists recent runs with workspace and session filters", () => {
