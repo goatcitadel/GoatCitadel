@@ -164,6 +164,41 @@ describe("chat streaming preview", () => {
     expect(onFlush).toHaveBeenLastCalledWith(null);
   });
 
+  it("forces divergent message_done final text visible before clearing", () => {
+    const frameCallbacks: Array<() => void> = [];
+    const onFlush = vi.fn();
+    const finalText = "Final server answer replaced the optimistic preview.";
+    const buffer = new ChatStreamingPreviewBuffer({
+      now: () => 1000,
+      onFlush,
+      revealCharsPerFrame: 5,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+      setTimer: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+      isReducedMotion: () => false,
+    });
+
+    buffer.start({ sessionId: "sess", turnId: "turn" });
+    buffer.append({ sessionId: "sess", turnId: "turn", delta: "Draft visible prefix" });
+    frameCallbacks.shift()?.();
+    expect(onFlush).toHaveBeenLastCalledWith(expect.objectContaining({ visibleText: "Draft" }));
+
+    buffer.finish({ clear: true, forceVisible: false, finalText });
+
+    const finalIndex = onFlush.mock.calls.findIndex(([preview]) => preview?.visibleText === finalText);
+    const clearIndex = onFlush.mock.calls.findIndex(([preview], index) => index > finalIndex && preview === null);
+
+    expect(finalIndex).toBeGreaterThan(-1);
+    expect(clearIndex).toBeGreaterThan(finalIndex);
+  });
+
   it("cleans up scheduled work without publishing more preview state", () => {
     const onFlush = vi.fn();
     const cancelFrame = vi.fn();

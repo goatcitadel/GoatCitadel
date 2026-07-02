@@ -50,6 +50,9 @@ const FIXTURES: Record<string, string> = {
   fenceWithBlankInside: "Lead in.\n\n```py\nx = 1\n\ny = 2\n```\n\nAfter the fence with an inner blank line.",
   adjacentFences: "Head.\n\n```ts\na\n```\n\n```js\nb\n```\n\nTail prose after two adjacent fences.",
   indentedFence: "Setup.\n\n   ```js\nbar\n   ```   \n\nbaz tail",
+  sameLineFence: 'intro\n\n```json {"ok":true}```\n\noutro tail',
+  indentedSameLineFence: "intro\n\n   ```txt done```\n\noutro tail",
+  emptyFence: "before\n\n```\n```\n\nafter tail",
   tildeFence: "Pre.\n\n~~~txt\nbody\n~~~\n\npost tail",
   unclosedTildeFence: "intro\n\n~~~txt\n~~~not closed\n\nstill code",
   unclosedBacktickFence: "intro\n\n```js\n```not closed\n\nstill code",
@@ -93,7 +96,10 @@ describe("splitIncremental equivalence with splitStreamingMarkdown", () => {
     splitIncremental(turnA, "before\n\n```ts\nopen fence never closed");
 
     const turnB = createIncrementalSplitState(); // fresh state == new turn id
-    const incrementalB = splitIncremental(turnB, "clean paragraph.\n\nsecond clean paragraph that should finalize.\n\n");
+    const incrementalB = splitIncremental(
+      turnB,
+      "clean paragraph.\n\nsecond clean paragraph that should finalize.\n\n",
+    );
     expect(incrementalB).toEqual(
       splitStreamingMarkdown("clean paragraph.\n\nsecond clean paragraph that should finalize.\n\n"),
     );
@@ -140,9 +146,7 @@ describe("StreamingMarkdown incremental wiring", () => {
     const full = "Para one.\n\n```ts\nconst v = 1;\n```\n\nPara two closing.";
 
     // Stream it token-by-token through the running renderer with a stable turn id.
-    renderer = create(
-      <AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-stream" />,
-    );
+    renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-stream" />);
     for (let length = 1; length <= full.length; length += 1) {
       renderer.update(
         <AssistantMessageRenderer
@@ -174,9 +178,7 @@ describe("StreamingMarkdown incremental wiring", () => {
     // New turn id with plain prose; if fence-state leaked, the second paragraph would be
     // swallowed into the tail as 'still inside a fence'.
     const turnBContent = "clean para.\n\nsecond clean para to finalize.\n\nnow streaming tail";
-    renderer.update(
-      <AssistantMessageRenderer role="assistant" content={turnBContent} running streamTurnId="turn-b" />,
-    );
+    renderer.update(<AssistantMessageRenderer role="assistant" content={turnBContent} running streamTurnId="turn-b" />);
 
     const expected = splitStreamingMarkdown(turnBContent);
     // The stable prefix should be present in the rendered output as its own block.

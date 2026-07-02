@@ -867,6 +867,15 @@ describe("useChatOutboundExecution", () => {
     expect(denyChatToolMock).toHaveBeenCalledWith("child-session", "approval-child-deny");
   });
 
+  it("reports queued status even when all queued outbound items are paused", async () => {
+    await act(async () => {
+      create(<Harness queuedOutbound={[{ id: "queue-1", paused: true }]} />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().streamStatus).toBe("queued");
+  });
+
   it("handles branch selection, fetched-thread reconciliation, and stream status guards", async () => {
     const nextThread = {
       ...makeThread(),

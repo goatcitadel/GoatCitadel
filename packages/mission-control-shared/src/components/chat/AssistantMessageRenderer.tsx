@@ -86,10 +86,10 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
     blockquote({ children, node: _node, ...props }) {
       return <blockquote {...props}>{children}</blockquote>;
     },
-    code({ children, className, node: _node, ...props }) {
+    code({ children, className, node, ...props }) {
       const content = String(children ?? "");
       const language = /language-([a-z0-9_+-]+)/i.exec(className ?? "")?.[1];
-      const isBlock = Boolean(language || content.includes("\n"));
+      const isBlock = isMarkdownCodeBlock(content, className, node);
       if (isBlock) {
         return (
           <AssistantCodeBlock
@@ -144,6 +144,20 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
       return <ul {...props}>{children}</ul>;
     },
   };
+}
+
+function isMarkdownCodeBlock(content: string, className: string | undefined, node: unknown): boolean {
+  if (className && /(?:^|\s)language-/i.test(className)) {
+    return true;
+  }
+  if (content.includes("\n")) {
+    return true;
+  }
+  const position = (node as { position?: { start?: { line?: number }; end?: { line?: number } } } | undefined)
+    ?.position;
+  const startLine = position?.start?.line;
+  const endLine = position?.end?.line;
+  return typeof startLine === "number" && typeof endLine === "number" && endLine > startLine;
 }
 
 const assistantMarkdownComponents = createMarkdownComponents({ allowGeneratedUi: true });
@@ -429,16 +443,17 @@ export function splitStreamingMarkdown(content: string): { stable: string; tail:
       continue;
     }
     const line = content.slice(lineStart, index);
-    const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (match) {
-      const marker = match[1]!;
-      const markerChar = marker[0] as "`" | "~";
+    const marker = parseMarkdownFenceMarker(line);
+    if (marker) {
+      const markerChar = marker.char;
       if (!inFence) {
-        inFence = true;
-        fenceChar = markerChar;
-        fenceLength = marker.length;
+        if (!hasSameLineStreamingFenceClose(line, markerChar, marker.length, marker.start + marker.length)) {
+          inFence = true;
+          fenceChar = markerChar;
+          fenceLength = marker.length;
+        }
       } else {
-        const markerTail = line.slice(line.indexOf(marker) + marker.length);
+        const markerTail = line.slice(marker.start + marker.length);
         if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
           inFence = false;
           fenceChar = null;
@@ -465,6 +480,41 @@ export function splitStreamingMarkdown(content: string): { stable: string; tail:
     stable: content.slice(0, bestSplitEnd),
     tail: content.slice(bestSplitEnd),
   };
+}
+
+function parseMarkdownFenceMarker(line: string): { char: "`" | "~"; length: number; start: number } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+  if (!match) {
+    return null;
+  }
+  const marker = match[2]!;
+  return {
+    char: marker[0] as "`" | "~",
+    length: marker.length,
+    start: match[1]!.length,
+  };
+}
+
+function hasSameLineStreamingFenceClose(
+  line: string,
+  fenceChar: "`" | "~",
+  fenceLength: number,
+  searchStart: number,
+): boolean {
+  for (let index = searchStart; index <= line.length - fenceLength; index += 1) {
+    if (line[index] !== fenceChar) {
+      continue;
+    }
+    let markerLength = 0;
+    while (line[index + markerLength] === fenceChar) {
+      markerLength += 1;
+    }
+    if (markerLength >= fenceLength && line.slice(index + markerLength).trim().length === 0) {
+      return true;
+    }
+    index += Math.max(0, markerLength - 1);
+  }
+  return false;
 }
 
 // --- Incremental streaming split -------------------------------------------------
@@ -551,16 +601,17 @@ export function splitIncremental(state: IncrementalSplitState, content: string):
       continue;
     }
     const line = content.slice(lineStart, index);
-    const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (match) {
-      const marker = match[1]!;
-      const markerChar = marker[0] as "`" | "~";
+    const marker = parseMarkdownFenceMarker(line);
+    if (marker) {
+      const markerChar = marker.char;
       if (!inFence) {
-        inFence = true;
-        fenceChar = markerChar;
-        fenceLength = marker.length;
+        if (!hasSameLineStreamingFenceClose(line, markerChar, marker.length, marker.start + marker.length)) {
+          inFence = true;
+          fenceChar = markerChar;
+          fenceLength = marker.length;
+        }
       } else {
-        const markerTail = line.slice(line.indexOf(marker) + marker.length);
+        const markerTail = line.slice(marker.start + marker.length);
         if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
           inFence = false;
           fenceChar = null;

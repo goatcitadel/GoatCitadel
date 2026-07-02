@@ -153,12 +153,14 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
 ): {
   completedCount: number;
   failedCount: number;
+  pendingCount: number;
   skippedCount: number;
   runningCount: number;
   currentStep: TStep | undefined;
 } {
   let completedCount = 0;
   let failedCount = 0;
+  let pendingCount = 0;
   let skippedCount = 0;
   let runningCount = 0;
   let currentRunningStep: TStep | undefined;
@@ -171,6 +173,8 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
     } else if (step.status === "failed") {
       failedCount += 1;
       latestSettledStep = step;
+    } else if (step.status === "pending") {
+      pendingCount += 1;
     } else if (step.status === "skipped") {
       skippedCount += 1;
     } else if (step.status === "running") {
@@ -182,6 +186,7 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
   return {
     completedCount,
     failedCount,
+    pendingCount,
     skippedCount,
     runningCount,
     currentStep: currentRunningStep ?? latestSettledStep ?? steps[0],

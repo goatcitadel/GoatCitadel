@@ -948,7 +948,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       ? "streaming"
       : sending
         ? "connecting"
-        : queuedOutbound.some((item) => !item.paused)
+        : queuedOutbound.length > 0
           ? "queued"
           : "idle";
 

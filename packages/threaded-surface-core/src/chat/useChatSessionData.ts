@@ -197,6 +197,19 @@ export function useChatSessionData(input: {
     sidebarNextCursorRef.current = nextCursor;
     setSidebarNextCursor(nextCursor);
   }, []);
+  const clearSessionScopedState = useCallback(() => {
+    setThread(null);
+    setPrefs(null);
+    setBinding(null);
+    setGeneratedArtifacts(null);
+    setThreadKnowledgeAttachments(null);
+    setProactiveStatus(null);
+    setProactiveRuns([]);
+    setLearnedMemory([]);
+    setSpecialistCandidates([]);
+    setMessagesLoading(false);
+    setSecondaryLoading(false);
+  }, []);
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
@@ -330,7 +343,7 @@ export function useChatSessionData(input: {
     setSettings((current) => (current ? { ...current, llm: runtimeLlmConfig } : current));
   }, [runtimeLlmConfig]);
 
-  const loadSessionCoreState = useCallback(
+  const loadSessionCoreStateInternal = useCallback(
     async (
       sessionId: string,
       options: {
@@ -351,12 +364,13 @@ export function useChatSessionData(input: {
           fetchChatSessionBinding(sessionId),
           fetchChatSessionPrefs(sessionId),
         ]);
-        if (generation !== loadCoreGenerationRef.current) return;
+        if (generation !== loadCoreGenerationRef.current) return false;
         if (nextThread) {
           applyFetchedThreadRef.current(nextThread, messageVersionAtStart);
         }
         setBinding(nextBinding.item);
         setPrefs(nextPrefs);
+        return true;
       } finally {
         if (!background) {
           setMessagesLoading(false);
@@ -364,6 +378,19 @@ export function useChatSessionData(input: {
       }
     },
     [applyFetchedThreadRef, messageMutationVersionRef],
+  );
+
+  const loadSessionCoreState = useCallback(
+    async (
+      sessionId: string,
+      options: {
+        background?: boolean;
+        includeThread?: boolean;
+      } = {},
+    ) => {
+      await loadSessionCoreStateInternal(sessionId, options);
+    },
+    [loadSessionCoreStateInternal],
   );
 
   const loadSessionSecondaryState = useCallback(
@@ -422,14 +449,17 @@ export function useChatSessionData(input: {
       const background = options.background ?? false;
       const includeThread = options.includeThread ?? true;
       const deferSecondary = options.deferSecondary ?? false;
-      await loadSessionCoreState(sessionId, { background, includeThread });
+      const coreLoaded = await loadSessionCoreStateInternal(sessionId, { background, includeThread });
+      if (!coreLoaded) {
+        return;
+      }
       if (deferSecondary) {
         void loadSessionSecondaryState(sessionId, { background: false }).catch((err: Error) => setError(err.message));
         return;
       }
       await loadSessionSecondaryState(sessionId, { background });
     },
-    [loadSessionCoreState, loadSessionSecondaryState, setError],
+    [loadSessionCoreStateInternal, loadSessionSecondaryState, setError],
   );
 
   const refreshViewState = useCallback(
@@ -571,30 +601,16 @@ export function useChatSessionData(input: {
 
   useEffect(() => {
     if (!selectedSessionId) {
-      setThread(null);
-      setPrefs(null);
-      setBinding(null);
-      setGeneratedArtifacts(null);
-      setThreadKnowledgeAttachments(null);
-      setProactiveStatus(null);
-      setProactiveRuns([]);
-      setLearnedMemory([]);
-      setSpecialistCandidates([]);
-      setSecondaryLoading(false);
+      loadCoreGenerationRef.current += 1;
+      loadSecondaryGenerationRef.current += 1;
+      clearSessionScopedState();
       lastLoadedSessionIdRef.current = null;
       return;
     }
     if (lastLoadedSessionIdRef.current !== selectedSessionId) {
-      setThread(null);
-      setPrefs(null);
-      setBinding(null);
-      setGeneratedArtifacts(null);
-      setThreadKnowledgeAttachments(null);
-      setProactiveStatus(null);
-      setProactiveRuns([]);
-      setLearnedMemory([]);
-      setSpecialistCandidates([]);
-      setSecondaryLoading(false);
+      loadCoreGenerationRef.current += 1;
+      loadSecondaryGenerationRef.current += 1;
+      clearSessionScopedState();
       lastLoadedSessionIdRef.current = selectedSessionId;
     }
     void loadSessionState(selectedSessionId, {
@@ -602,7 +618,7 @@ export function useChatSessionData(input: {
       includeThread: true,
       deferSecondary: true,
     }).catch((err: Error) => setError(err.message));
-  }, [loadSessionState, selectedSessionId, setError]);
+  }, [clearSessionScopedState, loadSessionState, selectedSessionId, setError]);
 
   return {
     projects,
