@@ -189,6 +189,7 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
           role="tabpanel"
           id={buildPanelId("plan")}
           aria-labelledby={buildTabId("plan")}
+          tabIndex={0}
         >
           <PanelList
             title="Plan"
@@ -209,19 +210,19 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
       ) : null}
 
       {activeTab === "run-map" ? (
-        <div role="tabpanel" id={buildPanelId("run-map")} aria-labelledby={buildTabId("run-map")}>
+        <div role="tabpanel" id={buildPanelId("run-map")} aria-labelledby={buildTabId("run-map")} tabIndex={0}>
           <RunMapPanel viewModel={viewModel} onOpenDetails={onOpenDetails} />
         </div>
       ) : null}
 
       {activeTab === "timeline" ? (
-        <div role="tabpanel" id={buildPanelId("timeline")} aria-labelledby={buildTabId("timeline")}>
+        <div role="tabpanel" id={buildPanelId("timeline")} aria-labelledby={buildTabId("timeline")} tabIndex={0}>
           <CheckpointTimelinePanel viewModel={viewModel} fallbackItems={viewModel.timelineItems.items} />
         </div>
       ) : null}
 
       {activeTab === "actions" ? (
-        <div role="tabpanel" id={buildPanelId("actions")} aria-labelledby={buildTabId("actions")}>
+        <div role="tabpanel" id={buildPanelId("actions")} aria-labelledby={buildTabId("actions")} tabIndex={0}>
           <PanelList
             title="Operator actions"
             items={viewModel.operatorActionItems.items}
@@ -416,24 +417,27 @@ function CoworkInterventionPanel({
     viewModel.continuationGate.metrics.approvalWait ||
     viewModel.continuationGate.reasonCodes.includes("approval_wait");
 
-  // H-6: auto-focus and scroll a newly arrived approval into view.
+  const [approvalAnnouncement, setApprovalAnnouncement] = useState("");
+
+  // H-6: announce and scroll a newly arrived approval into view without
+  // stealing focus from the operator's current task.
   // - `seenApprovalIdsRef` tracks every approval ID we have rendered so we
-  //   only autofocus *true* new arrivals — re-renders for the same approval
-  //   do not steal focus repeatedly.
+  //   only announce *true* new arrivals — re-renders for the same approval do
+  //   not repeat the notification.
   // - `consumedApprovalIdsRef` records which arrivals we have already auto-
-  //   focused so React StrictMode double-invocation cannot trigger focus twice.
+  //   announced so React StrictMode double-invocation cannot trigger twice.
   // - On the very first observed snapshot we prime the seen set without
-  //   focusing, matching the ApprovalsRoutePage `seenPendingIdsRef` pattern.
+  //   notifying, matching the ApprovalsRoutePage `seenPendingIdsRef` pattern.
   // - `prefers-reduced-motion` callers get `behavior: "auto"` instead of smooth
   //   scrolling.
   const approvalArticleRef = useRef<HTMLElement | null>(null);
-  const approvalResolveButtonRef = useRef<HTMLButtonElement | null>(null);
   const seenApprovalIdsRef = useRef<Set<string>>(new Set());
   const consumedApprovalIdsRef = useRef<Set<string>>(new Set());
   const hasPrimedApprovalSeenRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!pendingApprovalId) {
+      setApprovalAnnouncement("");
       return;
     }
     // Prime the seen set on first observation so the initial paint does not
@@ -457,15 +461,14 @@ function CoworkInterventionPanel({
     if (articleNode && typeof articleNode.scrollIntoView === "function") {
       articleNode.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
     }
-    // Defer focus by one microtask so the scroll commit and any conditional
-    // render of the Resolve approval button has settled before we move focus.
-    queueMicrotask(() => {
-      approvalResolveButtonRef.current?.focus();
-    });
-  }, [pendingApprovalId]);
+    setApprovalAnnouncement(`Approval needed: ${pendingApprovalLabel}. Approval panel moved into view.`);
+  }, [pendingApprovalId, pendingApprovalLabel]);
 
   return (
     <section className="mc-next-cowork-intervention" aria-label="Cowork blockers approvals and checkpoints">
+      <p className="mc-next-sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {approvalAnnouncement}
+      </p>
       <article className={viewModel.blockers.length > 0 ? "is-attention" : ""}>
         <p className="mc-next-panel-kicker">Blockers</p>
         <h5>{viewModel.blockers.length > 0 ? `${viewModel.blockers.length} need attention` : "None blocking"}</h5>
@@ -479,7 +482,7 @@ function CoworkInterventionPanel({
         <h5>{approvalBlocked ? "Operator decision needed" : "Clear"}</h5>
         <p>{pendingApprovalLabel}</p>
         {approvalBlocked && onOpenDetails ? (
-          <button ref={approvalResolveButtonRef} type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
+          <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
             Resolve approval
           </button>
         ) : null}

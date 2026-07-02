@@ -2182,6 +2182,9 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
 
+    const currentTabPanel = () => renderer!.root.findAll((node) => node.props.role === "tabpanel")[0]!;
+    expect(currentTabPanel().props.tabIndex).toBe(0);
+    expect(instanceText(currentTabPanel().children)).toContain("Plan");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Pause intent recorded.");
     await act(async () => {
       renderer!.root
@@ -2197,6 +2200,8 @@ describe("ThreadedWorkflowPanel", () => {
         .find((button) => button.children.includes("Run Map"))
         ?.props.onClick();
     });
+    expect(currentTabPanel().props.tabIndex).toBe(0);
+    expect(instanceText(currentTabPanel().children)).toContain("Finish coverage");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
     expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Timestamped checkpoints");
@@ -2214,6 +2219,7 @@ describe("ThreadedWorkflowPanel", () => {
         .find((button) => button.children.includes("Timeline"))
         ?.props.onClick();
     });
+    expect(currentTabPanel().props.tabIndex).toBe(0);
     expect(JSON.stringify(renderer!.toJSON())).toContain("Checkpoint");
 
     await act(async () => {
@@ -2222,7 +2228,75 @@ describe("ThreadedWorkflowPanel", () => {
         .find((button) => button.children.includes("Operator actions"))
         ?.props.onClick();
     });
+    expect(currentTabPanel().props.tabIndex).toBe(0);
     expect(JSON.stringify(renderer!.toJSON())).toContain("Review output");
+  });
+
+  it("announces new cowork approvals without moving focus to the resolve action", async () => {
+    const scrollIntoView = vi.fn();
+    const focus = vi.fn();
+    const buildApprovalPanel = (approvalId: string, description: string) => {
+      const panel = buildCoworkPanel();
+      Object.assign(panel.props, {
+        onOpenDetails: vi.fn(),
+      });
+      Object.assign(panel.props.viewModel, {
+        continuationGate: {
+          ...panel.props.viewModel.continuationGate,
+          decision: "checkpoint",
+          reasonCodes: ["approval_wait"],
+          summary: "Approval is required.",
+          metrics: {
+            ...panel.props.viewModel.continuationGate.metrics,
+            approvalWait: true,
+          },
+        },
+        raw: {
+          activeTurn: {
+            trace: {
+              routing: {},
+              pendingApprovalSummary: {
+                approvalId,
+                description,
+                kind: "tool",
+              },
+            },
+          },
+          selectedTurn: null,
+          orchestrationCheckpoints: [],
+        },
+      });
+      return panel;
+    };
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildApprovalPanel("approval-1", "Review initial action")} />, {
+        createNodeMock: (element) => {
+          if (element.type === "article") {
+            return { scrollIntoView };
+          }
+          if (element.type === "button") {
+            return { focus };
+          }
+          return {};
+        },
+      });
+      await Promise.resolve();
+    });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer!.update(<ThreadedWorkflowPanel panel={buildApprovalPanel("approval-2", "Review deployment")} />);
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
+    expect(focus).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer!.toJSON())).toContain(
+      "Approval needed: Review deployment. Approval panel moved into view.",
+    );
   });
 
   it("renders degraded cowork synthesis notes with a warning tone", async () => {

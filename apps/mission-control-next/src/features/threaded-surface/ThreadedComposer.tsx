@@ -59,7 +59,7 @@ function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
   return props.sending ? "Sending..." : "Send";
 }
 
-function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
+export function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
   return (thread?.turns ?? []).reduce(
     (next, turn) => {
       const messages = [turn.userMessage, turn.assistantMessage].filter(Boolean);
@@ -73,11 +73,11 @@ function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["th
   );
 }
 
-function formatTokenLabel(tokens: number): string {
+export function formatTokenLabel(tokens: number): string {
   return `${new Intl.NumberFormat("en-US").format(tokens)} tokens`;
 }
 
-function formatCostLabel(costUsd: number): string {
+export function formatCostLabel(costUsd: number): string {
   if (costUsd <= 0) {
     return "$0.00";
   }
@@ -93,7 +93,7 @@ function formatCostLabel(costUsd: number): string {
   return `$${costUsd.toFixed(3)}`;
 }
 
-function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
+export function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
   const totals = computeUsageTotals(thread);
   return `${formatTokenLabel(totals.tokens)} / ${formatCostLabel(totals.costUsd)}`;
 }
