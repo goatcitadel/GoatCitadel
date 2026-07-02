@@ -418,9 +418,9 @@ describe("storage branch-tail matrices", () => {
 
     internal.listReputations = () => [];
     const reputation = {
-      modelRef: "openai:gpt-5.5",
+      modelRef: "openai:gpt-5",
       providerId: "openai",
-      modelId: "gpt-5.5",
+      modelId: "gpt-5",
       overall: 0.5,
       byDomain: {},
       accuracy: 0.5,
@@ -436,10 +436,10 @@ describe("storage branch-tail matrices", () => {
   });
 
   it("covers context manifest optional defaults, duplicate suppression, and malformed details", () => {
-    const repo = new ContextManifestRepository(createDb("context-manifest-loop8"));
+    const repo = new ContextManifestRepository(createDb("context-manifest-loop7"));
     const manifest = repo.ensure({
       scope: "chat_turn",
-      turnId: "turn-loop8",
+      turnId: "turn-loop7",
       createdAt: "2026-05-14T11:00:00.000Z",
     });
     assert.equal(manifest.sessionId, undefined);
@@ -476,12 +476,12 @@ describe("storage branch-tail matrices", () => {
   });
 
   it("covers prompt-pack run optional create, profile patch, and adapter fallbacks", () => {
-    const repo = new PromptPackRunRepository(createDb("prompt-pack-run-loop8"));
+    const repo = new PromptPackRunRepository(createDb("prompt-pack-run-loop7"));
     const created = repo.create({
-      runId: "pprun-loop8",
-      packId: "pack-loop8",
-      testId: "TEST-LOOP8",
-      sessionId: "session-loop8",
+      runId: "pprun-loop7",
+      packId: "pack-loop7",
+      testId: "TEST-LOOP7",
+      sessionId: "session-loop7",
       status: "queued",
       providerId: "openai",
       model: "gpt-5",
@@ -500,8 +500,8 @@ describe("storage branch-tail matrices", () => {
       responseText: "response",
       derivedResponseText: "derived",
       derivedResponseSignals: ["signal"],
-      trace: { turnId: "turn-loop8", sessionId: "session-loop8", status: "completed" } as never,
-      citations: [{ citationId: "cite-loop8", title: "Source", url: "https://example.test/source" }],
+      trace: { turnId: "turn-loop7", sessionId: "session-loop7", status: "completed" } as never,
+      citations: [{ citationId: "cite-loop7", title: "Source", url: "https://example.test/source" }],
       integrity: { validationStatus: "valid", signals: ["ok"] },
       error: "old error",
       startedAt: "2026-05-14T11:00:00.000Z",
@@ -510,7 +510,7 @@ describe("storage branch-tail matrices", () => {
     assert.equal(created.providerId, "openai");
     assert.equal(created.executionStyle, "agentic_surface");
 
-    const patched = repo.patch("pprun-loop8", {
+    const patched = repo.patch("pprun-loop7", {
       mode: null as never,
       toolTier: null as never,
       toolAutonomy: null as never,
@@ -540,17 +540,17 @@ describe("storage branch-tail matrices", () => {
     internal.listByPackStmt = { all: () => ({ not: "rows" }) };
     internal.listByTestStmt = { all: () => [null] };
     internal.deleteByPackStmt = { run: () => ({ changes: undefined }) };
-    assert.deepEqual(repo.listByPack("pack-loop8"), []);
-    assert.deepEqual(repo.listByTest("TEST-LOOP8"), []);
-    assert.equal(repo.deleteByPack("pack-loop8"), 0);
+    assert.deepEqual(repo.listByPack("pack-loop7"), []);
+    assert.deepEqual(repo.listByTest("TEST-LOOP7"), []);
+    assert.equal(repo.deleteByPack("pack-loop7"), 0);
   });
 
   it("covers delegation run defaults and optional patch clearing branches", () => {
-    const repo = new ChatDelegationRunRepository(createDb("delegation-run-loop8"));
+    const repo = new ChatDelegationRunRepository(createDb("delegation-run-loop7"));
     const created = repo.create({
-      runId: "delegation-loop8",
-      sessionId: "session-loop8",
-      taskId: "task-loop8",
+      runId: "delegation-loop7",
+      sessionId: "session-loop7",
+      taskId: "task-loop7",
       objective: "Exercise delegation tails",
       roles: ["Researcher"],
       mode: "sequential",
@@ -559,10 +559,10 @@ describe("storage branch-tail matrices", () => {
     assert.equal(created.status, "running");
     assert.equal(typeof created.startedAt, "string");
 
-    const populated = repo.patch("delegation-loop8", {
+    const populated = repo.patch("delegation-loop7", {
       visibility: "explicit",
       workflowTemplate: "qa",
-      executionPlanId: "plan-loop8",
+      executionPlanId: "plan-loop7",
       routeDecision: {
         modePolicy: "cowork",
         workflowTemplate: "qa",
@@ -578,20 +578,20 @@ describe("storage branch-tail matrices", () => {
       } as never,
       finalSummary: "summary",
       stitchedOutput: "stitched",
-      citations: [{ citationId: "cite-loop8", title: "Source", url: "https://example.test/source" }],
+      citations: [{ citationId: "cite-loop7", title: "Source", url: "https://example.test/source" }],
       trace: { effectiveModel: "gpt-5" } as never,
       finishedAt: "2026-05-14T11:02:00.000Z",
     });
     assert.equal(populated.visibility, "explicit");
 
-    const preserved = repo.patch("delegation-loop8", {});
+    const preserved = repo.patch("delegation-loop7", {});
     assert.equal(preserved.workflowTemplate, "qa");
     assert.equal(preserved.finishedAt, "2026-05-14T11:02:00.000Z");
 
     const empty = repo.create({
-      runId: "delegation-empty-loop19",
-      sessionId: "session-empty-loop19",
-      taskId: "task-empty-loop19",
+      runId: "delegation-empty-loop7",
+      sessionId: "session-empty-loop7",
+      taskId: "task-empty-loop7",
       objective: "Keep unset optional delegation fields explicit",
       roles: [],
       mode: "sequential",
@@ -607,7 +607,7 @@ describe("storage branch-tail matrices", () => {
   });
 
   it("covers agent profile nullish create/update defaults without seeding hidden arrays", () => {
-    const repo = new AgentProfileRepository(createDb("agent-profile-loop19"));
+    const repo = new AgentProfileRepository(createDb("agent-profile-loop7"));
     const created = repo.create({
       roleId: "coverage-tail",
       name: "Coverage Tail",
@@ -645,34 +645,34 @@ describe("storage branch-tail matrices", () => {
   });
 
   it("covers imported agent catalog search/defaults and lifecycle timestamp preservation", () => {
-    const repo = new ImportedAgentCatalogRepository(createDb("imported-agent-loop8"));
-    const [created] = repo.upsertMany([importedAgentRecord("loop8")]);
+    const repo = new ImportedAgentCatalogRepository(createDb("imported-agent-loop7"));
+    const [created] = repo.upsertMany([importedAgentRecord("loop7")]);
     assert.equal(created?.definition.provenance.repoUrl, undefined);
 
     assert.deepEqual(
       repo.list({ workspaceId: " workspace-loop7 ", search: "researcher", limit: 0 }).map((row) => row.entryId),
-      ["loop8"],
+      ["loop7"],
     );
     assert.deepEqual(repo.list({ workspaceId: "workspace-loop7", state: "all", parseStatus: "all", search: "   " }), [
       created,
     ]);
 
-    const active = repo.patchState("loop8", { state: "active" }, "2026-05-14T11:03:00.000Z");
-    const activeAgain = repo.patchState("loop8", { state: "active" }, "2026-05-14T11:04:00.000Z");
+    const active = repo.patchState("loop7", { state: "active" }, "2026-05-14T11:03:00.000Z");
+    const activeAgain = repo.patchState("loop7", { state: "active" }, "2026-05-14T11:04:00.000Z");
     assert.equal(activeAgain.activatedAt, active.activatedAt);
-    const retired = repo.patchState("loop8", { state: "retired" }, "2026-05-14T11:05:00.000Z");
-    const retiredAgain = repo.patchState("loop8", { state: "retired" }, "2026-05-14T11:06:00.000Z");
+    const retired = repo.patchState("loop7", { state: "retired" }, "2026-05-14T11:05:00.000Z");
+    const retiredAgain = repo.patchState("loop7", { state: "retired" }, "2026-05-14T11:06:00.000Z");
     assert.equal(retiredAgain.retiredAt, retired.retiredAt);
     assert.throws(() => repo.list({ workspaceId: "bad workspace" }), /workspaceId contains unsupported characters/);
   });
 
   it("covers memory context scoped cache defaults, malformed rows, and prune fallbacks", () => {
-    const repo = new MemoryContextRepository(createDb("memory-context-loop8"));
+    const repo = new MemoryContextRepository(createDb("memory-context-loop7"));
     const created = repo.upsert({
-      cacheKey: "cache-loop8",
+      cacheKey: "cache-loop7",
       scope: "chat",
-      queryHash: "query-loop8",
-      sourcesHash: "sources-loop8",
+      queryHash: "query-loop7",
+      sourcesHash: "sources-loop7",
       contextText: "distilled memory",
       citations: [],
       quality: { status: "generated" },
@@ -698,20 +698,20 @@ describe("storage branch-tail matrices", () => {
     internal.pruneExpiredStmt = { run: () => ({ changes: undefined }) };
     internal.pruneOlderThanStmt = { run: () => ({ changes: undefined }) };
     assert.deepEqual(repo.listRecent(), []);
-    assert.deepEqual(repo.listByRun("run-loop8"), []);
+    assert.deepEqual(repo.listByRun("run-loop7"), []);
     assert.equal(repo.pruneExpired("2026-05-16T00:00:00.000Z"), 0);
     assert.equal(repo.pruneOlderThan("2026-05-01T00:00:00.000Z"), 0);
   });
 
   it("covers approval effect existing-row defaults and zero-change terminal updates", () => {
-    const db = createDb("approval-effect-loop8");
+    const db = createDb("approval-effect-loop7");
     const repo = new ApprovalEffectRepository(db);
-    insertApproval(db, "approval-loop8");
+    insertApproval(db, "approval-loop7");
     const created = repo.upsert({
-      approvalId: "approval-loop8",
+      approvalId: "approval-loop7",
       effectKind: "approval_wait_wake",
       targetKind: "durable_run",
-      targetId: "run-loop8",
+      targetId: "run-loop7",
       payload: { keep: true },
       result: { previous: true },
       status: "running",
@@ -723,10 +723,10 @@ describe("storage branch-tail matrices", () => {
       completedAt: "2026-05-14T11:06:00.000Z",
     });
     const preserved = repo.upsert({
-      approvalId: "approval-loop8",
+      approvalId: "approval-loop7",
       effectKind: "approval_wait_wake",
       targetKind: "durable_run",
-      targetId: "run-loop8",
+      targetId: "run-loop7",
     });
     assert.deepEqual(preserved.payload, created.payload);
     assert.deepEqual(preserved.result, created.result);
