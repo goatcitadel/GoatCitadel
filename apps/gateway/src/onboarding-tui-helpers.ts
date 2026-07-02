@@ -35,13 +35,22 @@ export function buildWindowsCommand(parts: string[]): string {
 }
 
 export function quoteWindowsCommandArg(value: string): string {
+  assertSafeWindowsCommandArg(value);
   if (value.length === 0) {
     return '""';
   }
-  if (!/[\s"&()^<>|]/.test(value)) {
+  if (!/[\s&()^<>|]/.test(value)) {
     return value;
   }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+  return `"${value}"`;
+}
+
+function assertSafeWindowsCommandArg(value: string): void {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
 }
 
 export function clampOption<const T extends readonly string[]>(

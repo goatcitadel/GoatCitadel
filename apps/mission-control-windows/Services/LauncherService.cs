@@ -43,6 +43,8 @@ public sealed class LauncherEnvironment
 
 public sealed class LauncherService
 {
+    private static readonly char[] UnsafeWindowsShellArgChars = { '"', '%', '\r', '\n', '\0' };
+
     private readonly LauncherEnvironment _environment;
 
     public LauncherService(LauncherEnvironment? environment = null)
@@ -231,13 +233,20 @@ public sealed class LauncherService
 
     public static string QuoteWindowsCommandArg(string value)
     {
+        if (value.IndexOfAny(UnsafeWindowsShellArgChars) >= 0)
+        {
+            throw new ArgumentException(
+                "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+                nameof(value));
+        }
+
         if (value.Length == 0)
         {
             return "\"\"";
         }
 
-        return value.Any(character => char.IsWhiteSpace(character) || "\"&()^<>|".Contains(character))
-            ? $"\"{value.Replace("\"", "\\\"")}\""
+        return value.Any(character => char.IsWhiteSpace(character) || "&()^<>|".Contains(character))
+            ? $"\"{value}\""
             : value;
     }
 }

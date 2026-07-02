@@ -35,7 +35,11 @@ describe("code-mode-execution-backends", () => {
     const preview = buildCodeModeExecutionBackends({
       codeModeEnabled: true,
       sandbox: sandboxMetadata(),
-      dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+      dockerBackend: {
+        enabled: true,
+        image:
+          "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
       aiderAdapter: { enabled: true },
       env: {},
     }).items.find((item) => item.backendId === CODE_MODE_AIDER_ADAPTER_ID);
@@ -52,7 +56,11 @@ describe("code-mode-execution-backends", () => {
     const response = buildCodeModeExecutionBackends({
       codeModeEnabled: true,
       sandbox: sandboxMetadata(),
-      dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        requireDigestPin: false,
+      },
       aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview", command: "aider" },
       env: {},
     });
@@ -70,7 +78,11 @@ describe("code-mode-execution-backends", () => {
     expect(
       buildCodeModeRunExecutionBackendRef(sandboxMetadata(), {
         requestedBackendId: CODE_MODE_AIDER_ADAPTER_ID,
-        dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+        dockerBackend: {
+          enabled: true,
+          image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+          requireDigestPin: false,
+        },
         aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
         env: {},
       }),
@@ -118,6 +130,25 @@ describe("code-mode-execution-backends", () => {
         env: {},
       }),
     ).toThrow("Docker backend requires a digest-pinned image");
+  });
+
+  it("requires Docker digest pinning by default when the backend is enabled", () => {
+    const response = buildCodeModeExecutionBackends({
+      codeModeEnabled: true,
+      sandbox: sandboxMetadata(),
+      dockerBackend: {
+        enabled: true,
+        image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+      },
+      env: {},
+    });
+
+    expect(response.activeBackendId).toBe("trusted-code-host");
+    expect(response.items.find((item) => item.backendId === "docker-container")).toMatchObject({
+      status: "blocked",
+      callable: false,
+      blockers: expect.arrayContaining(["Docker backend requires a digest-pinned image (name@sha256:<64 hex chars>)."]),
+    });
   });
 
   it("includes unsupported backend candidates as evaluation-only metadata", () => {

@@ -43,6 +43,7 @@ const templatesRoot = path.join(appRoot, "templates");
 const nodeVersion = args.nodeVersion || process.version;
 const uiTarget = resolveUiTarget(repoRoot, process.env);
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const WINDOWS_TAR_PATH = "C:\\Windows\\System32\\tar.exe";
 const includeDesktopHost = targetInfo.bundleDesktopHost && !args.skipDesktop;
 
 await main();
@@ -554,7 +555,7 @@ function expandNodeRuntimeArchive({ archivePath, expandedRoot, targetInfo: curre
     return;
   }
 
-  const tarCommand = process.platform === "win32" ? "tar.exe" : "tar";
+  const tarCommand = process.platform === "win32" ? WINDOWS_TAR_PATH : "tar";
   const tarResult = spawnSync(tarCommand, ["-xzf", archivePath, "-C", expandedRoot], {
     stdio: "inherit",
   });
@@ -571,11 +572,20 @@ function buildWindowsCommand(parts) {
 }
 
 function quoteWindowsCommandArg(value) {
+  assertSafeWindowsCommandArg(value);
   if (value.length === 0) {
     return '""';
   }
-  if (!/[\s"&()^<>|]/.test(value)) {
+  if (!/[\s&()^<>|]/.test(value)) {
     return value;
   }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+  return `"${value}"`;
+}
+
+function assertSafeWindowsCommandArg(value) {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
 }

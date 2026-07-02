@@ -103,6 +103,14 @@ test("Windows release manifest can carry the signed sparse identity package", ()
   assert.equal(identityPackage?.signed, true);
 });
 
+test("bundle extraction uses Windows system tar instead of PATH tar", () => {
+  const source = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-bundle.mjs"), "utf8");
+
+  assert.match(source, /const WINDOWS_TAR_PATH = "C:\\\\Windows\\\\System32\\\\tar\.exe";/);
+  assert.match(source, /process\.platform === "win32" \? WINDOWS_TAR_PATH : "tar"/);
+  assert.doesNotMatch(source, /process\.platform === "win32" \? "tar\.exe" : "tar"/);
+});
+
 test("Windows host manifests declare matching external-location package identity", () => {
   const appManifest = fs.readFileSync(path.join(repoRoot, "apps", "mission-control-windows", "app.manifest"), "utf8");
   const packageManifest = fs.readFileSync(

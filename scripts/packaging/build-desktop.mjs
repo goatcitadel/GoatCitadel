@@ -153,13 +153,22 @@ function buildWindowsCommand(parts) {
 }
 
 function quoteWindowsCommandArg(value) {
+  assertSafeWindowsCommandArg(value);
   if (value.length === 0) {
     return '""';
   }
-  if (!/[\s"&()^<>|]/.test(value)) {
+  if (!/[\s&()^<>|]/.test(value)) {
     return value;
   }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+  return `"${value}"`;
+}
+
+function assertSafeWindowsCommandArg(value) {
+  if (/["%\r\n\0]/.test(value)) {
+    throw new Error(
+      "Windows shell command arguments must not contain embedded quotes, percent expansions, or control characters.",
+    );
+  }
 }
 
 function listFiles(root) {

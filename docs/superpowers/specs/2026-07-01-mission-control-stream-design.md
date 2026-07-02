@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-01
 - **Status:** Approved (design); pending implementation plan
-- **Drives:** Open Design "Code import" project (project id `dbc9a60e-4a9f-4051-a56c-cba0c14d53dc`, linked to `F:\code\personal-ai`) — specifically the `verge-remix.html` exploration, which restructured Mission Control's IA around one unified cross-agent activity timeline instead of the session-scoped 3-pane work surface. The `verge-reskin.html` (app-wide visual reskin) direction is explicitly deferred, not part of this spec.
+- **Drives:** Open Design "Code import" project (project id `dbc9a60e-4a9f-4051-a56c-cba0c14d53dc`, linked to this GoatCitadel checkout) — specifically the `verge-remix.html` exploration, which restructured Mission Control's IA around one unified cross-agent activity timeline instead of the session-scoped 3-pane work surface. The `verge-reskin.html` (app-wide visual reskin) direction is explicitly deferred, not part of this spec.
 - **Author:** design session (brainstorming)
 
 > File/line anchors below come from a mix of direct reads and read-only exploration (background research agents). Anchors from direct reads (route-model.ts, chat-page-pure-helpers.ts) are exact at time of writing. Anchors sourced from agent research are **approximate** — verify at implementation time.

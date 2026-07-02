@@ -5,6 +5,7 @@ import type { CronJobRecord } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import {
   COST_REPORT_HOURLY_JOB_ID,
+  IMPROVEMENT_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -25,6 +26,13 @@ import {
 import { describeMalformedCronRow, isPlainRecord, isValidCronRow } from "./cron-row-validation.js";
 
 const log = logger.child("cron-job-config-helpers");
+const BUILT_IN_CRON_ACTIONS = new Map<string, CronJobRecord["action"]>([
+  [IMPROVEMENT_WEEKLY_JOB_ID, "improvement"],
+  [PRIVATE_BETA_BACKUP_JOB_ID, "backup"],
+  [MEMORY_FLUSH_DAILY_JOB_ID, "memory_flush"],
+  [COST_REPORT_HOURLY_JOB_ID, "cost_report"],
+  [UPDATE_REVIEW_DAILY_JOB_ID, "update_review"],
+]);
 
 export interface CronJobConfigHost {
   readonly config: Pick<GatewayRuntimeConfig, "rootDir">;
@@ -109,6 +117,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
       }
       const persistedNext = sanitized.nextRunAt ?? existing?.nextRunAt;
       const repairedNext = repairCronNextRunAt(normalizedSchedule, persistedNext, normalizedEndAt, Date.now());
+      const canonicalAction = BUILT_IN_CRON_ACTIONS.get(normalizedJobId);
       if (repairedNext && repairedNext !== persistedNext) {
         log.info("repaired stale nextRunAt", {
           jobId: normalizedJobId,
@@ -121,7 +130,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
         ...sanitized,
         jobId: normalizedJobId,
         name: normalizedName,
-        action: sanitized.action ?? existing?.action ?? "task",
+        action: canonicalAction ?? sanitized.action ?? existing?.action ?? "task",
         actionConfig: sanitized.actionConfig ?? existing?.actionConfig,
         description: sanitized.description ?? existing?.description,
         schedule: normalizedSchedule,
@@ -187,7 +196,8 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
     contextFrom: typeof record.contextFrom === "string" ? record.contextFrom : undefined,
     lastRunOutput: typeof record.lastRunOutput === "string" ? record.lastRunOutput : undefined,
     lastRunId: typeof record.lastRunId === "string" ? record.lastRunId : undefined,
-    lastRunStatus: record.lastRunStatus === "ok" || record.lastRunStatus === "failed" ? record.lastRunStatus : undefined,
+    lastRunStatus:
+      record.lastRunStatus === "ok" || record.lastRunStatus === "failed" ? record.lastRunStatus : undefined,
     lastFailureAt: typeof record.lastFailureAt === "string" ? record.lastFailureAt : undefined,
     lastFailure: sanitizeCronLastFailure(record.lastFailure),
     failureCount:

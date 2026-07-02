@@ -156,6 +156,64 @@ describe("cron job config helpers", () => {
       expect(new Date(now as string).toString()).not.toBe("Invalid Date");
     }
   });
+
+  it("repairs canonical actions for built-in cron job ids loaded from config", async () => {
+    const host = createHost(await makeRoot());
+    await writeFile(
+      getCronJobsConfigPath(host),
+      JSON.stringify({
+        jobs: [
+          {
+            jobId: "self_improvement_weekly_replay",
+            name: "Self-Improvement Weekly Replay",
+            action: "task",
+            schedule: "0 2 * * 0 America/Los_Angeles",
+            enabled: false,
+          },
+          {
+            jobId: "private_beta_backup_daily",
+            name: "Private Beta Daily Backup",
+            schedule: "30 2 * * * America/Los_Angeles",
+            enabled: true,
+          },
+          {
+            jobId: "memory-flush-daily",
+            name: "Memory Flush Daily",
+            schedule: "0 3 * * * America/Los_Angeles",
+            enabled: true,
+          },
+          {
+            jobId: "cost-report-hourly",
+            name: "Cost Report Hourly",
+            schedule: "0 * * * * America/Los_Angeles",
+            enabled: true,
+          },
+          {
+            jobId: "update-review-daily",
+            name: "Daily Update Review",
+            schedule: "15 4 * * * America/Los_Angeles",
+            enabled: true,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    await loadCronJobsFromConfig(host);
+
+    const actionsByJobId = new Map(
+      host.storage.cronJobs.upsertIfChanged.mock.calls.map(([record]) => [record.jobId, record.action]),
+    );
+    expect(actionsByJobId).toEqual(
+      new Map([
+        ["self_improvement_weekly_replay", "improvement"],
+        ["private_beta_backup_daily", "backup"],
+        ["memory-flush-daily", "memory_flush"],
+        ["cost-report-hourly", "cost_report"],
+        ["update-review-daily", "update_review"],
+      ]),
+    );
+  });
 });
 
 async function makeRoot(): Promise<string> {
