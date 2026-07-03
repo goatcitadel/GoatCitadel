@@ -1466,6 +1466,31 @@ describe("ThreadedTimeline", () => {
       expect(renderedText(renderer)).toContain("User message 41");
     });
 
+    it("freezes to the pre-growth window start when followOutput flips false in the same commit as turn growth", () => {
+      // React 18 auto-batches same-task state updates: an IntersectionObserver
+      // flip (followOutput -> false) and a stream turn arrival (100 -> 110
+      // turns) can land in a single renderer.update. The render-time mirror
+      // (`unfrozenWindowStartRef.current = defaultWindowStart`) must not have
+      // already advanced to the post-growth default (start 50, turn 51) by
+      // the time the transition is captured -- the freeze has to hold the
+      // reader's pre-growth anchor (start 40, turn 41 as the OLDEST rendered
+      // turn), exactly as it would if the two updates had landed in separate
+      // commits. The window is wide (41-110) so turns like 51 legitimately
+      // still appear; the assertion that matters is the oldest boundary:
+      // turn 41 present, turn 40 (one before the pre-growth anchor) absent.
+      const props = buildLongThreadProps({ followOutput: true });
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain("User message 100");
+
+      const combinedProps = buildLongThreadProps({ followOutput: false }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={combinedProps as any} />);
+      });
+
+      expect(renderedText(renderer)).toContain("User message 41");
+      expect(renderedText(renderer)).not.toContain("User message 40");
+    });
+
     it("snaps the window back to the live default once the operator re-engages follow output", () => {
       const props = buildLongThreadProps();
       const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);

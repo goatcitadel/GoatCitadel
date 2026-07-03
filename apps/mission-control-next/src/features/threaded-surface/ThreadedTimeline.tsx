@@ -323,32 +323,38 @@ export function ThreadedTimeline({
    * false), the window start must freeze so newly appended turns don't
    * unmount the oldest turn under the reader and defeat scroll anchoring.
    *
-   * `unfrozenWindowStartRef` mirrors `defaultWindowStart` every render (a
-   * plain render-time write, not an effect) so the capture effect below can
-   * read "the current live default" without needing it in its dependency
-   * array — only the followOutput transition itself should trigger a
-   * capture, not every turn-count change.
+   * `unfrozenWindowStartRef` mirrors `defaultWindowStart` only while
+   * `props.followOutput` is true for THIS render (a plain render-time write,
+   * not an effect), so it always holds "the live default as of the most
+   * recent render where the operator was still following."
    *
-   * Release is read directly from `props.followOutput` in the render body
-   * (not gated behind an effect) so re-engaging follow output takes effect
-   * in the same render as the prop flip, rather than one render later: an
-   * effect-only release would still see the stale frozen value on the
-   * render where `followOutput` first becomes true, since effects commit
-   * after render.
+   * React 18 auto-batches same-task updates, so a single commit can carry
+   * BOTH `followOutput: true -> false` AND turn-count growth (e.g. an
+   * IntersectionObserver flip and a stream turn arrival landing in one
+   * browser task). Gating the mirror write on the CURRENT render's
+   * `followOutput` (rather than writing unconditionally every render) means
+   * the render that first observes the flip to false leaves the mirror
+   * holding the value from the last render where following was still true —
+   * the pre-growth anchor — instead of overwriting it with this render's own
+   * post-growth default.
+   *
+   * The freeze is captured synchronously in the render body (not in an
+   * effect) so this same render's `effectiveWindowStart` immediately reads
+   * the frozen value: an effect-only capture would still display the live
+   * (post-growth) default for one render, since effects commit after render.
+   * This mirrors how release below already works (read directly from
+   * `props.followOutput`, not gated behind an effect).
    */
   const unfrozenWindowStartRef = useRef(defaultWindowStart);
-  unfrozenWindowStartRef.current = defaultWindowStart;
+  if (props.followOutput) {
+    unfrozenWindowStartRef.current = defaultWindowStart;
+  }
   const frozenWindowStartRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (props.followOutput) {
-      frozenWindowStartRef.current = null;
-      return;
-    }
-    if (frozenWindowStartRef.current === null) {
-      frozenWindowStartRef.current = unfrozenWindowStartRef.current;
-    }
-  }, [props.followOutput]);
+  if (props.followOutput) {
+    frozenWindowStartRef.current = null;
+  } else if (frozenWindowStartRef.current === null) {
+    frozenWindowStartRef.current = unfrozenWindowStartRef.current;
+  }
 
   const effectiveWindowStart = resolveEffectiveWindowStart({
     manualWindowStart,
