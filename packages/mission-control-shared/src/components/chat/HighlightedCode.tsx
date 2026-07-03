@@ -55,10 +55,10 @@ export function HighlightedCode({
         }
       })
       .catch(() => {
-        // Defense in depth: loadAssistantCodeHighlighter() is documented to resolve
-        // null rather than reject, but a rejection here (e.g. a mocked/replaced
-        // loader) must still degrade to plain text instead of surfacing an unhandled
-        // rejection or crashing the message renderer.
+        // Intentionally a no-op: loadAssistantCodeHighlighter() is documented to
+        // resolve null rather than reject, but a rejection here (e.g. a mocked or
+        // replaced loader) must fall back to plain text instead of surfacing an
+        // unhandled rejection or crashing the message renderer.
       });
     return () => {
       cancelled = true;
