@@ -1401,6 +1401,159 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("User message 30");
   });
 
+  describe("freezes the thread window while the operator has scrolled away from the bottom", () => {
+    function buildLongThreadProps(overrides: Partial<any> = {}, turnCount = 100) {
+      const props = buildProps({
+        mode: "chat",
+        delegationRun: null,
+        selectedTurnId: null,
+        selectedContextTurnIds: [],
+        activeStreamingTurnId: null,
+        streamingPreview: null,
+        followOutput: false,
+        ...overrides,
+      });
+      const baseTurn = props.thread.turns[0];
+      props.thread.turns = Array.from({ length: turnCount }, (_, index) => {
+        const turnNumber = index + 1;
+        return {
+          ...baseTurn,
+          turnId: `turn-${turnNumber}`,
+          userMessage: {
+            ...baseTurn.userMessage,
+            messageId: `user-${turnNumber}`,
+            content: `User message ${turnNumber}`,
+          },
+          assistantMessage: {
+            ...baseTurn.assistantMessage,
+            messageId: `assistant-${turnNumber}`,
+            content: `Assistant answer ${turnNumber}`,
+          },
+          trace: {
+            ...baseTurn.trace,
+            turnId: `turn-${turnNumber}`,
+            userMessageId: `user-${turnNumber}`,
+            status: "completed",
+            mode: "chat",
+          },
+          branch: {
+            ...baseTurn.branch,
+            siblingTurnIds: [`turn-${turnNumber}`],
+          },
+        };
+      });
+      props.thread.activeLeafTurnId = `turn-${turnCount}`;
+      return props;
+    }
+
+    it("keeps the oldest visible turn mounted as new turns append while followOutput is false", () => {
+      // Start at 100 turns: THREAD_WINDOW_SIZE=60 means the live default window
+      // is turns 41-100 (0-indexed start 40), so "User message 41" is the oldest
+      // visible turn and "User message 40" is hidden.
+      const props = buildLongThreadProps();
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain("User message 41");
+      expect(renderedText(renderer)).not.toContain("User message 40");
+
+      // 10 more turns append while the operator is still scrolled up (followOutput
+      // stays false). Without the freeze, the live default would advance to start
+      // 50, unmounting "User message 41" out from under the reader.
+      const grownProps = buildLongThreadProps({ followOutput: false }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={grownProps as any} />);
+      });
+
+      expect(renderedText(renderer)).toContain("User message 41");
+    });
+
+    it("snaps the window back to the live default once the operator re-engages follow output", () => {
+      const props = buildLongThreadProps();
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain("User message 41");
+
+      const grownProps = buildLongThreadProps({ followOutput: false }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={grownProps as any} />);
+      });
+      expect(renderedText(renderer)).toContain("User message 41");
+
+      // Operator scrolls to the bottom / hits jump-to-latest: followOutput flips
+      // true. The freeze must release and the window should snap to the live
+      // default for the now-110-turn thread (start 50, so "User message 51" is
+      // the oldest visible turn and the previously-frozen 41 is hidden again).
+      const reengagedProps = buildLongThreadProps({ followOutput: true }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={reengagedProps as any} />);
+      });
+
+      expect(renderedText(renderer)).toContain("User message 51");
+      expect(renderedText(renderer)).not.toContain("User message 41");
+
+      // Operator scrolls up again at 120 turns: a fresh freeze must capture
+      // the NEW live default (start 60, oldest visible turn 61), not reuse
+      // the stale value from the first freeze episode (start 40, turn 41).
+      const rescrolledProps = buildLongThreadProps({ followOutput: false }, 120);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={rescrolledProps as any} />);
+      });
+      expect(renderedText(renderer)).toContain("User message 61");
+      expect(renderedText(renderer)).not.toContain("User message 41");
+
+      // Further growth to 130 turns while still not following holds the
+      // fresh freeze at turn 61, proving the second freeze episode behaves
+      // identically to the first rather than being a one-shot capture.
+      const grownAgainProps = buildLongThreadProps({ followOutput: false }, 130);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={grownAgainProps as any} />);
+      });
+      expect(renderedText(renderer)).toContain("User message 61");
+    });
+
+    it("still widens the window when 'Show hidden turns' is used while frozen", () => {
+      const props = buildLongThreadProps();
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain("hidden for performance");
+
+      const grownProps = buildLongThreadProps({ followOutput: false }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={grownProps as any} />);
+      });
+      expect(renderedText(renderer)).toContain("User message 41");
+
+      const showHidden = renderer.root.find(
+        (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+      );
+      TestRenderer.act(() => {
+        showHidden.props.onClick();
+      });
+
+      // Manual expansion wins over the freeze: the very first turn is now visible,
+      // and the frozen oldest-visible turn is still mounted too (widen, not shift).
+      expect(renderedText(renderer)).not.toContain("hidden for performance");
+      expect(renderedText(renderer)).toContain("User message 1G");
+      expect(renderedText(renderer)).toContain("User message 41");
+    });
+
+    it("keeps an early context-pinned turn mounted through buildThreadWindow's own pinning while the window is frozen", () => {
+      // The freeze only changes which windowStart is passed into
+      // buildThreadWindow; the pin-and-overscan behavior it already provides
+      // for selected/context/streaming turns must keep working unmodified.
+      const props = buildLongThreadProps({ selectedContextTurnIds: ["turn-5"] });
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain("User message 5G");
+      expect(renderedText(renderer)).toContain("User message 41");
+
+      const grownProps = buildLongThreadProps({ followOutput: false, selectedContextTurnIds: ["turn-5"] }, 110);
+      TestRenderer.act(() => {
+        renderer.update(<ThreadedTimeline props={grownProps as any} />);
+      });
+
+      // Both the pinned early turn and the frozen oldest-visible turn remain mounted.
+      expect(renderedText(renderer)).toContain("User message 5G");
+      expect(renderedText(renderer)).toContain("User message 41");
+    });
+  });
+
   it("cancels pending follow-output scrolling when the timeline unmounts", () => {
     const cancelAnimationFrame = vi.fn();
     vi.stubGlobal(

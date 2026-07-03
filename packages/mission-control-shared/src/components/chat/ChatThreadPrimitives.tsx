@@ -195,6 +195,42 @@ export function buildThreadWindow({
   return items;
 }
 
+/**
+ * Resolves the window start index {@link buildThreadWindow} should use,
+ * honoring three interacting states:
+ *
+ * - `manualWindowStart` (the "show hidden turns" affordance): when set, it
+ *   always wins — the operator explicitly asked to see earlier turns, so
+ *   neither the live default nor a scroll-freeze should re-hide them.
+ * - `frozenWindowStart` (captured the moment the operator scrolls away from
+ *   the bottom): while set, the window never advances past it, even as new
+ *   turns append and push the live default forward. This keeps the oldest
+ *   turn the operator is currently reading mounted, preserving scroll
+ *   anchoring. `Math.min` guards a shrinking thread (e.g. branch switch)
+ *   from producing a start past the live default.
+ * - `defaultWindowStart` (the live default): used whenever neither of the
+ *   above applies.
+ *
+ * Precedence: manual > frozen > live default.
+ */
+export function resolveEffectiveWindowStart({
+  manualWindowStart,
+  frozenWindowStart,
+  defaultWindowStart,
+}: {
+  manualWindowStart: number | null;
+  frozenWindowStart: number | null;
+  defaultWindowStart: number;
+}): number {
+  if (manualWindowStart !== null) {
+    return Math.min(manualWindowStart, defaultWindowStart);
+  }
+  if (frozenWindowStart !== null) {
+    return Math.min(frozenWindowStart, defaultWindowStart);
+  }
+  return defaultWindowStart;
+}
+
 export function isInteractiveChatEventTarget(target: EventTarget | null, currentTarget: EventTarget): boolean {
   const maybeElement = target as { closest?: (selector: string) => Element | null } | null;
   const interactiveAncestor = maybeElement?.closest?.(

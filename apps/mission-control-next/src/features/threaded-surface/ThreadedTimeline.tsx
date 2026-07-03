@@ -17,6 +17,7 @@ import {
   ChatThreadWindowGap,
   THREAD_WINDOW_SIZE,
   buildThreadWindow,
+  resolveEffectiveWindowStart,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
 import {
@@ -316,7 +317,44 @@ export function ThreadedTimeline({
     onStop: onStopStreamingTurn,
   });
   const defaultWindowStart = Math.max(0, threadTurnCount - THREAD_WINDOW_SIZE);
-  const effectiveWindowStart = Math.min(manualWindowStart ?? defaultWindowStart, defaultWindowStart);
+
+  /*
+   * While the operator has scrolled away from the bottom (followOutput ===
+   * false), the window start must freeze so newly appended turns don't
+   * unmount the oldest turn under the reader and defeat scroll anchoring.
+   *
+   * `unfrozenWindowStartRef` mirrors `defaultWindowStart` every render (a
+   * plain render-time write, not an effect) so the capture effect below can
+   * read "the current live default" without needing it in its dependency
+   * array — only the followOutput transition itself should trigger a
+   * capture, not every turn-count change.
+   *
+   * Release is read directly from `props.followOutput` in the render body
+   * (not gated behind an effect) so re-engaging follow output takes effect
+   * in the same render as the prop flip, rather than one render later: an
+   * effect-only release would still see the stale frozen value on the
+   * render where `followOutput` first becomes true, since effects commit
+   * after render.
+   */
+  const unfrozenWindowStartRef = useRef(defaultWindowStart);
+  unfrozenWindowStartRef.current = defaultWindowStart;
+  const frozenWindowStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (props.followOutput) {
+      frozenWindowStartRef.current = null;
+      return;
+    }
+    if (frozenWindowStartRef.current === null) {
+      frozenWindowStartRef.current = unfrozenWindowStartRef.current;
+    }
+  }, [props.followOutput]);
+
+  const effectiveWindowStart = resolveEffectiveWindowStart({
+    manualWindowStart,
+    frozenWindowStart: props.followOutput ? null : frozenWindowStartRef.current,
+    defaultWindowStart,
+  });
   const windowedThreadItems = useMemo(
     () =>
       buildThreadWindow({
@@ -375,9 +413,22 @@ export function ThreadedTimeline({
     setManualWindowStart(0);
   }, []);
 
+  /*
+   * Reset windowing state on an actual session change, not on mount: the
+   * freeze effect above also runs on mount (all effects do) and may capture
+   * `frozenWindowStartRef` in the same commit. Comparing against the
+   * previous session id (rather than keying off identity alone) ensures
+   * this only clears state when the session genuinely switches.
+   */
+  const previousSessionIdRef = useRef(sessionId);
   useEffect(() => {
+    if (previousSessionIdRef.current === sessionId) {
+      return;
+    }
+    previousSessionIdRef.current = sessionId;
     setManualWindowStart(null);
-  }, [props.thread?.sessionId]);
+    frozenWindowStartRef.current = null;
+  }, [sessionId]);
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>

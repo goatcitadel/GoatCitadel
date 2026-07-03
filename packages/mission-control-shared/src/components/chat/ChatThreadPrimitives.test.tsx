@@ -8,6 +8,7 @@ import {
   buildThreadWindow,
   handleTurnSurfaceKeyDown,
   isInteractiveChatEventTarget,
+  resolveEffectiveWindowStart,
 } from "./ChatThreadPrimitives";
 
 function createTurn(overrides: Partial<ChatThreadTurnRecord> = {}): ChatThreadTurnRecord {
@@ -458,6 +459,74 @@ describe("ChatThreadPrimitives", () => {
     expect(visibleTurnIds).toEqual(expect.arrayContaining(["turn-5", "turn-50", "turn-70", "turn-99"]));
     expect(gaps.length).toBeGreaterThan(0);
     expect(gaps.some((gap) => gap.hiddenCount > 0)).toBe(true);
+  });
+
+  describe("resolveEffectiveWindowStart", () => {
+    it("uses the live default when nothing is manual or frozen", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: null,
+          defaultWindowStart: 40,
+        }),
+      ).toBe(40);
+    });
+
+    it("freezes the window at the captured start even as the live default advances", () => {
+      // Regression for the scroll-reading bug: while the operator is scrolled up,
+      // newly appended turns must not advance the window start under them.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: 10,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(10);
+    });
+
+    it("clamps the frozen start down if the thread shrinks below it", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: 25,
+          defaultWindowStart: 10,
+        }),
+      ).toBe(10);
+    });
+
+    it("gives manual expansion precedence over an active freeze", () => {
+      // "Show hidden turns" clicked while frozen must still widen the window,
+      // not fight the freeze.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 0,
+          frozenWindowStart: 10,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(0);
+    });
+
+    it("gives manual precedence over the live default when not frozen", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 0,
+          frozenWindowStart: null,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(0);
+    });
+
+    it("clamps a manual start down if the thread shrinks below it", () => {
+      // Preserves the pre-existing buildThreadWindow contract: manual never
+      // exceeds the live default.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 25,
+          frozenWindowStart: null,
+          defaultWindowStart: 10,
+        }),
+      ).toBe(10);
+    });
   });
 
   it("renders the streaming skeleton as a visual-only indicator without a live region", () => {
