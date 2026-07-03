@@ -412,6 +412,8 @@ export function ThreadedTimeline({
               queuedCount={props.queuedCount}
               error={props.streamError}
               announce={false}
+              activitySessionId={sessionId}
+              suppressStallIndicator={Boolean(props.pendingApproval || props.pendingUserInput)}
             />
             <div className="mc-next-thread-list">
               <ChatThreadDelegationSummary

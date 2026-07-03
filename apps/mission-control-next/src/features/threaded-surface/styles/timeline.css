@@ -1504,6 +1504,19 @@
   background: var(--gc-risk-danger, var(--risk-danger));
 }
 
+/* Client-side stall indicator: no chunk has arrived for
+   CHAT_STREAM_STALL_THRESHOLD_MS (12s) while streaming/connecting. Purely a
+   liveness signal layered on top of the existing tone -- it does not replace
+   tone-pending/tone-active. */
+.chat-stream-status-bar.is-stalled {
+  border-color: color-mix(in oklab, var(--gc-risk-caution, var(--risk-caution)) 45%, var(--mc-border-subtle));
+}
+
+.chat-stream-status-stall {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ============================================================
    SurfaceReconnectBanner (.surface-reconnect-banner)
    Rendered inside the timeline by ThreadedTimeline.tsx.

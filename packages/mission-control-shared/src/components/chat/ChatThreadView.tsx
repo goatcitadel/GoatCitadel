@@ -191,6 +191,7 @@ export function ChatThreadView({
         queuedCount={queuedCount}
         error={streamError}
         announce={true}
+        activitySessionId={thread.sessionId}
       />
       <Virtuoso
         key={thread.sessionId}
