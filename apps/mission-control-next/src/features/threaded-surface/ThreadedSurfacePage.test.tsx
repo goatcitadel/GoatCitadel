@@ -1121,6 +1121,133 @@ describe("ThreadedSurfacePage", () => {
     expect(onOpenTasks).toHaveBeenCalledTimes(1);
   });
 
+  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook", async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal("document", {
+      activeElement: null,
+      contains: () => false,
+      querySelector: () => null,
+      addEventListener,
+      removeEventListener,
+    });
+
+    const onStopActiveTurn = vi.fn();
+    const activeProps = buildActiveSessionProps({ mode: "chat", onStopActiveTurn });
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: activeProps,
+      // Keep the capture-phase rail drawer and context dock closed so the only
+      // "keydown" listeners registered on `document` are the Panels menu's own
+      // bubble-phase Escape handler and useEscapeToStopStream's (both of those
+      // other capture-phase handlers are gated behind `railDrawerOpen`/`dockOpen`
+      // and would otherwise also call `addEventListener`, making the assertions
+      // below ambiguous).
+      sessionRailOpen: false,
+      dockOpen: false,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    // Open the Panels menu first (registers its bubble-phase listener), THEN
+    // start the stream (registers useEscapeToStopStream's listener second) —
+    // this is the ordering the gating finding describes: the menu's own
+    // handler runs before the document-bubble stop hook gets a chance to act,
+    // so claiming the event here is what stops it from also firing.
+    // NOTE: document.addEventListener dispatch is registration-order, so the
+    // REVERSE sequence (stream already active, operator opens the menu after)
+    // would let useEscapeToStopStream's handler run first instead — that
+    // ordering is unaffected by this fix and is tracked as a follow-up.
+    await act(async () => {
+      findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
+    });
+    await act(async () => {
+      renderer!.update(
+        <ThreadedSurfacePage
+          surface="chat"
+          input={{
+            ...input,
+            activeSessionSurfaceProps: { ...activeProps, sending: true, hasActiveStream: true },
+          }}
+        />,
+      );
+    });
+
+    const keydownHandlers = addEventListener.mock.calls
+      .filter(([type]) => type === "keydown")
+      .map(([, handler]) => handler as (event: unknown) => void);
+    // Exactly two bubble-phase "keydown" listeners should be live at this point:
+    // the Panels menu's own handler (registered first, because it opened
+    // first) and useEscapeToStopStream's document-level hook (registered
+    // second, because the stream only went active afterwards).
+    expect(keydownHandlers).toHaveLength(2);
+
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    // A single dispatched Escape reaches every bubble-phase listener with the
+    // SAME event object, in registration order — mirror that here by invoking
+    // every captured handler, in that same order, against one shared fake
+    // event.
+    const sharedEvent = {
+      key: "Escape",
+      defaultPrevented: false,
+      isComposing: false,
+      target: null,
+      preventDefault: () => {
+        preventDefault();
+        sharedEvent.defaultPrevented = true;
+      },
+      stopPropagation,
+    };
+    await act(async () => {
+      for (const handler of keydownHandlers) {
+        handler(sharedEvent);
+      }
+    });
+
+    // The menu closed...
+    expect(collectText(renderer!.root)).not.toContain("Background tasks");
+    // ...claimed the event so the document-bubble useEscapeToStopStream hook
+    // (which only fires when `!event.defaultPrevented`) would skip it...
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
+    // ...and, wired end-to-end, the stream was never cancelled by this keypress.
+    expect(onStopActiveTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the Escape event when the Panels menu is closed", async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal("document", {
+      activeElement: null,
+      contains: () => false,
+      querySelector: () => null,
+      addEventListener,
+      removeEventListener,
+    });
+
+    const activeProps = buildActiveSessionProps({ mode: "chat" });
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: activeProps,
+      sessionRailOpen: false,
+      dockOpen: false,
+    } as any;
+
+    await act(async () => {
+      create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    // The Panels menu was never opened, so its `useEffect` never registers a
+    // "keydown" listener at all (it early-returns while `open` is false).
+    expect(addEventListener.mock.calls.find(([type]) => type === "keydown")).toBeUndefined();
+  });
+
   it("exposes keyboard-adjustable resize handles for the rail and right drawer", async () => {
     const activeProps = buildActiveSessionProps({ mode: "chat" });
     const input = {

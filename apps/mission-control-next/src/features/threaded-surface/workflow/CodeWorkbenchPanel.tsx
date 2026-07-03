@@ -1248,6 +1248,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setMoreMenuOpen(false);
       }
     };

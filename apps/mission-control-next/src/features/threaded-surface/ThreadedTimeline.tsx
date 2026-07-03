@@ -421,10 +421,22 @@ export function ThreadedTimeline({
 
   /*
    * Reset windowing state on an actual session change, not on mount: the
-   * freeze effect above also runs on mount (all effects do) and may capture
-   * `frozenWindowStartRef` in the same commit. Comparing against the
-   * previous session id (rather than keying off identity alone) ensures
-   * this only clears state when the session genuinely switches.
+   * render-body freeze capture above (lines ~348-357) also runs on the mount
+   * render — like all render-body writes, not just effects — so it may
+   * already have populated `frozenWindowStartRef` for this session by the
+   * time this effect first runs. Comparing against the previous session id
+   * (rather than keying off identity alone) ensures this only clears state
+   * when the session genuinely switches, not on the initial mount.
+   *
+   * Deliberately not cleared here: `unfrozenWindowStartRef`. Its stale value
+   * survives the session switch, but that's safe because
+   * useChatThreadController.ts re-arms `props.followOutput` to true on
+   * session change, which (a) makes the render-body capture above rewrite
+   * `unfrozenWindowStartRef` from the new session's live default on the very
+   * next render, and (b) forces `frozenWindowStartRef` back to null in the
+   * same pass. Any interim frame that could still read the stale value is
+   * further guarded by `resolveEffectiveWindowStart`'s `Math.min` clamp
+   * against the new session's `defaultWindowStart`.
    */
   const previousSessionIdRef = useRef(sessionId);
   useEffect(() => {
