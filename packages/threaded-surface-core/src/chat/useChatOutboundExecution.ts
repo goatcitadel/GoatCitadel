@@ -909,7 +909,9 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           if (session) {
             promoteStreamingPreviewToThread(session.sessionId, "abort");
           }
-          flushPreviewPathDiagnostic("abort", activeStreamRef.current?.turnId ?? item.targetTurnId);
+          // Fall back to the queue-item id so rapid abort-during-send summaries
+          // from distinct sends never collide on the shared throttle bucket.
+          flushPreviewPathDiagnostic("abort", activeStreamRef.current?.turnId ?? item.targetTurnId ?? item.id);
           recordChatOutboundPhase({
             phase: "aborted",
             action: item.action,
