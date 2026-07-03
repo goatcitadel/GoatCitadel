@@ -4,6 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils";
 import { normalizeAssistantDisplayText } from "./assistant-display-text";
+import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
 import {
   canRenderOpenUiStructuredBlock,
   isGoatOpenUiRendererEnabled,
@@ -98,9 +99,7 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
             codeProps={props as HTMLAttributes<HTMLElement>}
             rawText={content}
             allowGeneratedUi={allowGeneratedUi}
-          >
-            {children}
-          </AssistantCodeBlock>
+          />
         );
       }
       return (
@@ -169,14 +168,12 @@ function AssistantCodeBlock({
   codeProps,
   rawText,
   allowGeneratedUi,
-  children,
 }: {
   language: string | undefined;
   codeClassName: string | undefined;
   codeProps: HTMLAttributes<HTMLElement>;
   rawText: string;
   allowGeneratedUi: boolean;
-  children: ReactNode;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const resetRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
@@ -234,9 +231,7 @@ function AssistantCodeBlock({
         </button>
       </div>
       <pre className="mc-assistant-code-block">
-        <code className={codeClassName} {...codeProps}>
-          {children}
-        </code>
+        <HighlightedCode code={trimmed} language={language} codeClassName={codeClassName} codeProps={codeProps} />
       </pre>
     </div>
   );
@@ -417,7 +412,9 @@ function StreamingMarkdown({
             streamPresentationMode === "smooth" ? "mc-assistant-streaming-tail-smooth" : "",
           )}
         >
-          <MemoizedMarkdownBlock content={tail} role="assistant" components={assistantMarkdownComponents} />
+          <AssistantStreamingTailContext.Provider value={true}>
+            <MemoizedMarkdownBlock content={tail} role="assistant" components={assistantMarkdownComponents} />
+          </AssistantStreamingTailContext.Provider>
         </div>
       ) : null}
       <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
