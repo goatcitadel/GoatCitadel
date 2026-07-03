@@ -74,6 +74,7 @@ const HIGH_FREQUENCY_EVENT_THROTTLES = new Map<string, number>([
   ["refresh:started", 1500],
   ["chat:thread.reconcile", 1200],
   ["chat:thread.render_path", 1200],
+  ["chat:thread.preview_path", 1200],
 ]);
 
 type Listener = () => void;

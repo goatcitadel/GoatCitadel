@@ -231,6 +231,40 @@ describe("dev diagnostics store", () => {
     expect(event?.runtimeError).toBeUndefined();
   });
 
+  it("throttles chat:thread.preview_path so rapid preview-path records within 1200ms collapse to one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    const store = await loadStore({ VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true" });
+
+    const first = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      context: { deltaCount: 5, characterCount: 42, turnId: "turn-1", reason: "message_done" },
+    });
+    const throttled = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      context: { deltaCount: 2, characterCount: 10, turnId: "turn-2", reason: "message_done" },
+    });
+
+    expect(first).toBeDefined();
+    expect(throttled).toBeUndefined();
+
+    vi.advanceTimersByTime(1200);
+    const afterWindow = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      context: { deltaCount: 1, characterCount: 3, turnId: "turn-3", reason: "message_done" },
+    });
+    expect(afterWindow).toBeDefined();
+  });
+
   it("treats malformed window location parts and invalid input as empty diagnostics text", async () => {
     vi.stubGlobal("window", {
       location: {

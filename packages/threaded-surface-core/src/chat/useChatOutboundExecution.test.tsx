@@ -22,6 +22,7 @@ const sendAgentChatMessageMock = vi.fn();
 const streamAgentChatMessageMock = vi.fn();
 const streamEditChatTurnMock = vi.fn();
 const streamRetryChatTurnMock = vi.fn();
+const recordClientDiagnosticMock = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   answerChatUserInputPrompt: (...args: unknown[]) => answerChatUserInputPromptMock(...args),
@@ -36,6 +37,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   streamAgentChatMessage: (...args: unknown[]) => streamAgentChatMessageMock(...args),
   streamEditChatTurn: (...args: unknown[]) => streamEditChatTurnMock(...args),
   streamRetryChatTurn: (...args: unknown[]) => streamRetryChatTurnMock(...args),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () => ({
+  recordClientDiagnostic: (...args: unknown[]) => recordClientDiagnosticMock(...args),
+  createCorrelationId: () => `correlation-${Math.random().toString(36).slice(2)}`,
 }));
 
 type HarnessState = {
@@ -299,6 +305,7 @@ describe("useChatOutboundExecution", () => {
     streamAgentChatMessageMock.mockReset();
     streamEditChatTurnMock.mockReset();
     streamRetryChatTurnMock.mockReset();
+    recordClientDiagnosticMock.mockReset();
     fetchChatPendingApprovalsMock.mockResolvedValue({
       items: [],
       activeApprovalId: null,
@@ -2194,5 +2201,327 @@ describe("useChatOutboundExecution", () => {
     );
     // autoRoute must NOT be present when an explicit surfaceMode is provided
     expect(sendAgentChatMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("autoRoute");
+  });
+
+  describe("preview-path diagnostics aggregation", () => {
+    function previewPathCalls() {
+      return recordClientDiagnosticMock.mock.calls
+        .map(([input]) => input)
+        .filter((input: { event?: string }) => input?.event === "thread.preview_path");
+    }
+
+    it("aggregates five delta chunks into exactly one summary diagnostic on message_done", async () => {
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-0",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          branchKind: "append",
+          parentTurnId: "turn-1",
+        });
+        for (let index = 0; index < 5; index += 1) {
+          onChunk({
+            type: "delta",
+            eventId: `evt-delta-${index}`,
+            sessionId: "session-1",
+            turnId: "turn-2",
+            messageId: "assistant-2",
+            delta: `chunk${index}`,
+          });
+        }
+        // No preview_path diagnostic should have fired before message_done.
+        expect(previewPathCalls()).toHaveLength(0);
+        onChunk({
+          type: "message_done",
+          eventId: "evt-done",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          content: "chunk0chunk1chunk2chunk3chunk4",
+        });
+      });
+
+      await act(async () => {
+        create(<Harness streamEnabled />);
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-aggregate",
+          action: "send",
+          content: "Stream this",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+      });
+
+      const calls = previewPathCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual(
+        expect.objectContaining({
+          level: "debug",
+          category: "chat",
+          event: "thread.preview_path",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          context: {
+            deltaCount: 5,
+            characterCount: "chunk0chunk1chunk2chunk3chunk4".length,
+            turnId: "turn-2",
+            reason: "message_done",
+          },
+        }),
+      );
+    });
+
+    it("emits a preview_path summary with reason 'error' when the stream errors mid-flight", async () => {
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-0",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          branchKind: "append",
+          parentTurnId: "turn-1",
+        });
+        for (let index = 0; index < 3; index += 1) {
+          onChunk({
+            type: "delta",
+            eventId: `evt-delta-${index}`,
+            sessionId: "session-1",
+            turnId: "turn-2",
+            messageId: "assistant-2",
+            delta: "ab",
+          });
+        }
+        onChunk({
+          type: "error",
+          eventId: "evt-error",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          error: "stream broke",
+        });
+      });
+
+      await act(async () => {
+        create(<Harness streamEnabled />);
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-error",
+          action: "send",
+          content: "Stream then error",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+      });
+
+      const calls = previewPathCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual(
+        expect.objectContaining({
+          event: "thread.preview_path",
+          turnId: "turn-2",
+          context: {
+            deltaCount: 3,
+            characterCount: 6,
+            turnId: "turn-2",
+            reason: "error",
+          },
+        }),
+      );
+    });
+
+    it("emits a preview_path summary with reason 'abort' when the stream is aborted mid-flight", async () => {
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-0",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          branchKind: "append",
+          parentTurnId: "turn-1",
+        });
+        onChunk({
+          type: "delta",
+          eventId: "evt-delta-0",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          delta: "partial",
+        });
+        throw { name: "AbortError" };
+      });
+
+      await act(async () => {
+        create(<Harness streamEnabled />);
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-abort",
+          action: "send",
+          content: "Stream then abort",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+      });
+
+      const calls = previewPathCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual(
+        expect.objectContaining({
+          event: "thread.preview_path",
+          turnId: "turn-2",
+          context: {
+            deltaCount: 1,
+            characterCount: "partial".length,
+            turnId: "turn-2",
+            reason: "abort",
+          },
+        }),
+      );
+    });
+
+    it("does not leak preview-path counts across two separate queue items", async () => {
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-a-0",
+          sessionId: "session-1",
+          turnId: "turn-a",
+          messageId: "assistant-a",
+          branchKind: "append",
+          parentTurnId: "turn-1",
+        });
+        onChunk({
+          type: "delta",
+          eventId: "evt-a-1",
+          sessionId: "session-1",
+          turnId: "turn-a",
+          messageId: "assistant-a",
+          delta: "aaaa",
+        });
+        onChunk({
+          type: "message_done",
+          eventId: "evt-a-2",
+          sessionId: "session-1",
+          turnId: "turn-a",
+          messageId: "assistant-a",
+          content: "aaaa",
+        });
+      });
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-b-0",
+          sessionId: "session-1",
+          turnId: "turn-b",
+          messageId: "assistant-b",
+          branchKind: "append",
+          parentTurnId: "turn-a",
+        });
+        onChunk({
+          type: "delta",
+          eventId: "evt-b-1",
+          sessionId: "session-1",
+          turnId: "turn-b",
+          messageId: "assistant-b",
+          delta: "bb",
+        });
+        onChunk({
+          type: "delta",
+          eventId: "evt-b-2",
+          sessionId: "session-1",
+          turnId: "turn-b",
+          messageId: "assistant-b",
+          delta: "bb",
+        });
+        onChunk({
+          type: "message_done",
+          eventId: "evt-b-3",
+          sessionId: "session-1",
+          turnId: "turn-b",
+          messageId: "assistant-b",
+          content: "bbbb",
+        });
+      });
+
+      await act(async () => {
+        create(<Harness streamEnabled />);
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-first",
+          action: "send",
+          content: "First message",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-second",
+          action: "send",
+          content: "Second message",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:01.000Z",
+        });
+      });
+
+      const calls = previewPathCalls();
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual(
+        expect.objectContaining({
+          turnId: "turn-a",
+          context: { deltaCount: 1, characterCount: 4, turnId: "turn-a", reason: "message_done" },
+        }),
+      );
+      expect(calls[1]).toEqual(
+        expect.objectContaining({
+          turnId: "turn-b",
+          context: { deltaCount: 2, characterCount: 4, turnId: "turn-b", reason: "message_done" },
+        }),
+      );
+    });
+
+    it("does not emit a preview_path summary when a message has no deltas", async () => {
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-0",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          branchKind: "append",
+          parentTurnId: "turn-1",
+        });
+        onChunk({
+          type: "message_done",
+          eventId: "evt-1",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          messageId: "assistant-2",
+          content: "",
+        });
+      });
+
+      await act(async () => {
+        create(<Harness streamEnabled />);
+      });
+      await act(async () => {
+        await latest?.execute({
+          id: "queue-preview-no-deltas",
+          action: "send",
+          content: "No deltas here",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+      });
+
+      expect(previewPathCalls()).toHaveLength(0);
+    });
   });
 });

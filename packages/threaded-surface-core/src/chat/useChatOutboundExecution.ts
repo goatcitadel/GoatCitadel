@@ -393,6 +393,33 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
         sizeBytes: entry.sizeBytes,
       }));
       let session: ChatSessionRecord | null = null;
+      // Closure-local counters for the streaming preview path: accumulated per
+      // queue-item execution (including any stream-resume segments, which reuse
+      // the same onChunk closure) and flushed as a single summary diagnostic
+      // instead of recording one event per delta chunk (10-50/s while streaming).
+      let previewDeltaCount = 0;
+      let previewCharCount = 0;
+      const flushPreviewPathDiagnostic = (reason: "message_done" | "error" | "abort", turnId: string | undefined) => {
+        if (previewDeltaCount === 0) {
+          return;
+        }
+        recordClientDiagnostic({
+          level: "debug",
+          category: "chat",
+          event: "thread.preview_path",
+          message: "Aggregated streaming preview delta volume for the message",
+          sessionId: session?.sessionId,
+          turnId,
+          context: {
+            deltaCount: previewDeltaCount,
+            characterCount: previewCharCount,
+            turnId,
+            reason,
+          },
+        });
+        previewDeltaCount = 0;
+        previewCharCount = 0;
+      };
       try {
         recordChatOutboundPhase({
           phase: "start",
@@ -528,6 +555,11 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
               liveStream.runId = chunk.runId;
             }
             if (chunk.type === "message_start") {
+              // Guards against double-counting if a resumed/retried segment ever
+              // reuses this onChunk closure across more than one message_start;
+              // the normal per-message case starts these already at zero.
+              previewDeltaCount = 0;
+              previewCharCount = 0;
               liveStream.turnId = chunk.turnId;
               getStreamingPreviewBuffer().start({
                 sessionId: chunk.sessionId,
@@ -554,6 +586,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                 messageId: chunk.messageId,
                 content: chunk.content,
               };
+              flushPreviewPathDiagnostic("message_done", chunk.turnId);
             }
             if (chunk.type === "trace_update" && chunk.trace.capabilityUpgradeSuggestions !== undefined) {
               setCapabilitySuggestions(chunk.trace.capabilityUpgradeSuggestions);
@@ -619,6 +652,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                 sessionId: session!.sessionId,
                 turnId: chunk.turnId,
               });
+              flushPreviewPathDiagnostic("error", chunk.turnId);
             }
             if (chunk.type === "delta") {
               getStreamingPreviewBuffer().append({
@@ -627,17 +661,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                 messageId: chunk.messageId,
                 delta: chunk.delta,
               });
-              recordClientDiagnostic({
-                level: "debug",
-                category: "chat",
-                event: "thread.preview_path",
-                message: "Buffered delta chunk for streaming preview",
-                sessionId: session!.sessionId,
-                turnId: chunk.turnId,
-                context: {
-                  characterCount: chunk.delta.length,
-                },
-              });
+              previewDeltaCount += 1;
+              previewCharCount += chunk.delta.length;
               return;
             }
             if (!isThreadMutatingStreamChunk(chunk)) {
@@ -854,6 +879,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           if (session) {
             promoteStreamingPreviewToThread(session.sessionId, "abort");
           }
+          flushPreviewPathDiagnostic("abort", activeStreamRef.current?.turnId ?? item.targetTurnId);
           recordChatOutboundPhase({
             phase: "aborted",
             action: item.action,
