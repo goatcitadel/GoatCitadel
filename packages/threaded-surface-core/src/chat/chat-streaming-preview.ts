@@ -51,6 +51,9 @@ const DEFAULT_NO_NEWLINE_DELAY_MS = 250;
 const DEFAULT_NO_NEWLINE_CHARS = 80;
 const DEFAULT_REVEAL_CHARS_PER_FRAME = 18;
 
+export const STREAM_CATCH_UP_FRAMES = 15; // drain horizon ≈ 250 ms at 60 fps
+export const MAX_REVEAL_CHARS_PER_FRAME = 600; // never a wall of text in one frame
+
 export function isReducedMotionPreferred(): boolean {
   return Boolean(
     typeof window !== "undefined" &&
@@ -75,8 +78,10 @@ export function resolveVisibleStreamingText(
     return text;
   }
 
-  const baseRevealBudget = Math.max(1, options.revealCharsPerFrame ?? DEFAULT_REVEAL_CHARS_PER_FRAME);
-  const targetLength = Math.min(text.length, visiblePrefixLength + baseRevealBudget);
+  const backlog = text.length - visiblePrefixLength;
+  const base = Math.max(1, options.revealCharsPerFrame ?? DEFAULT_REVEAL_CHARS_PER_FRAME);
+  const adaptive = Math.min(MAX_REVEAL_CHARS_PER_FRAME, Math.max(base, Math.ceil(backlog / STREAM_CATCH_UP_FRAMES)));
+  const targetLength = Math.min(text.length, visiblePrefixLength + adaptive);
   return text.slice(0, targetLength);
 }
 

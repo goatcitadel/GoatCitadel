@@ -17,12 +17,14 @@ import {
   ChatThreadWindowGap,
   THREAD_WINDOW_SIZE,
   buildThreadWindow,
+  resolveEffectiveWindowStart,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
 import {
   useChannelActivitySnapshot,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
@@ -308,9 +310,57 @@ export function ThreadedTimeline({
   const onOpenGeneratedArtifact = useStableHandler(props.onOpenGeneratedArtifact);
   const onCreateGeneratedArtifact = useStableHandler(props.onCreateGeneratedArtifact);
   const onCreateGeneratedArtifactVersion = useStableHandler(props.onCreateGeneratedArtifactVersion);
+  const onStopStreamingTurn = useStableHandler(props.onStopActiveTurn);
   const onOpenUniversalRunDetailStable = useOptionalStableHandler(onOpenUniversalRunDetail);
+  useEscapeToStopStream({
+    enabled: Boolean(props.sending && props.hasActiveStream),
+    onStop: onStopStreamingTurn,
+  });
   const defaultWindowStart = Math.max(0, threadTurnCount - THREAD_WINDOW_SIZE);
-  const effectiveWindowStart = Math.min(manualWindowStart ?? defaultWindowStart, defaultWindowStart);
+
+  /*
+   * While the operator has scrolled away from the bottom (followOutput ===
+   * false), the window start must freeze so newly appended turns don't
+   * unmount the oldest turn under the reader and defeat scroll anchoring.
+   *
+   * `unfrozenWindowStartRef` mirrors `defaultWindowStart` only while
+   * `props.followOutput` is true for THIS render (a plain render-time write,
+   * not an effect), so it always holds "the live default as of the most
+   * recent render where the operator was still following."
+   *
+   * React 18 auto-batches same-task updates, so a single commit can carry
+   * BOTH `followOutput: true -> false` AND turn-count growth (e.g. an
+   * IntersectionObserver flip and a stream turn arrival landing in one
+   * browser task). Gating the mirror write on the CURRENT render's
+   * `followOutput` (rather than writing unconditionally every render) means
+   * the render that first observes the flip to false leaves the mirror
+   * holding the value from the last render where following was still true —
+   * the pre-growth anchor — instead of overwriting it with this render's own
+   * post-growth default.
+   *
+   * The freeze is captured synchronously in the render body (not in an
+   * effect) so this same render's `effectiveWindowStart` immediately reads
+   * the frozen value: an effect-only capture would still display the live
+   * (post-growth) default for one render, since effects commit after render.
+   * This mirrors how release below already works (read directly from
+   * `props.followOutput`, not gated behind an effect).
+   */
+  const unfrozenWindowStartRef = useRef(defaultWindowStart);
+  if (props.followOutput) {
+    unfrozenWindowStartRef.current = defaultWindowStart;
+  }
+  const frozenWindowStartRef = useRef<number | null>(null);
+  if (props.followOutput) {
+    frozenWindowStartRef.current = null;
+  } else if (frozenWindowStartRef.current === null) {
+    frozenWindowStartRef.current = unfrozenWindowStartRef.current;
+  }
+
+  const effectiveWindowStart = resolveEffectiveWindowStart({
+    manualWindowStart,
+    frozenWindowStart: props.followOutput ? null : frozenWindowStartRef.current,
+    defaultWindowStart,
+  });
   const windowedThreadItems = useMemo(
     () =>
       buildThreadWindow({
@@ -351,6 +401,7 @@ export function ThreadedTimeline({
       threadTurnCount,
       latestTurnId,
       latestTraceStatus,
+      latestTurnToolRunCount: lastTurn?.toolRuns.length ?? 0,
       noticeCount: props.notices.length,
       queuedCount: props.queuedCount,
       streamStatus: props.streamStatus,
@@ -368,9 +419,34 @@ export function ThreadedTimeline({
     setManualWindowStart(0);
   }, []);
 
+  /*
+   * Reset windowing state on an actual session change, not on mount: the
+   * render-body freeze capture above (lines ~348-357) also runs on the mount
+   * render — like all render-body writes, not just effects — so it may
+   * already have populated `frozenWindowStartRef` for this session by the
+   * time this effect first runs. Comparing against the previous session id
+   * (rather than keying off identity alone) ensures this only clears state
+   * when the session genuinely switches, not on the initial mount.
+   *
+   * Deliberately not cleared here: `unfrozenWindowStartRef`. Its stale value
+   * survives the session switch, but that's safe because
+   * useChatThreadController.ts re-arms `props.followOutput` to true on
+   * session change, which (a) makes the render-body capture above rewrite
+   * `unfrozenWindowStartRef` from the new session's live default on the very
+   * next render, and (b) forces `frozenWindowStartRef` back to null in the
+   * same pass. Any interim frame that could still read the stale value is
+   * further guarded by `resolveEffectiveWindowStart`'s `Math.min` clamp
+   * against the new session's `defaultWindowStart`.
+   */
+  const previousSessionIdRef = useRef(sessionId);
   useEffect(() => {
+    if (previousSessionIdRef.current === sessionId) {
+      return;
+    }
+    previousSessionIdRef.current = sessionId;
     setManualWindowStart(null);
-  }, [props.thread?.sessionId]);
+    frozenWindowStartRef.current = null;
+  }, [sessionId]);
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
@@ -411,6 +487,8 @@ export function ThreadedTimeline({
               queuedCount={props.queuedCount}
               error={props.streamError}
               announce={false}
+              activitySessionId={sessionId}
+              suppressStallIndicator={Boolean(props.pendingApproval || props.pendingUserInput)}
             />
             <div className="mc-next-thread-list">
               <ChatThreadDelegationSummary
@@ -451,6 +529,7 @@ export function ThreadedTimeline({
                     onOpenGeneratedArtifact={onOpenGeneratedArtifact}
                     onCreateGeneratedArtifact={onCreateGeneratedArtifact}
                     onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+                    onStopStreamingTurn={onStopStreamingTurn}
                   />
                 );
               })}

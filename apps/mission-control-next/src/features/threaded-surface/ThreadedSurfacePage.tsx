@@ -1157,6 +1157,8 @@ function ThreadedPanelSwitcher({
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
       }
     };

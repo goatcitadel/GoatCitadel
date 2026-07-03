@@ -26,6 +26,8 @@ export function useChatComposerInteractions(input: {
   lastEditableDraft?: string | null;
   commandSuggestions: CommandSuggestionItem[];
   commandIndex: number;
+  error: string | null;
+  dockOpen: boolean;
   sending: boolean;
   selectedSession: ChatSessionRecord | null;
   messageMode: ChatMode;
@@ -52,6 +54,8 @@ export function useChatComposerInteractions(input: {
   const {
     commandSuggestions,
     commandIndex,
+    error,
+    dockOpen,
     draft,
     lastEditableDraft,
     sending,
@@ -114,10 +118,20 @@ export function useChatComposerInteractions(input: {
         return;
       }
       if (event.key === "Escape") {
+        const hasSuggestionsOpen = commandSuggestions.length > 0;
+        const hasError = error !== null;
+        const hasDockOpen = dockOpen;
+        if (!hasSuggestionsOpen && !hasError && !hasDockOpen) {
+          // Nothing in the composer for Escape to close: leave the event alone so it
+          // bubbles to the document-level useEscapeToStopStream listener, which stops
+          // the active stream. Do NOT preventDefault or call a stop handler here — that
+          // hook is the single owner of the stream-stop shortcut.
+          return;
+        }
         event.preventDefault();
-        setCommandIndex(0);
-        setError(null);
-        setDockOpen(false);
+        if (hasSuggestionsOpen) setCommandIndex(0);
+        if (hasError) setError(null);
+        if (hasDockOpen) setDockOpen(false);
         return;
       }
       if (commandSuggestions.length > 0) {
@@ -151,7 +165,9 @@ export function useChatComposerInteractions(input: {
     [
       commandIndex,
       commandSuggestions,
+      dockOpen,
       draft,
+      error,
       handleSend,
       handleTogglePlanningMode,
       lastEditableDraft,

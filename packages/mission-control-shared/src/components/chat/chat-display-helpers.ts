@@ -8,6 +8,11 @@ import {
 
 export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
+export function parseTimestamp(timestamp: string): number | null {
+  const parsed = Date.parse(timestamp);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 export function toTitleCase(value: string): string {
   return value
     .split(/[\s_-]+/)

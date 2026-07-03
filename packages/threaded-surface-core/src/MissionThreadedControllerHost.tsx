@@ -2773,6 +2773,8 @@ export function MissionThreadedControllerHost({
     lastEditableDraft,
     commandSuggestions,
     commandIndex,
+    error,
+    dockOpen,
     sending,
     selectedSession,
     messageMode,

@@ -89,6 +89,8 @@ function ComposerHarness(
       { key: "plan", command: "/plan", applyValue: "/plan on", description: "Plan" },
     ],
     commandIndex,
+    error,
+    dockOpen,
     sending,
     selectedSession: { sessionId: "session-1", projectId: "project-1" } as any,
     messageMode: "cowork",
@@ -195,6 +197,105 @@ describe("useChatComposerInteractions", () => {
     });
     expect(sendEvent.preventDefault).toHaveBeenCalled();
     expect(handleSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("Escape fallthrough to the document-level stream-stop shortcut", () => {
+    it("resets the command-suggestion index and prevents default when suggestions are open", async () => {
+      await act(async () => {
+        create(
+          React.createElement(ComposerHarness, {
+            commandSuggestions: [
+              { key: "skill", command: "$react-expert", applyValue: "$react-expert", description: "React" },
+              { key: "plan", command: "/plan", applyValue: "/plan on", description: "Plan" },
+            ],
+            initialDockOpen: false,
+          }),
+        );
+      });
+      // Move the suggestion index off zero so the Escape reset is observable.
+      await act(async () => {
+        latest?.handleComposerKeyDown(makeKeyEvent("ArrowDown"));
+      });
+      expect(latestState?.commandIndex).toBe(1);
+
+      const escapeEvent = makeKeyEvent("Escape");
+      await act(async () => {
+        latest?.handleComposerKeyDown(escapeEvent);
+      });
+      expect(latestState?.commandIndex).toBe(0);
+      expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    });
+
+    it("clears a composer error and prevents default when an error is present", async () => {
+      await act(async () => {
+        create(
+          React.createElement(ComposerHarness, {
+            commandSuggestions: [],
+            initialDockOpen: false,
+          }),
+        );
+      });
+      // ComposerHarness seeds error to "initial error" by default.
+      expect(latestState?.error).toBe("initial error");
+
+      const escapeEvent = makeKeyEvent("Escape");
+      await act(async () => {
+        latest?.handleComposerKeyDown(escapeEvent);
+      });
+      expect(latestState?.error).toBeNull();
+      expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    });
+
+    it("closes the dock and prevents default when the dock is open", async () => {
+      await act(async () => {
+        create(
+          React.createElement(ComposerHarness, {
+            commandSuggestions: [],
+            initialDockOpen: true,
+          }),
+        );
+      });
+      // Clear the seeded error out of band so the dock is the only thing Escape can act on.
+      await act(async () => {
+        latest?.handleDismissError();
+      });
+      expect(latestState?.error).toBeNull();
+      expect(latestState?.dockOpen).toBe(true);
+
+      const escapeEvent = makeKeyEvent("Escape");
+      await act(async () => {
+        latest?.handleComposerKeyDown(escapeEvent);
+      });
+      expect(latestState?.dockOpen).toBe(false);
+      expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    });
+
+    it("does NOT preventDefault when there is nothing to close, letting Escape fall through to the document-level stream-stop shortcut", async () => {
+      await act(async () => {
+        create(
+          React.createElement(ComposerHarness, {
+            commandSuggestions: [],
+            initialDockOpen: false,
+          }),
+        );
+      });
+      // Clear the seeded error and confirm there are no suggestions and no open dock:
+      // Escape has nothing left to do in the composer.
+      await act(async () => {
+        latest?.handleDismissError();
+      });
+      expect(latestState?.error).toBeNull();
+      expect(latestState?.dockOpen).toBe(false);
+
+      const escapeEvent = makeKeyEvent("Escape");
+      await act(async () => {
+        latest?.handleComposerKeyDown(escapeEvent);
+      });
+      expect(escapeEvent.preventDefault).not.toHaveBeenCalled();
+      expect(latestState?.commandIndex).toBe(0);
+      expect(latestState?.dockOpen).toBe(false);
+      expect(latestState?.error).toBeNull();
+    });
   });
 
   it("handles paste drag drop and command callbacks", async () => {

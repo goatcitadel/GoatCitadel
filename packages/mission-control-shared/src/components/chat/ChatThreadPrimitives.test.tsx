@@ -8,6 +8,7 @@ import {
   buildThreadWindow,
   handleTurnSurfaceKeyDown,
   isInteractiveChatEventTarget,
+  resolveEffectiveWindowStart,
 } from "./ChatThreadPrimitives";
 
 function createTurn(overrides: Partial<ChatThreadTurnRecord> = {}): ChatThreadTurnRecord {
@@ -460,6 +461,74 @@ describe("ChatThreadPrimitives", () => {
     expect(gaps.some((gap) => gap.hiddenCount > 0)).toBe(true);
   });
 
+  describe("resolveEffectiveWindowStart", () => {
+    it("uses the live default when nothing is manual or frozen", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: null,
+          defaultWindowStart: 40,
+        }),
+      ).toBe(40);
+    });
+
+    it("freezes the window at the captured start even as the live default advances", () => {
+      // Regression for the scroll-reading bug: while the operator is scrolled up,
+      // newly appended turns must not advance the window start under them.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: 10,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(10);
+    });
+
+    it("clamps the frozen start down if the thread shrinks below it", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: null,
+          frozenWindowStart: 25,
+          defaultWindowStart: 10,
+        }),
+      ).toBe(10);
+    });
+
+    it("gives manual expansion precedence over an active freeze", () => {
+      // "Show hidden turns" clicked while frozen must still widen the window,
+      // not fight the freeze.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 0,
+          frozenWindowStart: 10,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(0);
+    });
+
+    it("gives manual precedence over the live default when not frozen", () => {
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 0,
+          frozenWindowStart: null,
+          defaultWindowStart: 25,
+        }),
+      ).toBe(0);
+    });
+
+    it("clamps a manual start down if the thread shrinks below it", () => {
+      // Preserves the pre-existing buildThreadWindow contract: manual never
+      // exceeds the live default.
+      expect(
+        resolveEffectiveWindowStart({
+          manualWindowStart: 25,
+          frozenWindowStart: null,
+          defaultWindowStart: 10,
+        }),
+      ).toBe(10);
+    });
+  });
+
   it("renders the streaming skeleton as a visual-only indicator without a live region", () => {
     const renderer = TestRenderer.create(<StreamingAssistantSkeleton label="Working" />);
     const skeleton = renderer.root.findByProps({ className: "mc-next-assistant-streaming-skeleton" });
@@ -653,5 +722,209 @@ describe("ChatThreadPrimitives", () => {
       );
     });
     expect(findEvidence().props.open).toBe(false);
+  });
+
+  it("renders the live activity rail exclusively for a streaming turn, and the evidence rows exclusively once settled", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+
+    const streamingTurn = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: streamingTurn,
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    // Rail is mounted inside the assistant bubble...
+    const rail = renderer.root.findByProps({ className: "mc-next-live-activity" });
+    expect(rail).toBeTruthy();
+    // ...and the evidence body underneath renders no activity rows while streaming.
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-tool-activity" })).toHaveLength(0);
+
+    // Once the turn settles, the rail unmounts and ChatTurnActivityRows takes back over.
+    const settledTurn = createTurn({
+      toolRuns: [{ ...toolRuns[0]!, status: "executed", finishedAt: "2026-05-15T00:00:02.000Z" }],
+      trace: {
+        ...createTurn().trace,
+        status: "completed",
+        toolRuns: [{ ...toolRuns[0]!, status: "executed", finishedAt: "2026-05-15T00:00:02.000Z" }],
+      },
+    });
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={settledTurn}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+
+    expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ className: "mc-next-thread-tool-activity" })).toBeTruthy();
+  });
+
+  it("passes onStopStreamingTurn to the rail only while this card's turn is the one streaming", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const onStopStreamingTurn = vi.fn();
+
+    const streamingTurn = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: streamingTurn,
+      onStopStreamingTurn,
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    // The card's turn IS the streaming turn: the rail gets a real stop control.
+    const stopButton = renderer.root.findByProps({
+      className: "mc-next-live-activity-stop mc-next-thread-inline-button",
+    });
+    TestRenderer.act(() => {
+      stopButton.props.onClick();
+    });
+    expect(onStopStreamingTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds onStopStreamingTurn from the rail when the turn is active but not the streaming turn", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const onStopStreamingTurn = vi.fn();
+
+    // `running` trace status alone makes showLiveActivity true (isChatTurnActiveStatus),
+    // but isStreamingTurn requires streamingPreview.turnId to match THIS turn. Passing no
+    // streamingPreview reproduces "this card is active but a different turn is streaming".
+    const activeButNotStreamingTurn = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: activeButNotStreamingTurn,
+      onStopStreamingTurn,
+      streamingPreview: null,
+    });
+
+    const rail = renderer.root.findByProps({ className: "mc-next-live-activity" });
+    expect(rail).toBeTruthy();
+    expect(
+      renderer.root.findAllByProps({ className: "mc-next-live-activity-stop mc-next-thread-inline-button" }),
+    ).toHaveLength(0);
+  });
+
+  it("does not re-render the memoized card when re-rendered with identical props", () => {
+    const renderSpy = vi.fn();
+    const turn = createTurn();
+    const onSelectTurn = vi.fn();
+    const onSwitchBranch = vi.fn();
+    const onRetryTurn = vi.fn();
+    const onOpenRunDetails = vi.fn();
+    const onOpenGeneratedArtifact = vi.fn();
+    const onCreateGeneratedArtifact = vi.fn();
+    const onCreateGeneratedArtifactVersion = vi.fn();
+    // A stable-identity function, exactly as ThreadedTimeline's useStableHandler would
+    // hand the card: the same reference must survive re-renders for the memo to hold.
+    const onStopStreamingTurn = vi.fn();
+
+    function Probe(props: React.ComponentProps<typeof ChatThreadTurnCard>) {
+      renderSpy();
+      return <ChatThreadTurnCard {...props} />;
+    }
+
+    const renderer = TestRenderer.create(
+      <Probe
+        mode="chat"
+        turn={turn}
+        selected={false}
+        onSelectTurn={onSelectTurn}
+        onSwitchBranch={onSwitchBranch}
+        onRetryTurn={onRetryTurn}
+        onOpenRunDetails={onOpenRunDetails}
+        onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+        onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+        onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+        onStopStreamingTurn={onStopStreamingTurn}
+      />,
+    );
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    const firstJson = JSON.stringify(renderer.toJSON());
+
+    // Re-render the wrapper with byte-identical props (including the same
+    // onStopStreamingTurn reference): the memoized card must bail out and produce the
+    // exact same output without doing new work. This is the "ZERO new unstable props"
+    // guarantee — adding onStopStreamingTurn must not defeat the existing memo.
+    TestRenderer.act(() => {
+      renderer.update(
+        <Probe
+          mode="chat"
+          turn={turn}
+          selected={false}
+          onSelectTurn={onSelectTurn}
+          onSwitchBranch={onSwitchBranch}
+          onRetryTurn={onRetryTurn}
+          onOpenRunDetails={onOpenRunDetails}
+          onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+          onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+          onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+          onStopStreamingTurn={onStopStreamingTurn}
+        />,
+      );
+    });
+    expect(renderSpy).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(renderer.toJSON())).toBe(firstJson);
   });
 });

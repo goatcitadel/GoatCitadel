@@ -23,6 +23,8 @@ const streamAgentChatMessageMock = vi.fn();
 const streamEditChatTurnMock = vi.fn();
 const streamRetryChatTurnMock = vi.fn();
 const recordClientDiagnosticMock = vi.fn();
+const recordChatStreamChunkActivityMock = vi.fn();
+const clearChatStreamActivityMock = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   answerChatUserInputPrompt: (...args: unknown[]) => answerChatUserInputPromptMock(...args),
@@ -42,6 +44,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () => ({
   recordClientDiagnostic: (...args: unknown[]) => recordClientDiagnosticMock(...args),
   createCorrelationId: () => `correlation-${Math.random().toString(36).slice(2)}`,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/state/chat-stream-activity-store", () => ({
+  recordChatStreamChunkActivity: (...args: unknown[]) => recordChatStreamChunkActivityMock(...args),
+  clearChatStreamActivity: (...args: unknown[]) => clearChatStreamActivityMock(...args),
 }));
 
 type HarnessState = {
@@ -310,6 +317,8 @@ describe("useChatOutboundExecution", () => {
     streamEditChatTurnMock.mockReset();
     streamRetryChatTurnMock.mockReset();
     recordClientDiagnosticMock.mockReset();
+    recordChatStreamChunkActivityMock.mockReset();
+    clearChatStreamActivityMock.mockReset();
     fetchChatPendingApprovalsMock.mockResolvedValue({
       items: [],
       activeApprovalId: null,
@@ -2404,6 +2413,76 @@ describe("useChatOutboundExecution", () => {
     );
     // autoRoute must NOT be present when an explicit surfaceMode is provided
     expect(sendAgentChatMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("autoRoute");
+  });
+
+  it("records chat stream activity for the session on each processed chunk and clears it on completion", async () => {
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sequence: 0,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "delta",
+        eventId: "evt-1",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Hello",
+      });
+      // Activity must already be recorded for a chunk the dedupe guard drops
+      // (a replayed sequence): a dropped duplicate still proves the stream
+      // connection itself is alive, so it must count as liveness.
+      recordChatStreamChunkActivityMock.mockClear();
+      onChunk({
+        type: "delta",
+        eventId: "evt-1-replay",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Hello",
+      });
+      expect(recordChatStreamChunkActivityMock).toHaveBeenCalledWith("session-1");
+      onChunk({
+        type: "message_done",
+        eventId: "evt-2",
+        sequence: 2,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Hello",
+      });
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-activity",
+        action: "send",
+        content: "Track stream activity",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    // The stream must be seeded with a baseline activity timestamp as soon as
+    // the connection is created (before any chunk arrives), and every
+    // processed chunk (including a dropped duplicate) must record activity
+    // again -- so the mock should have fired well beyond a single call.
+    expect(recordChatStreamChunkActivityMock.mock.calls.length).toBeGreaterThan(1);
+    expect(recordChatStreamChunkActivityMock).toHaveBeenCalledWith("session-1");
+    // The finally path must clear activity for the session once the queue
+    // item finishes, so a subsequent idle bar never reads stale stall state.
+    expect(clearChatStreamActivityMock).toHaveBeenCalledWith("session-1");
   });
 
   describe("preview-path diagnostics aggregation", () => {

@@ -17,6 +17,14 @@ export interface ScrollToBottomContentSignals {
   latestTurnId: string | null;
   /** Trace status of the latest turn. Changes as the tail turn progresses. */
   latestTraceStatus: string | null;
+  /**
+   * Number of tool runs on the latest turn. Grows live as the gateway streams
+   * tool_start/tool_result into `turn.toolRuns` while the turn is running, so
+   * the live activity rail's rows are covered by the same follow-output pin
+   * as the rest of the turn's content (without this, the pinned-to-bottom
+   * view would lag one row height behind each tool start).
+   */
+  latestTurnToolRunCount: number;
   /** Number of inline notices. */
   noticeCount: number;
   /** Number of queued turns. */
@@ -84,6 +92,7 @@ export function useScrollToBottom<
     threadTurnCount,
     latestTurnId,
     latestTraceStatus,
+    latestTurnToolRunCount,
     noticeCount,
     queuedCount,
     streamStatus,
@@ -183,6 +192,7 @@ export function useScrollToBottom<
     followOutput,
     latestTraceStatus,
     latestTurnId,
+    latestTurnToolRunCount,
     noticeCount,
     emitBottomState,
     queuedCount,
@@ -208,6 +218,7 @@ export function useScrollToBottom<
     followOutput,
     latestTraceStatus,
     latestTurnId,
+    latestTurnToolRunCount,
     noticeCount,
     emitBottomState,
     queuedCount,

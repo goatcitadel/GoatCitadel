@@ -22,6 +22,10 @@ import {
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
+import {
+  clearChatStreamActivity,
+  recordChatStreamChunkActivity,
+} from "@goatcitadel/mission-control-shared/state/chat-stream-activity-store";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
 import { isAbortError } from "./chat-page-derivations";
@@ -529,6 +533,11 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
             controller,
           };
           activeStreamRef.current = activeStream;
+          // Seed a baseline activity timestamp as soon as the stream is
+          // created so the stall indicator has something to measure against
+          // while the connection is still opening ("connecting" status),
+          // before the first chunk (or even message_start) has arrived.
+          recordChatStreamChunkActivity(session.sessionId);
           recordChatOutboundPhase({
             phase: "stream_seeded",
             action: item.action,
@@ -557,6 +566,15 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
             ) {
               return;
             }
+            // Any chunk that survives the identity guard above proves the
+            // stream connection is alive, even one the dedupe guard below
+            // will drop as a replay/duplicate: a dropped duplicate still
+            // arrived over the wire, so it must count as liveness. Recording
+            // it here (before dedupe) keeps heartbeat-adjacent silence from
+            // ever being mistaken for a stall. Note: SSE `: heartbeat`
+            // comment lines never reach onChunk at all (the SSE parser drops
+            // them), so real heartbeats correctly do NOT mask a stall.
+            recordChatStreamChunkActivity(session!.sessionId);
             // Server sequences are strictly increasing per turn; anything at or
             // below the last successfully processed one is a replay (resume
             // overlap, re-delivery) whose effects already landed. Synthetic
@@ -957,6 +975,9 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
         }
         if (!session || activeStream?.sessionId === session.sessionId) {
           clearStreamingPreview({ allowSettlingFinalText: true });
+        }
+        if (session && activeStream?.sessionId === session.sessionId) {
+          clearChatStreamActivity(session.sessionId);
         }
         finishOutboundExecution();
       }
