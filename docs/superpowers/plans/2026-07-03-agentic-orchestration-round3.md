@@ -6,7 +6,7 @@
 
 **Architecture:** Five independent, individually kill-switched changes riding existing seams in the gateway turn pipeline (`apps/gateway/src/services` + `src/orchestration`). No new packages, no schema/storage migrations, no contract-breaking changes. Each task = failing test → minimal implementation → green → commit.
 
-**Tech Stack:** TypeScript (Node 24), vitest 4 (`pnpm exec vitest run <file>` from `apps/gateway`), pnpm monorepo. Worktree: `F:/code/pa-round3`, branch `feat/agentic-round3`.
+**Tech Stack:** TypeScript (Node 24), vitest 4 (`pnpm exec vitest run <file>` from `apps/gateway`), pnpm monorepo. Executed in an isolated worktree on branch `feat/agentic-round3`.
 
 ## Global Constraints
 
@@ -328,8 +328,8 @@ Rules (each is a test): parallel only when `!disabledByFlag`, `toolNames.length 
 - Modify: `docs/citadel_update/AGENTIC_FAST_LANE_PLAN.md` (mark S2/S4/watchdog/fan-out lines shipped with this round's commits; correct the workstreams-parallelism note)
 - Modify: `docs/superpowers/specs/2026-07-03-agentic-orchestration-round3-design.md` (status → Implemented; note any scope cuts)
 
-- [ ] **Step 1:** `cd F:/code/pa-round3/apps/gateway && pnpm test` (vitest full + the two tsx --test files) → green.
-- [ ] **Step 2:** `cd F:/code/pa-round3 && pnpm typecheck` → green (workspace-wide; catches contracts/policy-engine ripples).
+- [ ] **Step 1:** from `apps/gateway`: `pnpm test` (vitest full + the two tsx --test files) → green.
+- [ ] **Step 2:** from the repo root: `pnpm typecheck` → green (workspace-wide; catches contracts/policy-engine ripples).
 - [ ] **Step 3:** `pnpm verify:fast` and `pnpm verify:agentic:governance` from the worktree root → green (governance lane asserts deny-wins survived the parallel-tools change).
 - [ ] **Step 4:** Update the two docs; commit `docs: record round-3 agentic shipments in the fast-lane ledger`.
 - [ ] **Step 5:** Push branch, open PR, run code-review + security-review agents on the diff, fix findings, merge per repo convention.
