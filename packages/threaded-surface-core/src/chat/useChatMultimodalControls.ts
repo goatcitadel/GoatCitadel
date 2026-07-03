@@ -278,7 +278,10 @@ export function useChatMultimodalControls(input: {
       ? `${primaryImageRoute.label} with ${googleFallbackImageRoute.label} fallback`
       : primaryImageRoute.label
     : null;
-  const voiceStatusLabel = voiceStatus?.talk.activeSessionId
+  // `talk` is required by the VoiceStatus contract, but partial gateway
+  // responses (e.g. a stub returning {}) can omit it at runtime — treat a
+  // missing talk block as "no active talk session" everywhere below.
+  const voiceStatusLabel = voiceStatus?.talk?.activeSessionId
     ? "Talk mode live"
     : voiceReady
       ? voiceRuntime?.selectedModelId
@@ -365,7 +368,7 @@ export function useChatMultimodalControls(input: {
     setVoiceBusy(true);
     setError(null);
     try {
-      if (voiceStatus?.talk.activeSessionId) {
+      if (voiceStatus?.talk?.activeSessionId) {
         await stopVoiceTalkSession(voiceStatus.talk.activeSessionId);
         pushLocalNotice("Push-to-talk session stopped.", "neutral");
       } else {
@@ -382,7 +385,7 @@ export function useChatMultimodalControls(input: {
     } finally {
       setVoiceBusy(false);
     }
-  }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk.activeSessionId]);
+  }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk?.activeSessionId]);
 
   const handleOpenAudioTranscribe = useCallback(() => {
     audioInputRef.current?.click();
@@ -526,7 +529,7 @@ export function useChatMultimodalControls(input: {
     voiceBusy,
     voiceInputAvailable,
     voiceOutputAvailable,
-    voiceTalkActive: Boolean(voiceStatus?.talk.activeSessionId),
+    voiceTalkActive: Boolean(voiceStatus?.talk?.activeSessionId),
     voiceStatusLabel,
     voiceUnavailableReason,
     speakResponsesEnabled,

@@ -471,7 +471,7 @@ export function MissionControlNextApp() {
   const sessionsPill = describeDashboardFooterPill(
     status.dashboard,
     status.dashboardError,
-    status.dashboard ? `${status.dashboard.sessions.length} visible` : "—",
+    status.dashboard ? `${countDashboardSessions(status.dashboard)} visible` : "—",
   );
   const spendPill = describeDashboardFooterPill(
     status.dashboard,
@@ -512,7 +512,7 @@ export function MissionControlNextApp() {
     route.area === "settings"
       ? [`${activeCitadelName} Citadel`, `${activeWorkspaceName} active`, realtimeStatusCopy.rail]
       : [
-          `${status.dashboard?.sessions.length ?? 0} recent sessions`,
+          `${countDashboardSessions(status.dashboard)} recent sessions`,
           `${status.dashboard?.activeSubagents ?? 0} active subagents`,
           `${formatUsd(status.dashboard?.dailyCostUsd ?? 0)} daily spend`,
         ];
@@ -1486,4 +1486,13 @@ export function describeDashboardFooterPill(
     return { value: "—", degraded: false };
   }
   return { value: formatted, degraded: false };
+}
+
+/**
+ * `sessions` is required by DashboardStateResponse, but partial gateway
+ * responses (e.g. a stub returning {}) can omit it at runtime — count a
+ * missing list as 0 instead of crashing the footer pill and rail signal.
+ */
+export function countDashboardSessions(dashboard: ShellStatusState["dashboard"]): number {
+  return dashboard?.sessions?.length ?? 0;
 }

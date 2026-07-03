@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   RouteSurfaceFallback,
   buildRailSections,
+  countDashboardSessions,
   describeDashboardFooterPill,
   describeRealtimeTruthUi,
   formatUsd,
@@ -130,6 +131,16 @@ describe("MissionControlNextApp shell helpers", () => {
     expect(formatUsd(Number.POSITIVE_INFINITY)).toBe("$0.00");
     expect(formatUsd(0)).toBe("$0.00");
     expect(formatUsd(2.34567)).toBe("$2.3457");
+  });
+
+  it("counts dashboard sessions defensively when a partial gateway response omits them", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the dashboard endpoint, so `sessions` may be absent at runtime even
+    // though the response type declares it required.
+    expect(countDashboardSessions(null)).toBe(0);
+    expect(countDashboardSessions({} as any)).toBe(0);
+    expect(countDashboardSessions({ sessions: [] } as any)).toBe(0);
+    expect(countDashboardSessions({ sessions: [{}, {}] } as any)).toBe(2);
   });
 
   it("marks dashboard footer pills unavailable when the dashboard refresh fails (F-H4)", () => {

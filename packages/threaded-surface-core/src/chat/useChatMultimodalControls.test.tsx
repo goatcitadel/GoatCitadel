@@ -256,6 +256,39 @@ describe("useChatMultimodalControls", () => {
     expect(apiMocks.stopVoiceTalkSession).toHaveBeenCalledWith("talk-1");
   });
 
+  it("treats a partial voice status without talk as inactive instead of crashing", async () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the voice status endpoint, so `talk` may be absent at runtime even
+    // though the contract type declares it required.
+    apiMocks.fetchVoiceStatus.mockResolvedValue({});
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.controls.voiceTalkActive).toBe(false);
+    expect(latest!.controls.voiceStatusLabel).toBe("Voice ready · whisper-local");
+  });
+
+  it("starts a fresh push-to-talk session when the partial voice status omits talk", async () => {
+    apiMocks.fetchVoiceStatus.mockResolvedValue({});
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    await act(async () => {
+      await latest!.controls.handleToggleVoiceTalk();
+      await flushAsyncEffects();
+    });
+
+    expect(apiMocks.startVoiceTalkSession).toHaveBeenCalledWith({
+      mode: "push_to_talk",
+      sessionId: "session-1",
+    });
+    expect(apiMocks.stopVoiceTalkSession).not.toHaveBeenCalled();
+  });
+
   it("transcribes selected audio files into the draft", async () => {
     await act(async () => {
       create(<Harness draft="Existing" />);
