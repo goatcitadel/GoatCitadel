@@ -1398,13 +1398,18 @@ export function describeRealtimeTruthUi(
   }
 
   if (truthMode === "compatibility") {
+    // N1 (QA finding): "compatibility" is per-event topic-inference provenance
+    // (keyword match vs explicit `links` ids), not a transport downgrade.
+    // While the stream is open it is NOT a degradation — badge/strip/rail read
+    // healthy exactly like "authoritative". The nuance stays visible only in
+    // the inspector detail line, softened to avoid implying a fallback.
     return {
-      badge: "Live fallback",
-      inspector: "Streaming with compatibility fallback",
-      rail: "Streaming with compatibility fallback",
-      stage: "Realtime compatibility fallback",
-      strip: "Streaming (compatibility fallback)",
-      degraded: true,
+      badge: "Live",
+      inspector: "Streaming (inferred refresh)",
+      rail: "Gateway live with streaming",
+      stage: "Realtime connected",
+      strip: "Streaming",
+      degraded: false,
     };
   }
 

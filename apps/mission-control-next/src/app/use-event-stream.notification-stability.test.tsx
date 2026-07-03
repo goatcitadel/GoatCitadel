@@ -4,8 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { connectEventStream } from "@goatcitadel/mission-control-shared/api/shell-client";
+import { deriveRealtimeRefresh } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import { useShellNotifications } from "./use-shell-notifications";
-import { useEventStream } from "./use-event-stream";
+import { REALTIME_COMPATIBILITY_DECAY_MS, REALTIME_REPLAY_GAP_DECAY_MS, useEventStream } from "./use-event-stream";
 
 /*
  * MCNEXT-002: the realtime SSE subscription must NOT tear down/reconnect when
@@ -189,5 +190,220 @@ describe("event stream notification-preference stability (MCNEXT-002)", () => {
       await Promise.resolve();
     });
     expect(toastCount).toBe(1);
+  });
+});
+
+/*
+ * Task 1.3 (QA finding N1): "compatibility" truth-mode is transient per-event
+ * topic-inference nuance, not a transport downgrade — it must decay back to
+ * "authoritative" after REALTIME_COMPATIBILITY_DECAY_MS (15s) without a newer
+ * non-authoritative event. "replay-gap" decays after REALTIME_REPLAY_GAP_DECAY_MS
+ * (30s). This suite drives the mocked deriveRealtimeRefresh return value per
+ * captured event and asserts on the hook's exposed streamTruthMode using fake
+ * timers, mirroring the harness pattern above.
+ */
+
+const mockedDeriveRealtimeRefresh = vi.mocked(deriveRealtimeRefresh);
+
+function TruthModeHarness({
+  gatewayReady,
+  onTruthMode,
+}: {
+  gatewayReady: boolean;
+  onTruthMode: (mode: string) => void;
+}) {
+  const { deliverRealtimeNotification } = useShellNotifications({ notificationPreferences: BASE_PREFS });
+  const { streamTruthMode } = useEventStream({ gatewayReady, onRealtimeNotification: deliverRealtimeNotification });
+  onTruthMode(streamTruthMode);
+  return null;
+}
+
+describe("realtime truth-mode decay (N1)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockedConnect.mockClear();
+    closeSpy.mockClear();
+    capturedOnEvent = null;
+    mockedDeriveRealtimeRefresh.mockReturnValue({
+      topics: [],
+      truthMode: "authoritative",
+      usedCompatibilityInference: false,
+      signalReason: "test",
+      signalEventType: "test",
+    });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    vi.useRealTimers();
+  });
+
+  function deliverEvent(truthMode: "authoritative" | "compatibility" | "replay-gap") {
+    mockedDeriveRealtimeRefresh.mockReturnValueOnce({
+      topics: [],
+      truthMode,
+      usedCompatibilityInference: truthMode === "compatibility",
+      signalReason: "test",
+      signalEventType: "test",
+    });
+    capturedOnEvent?.({ eventId: `e-${Date.now()}-${Math.random()}`, source: "surface" });
+  }
+
+  it("decays a keyword-only compatibility event back to authoritative after 15s", async () => {
+    let truthMode = "authoritative";
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+    expect(truthMode).toBe("authoritative");
+
+    await act(async () => {
+      deliverEvent("compatibility");
+      await Promise.resolve();
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // Not yet decayed just before the deadline.
+    await act(async () => {
+      vi.advanceTimersByTime(REALTIME_COMPATIBILITY_DECAY_MS - 1);
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // Decays at the deadline, with NO further stream events / state changes.
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(truthMode).toBe("authoritative");
+    // Decay must not touch stream connectivity — no reconnect, no close.
+    expect(mockedConnect).toHaveBeenCalledTimes(1);
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("measures decay from the most recent compatibility event, not the first", async () => {
+    let truthMode = "authoritative";
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+
+    await act(async () => {
+      deliverEvent("compatibility");
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // 10s later, a second compatibility event arrives — this should reschedule
+    // the decay timer measured from THIS event, not the first.
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      deliverEvent("compatibility");
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // 14s after the SECOND event (24s after the first): still compatibility,
+    // because decay is measured from the second event's schedule.
+    await act(async () => {
+      vi.advanceTimersByTime(14_000);
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // +1s more (15s after the second event): now it decays.
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(truthMode).toBe("authoritative");
+  });
+
+  it("decays replay-gap at 30s, not 15s", async () => {
+    let truthMode = "authoritative";
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+
+    await act(async () => {
+      deliverEvent("replay-gap");
+    });
+    expect(truthMode).toBe("replay-gap");
+
+    // At the compatibility deadline (15s), replay-gap must NOT have decayed yet.
+    await act(async () => {
+      vi.advanceTimersByTime(REALTIME_COMPATIBILITY_DECAY_MS);
+    });
+    expect(truthMode).toBe("replay-gap");
+
+    // Remaining time to reach the replay-gap deadline (30s total).
+    await act(async () => {
+      vi.advanceTimersByTime(REALTIME_REPLAY_GAP_DECAY_MS - REALTIME_COMPATIBILITY_DECAY_MS - 1);
+    });
+    expect(truthMode).toBe("replay-gap");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(truthMode).toBe("authoritative");
+  });
+
+  it("clears the decay timer on unmount without a post-unmount setState/act warning", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let truthMode = "authoritative";
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+
+    await act(async () => {
+      deliverEvent("compatibility");
+    });
+    expect(truthMode).toBe("compatibility");
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    // Advancing timers past the decay deadline after unmount must not throw or
+    // attempt a setState on the unmounted tree.
+    await act(async () => {
+      vi.advanceTimersByTime(REALTIME_COMPATIBILITY_DECAY_MS + 1_000);
+    });
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("clears the decay timer when the gateway (stream) is torn down and reconnected", async () => {
+    let truthMode = "authoritative";
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+
+    await act(async () => {
+      deliverEvent("compatibility");
+    });
+    expect(truthMode).toBe("compatibility");
+
+    // Gateway drops mid-decay: stream tears down, and the existing "closed"
+    // reset takes effect. The pending decay timer must be cleared so it
+    // cannot fire later and clobber a fresh stream's state.
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady={false} onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+    expect(truthMode).toBe("authoritative");
+
+    // Reconnect: a fresh subscription starts clean at authoritative, and
+    // advancing time past the old (now-cleared) deadline must not regress it.
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={(mode) => (truthMode = mode)} />);
+    });
+    expect(truthMode).toBe("authoritative");
+
+    await act(async () => {
+      vi.advanceTimersByTime(REALTIME_COMPATIBILITY_DECAY_MS + 1_000);
+    });
+    expect(truthMode).toBe("authoritative");
   });
 });
