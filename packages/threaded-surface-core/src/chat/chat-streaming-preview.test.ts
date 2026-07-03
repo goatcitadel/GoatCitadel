@@ -219,4 +219,109 @@ describe("chat streaming preview", () => {
     expect(clearTimer).toHaveBeenCalledWith(11);
     expect(onFlush).toHaveBeenCalledTimes(1);
   });
+
+  it("adaptive reveal: 3000-char backlog / base 18 → reveals ceil(3000/15)=200 chars", () => {
+    const backlog = "x".repeat(3000);
+    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+      previousVisibleText: "",
+      revealCharsPerFrame: 18,
+    });
+    expect(result.length).toBe(200);
+  });
+
+  it("adaptive reveal: 100000-char backlog → capped at MAX_REVEAL_CHARS_PER_FRAME (600)", () => {
+    const backlog = "x".repeat(100000);
+    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+      previousVisibleText: "",
+      revealCharsPerFrame: 18,
+    });
+    expect(result.length).toBe(600);
+  });
+
+  it("adaptive reveal: 30-char backlog / base 18 → reveals 18 (base floor preserved)", () => {
+    const backlog = "x".repeat(30);
+    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+      previousVisibleText: "",
+      revealCharsPerFrame: 18,
+    });
+    expect(result.length).toBe(18);
+  });
+
+  it("adaptive reveal: large incoming chunk drains within bounded frames with no single step > 600", () => {
+    const frameCallbacks: Array<() => void> = [];
+    const onFlush = vi.fn();
+    const buffer = new ChatStreamingPreviewBuffer({
+      now: () => 1000,
+      onFlush,
+      revealCharsPerFrame: 18,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+      setTimer: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+      isReducedMotion: () => false,
+    });
+
+    buffer.start({ sessionId: "sess", turnId: "turn" });
+    buffer.append({ sessionId: "sess", turnId: "turn", delta: "x".repeat(5000) });
+
+    let lastVisibleLength = 0;
+    let converged = false;
+
+    // Pump frames until convergence to full text or max 200 frames
+    for (let i = 0; i < 200 && frameCallbacks.length > 0; i++) {
+      frameCallbacks.shift()?.();
+      const lastCall = onFlush.mock.calls.at(-1);
+      const preview = lastCall?.[0];
+      if (preview) {
+        const step = preview.visibleText.length - lastVisibleLength;
+        expect(step).toBeLessThanOrEqual(600);
+        lastVisibleLength = preview.visibleText.length;
+        if (preview.visibleText.length === preview.text.length) {
+          converged = true;
+          break;
+        }
+      }
+    }
+
+    expect(converged).toBe(true);
+  });
+
+  it("regression: finish({ finalText }) force-reveal path still works", () => {
+    const frameCallbacks: Array<() => void> = [];
+    const onFlush = vi.fn();
+    const finalText = "Final text revealed.";
+    const buffer = new ChatStreamingPreviewBuffer({
+      now: () => 1000,
+      onFlush,
+      revealCharsPerFrame: 5,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+      setTimer: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+      isReducedMotion: () => false,
+    });
+
+    buffer.start({ sessionId: "sess", turnId: "turn" });
+    buffer.finish({ clear: true, forceVisible: false, finalText });
+
+    // Pump frames to reveal the final text progressively
+    while (frameCallbacks.length > 0 && onFlush.mock.calls.at(-1)?.[0]?.visibleText !== finalText) {
+      frameCallbacks.shift()?.();
+    }
+
+    const finalIndex = onFlush.mock.calls.findIndex(([preview]) => preview?.visibleText === finalText);
+    expect(finalIndex).toBeGreaterThan(-1);
+  });
 });
