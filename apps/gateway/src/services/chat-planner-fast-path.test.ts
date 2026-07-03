@@ -65,6 +65,12 @@ describe("selectPlannerDraftModel", () => {
     expect(selectPlannerDraftModel({ capabilities: [], prefs })).toBeUndefined();
   });
 
+  it("returns undefined for a model-only pin so callers stay on prefs verbatim", () => {
+    const modelPinnedPrefs = { ...prefs, model: "gpt-5.4" } as ChatSessionPrefsRecord;
+    const fast = capability({ providerId: "openai", model: "gpt-5-mini", speedScore: 0.95 });
+    expect(selectPlannerDraftModel({ capabilities: [fast], prefs: modelPinnedPrefs })).toBeUndefined();
+  });
+
   it("returns undefined for an explicit provider pin so callers stay on prefs verbatim", () => {
     const pinnedPrefs = { ...prefs, providerId: "anthropic", model: "claude-opus-4-8" } as ChatSessionPrefsRecord;
     const fast = capability({ providerId: "openai", model: "gpt-5-mini", speedScore: 0.95 });

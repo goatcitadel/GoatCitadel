@@ -61,11 +61,12 @@ export function selectPlannerDraftModel(input: {
   capabilities: ProviderCapabilityRecord[] | undefined;
   prefs: ChatSessionPrefsRecord;
 }): PlannerDraftModelSelection | undefined {
-  if (input.prefs.providerId) {
-    // Explicit pin: never re-route the planner. The capability registry keys
-    // one record per provider carrying the provider's DEFAULT model, so even
-    // the selector's pin branch could silently swap a pinned model for the
-    // default one. Returning undefined keeps the caller on prefs verbatim.
+  if (input.prefs.providerId || input.prefs.model) {
+    // Explicit pin (provider-level OR model-only, e.g. "/model gpt-5.4"):
+    // never re-route the planner. The capability registry keys one record per
+    // provider carrying the provider's DEFAULT model, so selection could
+    // silently swap an explicitly chosen model. Returning undefined keeps the
+    // caller on prefs verbatim.
     return undefined;
   }
   // Missing capabilities (partial router inputs) simply yield no selection —

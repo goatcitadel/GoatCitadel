@@ -76,6 +76,7 @@ function buildHarness(input: {
   delaysByProbeMs: Record<number, number>;
   parallelDisabled?: boolean;
   failingProbe?: number;
+  accessRequiresApproval?: boolean;
 }) {
   const timings: ToolTiming[] = [];
   const completionRequests: ChatCompletionRequest[] = [];
@@ -104,6 +105,13 @@ function buildHarness(input: {
     listToolCatalog: () => createToolCatalog(["memory.read", "shell.exec"]),
     createChatCompletion: createChatCompletion as never,
     invokeTool: invokeTool as never,
+    // The batch preflight requires proof the whole batch is approval-free;
+    // absent evaluator ⇒ serial, so every parallel test wires a clean one.
+    evaluateToolAccess: () => ({
+      allowed: true,
+      requiresApproval: input.accessRequiresApproval === true,
+      reasonCodes: [],
+    }),
     parallelToolExecutionV1Disabled: () => input.parallelDisabled === true,
   } as never);
   return { orchestrator, timings, completionRequests, invokeTool, storage };
@@ -158,6 +166,21 @@ describe("ChatAgentOrchestrator parallel read-only tool batches", () => {
     expect(harness.timings).toHaveLength(2);
     const [first, second] = harness.timings;
     expect(second!.startedAt).toBeGreaterThanOrEqual(first!.finishedAt);
+  });
+
+  it("keeps the batch serial when access evaluation says approval could be required", async () => {
+    const harness = buildHarness({
+      toolNames: READ_ONLY_BATCH,
+      delaysByProbeMs: { 1: 60, 2: 60, 3: 60 },
+      accessRequiresApproval: true,
+    });
+    await harness.orchestrator.run(turnInput("approval-preflight"));
+
+    expect(harness.timings.length).toBeGreaterThanOrEqual(1);
+    const ordered = [...harness.timings].sort((left, right) => left.startedAt - right.startedAt);
+    for (let index = 1; index < ordered.length; index += 1) {
+      expect(ordered[index]!.startedAt).toBeGreaterThanOrEqual(ordered[index - 1]!.finishedAt);
+    }
   });
 
   it("keeps the batch serial when the kill switch is on", async () => {
@@ -240,6 +263,9 @@ describe("ChatAgentOrchestrator parallel batch approval pause", () => {
       listToolCatalog: () => createToolCatalog(["memory.read"]),
       createChatCompletion: createChatCompletion as never,
       invokeTool: invokeTool as never,
+      // Access preflight says clean, but invoke-time policy still parks call 2
+      // — the evaluate/invoke disagreement this test pins (residual I3 net).
+      evaluateToolAccess: () => ({ allowed: true, requiresApproval: false, reasonCodes: [] }),
       parallelToolExecutionV1Disabled: () => false,
     } as never);
 

@@ -2698,6 +2698,37 @@ export class ChatAgentOrchestrator {
             remainingToolBudget: executionBudget.maxToolRunsPerTurn - toolRunCount,
             maxParallel: MAX_PARALLEL_TOOL_CALLS,
           });
+          // Approval-capable batches stay serial: without an access evaluator
+          // we cannot prove the batch is approval-free, and a runtime profile
+          // (approve_all, outside-roots grants) can approval-gate even
+          // registry-safe read-only tools. The serial loop is the single
+          // place that pauses on the first approval, so route there.
+          const batchAccessApprovalFree = (): boolean => {
+            if (!this.deps.evaluateToolAccess) {
+              return false;
+            }
+            try {
+              return toolCalls.every((call) => {
+                const access = this.deps.evaluateToolAccess!({
+                  toolName: call.toolName,
+                  sessionId: input.sessionId,
+                  agentId: "assistant",
+                  taskId: input.policyTaskId,
+                  runId: input.policyRunId,
+                  args: call.args,
+                  permissionProfileId: input.permissionProfileId,
+                  localOperatorOverrideId: input.localOperatorOverrideId,
+                  surface: input.mode,
+                  policyContext: buildTurnToolPolicyContext(input),
+                });
+                return access.allowed && !access.requiresApproval;
+              });
+            } catch {
+              // Fail safe: an evaluator error means we cannot prove the batch
+              // is approval-free, so keep it on the serial path.
+              return false;
+            }
+          };
           if (
             parallelBatchDecision.parallel &&
             !circuitBreakerReason &&
@@ -2708,19 +2739,21 @@ export class ChatAgentOrchestrator {
             // work: with the turn budget effectively spent, fall back to the
             // serial loop so its budget-exceeded handling runs unchanged.
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs) >
-              Math.max(...toolCalls.map((call) => minimumRemainingBudgetForToolStart(call.toolName, executionBudget)))
+              Math.max(
+                ...toolCalls.map((call) => minimumRemainingBudgetForToolStart(call.toolName, executionBudget)),
+              ) &&
+            batchAccessApprovalFree()
           ) {
             throwIfChatTurnCancelled(input);
             this.deps.storage.chatTurnTraces.patch(input.turnId, {
               status: "waiting_for_tool",
             });
-            // Accepted divergence (review I3): when consumption later parks on
-            // approval/user-input, siblings in this batch have already run —
-            // their records persist and flushSkippedToolCallResults surfaces
-            // their REAL results, but under a profile that approval-gates
-            // read-only tools each sibling may have minted its own pending
-            // approval that nobody surfaces. Bounded to the safe read-only
-            // set; revisit if that set ever widens.
+            // Residual divergence (review I3, narrowed by the access preflight
+            // above): evaluate-time and invoke-time policy can still disagree
+            // (constraint counters, state changes), so a sibling can rarely
+            // return approval_required after the batch launched. Records
+            // persist and flushSkippedToolCallResults surfaces the executed
+            // siblings' REAL results; bounded to the safe read-only set.
             // Frozen snapshot: parallel siblings deliberately do not see each
             // other's results (pinned by the serial-parity tests).
             const priorToolRunsSnapshot = [...toolRuns];
