@@ -886,7 +886,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       ...onboarding,
       runtimeSettings,
       demoState,
-      firstRunEvidence: buildFirstRunEvidenceSnapshot(agenticRuns.items, evidenceEnvelopes.items),
+      firstRunEvidence: buildFirstRunEvidenceSnapshot(agenticRuns.items ?? [], evidenceEnvelopes.items ?? []),
     } satisfies OnboardingPageState;
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
@@ -908,10 +908,10 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       return;
     }
     setDefaultsDraft({
-      defaultToolProfile: normalizeToolProfile(data.settings.defaultToolProfile),
-      toolApprovalMode: normalizeToolApprovalMode(data.settings.toolApprovalMode),
-      budgetMode: normalizeBudgetMode(data.settings.budgetMode),
-      networkAllowlist: data.settings.networkAllowlist.join(", "),
+      defaultToolProfile: normalizeToolProfile(data.settings?.defaultToolProfile),
+      toolApprovalMode: normalizeToolApprovalMode(data.settings?.toolApprovalMode),
+      budgetMode: normalizeBudgetMode(data.settings?.budgetMode),
+      networkAllowlist: data.settings?.networkAllowlist?.join(", ") ?? "",
     });
   }, [data]);
 
@@ -980,17 +980,20 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
               scrollBody
               bodyMaxHeight="min(58vh, 34rem)"
               stats={[
-                { label: "Gateway", value: data.setupReadiness.profile.gatewayUrl },
-                { label: "Auth", value: data.setupReadiness.profile.authMode },
-                { label: "Posture", value: data.setupReadiness.profile.deploymentPosture.replaceAll("_", " ") },
+                { label: "Gateway", value: data.setupReadiness.profile?.gatewayUrl ?? "unknown" },
+                { label: "Auth", value: data.setupReadiness.profile?.authMode ?? "unknown" },
+                {
+                  label: "Posture",
+                  value: (data.setupReadiness.profile?.deploymentPosture ?? "unknown").replaceAll("_", " "),
+                },
                 {
                   label: "Blocked",
-                  value: `${data.setupReadiness.summary.blocked} / ${data.setupReadiness.summary.needsInput} input`,
+                  value: `${data.setupReadiness.summary?.blocked ?? 0} / ${data.setupReadiness.summary?.needsInput ?? 0} input`,
                 },
               ]}
             >
               <SettingsWizardSteps
-                steps={data.setupReadiness.items.slice(0, 6).map((item) => ({
+                steps={(data.setupReadiness.items ?? []).slice(0, 6).map((item) => ({
                   label: item.label,
                   description: `${item.value}: ${item.detail}`,
                   state:
@@ -1004,7 +1007,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 }))}
               />
               <SettingsActionList
-                items={data.setupReadiness.items.map((item) => ({
+                items={(data.setupReadiness.items ?? []).map((item) => ({
                   id: item.id,
                   label: item.label,
                   description: item.detail,
@@ -1030,12 +1033,12 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
             subtitle="Configured readiness for the first trustworthy send."
             stats={[
               { label: "Status", value: data.completed ? "Complete" : "Open" },
-              { label: "Provider", value: data.settings.llm.activeProviderId || "Unset" },
-              { label: "Model", value: data.settings.llm.activeModel || "Unset" },
+              { label: "Provider", value: data.settings?.llm?.activeProviderId || "Unset" },
+              { label: "Model", value: data.settings?.llm?.activeModel || "Unset" },
             ]}
           >
             <SettingsWizardSteps
-              steps={data.checklist.map((item) => ({
+              steps={(data.checklist ?? []).map((item) => ({
                 label: item.label,
                 description: item.detail ?? item.status,
                 state: item.status === "complete" ? "complete" : item.status === "optional" ? "pending" : "active",
@@ -1172,13 +1175,13 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
               items={[
                 {
                   label: "Auth",
-                  value: data.settings.auth.mode,
-                  meta: data.settings.auth.tokenConfigured ? "token configured" : "no token configured",
+                  value: data.settings?.auth?.mode ?? "unknown",
+                  meta: data.settings?.auth?.tokenConfigured ? "token configured" : "no token configured",
                 },
                 {
                   label: "Mesh",
-                  value: data.settings.mesh.enabled ? data.settings.mesh.mode : "off",
-                  meta: data.settings.mesh.nodeId || "no node id",
+                  value: data.settings?.mesh?.enabled ? (data.settings?.mesh?.mode ?? "unknown") : "off",
+                  meta: data.settings?.mesh?.nodeId || "no node id",
                 },
               ]}
             />
@@ -1446,13 +1449,13 @@ function SetupCenterPanel({
           {
             label: "Provider connection checks",
             description: "Check configured model providers and exact key/source status.",
-            meta: setupMeta(onboarding.checklist.find((item) => item.id === "llm")?.status),
+            meta: setupMeta(onboarding.checklist?.find((item) => item.id === "llm")?.status),
             onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
           },
           {
             label: "Runtime health",
             description: "Check daemon, database, llama.cpp, NPU, voice, and local runtime readiness.",
-            meta: setupMeta(onboarding.checklist.find((item) => item.id === "runtime")?.status),
+            meta: setupMeta(onboarding.checklist?.find((item) => item.id === "runtime")?.status),
             onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
           },
           {
@@ -9649,15 +9652,16 @@ export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
   description: string;
   state: SettingsWizardStepState;
 }> {
-  const checklistById = new Map(onboarding.checklist.map((item) => [item.id, item]));
-  const providersWithKeys = onboarding.settings.llm.providers.filter((provider) => provider.hasApiKey).length;
+  const checklistById = new Map((onboarding.checklist ?? []).map((item) => [item.id, item]));
+  const providersWithKeys = (onboarding.settings?.llm?.providers ?? []).filter((provider) => provider.hasApiKey).length;
+  const authMode = onboarding.settings?.auth?.mode ?? "none";
   return [
     {
       label: "Provider smoke",
       description:
         providersWithKeys > 0
           ? `${providersWithKeys} provider credential source available. Active model: ${
-              onboarding.settings.llm.activeModel || "unset"
+              onboarding.settings?.llm?.activeModel || "unset"
             }.`
           : "No provider credentials required for demo/local paths; add one before cloud sends.",
       state: wizardStateForChecklist(checklistById.get("llm")?.status),
@@ -9670,9 +9674,9 @@ export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
     {
       label: "Access and auth",
       description:
-        onboarding.settings.auth.mode === "none"
+        authMode === "none"
           ? "Local access is open; add gateway auth before exposing the app."
-          : `${onboarding.settings.auth.mode} gateway auth configured.`,
+          : `${authMode} gateway auth configured.`,
       state: wizardStateForChecklist(checklistById.get("auth")?.status),
     },
     {
@@ -9787,10 +9791,11 @@ export function deriveFirstOutcomePathItems(
   demoState: DemoBootstrapStateResponse | null,
   firstRunEvidence: FirstRunEvidenceSnapshot = EMPTY_FIRST_RUN_EVIDENCE,
 ): FirstOutcomePathItem[] {
-  const activeProvider = onboarding.settings.llm.providers.find(
-    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  const llmSettings = onboarding.settings?.llm;
+  const activeProvider = (llmSettings?.providers ?? []).find(
+    (provider) => provider.providerId === llmSettings?.activeProviderId,
   );
-  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const activeModel = (llmSettings?.activeModel ?? "").trim();
   const localEndpointReady = Boolean(activeProvider && isLikelyLocalProviderBaseUrl(activeProvider.baseUrl));
   const cloudProviderReady = Boolean(activeProvider?.hasApiKey);
   const providerCredentialReady = Boolean(activeProvider && (cloudProviderReady || localEndpointReady));
@@ -9821,7 +9826,7 @@ export function deriveFirstOutcomePathItems(
       id: "provider-ready",
       label: "Provider-ready path",
       description: providerConnected
-        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} is selected with ${activeModel}; risky actions still stay approval-governed.`
+        ? `${activeProvider?.label ?? llmSettings?.activeProviderId} is selected with ${activeModel}; risky actions still stay approval-governed.`
         : providerFailure,
       actionDescription: "Open Providers & Models to choose a provider, model, secret source, or local endpoint.",
       state: providerCredentialReady ? "complete" : "active",
@@ -9908,10 +9913,11 @@ export function deriveFirstRunGovernedJobState(
   if (firstRunEvidence.evidenceEnvelopes.length > 0) {
     return "proof-complete";
   }
-  const activeProvider = onboarding.settings.llm.providers.find(
-    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  const llmSettings = onboarding.settings?.llm;
+  const activeProvider = (llmSettings?.providers ?? []).find(
+    (provider) => provider.providerId === llmSettings?.activeProviderId,
   );
-  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const activeModel = (llmSettings?.activeModel ?? "").trim();
   const providerReady = Boolean(
     activeProvider && activeModel && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
   );
@@ -10018,12 +10024,12 @@ function surfaceLabel(
 export function deriveOnboardingProviderSmokeEvidenceItems(
   onboarding: OnboardingState,
 ): OnboardingProviderSmokeEvidenceItem[] {
-  const activeProvider = onboarding.settings.llm.providers.find(
-    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  const llmSettings = onboarding.settings?.llm;
+  const activeProvider = (llmSettings?.providers ?? []).find(
+    (provider) => provider.providerId === llmSettings?.activeProviderId,
   );
-  const activeProviderLabel =
-    activeProvider?.label ?? (onboarding.settings.llm.activeProviderId.trim() || "No provider");
-  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const activeProviderLabel = activeProvider?.label ?? ((llmSettings?.activeProviderId ?? "").trim() || "No provider");
+  const activeModel = (llmSettings?.activeModel ?? "").trim();
   const providerCredentialReady = Boolean(
     activeProvider && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
   );
@@ -10061,12 +10067,13 @@ export function deriveOnboardingProviderSmokeEvidenceItems(
 }
 
 export function describeProviderReadinessFailure(onboarding: OnboardingState): string {
-  const activeProviderId = onboarding.settings.llm.activeProviderId.trim();
-  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const llmSettings = onboarding.settings?.llm;
+  const activeProviderId = (llmSettings?.activeProviderId ?? "").trim();
+  const activeModel = (llmSettings?.activeModel ?? "").trim();
   if (!activeProviderId) {
     return "Choose an active provider before sending cloud-backed work.";
   }
-  const activeProvider = onboarding.settings.llm.providers.find((provider) => provider.providerId === activeProviderId);
+  const activeProvider = (llmSettings?.providers ?? []).find((provider) => provider.providerId === activeProviderId);
   if (!activeProvider) {
     return `Provider ${activeProviderId} is selected but is not present in the provider catalog.`;
   }

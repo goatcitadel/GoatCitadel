@@ -2445,4 +2445,41 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(text).toContain("Tool catalog");
     expect(text).toContain("No tool grants created yet.");
   });
+
+  it("renders the onboarding section when the onboarding payload is empty", async () => {
+    settingsMocks.fetchOnboardingState.mockResolvedValue({});
+
+    const onboarding = await mount("onboarding");
+
+    const text = collectText(onboarding.root);
+    expect(text).toContain("First trusted outcome");
+    expect(text).toContain("Setup Center");
+    expect(text).toContain("Provider smoke evidence");
+    expect(text).toContain("First-run setup");
+    expect(text).toContain("Apply first-run defaults");
+    expect(text).toContain("Choose an active provider before sending cloud-backed work.");
+    expect(text).toContain("Unset");
+  });
+
+  it("renders the onboarding section when agentic run and evidence payloads are empty", async () => {
+    settingsMocks.fetchAgenticRuns.mockResolvedValue({});
+    settingsMocks.fetchEvidenceEnvelopes.mockResolvedValue({});
+
+    const onboarding = await mount("onboarding");
+
+    const text = collectText(onboarding.root);
+    expect(text).toContain("First trusted outcome");
+    expect(text).toContain("First-run setup");
+    expect(text).toContain("No proof artifact or trace is recorded yet.");
+  });
+
+  it("renders the remote profile readiness card when the setup readiness payload is partial", async () => {
+    settingsMocks.fetchOnboardingState.mockResolvedValue({ setupReadiness: {} });
+
+    const onboarding = await mount("onboarding");
+
+    const text = collectText(onboarding.root);
+    expect(text).toContain("Remote profile readiness");
+    expect(text).toContain("unknown");
+  });
 });
