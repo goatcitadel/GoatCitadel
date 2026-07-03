@@ -15,6 +15,7 @@ function baseSignals(overrides: Partial<ScrollToBottomContentSignals> = {}): Scr
     threadTurnCount: 1,
     latestTurnId: "turn-1",
     latestTraceStatus: "completed",
+    latestTurnToolRunCount: 0,
     noticeCount: 0,
     queuedCount: 0,
     streamStatus: "idle",
@@ -167,6 +168,37 @@ describe("useScrollToBottom", () => {
         streamStatus: "streaming",
         streamingPreviewSignal: "turn-1:42:running",
       }),
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("auto-follows a new live-activity-rail tool run while the turn count is unchanged", () => {
+    // Regression guard for the live activity rail: a tool_start streamed into
+    // `turn.toolRuns` grows the rail by one row without changing threadTurnCount
+    // or the streaming text signal. Without latestTurnToolRunCount in the pin
+    // effect's deps, the pinned-to-bottom view would lag a row height behind.
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const onBottomStateChange = vi.fn();
+
+    render({
+      followOutput: true,
+      onBottomStateChange,
+      signals: baseSignals({ latestTraceStatus: "waiting_for_tool", latestTurnToolRunCount: 1 }),
+    });
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+
+    render({
+      followOutput: true,
+      onBottomStateChange,
+      signals: baseSignals({ latestTraceStatus: "waiting_for_tool", latestTurnToolRunCount: 2 }),
     });
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });

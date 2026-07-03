@@ -1330,6 +1330,123 @@
 }
 
 /* ============================================================
+   ChatLiveActivityRail (.mc-next-live-activity)
+   Rendered live inside the running assistant bubble by
+   ChatThreadPrimitives.tsx (packages/mission-control-shared).
+   Collapses into TurnEvidenceSummary's ChatTurnActivityRows the
+   instant the turn's trace settles (see suppressActivityRows).
+   ============================================================ */
+.mc-next-live-activity {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.4rem 0 0.6rem;
+}
+
+.mc-next-live-activity-row {
+  appearance: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.12rem 0.2rem;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: start;
+  cursor: pointer;
+}
+
+.mc-next-live-activity-row:hover {
+  background: color-mix(in oklab, var(--mc-accent) 8%, transparent);
+}
+
+.mc-next-live-activity-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  text-align: center;
+}
+
+.mc-next-live-activity-glyph.tone-active {
+  color: var(--mc-accent);
+}
+
+.mc-next-live-activity-glyph.tone-success {
+  color: var(--gc-risk-success, var(--success, var(--risk-safe)));
+}
+
+.mc-next-live-activity-glyph.tone-warning {
+  color: var(--gc-risk-caution, var(--risk-caution));
+}
+
+.mc-next-live-activity-glyph.tone-danger {
+  color: var(--gc-risk-danger, var(--risk-danger));
+}
+
+.mc-next-live-activity-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 720;
+  color: var(--foreground);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mc-next-live-activity-summary {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mc-next-live-activity-elapsed {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mc-next-live-activity-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-live-activity-more {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-live-activity-spinner {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: var(--r-pill);
+  border: 2px solid color-mix(in oklab, var(--mc-accent) 30%, transparent);
+  border-top-color: var(--mc-accent);
+  animation: mcLiveActivitySpin 0.8s linear infinite;
+}
+
+@keyframes mcLiveActivitySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-live-activity-spinner {
+    animation: none;
+    border-color: color-mix(in oklab, var(--text-secondary) 40%, transparent);
+    border-top-color: color-mix(in oklab, var(--text-secondary) 40%, transparent);
+    opacity: 0.7;
+  }
+}
+
+/* ============================================================
    ChatStreamStatusBar (.chat-stream-status-bar)
    Rendered inside the timeline by ThreadedTimeline.tsx.
    r4-ux CHAT-013 flagged the bare class as having no rule in

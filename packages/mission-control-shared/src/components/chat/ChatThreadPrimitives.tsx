@@ -7,11 +7,16 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { ChatMode, ChatStreamingPreview, ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import {
+  isChatTurnActiveStatus,
+  type ChatMode,
+  type ChatStreamingPreview,
+  type ChatThreadTurnRecord,
+} from "@goatcitadel/contracts";
 import { Badge } from "../ui";
 import { AssistantMessageRenderer, type AssistantStreamPresentationMode } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
-import { ChatTurnActivityRows, formatToolRunElapsed } from "./ChatToolActivity";
+import { ChatLiveActivityRail, ChatTurnActivityRows, formatToolRunElapsed } from "./ChatToolActivity";
 import {
   getAssistantPendingLabel,
   getRecoveryStripLabel,
@@ -345,6 +350,7 @@ function TurnEvidenceSummary({
   showContextToggle,
   showOperationalDetails,
   expandedByDefault,
+  suppressActivityRows,
   onToggleContextTurn,
   onOpenRunDetails,
   onOpenUniversalRunDetail,
@@ -359,6 +365,13 @@ function TurnEvidenceSummary({
   showContextToggle: boolean;
   showOperationalDetails: boolean;
   expandedByDefault: boolean;
+  /**
+   * True while {@link ChatLiveActivityRail} is mounted live inside the
+   * assistant bubble for this turn. The evidence body must not render
+   * {@link ChatTurnActivityRows} in that window, or the same tool runs would
+   * appear in two places at once.
+   */
+  suppressActivityRows: boolean;
   onToggleContextTurn?: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
@@ -480,11 +493,13 @@ function TurnEvidenceSummary({
             {citationList}
           </div>
         ) : null}
-        <ChatTurnActivityRows
-          mode={mode}
-          toolRuns={turn.toolRuns}
-          onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
-        />
+        {suppressActivityRows ? null : (
+          <ChatTurnActivityRows
+            mode={mode}
+            toolRuns={turn.toolRuns}
+            onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
+          />
+        )}
       </div>
     </details>
   );
@@ -883,6 +898,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
   const durableRunId = turn.trace.durable?.runId;
   const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  // The live activity rail owns rendering tool runs while the turn is in
+  // flight; TurnEvidenceSummary's ChatTurnActivityRows takes back over the
+  // instant the trace settles, in the same commit the rail unmounts (see
+  // suppressActivityRows below) so rows never render in two places at once.
+  const showLiveActivity = isStreamingTurn || isChatTurnActiveStatus(turn.trace.status);
   const assistantContent = isStreamingTurn
     ? (streamingPreview?.visibleText ?? "")
     : (turn.assistantMessage?.content ?? "");
@@ -997,6 +1017,13 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
               </>
             ) : null}
           </p>
+          {showLiveActivity ? (
+            <ChatLiveActivityRail
+              turn={turn}
+              hasVisibleAssistantText={hasAssistantOutput}
+              onOpenRunDetails={onOpenRunDetails}
+            />
+          ) : null}
           {hasAssistantOutput ? (
             <AssistantMessageRenderer
               role="assistant"
@@ -1023,6 +1050,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
         showContextToggle={showContextToggle}
         showOperationalDetails={showOperationalDetails}
         expandedByDefault={evidenceExpandedByDefault}
+        suppressActivityRows={showLiveActivity}
         onToggleContextTurn={onToggleContextTurn}
         onOpenRunDetails={onOpenRunDetails}
         onOpenUniversalRunDetail={onOpenUniversalRunDetail}

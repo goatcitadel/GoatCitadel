@@ -351,6 +351,7 @@ export function ThreadedTimeline({
       threadTurnCount,
       latestTurnId,
       latestTraceStatus,
+      latestTurnToolRunCount: lastTurn?.toolRuns.length ?? 0,
       noticeCount: props.notices.length,
       queuedCount: props.queuedCount,
       streamStatus: props.streamStatus,

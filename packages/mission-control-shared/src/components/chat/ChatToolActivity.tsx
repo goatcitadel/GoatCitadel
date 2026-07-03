@@ -1,4 +1,11 @@
-import type { ChatMode, ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import { useEffect, useState } from "react";
+import {
+  isChatTurnActiveStatus,
+  type ChatMode,
+  type ChatThreadTurnRecord,
+  type ChatToolRunRecord,
+  type ChatTurnLifecycleStatus,
+} from "@goatcitadel/contracts";
 import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
 import { parseTimestamp } from "./chat-display-helpers";
 
@@ -119,4 +126,220 @@ export function formatToolRunElapsed(startedAt: string, finishedAt?: string): st
     return `${Math.max(1, Math.round(elapsedMs))} ms`;
   }
   return `${(elapsedMs / 1000).toFixed(elapsedMs < 10_000 ? 1 : 0)} s`;
+}
+
+/**
+ * Live counterpart to {@link formatToolRunElapsed} for a run that has not
+ * settled yet: formats elapsed time against a caller-supplied `nowMs` (a
+ * ticking clock) instead of a `finishedAt` timestamp.
+ */
+export function formatToolRunElapsedLive(startedAt: string, nowMs: number): string | undefined {
+  const started = parseTimestamp(startedAt);
+  if (started === null || nowMs < started) {
+    return undefined;
+  }
+  const elapsedMs = nowMs - started;
+  if (elapsedMs < 1000) {
+    return `${Math.max(1, Math.round(elapsedMs))} ms`;
+  }
+  return `${(elapsedMs / 1000).toFixed(elapsedMs < 10_000 ? 1 : 0)} s`;
+}
+
+/**
+ * Live-activity phase shown while a turn is running and there is nothing
+ * more specific to show yet (no active tool row, no visible assistant text).
+ * `null` means the rail should defer to a tool row or the streaming text
+ * itself — there is nothing distinct for the phase row to add.
+ */
+export type ChatLiveActivityPhase =
+  | { kind: "thinking" }
+  | { kind: "working" }
+  | { kind: "waiting_approval" }
+  | { kind: "waiting_input" }
+  | null;
+
+const LIVE_ACTIVITY_PHASE_LABELS: Record<Exclude<ChatLiveActivityPhase, null>["kind"], string> = {
+  thinking: "Thinking…",
+  working: "Working…",
+  waiting_approval: "Waiting for approval…",
+  waiting_input: "Waiting for your answer…",
+};
+
+export function deriveLiveActivityPhase(input: {
+  traceStatus: ChatTurnLifecycleStatus;
+  toolRuns: ChatToolRunRecord[];
+  hasVisibleAssistantText: boolean;
+}): ChatLiveActivityPhase {
+  if (input.hasVisibleAssistantText) {
+    return null;
+  }
+  if (input.traceStatus === "waiting_for_approval") {
+    return { kind: "waiting_approval" };
+  }
+  if (input.traceStatus === "waiting_for_user_input") {
+    return { kind: "waiting_input" };
+  }
+  if (!isChatTurnActiveStatus(input.traceStatus)) {
+    return null;
+  }
+  const hasRunningTool = input.toolRuns.some((run) => run.status === "started");
+  if (hasRunningTool) {
+    return null;
+  }
+  return input.toolRuns.length === 0 ? { kind: "thinking" } : { kind: "working" };
+}
+
+function getLiveActivityGlyphTone(
+  run: ChatToolRunRecord,
+  hasFailureSignal: boolean,
+): "active" | "success" | "warning" | "danger" {
+  if (hasFailureSignal || run.status === "failed" || run.status === "blocked") {
+    return "danger";
+  }
+  if (run.status === "approval_required") {
+    return "warning";
+  }
+  if (run.status === "started") {
+    return "active";
+  }
+  return "success";
+}
+
+function LiveActivityRowGlyph({ run, hasFailureSignal }: { run: ChatToolRunRecord; hasFailureSignal: boolean }) {
+  const tone = getLiveActivityGlyphTone(run, hasFailureSignal);
+  if (run.status === "started") {
+    return (
+      <span className={`mc-next-live-activity-glyph tone-${tone}`}>
+        <span className="mc-next-live-activity-spinner" aria-hidden="true" />
+      </span>
+    );
+  }
+  if (tone === "danger") {
+    return (
+      <span className={`mc-next-live-activity-glyph tone-${tone}`} aria-hidden="true">
+        ✕
+      </span>
+    );
+  }
+  if (tone === "warning") {
+    return (
+      <span className={`mc-next-live-activity-glyph tone-${tone}`} aria-hidden="true">
+        ⏸
+      </span>
+    );
+  }
+  return (
+    <span className={`mc-next-live-activity-glyph tone-${tone}`} aria-hidden="true">
+      ✓
+    </span>
+  );
+}
+
+function LiveActivityRow({
+  run,
+  nowMs,
+  onOpenRunDetails,
+}: {
+  run: ChatToolRunRecord;
+  nowMs: number;
+  onOpenRunDetails: () => void;
+}) {
+  const diagnostics = getChatToolRunDiagnostics(run);
+  const summary =
+    diagnostics.summary ??
+    diagnostics.artifactSummary ??
+    diagnostics.engineLabel ??
+    run.failureGuidance ??
+    getToolRunActivityFallback(run.status);
+  const elapsed =
+    run.status === "started"
+      ? formatToolRunElapsedLive(run.startedAt, nowMs)
+      : formatToolRunElapsed(run.startedAt, run.finishedAt);
+
+  return (
+    <button
+      type="button"
+      className="mc-next-live-activity-row"
+      onClick={onOpenRunDetails}
+      aria-label={`Open execution detail for ${run.toolName}`}
+    >
+      <LiveActivityRowGlyph run={run} hasFailureSignal={diagnostics.hasFailureSignal} />
+      <span className="mc-next-live-activity-name">{run.toolName}</span>
+      <span className="mc-next-live-activity-summary">{summary}</span>
+      {elapsed ? <span className="mc-next-live-activity-elapsed">{elapsed}</span> : null}
+    </button>
+  );
+}
+
+/**
+ * Live activity rail rendered inside the running assistant bubble while a
+ * turn is in flight: compact rows for each tool run (spinner while active,
+ * settled glyph once it finishes) plus a phase row for the in-between states
+ * that have no tool or text of their own yet ("Thinking…", "Working…",
+ * approval/input waits). Collapses to nothing once the caller stops mounting
+ * it (the card unmounts the rail itself when the turn settles).
+ *
+ * Carries NO aria-live / role="status" — the single owning live region per
+ * surface already announces streaming activity (see the comment on
+ * StreamingAssistantSkeleton in ChatThreadPrimitives.tsx); duplicating that
+ * here would double-announce to screen readers.
+ */
+export function ChatLiveActivityRail({
+  turn,
+  hasVisibleAssistantText,
+  onOpenRunDetails,
+  maxVisible = 4,
+}: {
+  turn: ChatThreadTurnRecord;
+  hasVisibleAssistantText: boolean;
+  onOpenRunDetails: (turnId: string) => void;
+  onStopStreamingTurn?: () => void;
+  maxVisible?: number;
+}) {
+  const hasRunningTool = turn.toolRuns.some((run) => run.status === "started");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  // The ticking clock only needs to exist while a row is actively running —
+  // once every run has settled, there is nothing left for it to animate, so
+  // the interval is not mounted (and is torn down the instant the last
+  // running row settles, since `hasRunningTool` flips and this effect
+  // re-runs its cleanup).
+  useEffect(() => {
+    if (!hasRunningTool) {
+      return;
+    }
+    const intervalId = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, [hasRunningTool]);
+
+  const phase = deriveLiveActivityPhase({
+    traceStatus: turn.trace.status,
+    toolRuns: turn.toolRuns,
+    hasVisibleAssistantText,
+  });
+
+  if (turn.toolRuns.length === 0 && !phase) {
+    return null;
+  }
+
+  const visibleRuns = turn.toolRuns.length > maxVisible ? turn.toolRuns.slice(-maxVisible) : turn.toolRuns;
+  const hiddenCount = turn.toolRuns.length - visibleRuns.length;
+  const handleOpenRunDetails = () => onOpenRunDetails(turn.turnId);
+
+  return (
+    <div className="mc-next-live-activity" aria-label="Live activity for this response">
+      {hiddenCount > 0 ? <span className="mc-next-live-activity-more">+{hiddenCount} earlier steps</span> : null}
+      {visibleRuns.map((run) => (
+        <LiveActivityRow key={run.toolRunId} run={run} nowMs={nowMs} onOpenRunDetails={handleOpenRunDetails} />
+      ))}
+      {phase ? (
+        <span className="mc-next-live-activity-phase">
+          <span className="mc-next-live-activity-spinner" aria-hidden="true" />
+          {LIVE_ACTIVITY_PHASE_LABELS[phase.kind]}
+        </span>
+      ) : null}
+    </div>
+  );
 }
