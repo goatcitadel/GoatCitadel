@@ -1121,7 +1121,17 @@ describe("ThreadedSurfacePage", () => {
     expect(onOpenTasks).toHaveBeenCalledTimes(1);
   });
 
-  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook", async () => {
+  /**
+   * Exercises the Panels menu's Escape claim against useEscapeToStopStream in
+   * both possible registration orders. `document.addEventListener` dispatch
+   * is registration-order (both listeners are bubble-phase, so whichever
+   * registered first also runs first), and which one registers first depends
+   * on whether the operator opened the menu before or after the stream went
+   * active. useEscapeToStopStream now defers its decision to a microtask that
+   * re-checks `event.defaultPrevented` after every listener in the simulated
+   * dispatch below has run, so the outcome must be identical either way.
+   */
+  async function runPanelsMenuEscapeOrderingCase(order: "menu-opens-first" | "stream-starts-first") {
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();
     vi.stubGlobal("document", {
@@ -1153,37 +1163,39 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
-    // Open the Panels menu first (registers its bubble-phase listener), THEN
-    // start the stream (registers useEscapeToStopStream's listener second) —
-    // this is the ordering the gating finding describes: the menu's own
-    // handler runs before the document-bubble stop hook gets a chance to act,
-    // so claiming the event here is what stops it from also firing.
-    // NOTE: document.addEventListener dispatch is registration-order, so the
-    // REVERSE sequence (stream already active, operator opens the menu after)
-    // would let useEscapeToStopStream's handler run first instead — that
-    // ordering is unaffected by this fix and is tracked as a follow-up.
-    await act(async () => {
-      findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
-    });
-    await act(async () => {
-      renderer!.update(
-        <ThreadedSurfacePage
-          surface="chat"
-          input={{
-            ...input,
-            activeSessionSurfaceProps: { ...activeProps, sending: true, hasActiveStream: true },
-          }}
-        />,
-      );
-    });
+    const openMenu = async () => {
+      await act(async () => {
+        findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
+      });
+    };
+    const startStream = async () => {
+      await act(async () => {
+        renderer!.update(
+          <ThreadedSurfacePage
+            surface="chat"
+            input={{
+              ...input,
+              activeSessionSurfaceProps: { ...activeProps, sending: true, hasActiveStream: true },
+            }}
+          />,
+        );
+      });
+    };
+
+    if (order === "menu-opens-first") {
+      await openMenu();
+      await startStream();
+    } else {
+      await startStream();
+      await openMenu();
+    }
 
     const keydownHandlers = addEventListener.mock.calls
       .filter(([type]) => type === "keydown")
       .map(([, handler]) => handler as (event: unknown) => void);
-    // Exactly two bubble-phase "keydown" listeners should be live at this point:
-    // the Panels menu's own handler (registered first, because it opened
-    // first) and useEscapeToStopStream's document-level hook (registered
-    // second, because the stream only went active afterwards).
+    // Exactly two bubble-phase "keydown" listeners should be live at this
+    // point: the Panels menu's own handler and useEscapeToStopStream's
+    // document-level hook, in whichever order this case registered them.
     expect(keydownHandlers).toHaveLength(2);
 
     const preventDefault = vi.fn();
@@ -1207,6 +1219,11 @@ describe("ThreadedSurfacePage", () => {
       for (const handler of keydownHandlers) {
         handler(sharedEvent);
       }
+      // Flush the microtask useEscapeToStopStream defers its decision into:
+      // it re-reads event.defaultPrevented only after every handler above has
+      // had its turn, which is what makes the outcome independent of which
+      // handler ran first.
+      await Promise.resolve();
     });
 
     // The menu closed...
@@ -1217,6 +1234,14 @@ describe("ThreadedSurfacePage", () => {
     expect(stopPropagation).toHaveBeenCalledTimes(1);
     // ...and, wired end-to-end, the stream was never cancelled by this keypress.
     expect(onStopActiveTurn).not.toHaveBeenCalled();
+  }
+
+  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook (menu opens, then stream starts)", async () => {
+    await runPanelsMenuEscapeOrderingCase("menu-opens-first");
+  });
+
+  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook (stream starts, then menu opens)", async () => {
+    await runPanelsMenuEscapeOrderingCase("stream-starts-first");
   });
 
   it("does not touch the Escape event when the Panels menu is closed", async () => {
