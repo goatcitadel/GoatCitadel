@@ -1,6 +1,7 @@
 import {
   memo,
   useEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -367,9 +368,22 @@ function TurnEvidenceSummary({
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const [open, setOpen] = useState(expandedByDefault);
+  const userToggledRef = useRef(false);
+  const expandedByDefaultRef = useRef(expandedByDefault);
+  expandedByDefaultRef.current = expandedByDefault;
   useEffect(() => {
-    setOpen(expandedByDefault);
-  }, [expandedByDefault, turn.turnId]);
+    if (!userToggledRef.current) {
+      setOpen(expandedByDefault);
+    }
+  }, [expandedByDefault]);
+  useEffect(() => {
+    // New turn reusing this component: forget the prior turn's manual toggle and
+    // re-apply this turn's default. Reads the default via a ref (always current, kept
+    // in sync above) rather than depending on expandedByDefault directly, so a later
+    // default change for the SAME turn does not re-trigger this reset.
+    userToggledRef.current = false;
+    setOpen(expandedByDefaultRef.current);
+  }, [turn.turnId]);
   const summaryChips = [
     turn.trace.status,
     turn.toolRuns.length > 0 ? `${turn.toolRuns.length} tool${turn.toolRuns.length === 1 ? "" : "s"}` : null,
@@ -383,7 +397,13 @@ function TurnEvidenceSummary({
     <details
       className={`mc-next-turn-evidence-summary${showOperationalDetails ? "" : " compact"}`}
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        const nextOpen = event.currentTarget.open;
+        if (nextOpen !== open) {
+          userToggledRef.current = true;
+        }
+        setOpen(nextOpen);
+      }}
     >
       <summary className="mc-next-turn-evidence-summary-trigger">
         <span className="mc-next-turn-evidence-title">Evidence</span>

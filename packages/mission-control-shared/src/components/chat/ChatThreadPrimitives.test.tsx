@@ -509,4 +509,149 @@ describe("ChatThreadPrimitives", () => {
     expect(onSelect).toHaveBeenCalledWith("turn-1");
     expect(isInteractiveChatEventTarget({ closest: () => ({ tagName: "BUTTON" }) } as any, {} as any)).toBe(true);
   });
+
+  it("keeps a manually-closed evidence summary closed after the streaming default flips back open", () => {
+    // "running" drives evidenceExpandedByDefault=true; "completed" drives it false (see
+    // ChatThreadPrimitives evidenceExpandedByDefault derivation) — this stands in for a
+    // stream ending and the default expansion collapsing.
+    const runningTurn = createTurn({ trace: { ...createTurn().trace, status: "running" } });
+    const renderer = renderTurn({ turn: runningTurn });
+    const findEvidence = () =>
+      renderer.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"));
+
+    expect(findEvidence().props.open).toBe(true);
+
+    TestRenderer.act(() => {
+      findEvidence().props.onToggle({ currentTarget: { open: false } });
+    });
+    expect(findEvidence().props.open).toBe(false);
+
+    // Stream ends: expandedByDefault flips back to false — no-op for an already-closed panel.
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={createTurn({ trace: { ...createTurn().trace, status: "completed" } })}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+    expect(findEvidence().props.open).toBe(false);
+
+    // The real regression: default flips true again — user's manual close must still win.
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={runningTurn}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+    expect(findEvidence().props.open).toBe(false);
+  });
+
+  it("keeps a manually-opened evidence summary open after the streaming default flips back closed", () => {
+    const completedTurn = createTurn({ trace: { ...createTurn().trace, status: "completed" } });
+    const runningTurn = createTurn({ trace: { ...createTurn().trace, status: "running" } });
+    const renderer = renderTurn({ turn: completedTurn });
+    const findEvidence = () =>
+      renderer.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"));
+
+    expect(findEvidence().props.open).toBe(false);
+
+    TestRenderer.act(() => {
+      findEvidence().props.onToggle({ currentTarget: { open: true } });
+    });
+    expect(findEvidence().props.open).toBe(true);
+
+    // Default flips true (e.g. a retry starts streaming again) — already open, so this
+    // render pass is a no-op for the panel state either way.
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={runningTurn}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+    expect(findEvidence().props.open).toBe(true);
+
+    // The real regression: default flips back to false — user's manual open must still win.
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={completedTurn}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+    expect(findEvidence().props.open).toBe(true);
+  });
+
+  it("resets the manual evidence-summary toggle when the card is reused for a different turn", () => {
+    const renderer = renderTurn();
+    const findEvidence = () =>
+      renderer.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"));
+
+    expect(findEvidence().props.open).toBe(false);
+
+    TestRenderer.act(() => {
+      findEvidence().props.onToggle({ currentTarget: { open: true } });
+    });
+    expect(findEvidence().props.open).toBe(true);
+
+    // Same component instance, new turn: manual-toggle memory must reset to the new turn's default.
+    const nextTurn = createTurn({
+      turnId: "turn-2",
+      trace: { ...createTurn().trace, turnId: "turn-2" },
+    });
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadTurnCard
+          mode="chat"
+          turn={nextTurn}
+          selected={false}
+          onSelectTurn={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onRetryTurn={vi.fn()}
+          onOpenRunDetails={vi.fn()}
+          onOpenGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifact={vi.fn()}
+          onCreateGeneratedArtifactVersion={vi.fn()}
+        />,
+      );
+    });
+    expect(findEvidence().props.open).toBe(false);
+  });
 });
