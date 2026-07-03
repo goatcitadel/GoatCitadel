@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { useMediaQuery } from "../hooks/useMediaQuery";
+
+/**
+ * Below this viewport width the drawer docks as a bottom sheet (see
+ * `.mc-next-shell-inspector.side-inspector-drawer` in mission-control-next.css)
+ * and drag is fully disabled. Keep this in sync with the `@media (max-width: ...)`
+ * rule that sets `transform: none` on the docked drawer.
+ */
+export const SIDE_INSPECTOR_DOCKED_MAX_WIDTH = 1180;
+
 interface SideInspectorDrawerProps {
   title: string;
   kicker?: string;
@@ -41,7 +51,8 @@ export function SideInspectorDrawer({
   } | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
-  const dragEnabled = draggable && open;
+  const isDocked = useMediaQuery(`(max-width: ${SIDE_INSPECTOR_DOCKED_MAX_WIDTH}px)`);
+  const dragEnabled = draggable && open && !isDocked;
   const style = useMemo<CSSProperties | undefined>(
     () =>
       dragEnabled
@@ -53,13 +64,26 @@ export function SideInspectorDrawer({
     [dragEnabled, dragOffset.x, dragOffset.y],
   );
 
+  const resetDragState = useCallback(() => {
+    dragStateRef.current = null;
+    setDragging(false);
+    setDragOffset({ x: 0, y: 0 });
+  }, []);
+
   useEffect(() => {
     if (!open) {
-      setDragOffset({ x: 0, y: 0 });
-      setDragging(false);
-      dragStateRef.current = null;
+      resetDragState();
     }
-  }, [open]);
+  }, [open, resetDragState]);
+
+  useEffect(() => {
+    // Crossing into the docked range (e.g. resizing the window mid-drag) must
+    // clear any accumulated offset so resizing back above the breakpoint
+    // doesn't restore a surprising off-screen position.
+    if (isDocked) {
+      resetDragState();
+    }
+  }, [isDocked, resetDragState]);
 
   useEffect(() => {
     if (!dragEnabled || !dragging) {
@@ -106,7 +130,7 @@ export function SideInspectorDrawer({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragEnabled || window.innerWidth < 1024 || event.button !== 0) {
+      if (!dragEnabled || event.button !== 0) {
         return;
       }
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -135,13 +159,11 @@ export function SideInspectorDrawer({
   );
 
   const handleDoubleClick = useCallback(() => {
-    if (!dragEnabled || window.innerWidth < 1024) {
+    if (!dragEnabled) {
       return;
     }
-    dragStateRef.current = null;
-    setDragging(false);
-    setDragOffset({ x: 0, y: 0 });
-  }, [dragEnabled]);
+    resetDragState();
+  }, [dragEnabled, resetDragState]);
 
   return (
     <aside

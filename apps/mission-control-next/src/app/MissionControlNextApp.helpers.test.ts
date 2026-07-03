@@ -106,8 +106,21 @@ describe("MissionControlNextApp shell helpers", () => {
     expect(resolveEffectiveShellTheme(undefined, "light")).toBe("light");
     expect(describeRealtimeTruthUi("closed" as any, "authoritative").degraded).toBe(true);
     expect(describeRealtimeTruthUi("open" as any, "replay-gap").strip).toContain("replay recovery");
-    expect(describeRealtimeTruthUi("open" as any, "compatibility").strip).toContain("compatibility");
+    // replay-gap stays degraded even while OPEN (unchanged from before).
+    expect(describeRealtimeTruthUi("open" as any, "replay-gap").degraded).toBe(true);
     expect(describeRealtimeTruthUi("open" as any, "authoritative").degraded).toBe(false);
+    // N1: while the stream is OPEN, "compatibility" truth-mode is per-event topic
+    // inference nuance, not a transport degradation. The badge/strip must read
+    // healthy ("Live"); only the inspector detail line keeps the softened nuance.
+    const openCompatibility = describeRealtimeTruthUi("open" as any, "compatibility");
+    expect(openCompatibility.degraded).toBe(false);
+    expect(openCompatibility.badge).toBe("Live");
+    expect(openCompatibility.strip).toBe("Streaming");
+    expect(openCompatibility.inspector).toContain("inferred refresh");
+    // Non-open stream states keep today's degraded treatment even for
+    // "compatibility" — the branch above only relaxes the OPEN case.
+    expect(describeRealtimeTruthUi("closed" as any, "compatibility").degraded).toBe(true);
+    expect(describeRealtimeTruthUi("connecting" as any, "compatibility").degraded).toBe(true);
     expect(isImmersiveRoute({ area: "library", section: "prompt-packs" } as any)).toBe(true);
     expect(isImmersiveRoute({ area: "library", section: "memory" } as any)).toBe(false);
     expect(usesEmbeddedRouteHeader({ area: "cowork", section: "tasks" } as any)).toBe(true);

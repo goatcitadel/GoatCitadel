@@ -2,7 +2,7 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SideInspectorDrawer } from "./SideInspectorDrawer";
+import { SideInspectorDrawer, SIDE_INSPECTOR_DOCKED_MAX_WIDTH } from "./SideInspectorDrawer";
 import { StatusStrip } from "./StatusStrip";
 
 function installMatchMedia(matches = false) {
@@ -33,6 +33,18 @@ function installMatchMedia(matches = false) {
     },
   });
   return listeners;
+}
+
+// react-test-renderer's default createNodeMock returns null for every host-component
+// ref, so `drawerRef.current` (the <aside>) would be null and getBoundingClientRect()
+// unreachable. Mirrors the pattern in ResizablePaneLayout.test.tsx.
+function createDrawerNodeMock(element: { type: string; props: { className?: string } }) {
+  if (element.type === "aside" && String(element.props.className).includes("side-inspector-drawer")) {
+    return {
+      getBoundingClientRect: () => ({ left: 100, top: 80, width: 320, height: 480 }),
+    };
+  }
+  return null;
 }
 
 describe("status/session/drawer components", () => {
@@ -192,5 +204,135 @@ describe("status/session/drawer components", () => {
     );
     expect(String(renderer.root.findByType("aside").props.className)).toContain("closed");
     expect(renderer.root.findByType("aside").props["aria-hidden"]).toBe(true);
+  });
+
+  it("enables the drag affordance and tracks pointer drags above the docked breakpoint", () => {
+    installMatchMedia(false);
+    const renderer = create(
+      <SideInspectorDrawer title="Trace" draggable>
+        Body
+      </SideInspectorDrawer>,
+      { createNodeMock: createDrawerNodeMock },
+    );
+
+    expect(String(renderer.root.findByType("aside").props.className)).toContain("draggable");
+    const head = renderer.root.findByProps({ className: "side-inspector-drawer-head" });
+    act(() => {
+      head.props.onPointerDown({
+        button: 0,
+        pointerId: 1,
+        clientX: 10,
+        clientY: 10,
+        target: null,
+        preventDefault: vi.fn(),
+      });
+    });
+
+    const pointerMoveListeners = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([eventName]: [string]) => eventName === "pointermove")
+      .map(([, listener]: [string, (event: unknown) => void]) => listener);
+    expect(pointerMoveListeners.length).toBeGreaterThan(0);
+    act(() => {
+      for (const listener of pointerMoveListeners) {
+        listener({ pointerId: 1, clientX: 40, clientY: 25 });
+      }
+    });
+
+    const styleAfterDrag = renderer.root.findByType("aside").props.style as Record<string, string> | undefined;
+    expect(styleAfterDrag).toBeDefined();
+    expect(styleAfterDrag!["--side-inspector-drag-x"]).toBeDefined();
+    expect(styleAfterDrag!["--side-inspector-drag-x"]).not.toBe("0px");
+  });
+
+  it("disables the drag affordance entirely at or below the docked breakpoint", () => {
+    installMatchMedia(true);
+    const renderer = create(
+      <SideInspectorDrawer title="Trace" draggable>
+        Body
+      </SideInspectorDrawer>,
+    );
+
+    expect(String(renderer.root.findByType("aside").props.className)).not.toContain("draggable");
+    expect(renderer.root.findByType("aside").props.style).toBeUndefined();
+
+    const head = renderer.root.findByProps({ className: "side-inspector-drawer-head" });
+    act(() => {
+      head.props.onPointerDown({
+        button: 0,
+        pointerId: 1,
+        clientX: 10,
+        clientY: 10,
+        target: null,
+        preventDefault: vi.fn(),
+      });
+    });
+
+    const pointerMoveListeners = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([eventName]: [string]) => eventName === "pointermove")
+      .map(([, listener]: [string, (event: unknown) => void]) => listener);
+    act(() => {
+      for (const listener of pointerMoveListeners) {
+        listener({ pointerId: 1, clientX: 200, clientY: 200 });
+      }
+    });
+
+    expect(renderer.root.findByType("aside").props.style).toBeUndefined();
+    expect(String(renderer.root.findByType("aside").props.className)).not.toContain("draggable");
+  });
+
+  it("resets an in-progress drag offset when the viewport crosses into the docked range", () => {
+    const listeners = installMatchMedia(false);
+    const renderer = create(
+      <SideInspectorDrawer title="Trace" draggable>
+        Body
+      </SideInspectorDrawer>,
+      { createNodeMock: createDrawerNodeMock },
+    );
+
+    const head = renderer.root.findByProps({ className: "side-inspector-drawer-head" });
+    act(() => {
+      head.props.onPointerDown({
+        button: 0,
+        pointerId: 1,
+        clientX: 10,
+        clientY: 10,
+        target: null,
+        preventDefault: vi.fn(),
+      });
+    });
+    const pointerMoveListeners = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([eventName]: [string]) => eventName === "pointermove")
+      .map(([, listener]: [string, (event: unknown) => void]) => listener);
+    act(() => {
+      for (const listener of pointerMoveListeners) {
+        listener({ pointerId: 1, clientX: 60, clientY: 45 });
+      }
+    });
+    const styleWhileDragging = renderer.root.findByType("aside").props.style as Record<string, string> | undefined;
+    expect(styleWhileDragging?.["--side-inspector-drag-x"]).not.toBe("0px");
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({ matches: true });
+      }
+    });
+
+    expect(String(renderer.root.findByType("aside").props.className)).not.toContain("draggable");
+    expect(renderer.root.findByType("aside").props.style).toBeUndefined();
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({ matches: false });
+      }
+    });
+
+    const styleAfterReturningWide = renderer.root.findByType("aside").props.style as Record<string, string> | undefined;
+    expect(styleAfterReturningWide).toBeDefined();
+    expect(styleAfterReturningWide!["--side-inspector-drag-x"]).toBe("0px");
+    expect(styleAfterReturningWide!["--side-inspector-drag-y"]).toBe("0px");
+  });
+
+  it("exports the docked breakpoint constant used by the media query", () => {
+    expect(SIDE_INSPECTOR_DOCKED_MAX_WIDTH).toBe(1180);
   });
 });
