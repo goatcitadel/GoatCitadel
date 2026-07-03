@@ -1959,3 +1959,56 @@
   flex-wrap: wrap;
   gap: 0.42rem;
 }
+
+/* ============================================================
+   ChatToolDiffBlock (.mc-next-tool-diff-shell)
+   Unified diff rendering with +/- coloring in the tool result
+   inspector (packages/mission-control-shared/src/components/
+   chat/ChatToolDiffBlock.tsx). Claude Code-style: additions in
+   --risk-safe, deletions in --risk-danger, hunk headers in
+   --accent, file/index meta lines dimmed to --text-secondary.
+   ============================================================ */
+.mc-next-tool-diff-shell {
+  position: relative;
+}
+
+.mc-next-tool-diff {
+  max-height: 18rem;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.mc-next-tool-diff .line {
+  display: block;
+  white-space: pre;
+}
+
+.mc-next-tool-diff .line.add {
+  color: var(--risk-safe);
+  background: color-mix(in oklab, var(--risk-safe) 8%, transparent);
+}
+
+.mc-next-tool-diff .line.del {
+  color: var(--risk-danger);
+  background: color-mix(in oklab, var(--risk-danger) 8%, transparent);
+}
+
+.mc-next-tool-diff .line.hunk {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mc-next-tool-diff .line.meta {
+  color: var(--text-secondary);
+}
+
+.mc-next-tool-diff-more {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}

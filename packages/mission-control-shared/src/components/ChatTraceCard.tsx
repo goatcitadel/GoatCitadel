@@ -346,6 +346,7 @@ export function ChatTraceCard({
                           workspaceId={workspaceId}
                           artifactPath={diagnostics.artifactPath}
                           originalByteLength={diagnostics.originalByteLength}
+                          run={run}
                         />
                       ) : null}
                       {run.error ? <p>Error: {run.error}</p> : null}

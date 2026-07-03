@@ -1,5 +1,6 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
 import { ChatToolArtifactInspector } from "./ChatToolArtifactInspector";
 
@@ -27,6 +28,12 @@ function textOf(node: unknown): string {
   return "";
 }
 
+function findByClassName(renderer: ReactTestRenderer, className: string) {
+  return renderer.root.findAll(
+    (node) => typeof node.props?.className === "string" && node.props.className.split(/\s+/).includes(className),
+  );
+}
+
 async function clickToggle(renderer: ReactTestRenderer) {
   await act(async () => {
     renderer.root.findByType("button").props.onClick();
@@ -34,6 +41,21 @@ async function clickToggle(renderer: ReactTestRenderer) {
     await Promise.resolve();
   });
 }
+
+function createToolRun(overrides: Partial<ChatToolRunRecord> = {}): ChatToolRunRecord {
+  return {
+    toolRunId: "tool-1",
+    turnId: "turn-1",
+    sessionId: "session-1",
+    toolName: "fs.patch",
+    status: "executed",
+    startedAt: "2026-05-15T00:00:00.000Z",
+    finishedAt: "2026-05-15T00:00:01.000Z",
+    ...overrides,
+  };
+}
+
+const REALISTIC_DIFF = ["--- a/src/foo.ts", "+++ b/src/foo.ts", "@@ -1,1 +1,1 @@", "-old", "+new"].join("\n");
 
 describe("ChatToolArtifactInspector", () => {
   beforeEach(() => {
@@ -90,5 +112,42 @@ describe("ChatToolArtifactInspector", () => {
       <ChatToolArtifactInspector artifactId="none" workspaceId="default" originalByteLength={0} />,
     );
     expect(noCaption.root.findAllByProps({ className: "chat-tool-artifact-caption" })).toHaveLength(0);
+  });
+
+  it("renders the diff block instead of the raw dump when run.result carries a qualifying diff", async () => {
+    apiMocks.fetchChatToolArtifact.mockResolvedValue({
+      artifact: { contentType: "text/plain" },
+      content: "irrelevant fetched artifact content",
+    });
+    const run = createToolRun({ result: { patch: REALISTIC_DIFF } });
+    const renderer = create(<ChatToolArtifactInspector artifactId="artifact-1" workspaceId="default" run={run} />);
+    await clickToggle(renderer);
+
+    expect(findByClassName(renderer, "mc-next-tool-diff")).toHaveLength(1);
+    expect(textOf(renderer.toJSON())).not.toContain("irrelevant fetched artifact content");
+  });
+
+  it("renders exactly as before (raw text dump) for a run with plain-text output and no run prop", async () => {
+    const renderer = create(
+      <ChatToolArtifactInspector
+        artifactId="artifact-1"
+        workspaceId="default"
+        artifactPath="tool-artifacts/a.json"
+        originalByteLength={1536}
+      />,
+    );
+    await clickToggle(renderer);
+
+    expect(findByClassName(renderer, "mc-next-tool-diff")).toHaveLength(0);
+    expect(textOf(renderer.toJSON())).toContain('{"ok":true}');
+  });
+
+  it("renders exactly as before (raw text dump) for a run whose result has plain-text output", async () => {
+    const run = createToolRun({ result: { output: "plain text output, not a diff at all" } });
+    const renderer = create(<ChatToolArtifactInspector artifactId="artifact-1" workspaceId="default" run={run} />);
+    await clickToggle(renderer);
+
+    expect(findByClassName(renderer, "mc-next-tool-diff")).toHaveLength(0);
+    expect(textOf(renderer.toJSON())).toContain('{"ok":true}');
   });
 });
