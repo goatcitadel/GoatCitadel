@@ -1,7 +1,7 @@
 # Agentic Orchestration Round 3 — Design
 
 - **Date:** 2026-07-03
-- **Status:** Approved for implementation (autonomous session — see "Process note" below)
+- **Status:** Implemented (R3-1/2/3/5/7 shipped 2026-07-03 on `feat/agentic-round3`; R3-4/6 struck below; R3-8 not attempted — recorded as the open "part 2" in the fast-lane ledger). Implementation deviations: R3-1 landed as pre-execute-batch + single consumption loop (no dual post-processing path — strictly less drift surface than the plan's sketch); R3-3's UI stall signal is the machine-readable `stream_idle_timeout` error through the existing failure plumbing, not a new SSE event type (no contract change).
 - **Baseline:** `origin/main` @ `3d578543d`
 - **Prior rounds:** #137 overhaul (2026-06-22) → fast-lane P0s + S1 (2026-06-28, `80f654669`). Analysis of record: [GATEWAY_AGENTIC_REVIEW_2026-06-28.md](../../citadel_update/GATEWAY_AGENTIC_REVIEW_2026-06-28.md); execution ledger: [AGENTIC_FAST_LANE_PLAN.md](../../citadel_update/AGENTIC_FAST_LANE_PLAN.md); competitor verification: [COMPETITOR_UPDATE_2026-06-28.md](../../citadel_update/COMPETITOR_UPDATE_2026-06-28.md).
 
