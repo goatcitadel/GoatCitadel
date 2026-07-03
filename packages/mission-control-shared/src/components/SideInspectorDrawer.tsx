@@ -1,13 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+
+import { useMediaQuery } from "../hooks/useMediaQuery";
 
 /**
  * Below this viewport width the drawer docks as a bottom sheet (see
@@ -16,60 +9,6 @@ import {
  * rule that sets `transform: none` on the docked drawer.
  */
 export const SIDE_INSPECTOR_DOCKED_MAX_WIDTH = 1180;
-
-function readMediaQueryMatch(query: string): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  try {
-    return window.matchMedia(query).matches;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Subscribes to a media query via `useSyncExternalStore`. The latest match
- * state is tracked in a ref that the subscription's change handler updates
- * from the event payload (matching real `MediaQueryListEvent` behavior, where
- * `.matches` always mirrors the list's own current state) — `getSnapshot`
- * only reads that ref, it never mutates it, so repeated/concurrent snapshot
- * reads stay pure. Falls back to `false` (not docked) when `matchMedia` is
- * unavailable, e.g. in the package's node-environment vitest tests.
- */
-function useMediaQuery(query: string): boolean {
-  const matchesRef = useRef(readMediaQueryMatch(query));
-
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-        return () => undefined;
-      }
-      let mql: MediaQueryList;
-      try {
-        mql = window.matchMedia(query);
-      } catch {
-        return () => undefined;
-      }
-      const handleChange = (event: MediaQueryListEvent) => {
-        matchesRef.current = event.matches;
-        onStoreChange();
-      };
-      if (typeof mql.addEventListener === "function") {
-        mql.addEventListener("change", handleChange);
-        return () => mql.removeEventListener("change", handleChange);
-      }
-      mql.addListener(handleChange);
-      return () => mql.removeListener(handleChange);
-    },
-    [query],
-  );
-
-  const getSnapshot = useCallback(() => matchesRef.current, []);
-  const getServerSnapshot = useCallback(() => false, []);
-
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-}
 
 interface SideInspectorDrawerProps {
   title: string;
