@@ -1211,6 +1211,7 @@ export function renderRouteContent(input: {
         surface="chat"
         lockSurface={false}
         hidePageHeader
+        initialModeOverride={route.mode === "chat" ? "chat" : undefined}
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
@@ -1230,7 +1231,14 @@ export function renderRouteContent(input: {
             artifactId: options?.artifactId ?? undefined,
           })
         }
-        onResolvedModeChange={(mode) => input.navigate({ ...route, area: "chat", mode }, { replace: true })}
+        onResolvedModeChange={(mode) => {
+          // An explicit ?mode=chat already states operator intent (QA finding N3);
+          // do not rewrite it back to the session's own resolved mode (e.g. cowork).
+          if (route.mode === "chat") {
+            return;
+          }
+          input.navigate({ ...route, area: "chat", mode }, { replace: true });
+        }}
       />
     );
   }

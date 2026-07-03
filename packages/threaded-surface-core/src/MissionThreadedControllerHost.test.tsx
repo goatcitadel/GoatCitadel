@@ -2904,6 +2904,81 @@ describe("MissionThreadedControllerHost", () => {
       expect(afterInput.sessionConfig.surfaceMode).toBe("code");
     });
 
+    it("seeds modeOverride from initialModeOverride so an explicit ?mode=chat wins over the session's own cowork mode (QA finding N3)", async () => {
+      // Selected session's OWN mode is "cowork" (mirrors the QA repro: opening
+      // ?mode=chat&sessionId=X on a cowork session). Without the prop-seeded
+      // override, executionSurfaceMode/outboundSurfaceMode would resolve to
+      // "cowork" from selectedSession.mode, exactly the bug this task fixes.
+      const coworkSession = { ...selectedSession, mode: "cowork" as ChatMode };
+      useChatSessionDataMock.mockReturnValue({
+        ...useChatSessionDataMock(),
+        sessions: { items: [coworkSession] },
+      });
+      useChatThreadControllerMock.mockReturnValue({
+        ...useChatThreadControllerMock(),
+        selectedSession: coworkSession,
+        missionSessions: [coworkSession],
+      });
+
+      await renderHost({ initialModeOverride: "chat" as ChatMode });
+
+      // Surface presentation: the override is pending/selected, not the
+      // session's own "cowork" mode.
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
+
+      // Outbound sends on this thread must also route through the override.
+      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(lastInput.sessionConfig.surfaceMode).toBe("chat");
+    });
+
+    it("keeps honoring initialModeOverride after switching to another session (URL override survives session switch)", async () => {
+      const coworkSession = { ...selectedSession, mode: "cowork" as ChatMode };
+      const otherCoworkSession = {
+        ...selectedSession,
+        sessionId: "session-other",
+        sessionKey: "session-other",
+        mode: "cowork" as ChatMode,
+        title: "Other cowork session",
+      };
+      useChatSessionDataMock.mockReturnValue({
+        ...useChatSessionDataMock(),
+        sessions: { items: [coworkSession, otherCoworkSession] },
+      });
+      useChatThreadControllerMock.mockReturnValue({
+        ...useChatThreadControllerMock(),
+        selectedSession: coworkSession,
+        missionSessions: [coworkSession, otherCoworkSession],
+        visibleSessionLabelById: new Map([
+          ["session-1", "Launch plan"],
+          ["session-other", "Other cowork session"],
+        ]),
+      });
+
+      await renderHost({ initialModeOverride: "chat" as ChatMode });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
+
+      // Selecting another session resets modeOverride via the selectedSessionId
+      // effect. With initialModeOverride still "chat", the reset must re-seed
+      // from the prop rather than clearing to null.
+      useChatThreadControllerMock.mockReturnValue({
+        ...useChatThreadControllerMock(),
+        selectedSession: otherCoworkSession,
+        missionSessions: [coworkSession, otherCoworkSession],
+      });
+      await act(async () => {
+        latestSurfaceInput?.sessionRail.onSelectSession("session-other");
+        await flushEffects(8);
+      });
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
+      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        sessionConfig: { surfaceMode?: string };
+      };
+      expect(lastInput.sessionConfig.surfaceMode).toBe("chat");
+    });
+
     it("exposes autoRouteActive=true on activeSessionSurfaceProps for a new unlocked empty thread", async () => {
       // Override the session data mock to return an empty thread.
       // We must keep all fields from setupMocks but replace thread with an empty one.

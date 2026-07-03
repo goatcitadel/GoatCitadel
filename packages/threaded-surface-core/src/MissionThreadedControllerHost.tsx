@@ -717,6 +717,7 @@ export function MissionThreadedControllerHost({
   surface,
   lockSurface = false,
   hidePageHeader = false,
+  initialModeOverride,
   gatewayStatus,
   workTrust,
   onWorkTrustSummaryChange,
@@ -735,6 +736,15 @@ export function MissionThreadedControllerHost({
   surface?: ChatMode;
   lockSurface?: boolean;
   hidePageHeader?: boolean;
+  /**
+   * Seeds modeOverride from an explicit URL mode (e.g. ?mode=chat) so it behaves
+   * like the operator manually clicking the mode override control (QA finding N3):
+   * it wins for surface presentation AND outbound sends on that thread, even when
+   * the selected session's own mode differs. Re-seeds on session switch so the URL
+   * override keeps winning while present; absent (undefined) leaves today's
+   * session-mode-wins behavior untouched.
+   */
+  initialModeOverride?: ChatMode;
   gatewayStatus?: ThreadedGatewayStatusSummary;
   workTrust?: WorkTrustDescriptor;
   onWorkTrustSummaryChange?: (summary: string | null) => void;
@@ -755,7 +765,22 @@ export function MissionThreadedControllerHost({
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [modeOverride, setModeOverride] = useState<ChatMode | null>(null);
+  const [modeOverride, setModeOverride] = useState<ChatMode | null>(initialModeOverride ?? null);
+  // Synced ref so the selectedSessionId-keyed reset effect below can read the
+  // latest initialModeOverride without depending on it directly (it must only
+  // re-run on session switch, not on every prop identity change).
+  const initialModeOverrideRef = useRef(initialModeOverride);
+  useEffect(() => {
+    initialModeOverrideRef.current = initialModeOverride;
+  }, [initialModeOverride]);
+  // Re-seed modeOverride whenever the prop changes to a defined value (e.g. the
+  // URL gains ?mode=chat after mount), so navigating within the same session
+  // still picks up a newly-explicit override.
+  useEffect(() => {
+    if (initialModeOverride !== undefined) {
+      setModeOverride(initialModeOverride);
+    }
+  }, [initialModeOverride]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
   const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
@@ -975,8 +1000,11 @@ export function MissionThreadedControllerHost({
   // Clear a stale override when the selected thread changes to prevent cross-thread leakage.
   // The override is read synchronously by the next send before this fires, so a same-thread
   // override still applies; on an existing code thread subsequent turns naturally remain code.
+  // When an explicit URL override (initialModeOverride) is present, re-seed from it instead of
+  // clearing to null so selecting another session while ?mode=chat is present keeps honoring
+  // the URL (QA finding N3) rather than reverting to that session's own mode.
   useEffect(() => {
-    setModeOverride(null);
+    setModeOverride(initialModeOverrideRef.current ?? null);
   }, [selectedSessionId]);
 
   const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {

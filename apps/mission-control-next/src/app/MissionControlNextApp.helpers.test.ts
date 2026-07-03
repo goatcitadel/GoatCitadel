@@ -256,6 +256,53 @@ describe("MissionControlNextApp shell helpers", () => {
     ).toContain("Loading Runtime");
   });
 
+  it("seeds initialModeOverride from an explicit ?mode=chat and suppresses the URL rewrite (QA finding N3)", () => {
+    const navigate = vi.fn();
+    const gatewayStatus = {
+      ready: true,
+      tone: "success",
+      label: "Gateway ready",
+      detail: "Gateway ready. Daemon health is serving.",
+    } as const;
+    const baseInput = {
+      activeWorkspaceId: "workspace-1",
+      activeWorkspaceName: "Workspace One",
+      gatewayStatus,
+      pendingApprovals: 2,
+      navigate,
+      setActiveWorkspaceId: vi.fn(),
+    };
+
+    // Explicit ?mode=chat: the default branch must pass initialModeOverride="chat"
+    // so the host seeds modeOverride from the URL instead of discarding the intent.
+    const explicitChatElement = renderRouteContent({
+      ...baseInput,
+      route: { area: "chat", mode: "chat", sessionId: "cowork-session", theme: "library" } as any,
+    }) as any;
+    expect(explicitChatElement.props.initialModeOverride).toBe("chat");
+
+    // Before the fix, onResolvedModeChange always rewrote the URL to the
+    // session's resolved mode. With an explicit ?mode=chat present, that
+    // rewrite must be suppressed — the URL already states operator intent,
+    // so a cowork session's resolved mode must not clobber it back to
+    // ?mode=cowork.
+    explicitChatElement.props.onResolvedModeChange("cowork");
+    expect(navigate).not.toHaveBeenCalled();
+
+    // No mode param at all: today's session-mode-wins behavior is unchanged —
+    // no override to seed, and the URL rewrite still fires normally.
+    const noModeElement = renderRouteContent({
+      ...baseInput,
+      route: { area: "chat", sessionId: "chat-session", theme: "library" } as any,
+    }) as any;
+    expect(noModeElement.props.initialModeOverride).toBeUndefined();
+    noModeElement.props.onResolvedModeChange("cowork");
+    expect(navigate).toHaveBeenCalledWith(
+      { area: "chat", sessionId: "chat-session", theme: "library", mode: "cowork" },
+      { replace: true },
+    );
+  });
+
   it("keeps the rail-hidden experimental routes scoped and reachable (F-M11)", () => {
     // The three surfaces that have no rail entry and previously no palette entry.
     const experimentalRoutes = [
