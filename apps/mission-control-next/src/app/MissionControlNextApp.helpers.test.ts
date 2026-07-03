@@ -303,6 +303,73 @@ describe("MissionControlNextApp shell helpers", () => {
     );
   });
 
+  it("the ?mode=chat URL seed yields to a manual override so the URL never lies about the resolved surface", () => {
+    // Root cause: ?mode=chat must act as a ONE-TIME SEED, not a standing force.
+    // onResolvedModeChange fires from two distinct origins in the host: a passive
+    // "session-sync" (arrival, session switch — echoes the session's own stored
+    // mode, unrelated to any operator action) and an active "manual-override"
+    // (the operator just picked a mode via ThreadedModeControl). Only the latter
+    // means the resolved mode is genuinely superseding the URL's seeded intent;
+    // the URL must then become truthful. A session-sync emission carries no such
+    // intent and must keep being suppressed while ?mode=chat is present (the
+    // original QA finding N3 fix, preserved verbatim below).
+    const navigate = vi.fn();
+    const gatewayStatus = {
+      ready: true,
+      tone: "success",
+      label: "Gateway ready",
+      detail: "Gateway ready. Daemon health is serving.",
+    } as const;
+    const baseInput = {
+      activeWorkspaceId: "workspace-1",
+      activeWorkspaceName: "Workspace One",
+      gatewayStatus,
+      pendingApprovals: 2,
+      navigate,
+      setActiveWorkspaceId: vi.fn(),
+    };
+
+    // route.mode==="chat" throughout: the URL still says ?mode=chat in every
+    // case below (nothing has navigated yet within the same render tick).
+
+    // Case 1: a manual flip away from chat (origin: "manual-override") resolves
+    // to "cowork". The URL is now lying (?mode=chat while cowork is what's
+    // actually showing) — navigate MUST be called so the URL becomes truthful.
+    const manualFlipElement = renderRouteContent({
+      ...baseInput,
+      route: { area: "chat", mode: "chat", sessionId: "cowork-session", theme: "library" } as any,
+    }) as any;
+    manualFlipElement.props.onResolvedModeChange("cowork", "manual-override");
+    expect(navigate).toHaveBeenCalledWith(
+      { area: "chat", mode: "cowork", sessionId: "cowork-session", theme: "library" },
+      { replace: true },
+    );
+
+    navigate.mockClear();
+
+    // Case 2: a manual "flip" that resolves back to chat itself — still a
+    // manual-override origin, but the resolved mode agrees with the URL, so
+    // there is nothing untruthful to correct. navigate must NOT be called
+    // (existing behavior preserved: no-op rewrite when already agreeing).
+    const manualNoopElement = renderRouteContent({
+      ...baseInput,
+      route: { area: "chat", mode: "chat", sessionId: "chat-session", theme: "library" } as any,
+    }) as any;
+    manualNoopElement.props.onResolvedModeChange("chat", "manual-override");
+    expect(navigate).not.toHaveBeenCalled();
+
+    // Case 3 (unmodified from the original QA finding N3 test above): arrival at
+    // an existing cowork session under ?mode=chat with NO manual action — the
+    // session-sync origin (default when omitted) must still be suppressed, or
+    // the fix for N3 regresses.
+    const arrivalElement = renderRouteContent({
+      ...baseInput,
+      route: { area: "chat", mode: "chat", sessionId: "cowork-session", theme: "library" } as any,
+    }) as any;
+    arrivalElement.props.onResolvedModeChange("cowork");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it("keeps the rail-hidden experimental routes scoped and reachable (F-M11)", () => {
     // The three surfaces that have no rail entry and previously no palette entry.
     const experimentalRoutes = [

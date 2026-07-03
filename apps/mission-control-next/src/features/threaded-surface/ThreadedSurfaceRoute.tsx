@@ -44,7 +44,7 @@ export function ThreadedSurfaceRoute({
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
   ) => void;
-  onResolvedModeChange?: (mode: ChatMode) => void;
+  onResolvedModeChange?: (mode: ChatMode, origin?: "session-sync" | "manual-override") => void;
 }) {
   return (
     <MissionThreadedControllerHost

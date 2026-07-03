@@ -757,7 +757,14 @@ export function MissionThreadedControllerHost({
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
   ) => void;
-  onResolvedModeChange?: (mode: ChatMode) => void;
+  // `origin` distinguishes a passive session-mode sync (the selected session's
+  // own stored mode, e.g. on arrival or session switch) from an active operator
+  // change (the ThreadedModeControl UI's onModeOverride callback). Callers that
+  // only care about "what mode is resolved now" can ignore the second arg;
+  // callers that need to know whether the URL should be treated as truthfully
+  // superseded (vs. a one-time seed that shouldn't be echoed back) read it.
+  // Omitted/undefined is treated as "session-sync" for backward compatibility.
+  onResolvedModeChange?: (mode: ChatMode, origin?: "session-sync" | "manual-override") => void;
   renderSurface: (input: MissionThreadedRenderSurfaceInput) => ReactNode;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
@@ -770,7 +777,19 @@ export function MissionThreadedControllerHost({
   // latest initialModeOverride without depending on it directly (it must only
   // re-run on session switch, not on every prop identity change).
   const initialModeOverrideRef = useRef(initialModeOverride);
+  // Tracks whether the operator has manually changed the mode override (via the
+  // ThreadedModeControl UI's onModeOverride callback) since the last time
+  // initialModeOverride genuinely changed value. A URL-seeded override is a
+  // one-time seed, not a standing force: once the operator diverges from it,
+  // a session switch must not snap the override back to the URL's seed and
+  // silently discard their explicit choice. Set true in the public
+  // onModeOverride callback below; cleared when initialModeOverride's PROP
+  // VALUE changes (a new navigation seed re-arms URL precedence).
+  const userAdjustedModeOverrideRef = useRef(false);
   useEffect(() => {
+    if (initialModeOverrideRef.current !== initialModeOverride) {
+      userAdjustedModeOverrideRef.current = false;
+    }
     initialModeOverrideRef.current = initialModeOverride;
   }, [initialModeOverride]);
   // Re-seed modeOverride whenever the prop changes to a defined value (e.g. the
@@ -993,7 +1012,7 @@ export function MissionThreadedControllerHost({
   useEffect(() => {
     if (currentSessionMode && currentSessionMode !== lastEmittedModeRef.current) {
       lastEmittedModeRef.current = currentSessionMode;
-      onResolvedModeChange?.(currentSessionMode);
+      onResolvedModeChange?.(currentSessionMode, "session-sync");
     }
   }, [currentSessionMode, onResolvedModeChange]);
 
@@ -1003,8 +1022,15 @@ export function MissionThreadedControllerHost({
   // When an explicit URL override (initialModeOverride) is present, re-seed from it instead of
   // clearing to null so selecting another session while ?mode=chat is present keeps honoring
   // the URL (QA finding N3) rather than reverting to that session's own mode.
+  //
+  // EXCEPTION: the URL seed is a one-time force, not a standing one. If the operator has
+  // manually changed the override since it was last (re-)seeded from the URL
+  // (userAdjustedModeOverrideRef), their explicit choice takes precedence over the seed on a
+  // session switch — the override clears to null and the newly-selected session's own mode
+  // wins, exactly like the pre-existing behavior for an unseeded override. An untouched URL
+  // seed keeps re-asserting itself on every session switch, as before.
   useEffect(() => {
-    setModeOverride(initialModeOverrideRef.current ?? null);
+    setModeOverride(userAdjustedModeOverrideRef.current ? null : (initialModeOverrideRef.current ?? null));
   }, [selectedSessionId]);
 
   const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
@@ -3194,8 +3220,11 @@ export function MissionThreadedControllerHost({
         onToggleArchiveSession: () => void handleToggleArchiveSession(),
         onNavigateSurface: handleNavigateSurface,
         onModeOverride: (mode: ChatMode) => {
+          // A user-initiated override change: mark it so a later session switch
+          // honors this explicit choice instead of snapping back to a URL seed.
+          userAdjustedModeOverrideRef.current = true;
           setModeOverride(mode);
-          onResolvedModeChange?.(mode);
+          onResolvedModeChange?.(mode, "manual-override");
         },
         modeOverridePending: modeOverride,
         onRequestProviderChange: (providerId) => {
