@@ -62,6 +62,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationPlugins: fn(),
     fetchLlmProviderAdvice: fn(),
     fetchLlamaCppModels: fn(),
+    fetchLocalAiReadiness: fn(),
     fetchMcpElicitations: fn({ items: [] }),
     fetchMcpRemotePreview: fn(),
     fetchMcpServerModeManifest: fn(),
@@ -112,6 +113,8 @@ const settingsMocks = vi.hoisted(() => {
     setDefaultPersonality: fn(),
     startDaemon: fn(),
     startLlamaCppRuntime: fn(),
+    startLocalAiDownload: fn(),
+    startLocalAiServe: fn(),
     startMcpOAuth: fn(),
     startNpuRuntime: fn(),
     startOpenAICodexOAuthDeviceFlow: fn(),
@@ -284,6 +287,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   updateWorkspace: settingsMocks.updateWorkspace,
   updateCitadel: settingsMocks.updateCitadel,
   validateChannelSetupDraft: settingsMocks.validateChannelSetupDraft,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/local-ai", () => ({
+  fetchLocalAiReadiness: settingsMocks.fetchLocalAiReadiness,
+  startLocalAiDownload: settingsMocks.startLocalAiDownload,
+  startLocalAiServe: settingsMocks.startLocalAiServe,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", async (importOriginal) => ({
@@ -2191,5 +2200,135 @@ describe("SettingsNativePage broad native sections", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SettingsNativePage partial gateway responses", () => {
+  // Well-formed-but-partial gateway responses: a stub gateway can return
+  // HTTP 200 with {} (or a ready-flags-only payload) for any settings
+  // endpoint, so nested blocks the response contracts declare required may
+  // be absent at runtime. nativeLoad only falls back on rejected fetches and
+  // useAsyncLoad only catches thrown loads, so a 200 with an empty body
+  // reaches render as truthy-but-empty data.
+
+  it("keeps the runtime voice card defensive when the voice runtime status omits installed models and catalog", async () => {
+    settingsMocks.fetchVoiceRuntimeStatus.mockResolvedValue({
+      provider: "whisper.cpp",
+      source: "managed",
+      readiness: "ready",
+      binaryReady: true,
+      ffmpegReady: true,
+    });
+
+    const runtime = await mount("runtime");
+
+    const text = collectText(runtime.root);
+    expect(text).toContain("0 installed");
+    expect(text).toContain("No voice model catalog available.");
+    expect(buttons(runtime.root, "Activate first installed")).toHaveLength(0);
+
+    await click(findButton(runtime.root, "Install starter model"));
+    expect(settingsMocks.installVoiceRuntime).toHaveBeenCalledWith({});
+  });
+
+  it("renders the local AI section when the readiness payload is empty", async () => {
+    settingsMocks.fetchLocalAiReadiness.mockResolvedValue({});
+
+    const localAi = await mount("local-ai");
+
+    const text = collectText(localAi.root);
+    expect(text).toContain("Hardware readiness");
+    expect(text).toContain("Unknown");
+    expect(text).toContain("Serve jobs");
+  });
+
+  it("renders the general section when the settings payload is empty", async () => {
+    settingsMocks.fetchSettings.mockResolvedValue({});
+
+    const general = await mount("general");
+
+    const text = collectText(general.root);
+    expect(text).toContain("Mission Control posture");
+    expect(text).toContain("No active provider");
+    expect(text).toContain("unknown");
+  });
+
+  it("renders the onboarding demo card when the demo state payload is empty", async () => {
+    settingsMocks.fetchDemoState.mockResolvedValue({});
+
+    const onboarding = await mount("onboarding");
+
+    const text = collectText(onboarding.root);
+    expect(text).toContain("Start Here");
+    expect(text).toContain("Not created");
+  });
+
+  it("renders the personalities section when the personalities payload is empty", async () => {
+    settingsMocks.fetchPersonalities.mockResolvedValue({});
+
+    const personalities = await mount("personalities");
+
+    expect(collectText(personalities.root)).toContain("Personality catalog");
+  });
+
+  it("renders the workspaces section when workspace and citadel payloads are empty", async () => {
+    settingsMocks.fetchWorkspaces.mockResolvedValue({});
+    settingsMocks.listCitadels.mockResolvedValue({});
+
+    const workspaces = await mount("workspaces");
+
+    const text = collectText(workspaces.root);
+    expect(text).toContain("Citadel manager");
+    expect(text).toContain("Workspace directory");
+  });
+
+  it("renders the channels section when definitions and drafts payloads are empty", async () => {
+    settingsMocks.fetchChannelSetupDefinitions.mockResolvedValue({});
+    settingsMocks.fetchChannelSetupDrafts.mockResolvedValue({});
+
+    const channels = await mount("channels");
+
+    expect(collectText(channels.root)).toContain("Channel definitions");
+  });
+
+  it("renders the MCP section when server, preview, server-mode, and elicitation payloads are empty", async () => {
+    settingsMocks.fetchMcpServers.mockResolvedValue({});
+    settingsMocks.fetchMcpRemotePreview.mockResolvedValue({});
+    settingsMocks.fetchMcpServerModeManifest.mockResolvedValue({});
+    settingsMocks.fetchMcpElicitations.mockResolvedValue({});
+
+    const mcp = await mount("mcp");
+
+    expect(collectText(mcp.root)).toContain("MCP servers");
+  });
+
+  it("renders the permissions section when the profiles payload is empty", async () => {
+    settingsMocks.fetchPermissionProfiles.mockResolvedValue({});
+
+    const permissions = await mount("permissions");
+
+    expect(collectText(permissions.root)).toContain("Permission profiles");
+  });
+
+  it("renders the add-ons section when catalog and pack payloads are empty", async () => {
+    settingsMocks.fetchAddonsCatalog.mockResolvedValue({});
+    settingsMocks.fetchInstalledAddons.mockResolvedValue({});
+    settingsMocks.fetchCapabilityPacks.mockResolvedValue({});
+    settingsMocks.fetchStagedCapabilityPacks.mockResolvedValue({});
+
+    const addons = await mount("addons");
+
+    expect(collectText(addons.root)).toContain("Add-on catalog");
+  });
+
+  it("keeps provider advice defensive when the advice payload is empty", async () => {
+    settingsMocks.fetchLlmProviderAdvice.mockResolvedValue({});
+
+    const providers = await mount("providers");
+    await click(findButton(providers.root, "Load advice"));
+
+    const text = collectText(providers.root);
+    expect(text).toContain("Provider advice");
+    expect(text).toContain("Provider advice is advisory only.");
   });
 });

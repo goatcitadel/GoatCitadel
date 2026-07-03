@@ -225,9 +225,9 @@ export function SettingsPosturePanel({
   workspaces: Array<{ workspaceId?: string; name?: string }>;
   onNavigate: (section: "providers" | "mcp" | "integrations" | "access") => void;
 }) {
-  const providers = settings?.llm.providers ?? [];
-  const activeProviderId = settings?.llm.activeProviderId ?? null;
-  const authMode = settings?.auth.mode ?? "unknown";
+  const providers = settings?.llm?.providers ?? [];
+  const activeProviderId = settings?.llm?.activeProviderId ?? null;
+  const authMode = settings?.auth?.mode ?? "unknown";
 
   const providerRows: SettingsPostureCardRow[] = providers.slice(0, 4).map((provider) => {
     const isActive = provider.providerId === activeProviderId;

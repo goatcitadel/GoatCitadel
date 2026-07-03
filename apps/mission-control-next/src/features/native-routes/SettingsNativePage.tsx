@@ -421,7 +421,7 @@ function LocalAiSection(_props: SettingsSectionProps) {
       readiness: readiness.data,
     };
   }, []);
-  const topRecommendation = data?.readiness?.recommendations[0] ?? null;
+  const topRecommendation = data?.readiness?.recommendations?.[0] ?? null;
 
   const handleQueueDownload = async () => {
     if (!topRecommendation) {
@@ -472,23 +472,23 @@ function LocalAiSection(_props: SettingsSectionProps) {
             items={[
               {
                 label: "Platform",
-                value: data?.readiness?.hardware.os.platform ?? "Unknown",
-                meta: data?.readiness?.hardware.os.arch,
+                value: data?.readiness?.hardware?.os?.platform ?? "Unknown",
+                meta: data?.readiness?.hardware?.os?.arch,
               },
               {
                 label: "CPU cores",
-                value: String(data?.readiness?.hardware.cpu.logicalCores ?? 0),
-                meta: data?.readiness?.hardware.cpu.model,
+                value: String(data?.readiness?.hardware?.cpu?.logicalCores ?? 0),
+                meta: data?.readiness?.hardware?.cpu?.model,
               },
               {
                 label: "Memory",
-                value: formatLocalAiBytes(data?.readiness?.hardware.memory.totalBytes),
-                meta: data?.readiness?.hardware.disk.modelsRootPath,
+                value: formatLocalAiBytes(data?.readiness?.hardware?.memory?.totalBytes),
+                meta: data?.readiness?.hardware?.disk?.modelsRootPath,
               },
             ]}
           />
           <SettingsActionList
-            items={(data?.readiness?.hardware.runtimes ?? []).map((runtime) => ({
+            items={(data?.readiness?.hardware?.runtimes ?? []).map((runtime) => ({
               id: runtime.backend,
               label: runtime.backend,
               description: runtime.notes?.join(" ") ?? "Runtime detection has no notes.",
@@ -532,9 +532,9 @@ function LocalAiSection(_props: SettingsSectionProps) {
           >
             <NativeMetricGrid
               items={[
-                { label: "Downloads", value: String(data?.readiness?.downloads.length ?? 0) },
-                { label: "Serve jobs", value: String(data?.readiness?.serveJobs.length ?? 0) },
-                { label: "Endpoints", value: String(data?.readiness?.endpoints.length ?? 0) },
+                { label: "Downloads", value: String(data?.readiness?.downloads?.length ?? 0) },
+                { label: "Serve jobs", value: String(data?.readiness?.serveJobs?.length ?? 0) },
+                { label: "Endpoints", value: String(data?.readiness?.endpoints?.length ?? 0) },
               ]}
             />
           </NativeCard>
@@ -615,8 +615,8 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
             subtitle="Core defaults and system posture at a glance."
             stats={[
               { label: "Workspace", value: activeWorkspaceName },
-              { label: "Providers", value: String(data.settings?.llm.providers.length ?? 0) },
-              { label: "Auth", value: data.settings?.auth.mode ?? "unknown" },
+              { label: "Providers", value: String(data.settings?.llm?.providers?.length ?? 0) },
+              { label: "Auth", value: data.settings?.auth?.mode ?? "unknown" },
             ]}
           >
             <NativeMetricGrid
@@ -643,8 +643,8 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
                 { label: "Add-ons", value: String(data.addons.length), meta: "Installed extensions" },
                 {
                   label: "Active model",
-                  value: data.settings?.llm.activeModel ?? "n/a",
-                  meta: data.settings?.llm.activeProviderId ?? "No active provider",
+                  value: data.settings?.llm?.activeModel ?? "n/a",
+                  meta: data.settings?.llm?.activeProviderId ?? "No active provider",
                 },
               ]}
             />
@@ -1243,7 +1243,7 @@ function DemoStartPanel({
     }
   };
 
-  const promptPreview = data?.starterPrompts.slice(0, 3) ?? [];
+  const promptPreview = data?.starterPrompts?.slice(0, 3) ?? [];
   const workspaceLabel = data?.workspace?.name ?? "Not created";
 
   return (
@@ -1272,7 +1272,7 @@ function DemoStartPanel({
           {
             label: "Sample mission",
             description: "Seeds a Cowork run and Code review scenario you can inspect without sending messages.",
-            state: data?.sessions.length ? "complete" : "active",
+            state: data?.sessions?.length ? "complete" : "active",
           },
           {
             label: "Guided context",
@@ -1523,10 +1523,11 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
   const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
   const [draft, setDraft] = useState<PersonalityEditorDraft>(() => createEmptyPersonalityEditorDraft());
-  const selectedPersonality = data?.items.find((item) => item.id === selectedPersonalityId) ?? data?.items[0] ?? null;
+  const selectedPersonality =
+    data?.items?.find((item) => item.id === selectedPersonalityId) ?? data?.items?.[0] ?? null;
   const defaultPersonalityId = data?.defaultPersonalityId ?? "default";
-  const customCount = data?.items.filter((item) => !item.builtin).length ?? 0;
-  const modifiedBuiltinCount = data?.items.filter((item) => item.builtin && item.modified).length ?? 0;
+  const customCount = data?.items?.filter((item) => !item.builtin).length ?? 0;
+  const modifiedBuiltinCount = data?.items?.filter((item) => item.builtin && item.modified).length ?? 0;
   const editorLocked = editorMode === "selected" && (!selectedPersonality || selectedPersonality.editable === false);
   const editingBuiltin = editorMode === "selected" && selectedPersonality?.builtin === true;
   const canSave = editorMode === "new" || !editorLocked;
@@ -1555,7 +1556,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   }, [isDirty]);
 
   useEffect(() => {
-    if (!data?.items.length) {
+    if (!data?.items?.length) {
       setSelectedPersonalityId("");
       return;
     }
@@ -1684,7 +1685,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
             scrollBody
             bodyMaxHeight="min(64vh, 38rem)"
             stats={[
-              { label: "Presets", value: String(data.items.length) },
+              { label: "Presets", value: String(data.items?.length ?? 0) },
               { label: "Custom", value: String(customCount) },
               { label: "Modified", value: String(modifiedBuiltinCount) },
             ]}
@@ -1700,7 +1701,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
               </NativeButton>
             </SettingsButtonRow>
             <NativeSelectableList
-              items={data.items.map((item) => ({
+              items={(data.items ?? []).map((item) => ({
                 id: item.id,
                 title: item.label,
                 meta: formatPersonalityStatus(item, defaultPersonalityId),
@@ -2986,7 +2987,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     const nextProviderId = event.target.value;
                     const provider = providers.find((item) => item.providerId === nextProviderId);
                     setRoutingProviderId(nextProviderId);
-                    setRoutingModel(provider?.defaultModel ?? provider?.models[0] ?? "");
+                    setRoutingModel(provider?.defaultModel ?? provider?.models?.[0] ?? "");
                     setEditorMode("selected");
                     setSelectedProviderId(nextProviderId);
                   }}
@@ -3103,7 +3104,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
             stats={[
-              { label: "Candidates", value: String(providerAdvice.data?.candidates.length ?? 0) },
+              { label: "Candidates", value: String(providerAdvice.data?.candidates?.length ?? 0) },
               {
                 label: "Mutation",
                 value: providerAdvice.data?.mutationPerformed === false ? "none" : "none",
@@ -3116,11 +3117,11 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 <SettingsNotice
                   notice={{
                     tone: "info",
-                    message: providerAdvice.data.warnings[0] ?? "Provider advice is advisory only.",
+                    message: providerAdvice.data.warnings?.[0] ?? "Provider advice is advisory only.",
                   }}
                 />
                 <ul className="mc-next-approvals-compact-list">
-                  {providerAdvice.data.candidates.map((candidate) => (
+                  {(providerAdvice.data.candidates ?? []).map((candidate) => (
                     <li key={`${candidate.providerId}:${candidate.model}`}>
                       <strong>
                         {candidate.providerLabel} · {candidate.model}
@@ -4448,7 +4449,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   {
                     label: "Active model",
                     value: data.voiceRuntime?.selectedModelId ?? "none",
-                    meta: `${data.voiceRuntime?.installedModels.length ?? 0} installed`,
+                    meta: `${data.voiceRuntime?.installedModels?.length ?? 0} installed`,
                   },
                 ]}
               />
@@ -4457,8 +4458,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   variant="default"
                   onClick={() => {
                     const recommended =
-                      data.voiceRuntime?.catalog.find((item) => item.defaultInstall)?.id ??
-                      data.voiceRuntime?.catalog[0]?.id;
+                      data.voiceRuntime?.catalog?.find((item) => item.defaultInstall)?.id ??
+                      data.voiceRuntime?.catalog?.[0]?.id;
                     void runAndReload(
                       () => installVoiceRuntime(recommended ? { modelId: recommended, activate: true } : {}),
                       "Voice runtime install requested.",
@@ -4468,12 +4469,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   <Plus size={16} />
                   Install starter model
                 </NativeButton>
-                {data.voiceRuntime?.installedModels[0] ? (
+                {data.voiceRuntime?.installedModels?.[0] ? (
                   <NativeButton
                     variant="secondary"
                     onClick={() =>
                       void runAndReload(
-                        () => selectVoiceRuntimeModel(data.voiceRuntime?.installedModels[0]?.modelId ?? ""),
+                        () => selectVoiceRuntimeModel(data.voiceRuntime?.installedModels?.[0]?.modelId ?? ""),
                         "Voice model activated.",
                       )
                     }
@@ -4791,7 +4792,7 @@ function WorkspacesSection({
             title="Citadel manager"
             subtitle="Create, select, archive, and restore the top-level operating worlds that contain workspaces."
             stats={[
-              { label: "Citadels", value: String(citadelsData?.items.length ?? 0) },
+              { label: "Citadels", value: String(citadelsData?.items?.length ?? 0) },
               { label: "Active", value: activeCitadelId ?? "legacy" },
             ]}
           >
@@ -4972,7 +4973,7 @@ function WorkspacesSection({
             scrollBody
             bodyMaxHeight="min(54vh, 30rem)"
             stats={[
-              { label: "Total", value: String(data?.items.length ?? 0) },
+              { label: "Total", value: String(data?.items?.length ?? 0) },
               ...(activeCitadelId ? [{ label: "Citadel", value: activeCitadelId }] : []),
               { label: "Active workspace", value: activeWorkspaceId },
             ]}
@@ -6389,12 +6390,12 @@ function ChannelsSection(_props: SettingsSectionProps) {
   const [draftEnabled, setDraftEnabled] = useState(true);
   const [draftJson, setDraftJson] = useState("{}");
   const [validationResult, setValidationResult] = useState<{ kind: "validate" | "test"; items: string[] } | null>(null);
-  const selectedDraft = data?.drafts.find((item) => item.draftId === selectedDraftId) ?? data?.drafts[0] ?? null;
+  const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? data?.drafts?.[0] ?? null;
   const selectedDefinition =
-    data?.definitions.find((item) => item.catalog.catalogId === (selectedDraft?.catalogId || createCatalogId)) ?? null;
+    data?.definitions?.find((item) => item.catalog.catalogId === (selectedDraft?.catalogId || createCatalogId)) ?? null;
 
   useEffect(() => {
-    if (!data?.definitions.length) {
+    if (!data?.definitions?.length) {
       setCreateCatalogId("");
       return;
     }
@@ -6402,12 +6403,12 @@ function ChannelsSection(_props: SettingsSectionProps) {
       if (current && data.definitions.some((item) => item.catalog.catalogId === current)) {
         return current;
       }
-      return preferredChannelDefinition(data.definitions)?.catalog.catalogId || "";
+      return preferredChannelDefinition(data.definitions)?.catalog?.catalogId || "";
     });
   }, [data?.definitions]);
 
   useEffect(() => {
-    if (!data?.drafts.length) {
+    if (!data?.drafts?.length) {
       setSelectedDraftId("");
       return;
     }
@@ -6634,8 +6635,8 @@ function ChannelsSection(_props: SettingsSectionProps) {
               scrollBody
               bodyMaxHeight="min(54vh, 30rem)"
               stats={[
-                { label: "Definitions", value: String(data.definitions.length) },
-                { label: "Existing channels", value: String(data.connections.length) },
+                { label: "Definitions", value: String(data.definitions?.length ?? 0) },
+                { label: "Existing channels", value: String(data.connections?.length ?? 0) },
               ]}
             >
               <SettingsField label="Create draft from">
@@ -6644,7 +6645,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   value={createCatalogId}
                   onChange={(event) => setCreateCatalogId(event.target.value)}
                 >
-                  {data.definitions.map((item) => (
+                  {(data.definitions ?? []).map((item) => (
                     <option key={item.catalog.catalogId} value={item.catalog.catalogId}>
                       {item.catalog.label}
                     </option>
@@ -6671,7 +6672,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 </NativeButton>
               </SettingsButtonRow>
               <SettingsActionList
-                items={data.definitions.map((item) => ({
+                items={(data.definitions ?? []).map((item) => ({
                   label: item.catalog.label,
                   description: item.catalog.description,
                   meta: `${item.wizard.difficulty} · ${item.wizard.estimatedMinutes} min`,
@@ -6689,7 +6690,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
               subtitle="Saved setup drafts, readiness checks, trial sends, and finalization."
             >
               <NativeSelectableList
-                items={data.drafts.map((item) => ({
+                items={(data.drafts ?? []).map((item) => ({
                   id: item.draftId,
                   title: item.label || item.catalogId,
                   meta: item.lifecycleMode,
@@ -6707,7 +6708,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
-            title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"}
+            title={selectedDraft?.label || selectedDefinition?.catalog?.label || "Channel draft"}
             subtitle="Edit the draft payload, then check readiness, send a trial message, and finalize it."
           >
             {selectedDraft ? (
@@ -6852,9 +6853,10 @@ function McpSection(_props: SettingsSectionProps) {
   });
   const [tools, setTools] = useState<Array<{ toolName: string; description?: string }>>([]);
   const [healthReport, setHealthReport] = useState<ConnectorDiagnosticReport | null>(null);
-  const selectedServer = data?.servers.find((item) => item.serverId === selectedServerId) ?? data?.servers[0] ?? null;
+  const selectedServer =
+    data?.servers?.find((item) => item.serverId === selectedServerId) ?? data?.servers?.[0] ?? null;
   const selectedRemotePreviewItem = selectedServer
-    ? data?.remotePreview.items.find((item) => item.source === "server" && item.id === selectedServer.serverId)
+    ? data?.remotePreview.items?.find((item) => item.source === "server" && item.id === selectedServer.serverId)
     : undefined;
   const selectedServerRuntimeReady = selectedRemotePreviewItem
     ? selectedRemotePreviewItem.runtimeSupported
@@ -6863,7 +6865,7 @@ function McpSection(_props: SettingsSectionProps) {
       : false;
 
   useEffect(() => {
-    if (!data?.servers.length) {
+    if (!data?.servers?.length) {
       setSelectedServerId("");
       return;
     }
@@ -6873,7 +6875,7 @@ function McpSection(_props: SettingsSectionProps) {
   }, [data?.servers]);
 
   useEffect(() => {
-    if (!data?.pendingElicitations.length) {
+    if (!data?.pendingElicitations?.length) {
       setElicitationDrafts({});
       return;
     }
@@ -6981,7 +6983,9 @@ function McpSection(_props: SettingsSectionProps) {
       setNotice({
         tone: "success",
         message: `MCP elicitation ${updated.status}. Evidence ${
-          updated.response?.evidence.auditEventId ?? updated.evidence.statusHistory.at(-1)?.auditEventId ?? "recorded"
+          updated.response?.evidence?.auditEventId ??
+          updated.evidence?.statusHistory?.at(-1)?.auditEventId ??
+          "recorded"
         }.`,
       });
       await reload();
@@ -7005,13 +7009,13 @@ function McpSection(_props: SettingsSectionProps) {
               scrollBody
               bodyMaxHeight="min(48vh, 28rem)"
               stats={[
-                { label: "Servers", value: String(data.servers.length) },
-                { label: "Templates", value: String(data.templates.length) },
-                { label: "Pending prompts", value: String(data.pendingElicitations.length) },
+                { label: "Servers", value: String(data.servers?.length ?? 0) },
+                { label: "Templates", value: String(data.templates?.length ?? 0) },
+                { label: "Pending prompts", value: String(data.pendingElicitations?.length ?? 0) },
               ]}
             >
               <NativeSelectableList
-                items={data.servers.map((item) => ({
+                items={(data.servers ?? []).map((item) => ({
                   id: item.serverId,
                   title: item.label,
                   meta: item.status,
@@ -7089,7 +7093,7 @@ function McpSection(_props: SettingsSectionProps) {
                   Create MCP server
                 </NativeButton>
               </SettingsButtonRow>
-              {data.templates.length ? (
+              {data.templates?.length ? (
                 <SettingsActionList
                   items={data.templates.slice(0, 6).map((item) => ({
                     label: item.label,
@@ -7126,7 +7130,7 @@ function McpSection(_props: SettingsSectionProps) {
                 items={[
                   {
                     label: "Pending",
-                    value: String(data.pendingElicitations.length),
+                    value: String(data.pendingElicitations?.length ?? 0),
                     meta: "operator responses",
                   },
                   {
@@ -7136,7 +7140,7 @@ function McpSection(_props: SettingsSectionProps) {
                   },
                 ]}
               />
-              {data.pendingElicitations.length ? (
+              {data.pendingElicitations?.length ? (
                 <div className="mc-next-settings-stack">
                   {data.pendingElicitations.map((item) => (
                     <div className="mc-next-settings-panel-body" key={item.elicitationId}>
@@ -7221,31 +7225,31 @@ function McpSection(_props: SettingsSectionProps) {
                 items={[
                   {
                     label: "Runtime",
-                    value: data.serverMode.runtimeSupport.replaceAll("_", " "),
+                    value: data.serverMode.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
                     meta: data.serverMode.status,
                   },
                   {
                     label: "Descriptors",
-                    value: String(data.serverMode.summary.exportedToolDescriptors),
-                    meta: `${data.serverMode.summary.blockedDescriptors} blocked`,
+                    value: String(data.serverMode.summary?.exportedToolDescriptors ?? 0),
+                    meta: `${data.serverMode.summary?.blockedDescriptors ?? 0} blocked`,
                   },
                   {
                     label: "Call preview",
-                    value: data.serverMode.runtime.callPreview.supported ? "available" : "not available",
-                    meta: data.serverMode.runtime.callPreview.readOnlyOnly ? "read-only only" : "not scoped",
+                    value: data.serverMode.runtime?.callPreview?.supported ? "available" : "not available",
+                    meta: data.serverMode.runtime?.callPreview?.readOnlyOnly ? "read-only only" : "not scoped",
                   },
                 ]}
               />
               <SettingsNotice
                 notice={{
-                  tone: data.serverMode.runtime.callPreview.supported ? "success" : "info",
-                  message: data.serverMode.runtime.callPreview.supported
+                  tone: data.serverMode.runtime?.callPreview?.supported ? "success" : "info",
+                  message: data.serverMode.runtime?.callPreview?.supported
                     ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode stdio proxy or HTTP call preview."
                     : "The MCP stdio proxy can expose the manifest, but tools/call remains unavailable until Gateway tool invocation services are present.",
                 }}
               />
               <SettingsActionList
-                items={data.serverMode.tools.slice(0, 8).map((item) => ({
+                items={(data.serverMode.tools ?? []).slice(0, 8).map((item) => ({
                   label: item.name,
                   meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
                   description: `${item.title} · ${item.blockers[0] ?? item.governance[0] ?? "No blocker recorded."}`,
@@ -7263,33 +7267,33 @@ function McpSection(_props: SettingsSectionProps) {
                 items={[
                   {
                     label: "Remote servers",
-                    value: String(data.remotePreview.summary.remoteServers),
+                    value: String(data.remotePreview.summary?.remoteServers ?? 0),
                     meta: "configured records",
                   },
                   {
                     label: "Remote templates",
-                    value: String(data.remotePreview.summary.remoteTemplates),
+                    value: String(data.remotePreview.summary?.remoteTemplates ?? 0),
                     meta: "catalog entries",
                   },
                   {
                     label: "Callable",
-                    value: String(data.remotePreview.summary.runtimeSupported),
-                    meta: data.remotePreview.runtimeSupport.replaceAll("_", " "),
+                    value: String(data.remotePreview.summary?.runtimeSupported ?? 0),
+                    meta: data.remotePreview.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
                   },
                   {
                     label: "Blocked",
-                    value: String(data.remotePreview.summary.blocked),
+                    value: String(data.remotePreview.summary?.blocked ?? 0),
                     meta: data.remotePreview.experimentalRemoteRecordsAllowed ? "experimental records" : "default",
                   },
                   {
                     label: "Not callable",
-                    value: String(data.remotePreview.summary.notCallable),
-                    meta: `${data.remotePreview.summary.quarantined} quarantined`,
+                    value: String(data.remotePreview.summary?.notCallable ?? 0),
+                    meta: `${data.remotePreview.summary?.quarantined ?? 0} quarantined`,
                   },
                   {
                     label: "Needs auth",
-                    value: String(data.remotePreview.summary.needsAuth),
-                    meta: `${data.remotePreview.summary.experimentalRecords} experimental`,
+                    value: String(data.remotePreview.summary?.needsAuth ?? 0),
+                    meta: `${data.remotePreview.summary?.experimentalRecords ?? 0} experimental`,
                   },
                 ]}
               />
@@ -7301,7 +7305,7 @@ function McpSection(_props: SettingsSectionProps) {
                 }}
               />
               <SettingsActionList
-                items={data.remotePreview.items.map((item) => ({
+                items={(data.remotePreview.items ?? []).map((item) => ({
                   label: item.label,
                   meta: [
                     item.source,
@@ -7416,11 +7420,11 @@ function McpSection(_props: SettingsSectionProps) {
                     {
                       label: "Invocation",
                       value: selectedRemotePreviewItem
-                        ? selectedRemotePreviewItem.invocationState.replaceAll("_", " ")
+                        ? (selectedRemotePreviewItem.invocationState?.replaceAll("_", " ") ?? "unknown")
                         : selectedServerRuntimeReady
                           ? "runtime invokable"
                           : "not callable",
-                      meta: selectedRemotePreviewItem?.runtimePath.replaceAll("_", " ") ?? "local stdio",
+                      meta: selectedRemotePreviewItem?.runtimePath?.replaceAll("_", " ") ?? "local stdio",
                     },
                   ]}
                 />
@@ -7611,7 +7615,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
   const [recentLocalOverride, setRecentLocalOverride] = useState<LocalOperatorOverrideRecord | null>(null);
   const selectedProfile =
-    data?.profiles.find((profile) => profile.profileId === selectedProfileId) ?? data?.profiles[0];
+    data?.profiles?.find((profile) => profile.profileId === selectedProfileId) ?? data?.profiles?.[0];
   const effectiveOverride = data?.effective.find((item) => item.localOperatorOverride)?.localOperatorOverride;
   const activeOverrides = collectActiveLocalOperatorOverrides([
     effectiveOverride,
@@ -7649,7 +7653,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, [activeWorkspaceId]);
 
   useEffect(() => {
-    if (!data?.profiles.length) return;
+    if (!data?.profiles?.length) return;
     setSelectedProfileId((current) =>
       data.profiles.some((profile) => profile.profileId === current) ? current : data.profiles[0]!.profileId,
     );
@@ -7670,7 +7674,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, [selectedProfile]);
 
   const handleActivateProfile = async (profileId: string, surface: PermissionSurface) => {
-    const profile = data?.profiles.find((item) => item.profileId === profileId);
+    const profile = data?.profiles?.find((item) => item.profileId === profileId);
     if (promptSkippingProfileRestriction && profile?.approvalMode === "bypass") {
       setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
       return;
@@ -7845,12 +7849,12 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
             title="Permission profiles"
             subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
             stats={[
-              { label: "Profiles", value: String(data.profiles.length) },
+              { label: "Profiles", value: String(data.profiles?.length ?? 0) },
               { label: "Chat effective", value: chatEffectiveProfileLabel },
             ]}
           >
             <NativeSelectableList
-              items={data.profiles.map((profile) => ({
+              items={(data.profiles ?? []).map((profile) => ({
                 id: profile.profileId,
                 title: profile.label,
                 meta: profile.builtin ? "Built-in" : profile.scope,
@@ -7873,7 +7877,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   label: "Approval mode",
                   value: selectedProfile ? describeToolApprovalMode(selectedProfile.approvalMode) : "-",
                 },
-                { label: "Tool patterns", value: String(selectedProfile?.toolPatterns.length ?? 0) },
+                { label: "Tool patterns", value: String(selectedProfile?.toolPatterns?.length ?? 0) },
                 { label: "Read access", value: describeReadAccessMode(selectedProfile?.readAccessMode ?? "") },
               ]}
             >
@@ -8839,9 +8843,9 @@ function AddonsSection(_props: SettingsSectionProps) {
     () => new Map((data?.installed ?? []).map((item) => [item.addonId, item])),
     [data?.installed],
   );
-  const selectedAddon = data?.catalog.find((item) => item.addonId === selectedAddonId) ?? data?.catalog[0] ?? null;
+  const selectedAddon = data?.catalog?.find((item) => item.addonId === selectedAddonId) ?? data?.catalog?.[0] ?? null;
   const selectedPack =
-    data?.capabilityPacks.find((item) => item.packId === selectedPackId) ?? data?.capabilityPacks[0] ?? null;
+    data?.capabilityPacks?.find((item) => item.packId === selectedPackId) ?? data?.capabilityPacks?.[0] ?? null;
   const selectedInstalledRecord = selectedAddon
     ? (status.data?.installed ?? installedById.get(selectedAddon.addonId))
     : undefined;
@@ -8856,17 +8860,17 @@ function AddonsSection(_props: SettingsSectionProps) {
     () =>
       data
         ? buildAddonProductPosture({
-            catalog: data.catalog,
-            installed: data.installed,
-            capabilityPacks: data.capabilityPacks,
-            stagedPacks: data.stagedPacks,
+            catalog: data.catalog ?? [],
+            installed: data.installed ?? [],
+            capabilityPacks: data.capabilityPacks ?? [],
+            stagedPacks: data.stagedPacks ?? [],
           })
         : null,
     [data],
   );
 
   useEffect(() => {
-    if (!data?.catalog.length) {
+    if (!data?.catalog?.length) {
       setSelectedAddonId("");
       return;
     }
@@ -8899,7 +8903,7 @@ function AddonsSection(_props: SettingsSectionProps) {
   }, [selectedAddon]);
 
   useEffect(() => {
-    if (!data?.capabilityPacks.length) {
+    if (!data?.capabilityPacks?.length) {
       setSelectedPackId("");
       return;
     }
@@ -9060,12 +9064,12 @@ function AddonsSection(_props: SettingsSectionProps) {
             scrollBody
             bodyMaxHeight="min(58vh, 34rem)"
             stats={[
-              { label: "Catalog", value: String(data.catalog.length) },
-              { label: "Installed", value: String(data.installed.length) },
+              { label: "Catalog", value: String(data.catalog?.length ?? 0) },
+              { label: "Installed", value: String(data.installed?.length ?? 0) },
             ]}
           >
             <NativeSelectableList
-              items={data.catalog.map((item) => {
+              items={(data.catalog ?? []).map((item) => {
                 const installed = installedById.get(item.addonId);
                 const lifecycle = installed
                   ? installed.enabled === false || installed.runtimeStatus === "disabled"
@@ -9216,7 +9220,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                     meta: item.args?.join(" ") || "No args",
                   }))}
                 />
-                {status.data?.healthChecks.length ? (
+                {status.data?.healthChecks?.length ? (
                   <SettingsActionList
                     items={status.data.healthChecks.map((item) => ({
                       label: item.key,
@@ -9238,13 +9242,13 @@ function AddonsSection(_props: SettingsSectionProps) {
             scrollBody
             bodyMaxHeight="min(72vh, 42rem)"
             stats={[
-              { label: "Packs", value: String(data.capabilityPacks.length) },
-              { label: "Staged", value: String(data.stagedPacks.length) },
+              { label: "Packs", value: String(data.capabilityPacks?.length ?? 0) },
+              { label: "Staged", value: String(data.stagedPacks?.length ?? 0) },
               { label: "Selected", value: selectedPack?.trustTier ?? "none" },
             ]}
           >
             <NativeSelectableList
-              items={data.capabilityPacks.map((item) => ({
+              items={(data.capabilityPacks ?? []).map((item) => ({
                 id: item.packId,
                 title: item.name,
                 meta: item.trustTier,
@@ -9264,21 +9268,25 @@ function AddonsSection(_props: SettingsSectionProps) {
                   <>
                     <NativeMetricGrid
                       items={[
-                        { label: "Trust", value: packPreview.data.manifest.trustTier, meta: "local bundled manifest" },
+                        {
+                          label: "Trust",
+                          value: packPreview.data.manifest?.trustTier ?? "unknown",
+                          meta: "local bundled manifest",
+                        },
                         {
                           label: "Review",
                           value: packPreview.data.reviewRequired ? "required" : "not required",
-                          meta: packPreview.data.policyChanges.redactionMode,
+                          meta: packPreview.data.policyChanges?.redactionMode,
                         },
                         {
                           label: "Unsupported",
-                          value: String(packPreview.data.unsupportedAssets.length),
+                          value: String(packPreview.data.unsupportedAssets?.length ?? 0),
                           meta: "runtime support check",
                         },
                       ]}
                     />
                     <SettingsActionList
-                      items={packPreview.data.installPlan.map((item) => ({
+                      items={(packPreview.data.installPlan ?? []).map((item) => ({
                         label: `${item.kind}: ${item.assetId}`,
                         description: item.reason,
                         meta: item.outcome,
@@ -9286,8 +9294,8 @@ function AddonsSection(_props: SettingsSectionProps) {
                       emptyLabel="No installable assets in this pack."
                     />
                     <SettingsActionList
-                      items={packPreview.data.manifest.installWarnings.map((warning, index) => ({
-                        id: `${packPreview.data?.manifest.packId}-warning-${index}`,
+                      items={(packPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
+                        id: `${packPreview.data?.manifest?.packId}-warning-${index}`,
                         label: "Warning",
                         description: warning,
                         meta: "review",
@@ -9335,7 +9343,7 @@ function AddonsSection(_props: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
             <SettingsActionList
-              items={data.stagedPacks.map((item) => ({
+              items={(data.stagedPacks ?? []).map((item) => ({
                 id: item.evidenceEnvelopeId ?? item.packId,
                 label: item.name,
                 description: item.latestMaterialization
@@ -9415,23 +9423,23 @@ function AddonsSection(_props: SettingsSectionProps) {
                   items={[
                     {
                       label: "Pack",
-                      value: localPackPreview.data.manifest.name,
-                      meta: localPackPreview.data.manifest.provenance.source,
+                      value: localPackPreview.data.manifest?.name ?? "unknown",
+                      meta: localPackPreview.data.manifest?.provenance?.source,
                     },
                     {
                       label: "Review",
                       value: localPackPreview.data.reviewRequired ? "required" : "not required",
-                      meta: localPackPreview.data.policyChanges.redactionMode,
+                      meta: localPackPreview.data.policyChanges?.redactionMode,
                     },
                     {
                       label: "Assets",
-                      value: String(localPackPreview.data.installPlan.length),
-                      meta: `${localPackPreview.data.unsupportedAssets.length} unsupported`,
+                      value: String(localPackPreview.data.installPlan?.length ?? 0),
+                      meta: `${localPackPreview.data.unsupportedAssets?.length ?? 0} unsupported`,
                     },
                   ]}
                 />
                 <SettingsActionList
-                  items={localPackPreview.data.installPlan.map((item) => ({
+                  items={(localPackPreview.data.installPlan ?? []).map((item) => ({
                     label: `${item.kind}: ${item.assetId}`,
                     description: item.reason,
                     meta: item.outcome,
@@ -9439,8 +9447,8 @@ function AddonsSection(_props: SettingsSectionProps) {
                   emptyLabel="No staged assets in this portable pack."
                 />
                 <SettingsActionList
-                  items={localPackPreview.data.manifest.installWarnings.map((warning, index) => ({
-                    id: `${localPackPreview.data?.manifest.packId}-local-warning-${index}`,
+                  items={(localPackPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
+                    id: `${localPackPreview.data?.manifest?.packId}-local-warning-${index}`,
                     label: "Warning",
                     description: warning,
                     meta: "review",
