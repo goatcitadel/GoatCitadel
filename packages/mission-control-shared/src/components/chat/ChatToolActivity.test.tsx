@@ -418,4 +418,90 @@ describe("ChatLiveActivityRail", () => {
     expect(renderer.toJSON()).toBeNull();
     renderer.unmount();
   });
+
+  it("does not render a stop control when onStopStreamingTurn is not provided", () => {
+    const turn = createTurn({
+      toolRuns: [createToolRun({ status: "started" })],
+    });
+    const renderer = TestRenderer.create(
+      <ChatLiveActivityRail turn={turn} hasVisibleAssistantText={false} onOpenRunDetails={vi.fn()} />,
+    );
+    expect(
+      renderer.root.findAllByProps({ className: "mc-next-live-activity-stop mc-next-thread-inline-button" }),
+    ).toHaveLength(0);
+    renderer.unmount();
+  });
+
+  it("renders a stop control when onStopStreamingTurn is provided", () => {
+    const turn = createTurn({
+      toolRuns: [createToolRun({ status: "started" })],
+    });
+    const onStopStreamingTurn = vi.fn();
+    const renderer = TestRenderer.create(
+      <ChatLiveActivityRail
+        turn={turn}
+        hasVisibleAssistantText={false}
+        onOpenRunDetails={vi.fn()}
+        onStopStreamingTurn={onStopStreamingTurn}
+      />,
+    );
+    const button = renderer.root.findByProps({ className: "mc-next-live-activity-stop mc-next-thread-inline-button" });
+    expect(button.props["aria-label"]).toBe("Stop generating this response");
+    expect(button.props.title).toBe(
+      "Stop generating (Esc). Partial output is kept; actions already started may still finish.",
+    );
+    expect(button.props.disabled).toBeFalsy();
+    expect(renderedText(renderer)).toContain("Stop");
+    renderer.unmount();
+  });
+
+  it("calls onStopStreamingTurn once on click, then flips to a disabled Stopping… state", () => {
+    const turn = createTurn({
+      toolRuns: [createToolRun({ status: "started" })],
+    });
+    const onStopStreamingTurn = vi.fn();
+    const renderer = TestRenderer.create(
+      <ChatLiveActivityRail
+        turn={turn}
+        hasVisibleAssistantText={false}
+        onOpenRunDetails={vi.fn()}
+        onStopStreamingTurn={onStopStreamingTurn}
+      />,
+    );
+    const button = renderer.root.findByProps({ className: "mc-next-live-activity-stop mc-next-thread-inline-button" });
+    TestRenderer.act(() => {
+      button.props.onClick();
+    });
+    expect(onStopStreamingTurn).toHaveBeenCalledTimes(1);
+
+    // The `disabled` attribute is the real double-click guard: a browser does not
+    // dispatch onClick to a disabled button, so the handler firing exactly once above
+    // plus `disabled` flipping true here is the full guarantee (see the class-level
+    // "double-stop is safe" note: the server cancel path is separately idempotent).
+    const stoppingButton = renderer.root.findByProps({
+      className: "mc-next-live-activity-stop mc-next-thread-inline-button",
+    });
+    expect(stoppingButton.props.disabled).toBe(true);
+    expect(renderedText(renderer)).toContain("Stopping…");
+    renderer.unmount();
+  });
+
+  it("never renders aria-live or role=status on the rail even with a stop control present", () => {
+    const turn = createTurn({
+      toolRuns: [createToolRun({ status: "started" })],
+    });
+    const renderer = TestRenderer.create(
+      <ChatLiveActivityRail
+        turn={turn}
+        hasVisibleAssistantText={false}
+        onOpenRunDetails={vi.fn()}
+        onStopStreamingTurn={vi.fn()}
+      />,
+    );
+    const liveRegionNodes = renderer.root.findAll(
+      (node) => node.props["aria-live"] !== undefined || node.props.role === "status",
+    );
+    expect(liveRegionNodes).toHaveLength(0);
+    renderer.unmount();
+  });
 });

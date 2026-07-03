@@ -721,6 +721,82 @@ describe("ChatThreadPrimitives", () => {
     expect(renderer.root.findByProps({ className: "mc-next-thread-tool-activity" })).toBeTruthy();
   });
 
+  it("passes onStopStreamingTurn to the rail only while this card's turn is the one streaming", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const onStopStreamingTurn = vi.fn();
+
+    const streamingTurn = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: streamingTurn,
+      onStopStreamingTurn,
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    // The card's turn IS the streaming turn: the rail gets a real stop control.
+    const stopButton = renderer.root.findByProps({
+      className: "mc-next-live-activity-stop mc-next-thread-inline-button",
+    });
+    TestRenderer.act(() => {
+      stopButton.props.onClick();
+    });
+    expect(onStopStreamingTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds onStopStreamingTurn from the rail when the turn is active but not the streaming turn", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const onStopStreamingTurn = vi.fn();
+
+    // `running` trace status alone makes showLiveActivity true (isChatTurnActiveStatus),
+    // but isStreamingTurn requires streamingPreview.turnId to match THIS turn. Passing no
+    // streamingPreview reproduces "this card is active but a different turn is streaming".
+    const activeButNotStreamingTurn = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: activeButNotStreamingTurn,
+      onStopStreamingTurn,
+      streamingPreview: null,
+    });
+
+    const rail = renderer.root.findByProps({ className: "mc-next-live-activity" });
+    expect(rail).toBeTruthy();
+    expect(
+      renderer.root.findAllByProps({ className: "mc-next-live-activity-stop mc-next-thread-inline-button" }),
+    ).toHaveLength(0);
+  });
+
   it("does not re-render the memoized card when re-rendered with identical props", () => {
     const renderSpy = vi.fn();
     const turn = createTurn();
@@ -731,6 +807,9 @@ describe("ChatThreadPrimitives", () => {
     const onOpenGeneratedArtifact = vi.fn();
     const onCreateGeneratedArtifact = vi.fn();
     const onCreateGeneratedArtifactVersion = vi.fn();
+    // A stable-identity function, exactly as ThreadedTimeline's useStableHandler would
+    // hand the card: the same reference must survive re-renders for the memo to hold.
+    const onStopStreamingTurn = vi.fn();
 
     function Probe(props: React.ComponentProps<typeof ChatThreadTurnCard>) {
       renderSpy();
@@ -749,13 +828,16 @@ describe("ChatThreadPrimitives", () => {
         onOpenGeneratedArtifact={onOpenGeneratedArtifact}
         onCreateGeneratedArtifact={onCreateGeneratedArtifact}
         onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+        onStopStreamingTurn={onStopStreamingTurn}
       />,
     );
     expect(renderSpy).toHaveBeenCalledTimes(1);
     const firstJson = JSON.stringify(renderer.toJSON());
 
-    // Re-render the wrapper with byte-identical props: the memoized card must
-    // bail out and produce the exact same output without doing new work.
+    // Re-render the wrapper with byte-identical props (including the same
+    // onStopStreamingTurn reference): the memoized card must bail out and produce the
+    // exact same output without doing new work. This is the "ZERO new unstable props"
+    // guarantee — adding onStopStreamingTurn must not defeat the existing memo.
     TestRenderer.act(() => {
       renderer.update(
         <Probe
@@ -769,6 +851,7 @@ describe("ChatThreadPrimitives", () => {
           onOpenGeneratedArtifact={onOpenGeneratedArtifact}
           onCreateGeneratedArtifact={onCreateGeneratedArtifact}
           onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+          onStopStreamingTurn={onStopStreamingTurn}
         />,
       );
     });

@@ -288,6 +288,7 @@ export function ChatLiveActivityRail({
   turn,
   hasVisibleAssistantText,
   onOpenRunDetails,
+  onStopStreamingTurn,
   maxVisible = 4,
 }: {
   turn: ChatThreadTurnRecord;
@@ -298,6 +299,11 @@ export function ChatLiveActivityRail({
 }) {
   const hasRunningTool = turn.toolRuns.some((run) => run.status === "started");
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // Local-only: the rail unmounts the instant the trace flips to a terminal status
+  // (including `cancelled`, which is NOT in CHAT_TURN_ACTIVE_STATUSES — see
+  // showLiveActivity in ChatThreadPrimitives.tsx), so there is no stale "Stopping…"
+  // state to reset once the server confirms the cancel.
+  const [stopping, setStopping] = useState(false);
 
   // The ticking clock only needs to exist while a row is actively running —
   // once every run has settled, there is nothing left for it to animate, so
@@ -339,6 +345,21 @@ export function ChatLiveActivityRail({
           <span className="mc-next-live-activity-spinner" aria-hidden="true" />
           {LIVE_ACTIVITY_PHASE_LABELS[phase.kind]}
         </span>
+      ) : null}
+      {onStopStreamingTurn ? (
+        <button
+          type="button"
+          className="mc-next-live-activity-stop mc-next-thread-inline-button"
+          aria-label="Stop generating this response"
+          title="Stop generating (Esc). Partial output is kept; actions already started may still finish."
+          onClick={() => {
+            setStopping(true);
+            onStopStreamingTurn();
+          }}
+          disabled={stopping}
+        >
+          <span aria-hidden="true">■</span> {stopping ? "Stopping…" : "Stop"}
+        </button>
       ) : null}
     </div>
   );

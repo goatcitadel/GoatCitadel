@@ -23,6 +23,7 @@ import {
   useChannelActivitySnapshot,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
@@ -308,7 +309,12 @@ export function ThreadedTimeline({
   const onOpenGeneratedArtifact = useStableHandler(props.onOpenGeneratedArtifact);
   const onCreateGeneratedArtifact = useStableHandler(props.onCreateGeneratedArtifact);
   const onCreateGeneratedArtifactVersion = useStableHandler(props.onCreateGeneratedArtifactVersion);
+  const onStopStreamingTurn = useStableHandler(props.onStopActiveTurn);
   const onOpenUniversalRunDetailStable = useOptionalStableHandler(onOpenUniversalRunDetail);
+  useEscapeToStopStream({
+    enabled: Boolean(props.sending && props.hasActiveStream),
+    onStop: onStopStreamingTurn,
+  });
   const defaultWindowStart = Math.max(0, threadTurnCount - THREAD_WINDOW_SIZE);
   const effectiveWindowStart = Math.min(manualWindowStart ?? defaultWindowStart, defaultWindowStart);
   const windowedThreadItems = useMemo(
@@ -454,6 +460,7 @@ export function ThreadedTimeline({
                     onOpenGeneratedArtifact={onOpenGeneratedArtifact}
                     onCreateGeneratedArtifact={onCreateGeneratedArtifact}
                     onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
+                    onStopStreamingTurn={onStopStreamingTurn}
                   />
                 );
               })}

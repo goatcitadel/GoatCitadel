@@ -1422,6 +1422,11 @@
   font-size: var(--text-xs);
 }
 
+.mc-next-live-activity-stop {
+  justify-self: start;
+  margin-block-start: 0.15rem;
+}
+
 .mc-next-live-activity-spinner {
   width: 0.7rem;
   height: 0.7rem;

@@ -868,6 +868,14 @@ export interface ChatThreadTurnCardProps {
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
+  /**
+   * Stops the currently streaming turn (server-side cancel; see the mirror of the
+   * composer's "Stop turn" affordance surfaced by {@link ChatLiveActivityRail}). The card
+   * forwards this to the rail only when THIS card's turn is the one streaming — see
+   * `isStreamingTurn` below — so a card that is merely "active" (queued/running but not
+   * the live streaming turn) never renders a Stop control for someone else's turn.
+   */
+  onStopStreamingTurn?: () => void;
 }
 
 export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
@@ -891,6 +899,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   onOpenGeneratedArtifact,
   onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
+  onStopStreamingTurn,
 }: ChatThreadTurnCardProps) {
   const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
   const recoveryLabel = getRecoveryStripLabel(turn);
@@ -1022,6 +1031,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
               turn={turn}
               hasVisibleAssistantText={hasAssistantOutput}
               onOpenRunDetails={onOpenRunDetails}
+              onStopStreamingTurn={isStreamingTurn ? onStopStreamingTurn : undefined}
             />
           ) : null}
           {hasAssistantOutput ? (
