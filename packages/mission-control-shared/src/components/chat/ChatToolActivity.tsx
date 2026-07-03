@@ -1,6 +1,6 @@
 import type { ChatMode, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
-import { parseTimestamp } from "./ChatThreadPrimitives";
+import { parseTimestamp } from "./chat-display-helpers";
 
 export function ChatTurnActivityRows({
   mode,

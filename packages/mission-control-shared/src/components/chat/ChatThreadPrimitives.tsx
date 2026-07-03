@@ -16,6 +16,7 @@ import {
   getAssistantPendingLabel,
   getRecoveryStripLabel,
   getTraceTone,
+  parseTimestamp,
   renderSuggestionSummary,
   summarizeDelegationSteps,
   summarizeTurnRouting,
@@ -80,11 +81,6 @@ const ACTOR_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "short",
 });
-
-export function parseTimestamp(timestamp: string): number | null {
-  const parsed = Date.parse(timestamp);
-  return Number.isNaN(parsed) ? null : parsed;
-}
 
 export function formatActorTimestamp(timestamp: string): string {
   const parsed = parseTimestamp(timestamp);
