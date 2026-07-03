@@ -52,6 +52,12 @@ export interface AssistantConfig {
   sqlite: SqliteTuningConfig;
   durable: DurableConfig;
   features: FeatureFlagsConfig;
+  /**
+   * Per-chunk provider-stream idle bound (round-3 watchdog). A stream that
+   * goes silent for longer than this is aborted and salvaged instead of
+   * spinning forever. Floored at 5s by the consumer; default 120s.
+   */
+  streamIdleTimeoutMs?: number;
   budgets: {
     dailyUsdWarning: number;
     dailyUsdHardCap: number;
@@ -1232,6 +1238,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
     },
+    streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,
       dailyUsdHardCap: input.budgets?.dailyUsdHardCap ?? 50,

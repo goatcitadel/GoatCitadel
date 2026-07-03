@@ -3,6 +3,7 @@ import { coerceDurationMs } from "@goatcitadel/contracts";
 import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
+import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
@@ -277,6 +278,11 @@ export function getRemainingChatCompletionTimeoutMs(
 export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
   if (isChatTurnCancelledError(normalized)) {
+    return normalized;
+  }
+  if (normalized instanceof StreamIdleTimeoutError) {
+    // Already a precise, machine-readable stall error — collapsing it into the
+    // generic request-timeout shape would hide the idle-watchdog signal.
     return normalized;
   }
   const name = normalized.name.toLowerCase();
