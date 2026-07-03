@@ -557,10 +557,30 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
             ) {
               return;
             }
-            liveStream.lastEventId = chunk.eventId;
-            if (chunk.runId) {
-              liveStream.runId = chunk.runId;
+            // Server sequences are strictly increasing per turn; anything at or
+            // below the last successfully processed one is a replay (resume
+            // overlap, re-delivery) whose effects already landed. Synthetic
+            // client chunks use negative sequences and are exempt.
+            const chunkSequence = typeof chunk.sequence === "number" && chunk.sequence >= 0 ? chunk.sequence : null;
+            if (
+              chunkSequence !== null &&
+              typeof liveStream.lastSequence === "number" &&
+              chunkSequence <= liveStream.lastSequence
+            ) {
+              return;
             }
+            // The resume cursor may only advance after a chunk's handlers have
+            // run: a handler that throws must leave the cursor on the previous
+            // chunk so resume re-delivers this one.
+            const advanceStreamCursor = () => {
+              liveStream.lastEventId = chunk.eventId;
+              if (chunk.runId) {
+                liveStream.runId = chunk.runId;
+              }
+              if (chunkSequence !== null) {
+                liveStream.lastSequence = chunkSequence;
+              }
+            };
             if (chunk.type === "message_start") {
               // Guards against double-counting if a resumed/retried segment ever
               // reuses this onChunk closure across more than one message_start;
@@ -670,9 +690,11 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
               });
               previewDeltaCount += 1;
               previewCharCount += chunk.delta.length;
+              advanceStreamCursor();
               return;
             }
             if (!isThreadMutatingStreamChunk(chunk)) {
+              advanceStreamCursor();
               return;
             }
             recordClientDiagnostic({
@@ -689,6 +711,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
             commitThreadUpdate((current) =>
               updateThreadFromStreamChunk(current, chunk, streamSeed, session!.sessionId, optimisticPrefs),
             );
+            advanceStreamCursor();
           };
           let resumeAttempts = 0;
           while (resumeAttempts <= MAX_STREAM_RESUME_ATTEMPTS) {

@@ -132,13 +132,17 @@ function Harness(props: {
   streamEnabled?: boolean;
   surfaceMode?: "chat" | "cowork" | "code";
   fullWebAccess?: boolean;
+  /** Test-only seam: lets a test poison the capability-suggestions setter to
+   * simulate an onChunk handler throwing mid-processing. */
+  setCapabilitySuggestionsOverride?: (...args: unknown[]) => void;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
   );
   const [draft, setDraft] = useState(props.initialDraft ?? "");
   const [pendingAttachments, setPendingAttachments] = useState<any[]>(props.initialPendingAttachments ?? []);
-  const [, setCapabilitySuggestions] = useState<any[]>([]);
+  const [, setCapabilitySuggestionsState] = useState<any[]>([]);
+  const setCapabilitySuggestions = props.setCapabilitySuggestionsOverride ?? setCapabilitySuggestionsState;
   const [, setSpecialistSuggestions] = useState<any[]>([]);
   const [sending, setSending] = useState(Boolean(props.initialSending));
   const [error, setErrorState] = useState<string | null>(props.initialError ?? null);
@@ -655,6 +659,205 @@ describe("useChatOutboundExecution", () => {
         originSurface: "cowork",
       }),
     );
+  });
+
+  it("does not advance the resume cursor past a chunk whose processing throws", async () => {
+    // setCapabilitySuggestions is the injectable seam: trace_update chunks that
+    // carry capabilityUpgradeSuggestions route straight into it, so making the
+    // setter throw simulates a handler failure mid-onChunk without needing to
+    // fake out a whole chunk type.
+    const poisonedSetCapabilitySuggestions = vi.fn(() => {
+      throw new Error("boom: capability suggestion handler failed");
+    });
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-good-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      // This chunk processes cleanly, so its eventId must become the cursor.
+      expect(latest?.getSnapshot().activeStream?.lastEventId).toBe("evt-good-0");
+      let threw = false;
+      try {
+        onChunk({
+          type: "trace_update",
+          eventId: "evt-poison-1",
+          sessionId: "session-1",
+          turnId: "turn-2",
+          trace: {
+            status: "running",
+            routing: {},
+            capabilityUpgradeSuggestions: [{ kind: "skill", title: "Poisoned suggestion" }],
+          },
+        });
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
+      throw new Error("network dropped after poisoned chunk");
+    });
+    resumeChatTurnStreamMock.mockImplementationOnce(async (_sessionId, _turnId, onChunk) => {
+      onChunk({
+        type: "message_done",
+        eventId: "evt-after-resume",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Done after resume",
+      });
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled setCapabilitySuggestionsOverride={poisonedSetCapabilitySuggestions} />);
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Coordinate beta outreach",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    // Resume must be requested with the cursor from the last SUCCESSFULLY
+    // processed chunk (evt-good-0), not the poisoned one (evt-poison-1) whose
+    // effects (the capability suggestion) never landed.
+    expect(resumeChatTurnStreamMock).toHaveBeenCalledWith(
+      "session-1",
+      "turn-2",
+      expect.any(Function),
+      expect.objectContaining({
+        sinceEventId: "evt-good-0",
+      }),
+    );
+  });
+
+  it("drops replayed and out-of-order sequenced delta chunks but never drops chunks without a valid sequence", async () => {
+    // The mid-stream preview text is the observable that proves which deltas
+    // survived dedupe: message_done's finalText reconciliation would mask any
+    // duplication, so the stream is held open with a deferred while asserting.
+    vi.useFakeTimers();
+    const streamDeferred = createDeferred<void>();
+    let capturedOnChunk: ((chunk: any) => void) | null = null;
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      capturedOnChunk = onChunk;
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sequence: 0,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "delta",
+        eventId: "evt-1",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Hello",
+      });
+      // Replays sequence 1 verbatim: must be dropped (already applied).
+      onChunk({
+        type: "delta",
+        eventId: "evt-1-replay",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Hello",
+      });
+      // An older, out-of-order sequence arriving late: also dropped.
+      onChunk({
+        type: "delta",
+        eventId: "evt-stale",
+        sequence: 0,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "STALE",
+      });
+      // A chunk without a valid non-negative sequence (malformed or synthetic
+      // client chunk) must never be dropped by the dedupe guard.
+      onChunk({
+        type: "delta",
+        eventId: "evt-no-seq",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: " world",
+      });
+      // Forward progress resumes normally after the permissive no-sequence chunk.
+      onChunk({
+        type: "delta",
+        eventId: "evt-2",
+        sequence: 2,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "!",
+      });
+      await streamDeferred.promise;
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    let executePromise: Promise<void> | undefined;
+    await act(async () => {
+      executePromise = latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Coordinate beta outreach",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(260);
+      await Promise.resolve();
+    });
+
+    // The replay and the stale out-of-order chunk are dropped; the no-sequence
+    // chunk and the forward-progress chunk both survive: "Hello" + " world" + "!".
+    expect(latest!.getSnapshot().streamingPreview).toEqual(
+      expect.objectContaining({
+        turnId: "turn-2",
+        text: "Hello world!",
+      }),
+    );
+    // The dedupe guard must not advance the cursor for dropped chunks beyond
+    // the last successfully processed one.
+    expect(latest!.getSnapshot().activeStream?.lastEventId).toBe("evt-2");
+
+    await act(async () => {
+      capturedOnChunk?.({
+        type: "message_done",
+        eventId: "evt-3",
+        sequence: 3,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Hello world!",
+      });
+      streamDeferred.resolve();
+      await executePromise;
+    });
+
+    expect(
+      latest!.getSnapshot().thread!.turns.find((turn) => turn.turnId === "turn-2")!.assistantMessage?.content,
+    ).toBe("Hello world!");
+    vi.useRealTimers();
   });
 
   it("syncs approval queues and resolves approval denial and user input prompts", async () => {

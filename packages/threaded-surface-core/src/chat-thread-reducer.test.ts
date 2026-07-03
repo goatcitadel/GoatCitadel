@@ -545,4 +545,73 @@ describe("chat-thread-reducer", () => {
       updateThreadFromStreamChunk(null, { type: "delta", sessionId, delta: "ignored" } as never, null, sessionId, null),
     ).toBeNull();
   });
+
+  it("updates the existing turn in place when a message_start is replayed with a parentTurnId", () => {
+    const current = baseThread();
+    const withToolRun = {
+      ...current,
+      turns: current.turns.map((turn) =>
+        turn.turnId === "turn-2"
+          ? {
+              ...turn,
+              trace: { ...turn.trace, status: "running" },
+              toolRuns: [
+                {
+                  toolRunId: "tool-1",
+                  toolName: "web.search",
+                  status: "started",
+                  startedAt: "2026-05-04T12:00:02.000Z",
+                },
+              ],
+            }
+          : turn,
+      ),
+    };
+
+    const next = updateThreadFromStreamChunk(
+      withToolRun as never,
+      {
+        type: "message_start",
+        sessionId,
+        turnId: "turn-2",
+        messageId: "assistant-2b",
+        parentTurnId: "turn-1",
+        branchKind: "retry",
+      } as never,
+      null, // the replay path must not require a seed
+      sessionId,
+      null,
+    );
+
+    expect(next).not.toBeNull();
+    // No parent-slice truncation and no duplicate append: same three turns.
+    expect(next!.turns).toHaveLength(3);
+    expect(next!.turns.filter((turn) => turn.turnId === "turn-2")).toHaveLength(1);
+    const replayed = next!.turns.find((turn) => turn.turnId === "turn-2")!;
+    // Accumulated tool runs survive the replay; the assistant slot resets.
+    expect(replayed.toolRuns).toHaveLength(1);
+    expect(replayed.toolRuns[0]).toMatchObject({ toolRunId: "tool-1" });
+    expect(replayed.assistantMessage).toMatchObject({ messageId: "assistant-2b", content: "" });
+    expect(replayed.trace).toMatchObject({ assistantMessageId: "assistant-2b", status: "running" });
+    expect(replayed.userMessage).toEqual(withToolRun.turns[1]!.userMessage);
+    // Untouched turns keep their identity.
+    expect(next!.turns[0]).toBe(withToolRun.turns[0] as never);
+    expect(next!.turns[2]).toBe(withToolRun.turns[2] as never);
+    expect(next!.activeLeafTurnId).toBe("turn-2");
+    expect(next!.selectedTurnId).toBe("turn-2");
+  });
+
+  it("does not append a duplicate turn when a message_start is replayed without a parentTurnId", () => {
+    const current = baseThread();
+    const next = updateThreadFromStreamChunk(
+      current as never,
+      { type: "message_start", sessionId, turnId: "turn-1", messageId: "assistant-1b" } as never,
+      seed(),
+      sessionId,
+      null,
+    );
+    expect(next!.turns).toHaveLength(3);
+    expect(next!.turns.filter((turn) => turn.turnId === "turn-1")).toHaveLength(1);
+    expect(next!.turns.find((turn) => turn.turnId === "turn-1")!.assistantMessage?.messageId).toBe("assistant-1b");
+  });
 });

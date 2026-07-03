@@ -25,6 +25,8 @@ export interface ActiveChatStreamState {
   controller: AbortController;
   turnId?: string;
   lastEventId?: string;
+  /** Highest server sequence successfully processed; used to drop replayed/out-of-order chunks on resume. */
+  lastSequence?: number;
   runId?: string;
 }
 

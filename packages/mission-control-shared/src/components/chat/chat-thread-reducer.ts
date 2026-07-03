@@ -43,6 +43,36 @@ export function updateThreadFromStreamChunk(
   }
 
   if (chunk.type === "message_start") {
+    const existing = current?.turns.find((turn) => turn.turnId === chunk.turnId);
+    if (current && existing) {
+      // Replayed message_start (resume overlap / re-delivery): refresh the
+      // assistant slot for the incoming messageId but keep everything the turn
+      // already accumulated — recreating it would wipe live toolRuns/trace,
+      // and appending would duplicate the turnId.
+      const updatedTurn: ChatThreadTurnRecord = {
+        ...existing,
+        assistantMessage: {
+          messageId: chunk.messageId,
+          sessionId,
+          role: "assistant",
+          actorType: "agent",
+          actorId: "assistant",
+          content: "",
+          timestamp: existing.assistantMessage?.timestamp ?? new Date().toISOString(),
+        },
+        trace: {
+          ...existing.trace,
+          assistantMessageId: chunk.messageId,
+          status: "running",
+        },
+      };
+      return {
+        sessionId,
+        activeLeafTurnId: chunk.turnId,
+        selectedTurnId: chunk.turnId,
+        turns: current.turns.map((turn) => (turn.turnId === chunk.turnId ? updatedTurn : turn)),
+      };
+    }
     if (!seed) {
       return current;
     }
