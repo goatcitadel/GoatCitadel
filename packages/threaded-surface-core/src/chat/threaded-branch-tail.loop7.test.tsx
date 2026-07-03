@@ -63,6 +63,8 @@ function ComposerHarness(props: {
     lastEditableDraft: "Previous draft",
     commandSuggestions: (props.commandSuggestions ?? []) as never,
     commandIndex: props.commandIndex ?? 0,
+    error: null,
+    dockOpen: false,
     sending: false,
     selectedSession: (props.selectedSession ?? null) as never,
     messageMode: "chat",
