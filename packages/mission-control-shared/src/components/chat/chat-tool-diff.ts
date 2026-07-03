@@ -90,7 +90,9 @@ export function parseUnifiedDiffLines(
   diff: string,
   maxLines: number = DEFAULT_MAX_LINES,
 ): { lines: UnifiedDiffLine[]; truncatedCount: number } {
-  const allLines = diff.split("\n");
+  // CRLF-authored diffs (Windows-side git, CRLF artifacts) must not leak
+  // stray \r into the rendered line text.
+  const allLines = diff.split(/\r?\n/);
   const visibleLines = allLines.slice(0, maxLines).map((text) => ({ kind: classifyUnifiedDiffLine(text), text }));
   const truncatedCount = Math.max(0, allLines.length - visibleLines.length);
   return { lines: visibleLines, truncatedCount };

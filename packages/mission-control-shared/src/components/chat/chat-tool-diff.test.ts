@@ -193,4 +193,12 @@ describe("parseUnifiedDiffLines", () => {
     expect(lines).toEqual([{ kind: "ctx", text: "" }]);
     expect(truncatedCount).toBe(0);
   });
+
+  it("strips CRLF line endings so rendered line text carries no stray \\r", () => {
+    const diff = ["--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " unchanged", "-old", "+new"].join("\r\n");
+    const { lines } = parseUnifiedDiffLines(diff);
+    expect(lines.every((line) => !line.text.includes("\r"))).toBe(true);
+    expect(lines.map((line) => line.kind)).toEqual(["meta", "meta", "hunk", "ctx", "del", "add"]);
+    expect(lines[4]).toEqual({ kind: "del", text: "-old" });
+  });
 });
