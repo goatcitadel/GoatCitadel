@@ -410,6 +410,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           message: "Aggregated streaming preview delta volume for the message",
           sessionId: session?.sessionId,
           turnId,
+          // Per-turn discriminator: without this, two messages' summaries
+          // completing within the shared 1200ms throttle window (fast retry,
+          // quick follow-up, agentic loop) would collide on the single
+          // app-wide "chat:thread.preview_path" bucket and the second
+          // summary would be silently dropped, defeating its purpose of
+          // proving the preview path ran for THIS message.
+          throttleKeySuffix: turnId,
           context: {
             deltaCount: previewDeltaCount,
             characterCount: previewCharCount,

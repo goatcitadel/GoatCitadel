@@ -2265,6 +2265,10 @@ describe("useChatOutboundExecution", () => {
           event: "thread.preview_path",
           sessionId: "session-1",
           turnId: "turn-2",
+          // The throttle discriminator must equal this message's turnId so
+          // that a second message's summary completing within the same
+          // 1200ms throttle window is not silently dropped.
+          throttleKeySuffix: "turn-2",
           context: {
             deltaCount: 5,
             characterCount: "chunk0chunk1chunk2chunk3chunk4".length,

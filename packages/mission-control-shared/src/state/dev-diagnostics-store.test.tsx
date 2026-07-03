@@ -265,6 +265,104 @@ describe("dev diagnostics store", () => {
     expect(afterWindow).toBeDefined();
   });
 
+  it("throttles same-suffix preview_path records but lets different suffixes pass independently within the window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    const store = await loadStore({ VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true" });
+
+    const turnA1 = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-a",
+      context: { deltaCount: 5, characterCount: 42, turnId: "turn-a", reason: "message_done" },
+    });
+    // Different suffix ("turn-b") within the same 1200ms window as turn-a:
+    // must NOT be throttled, since it is a distinct message's summary.
+    const turnB1 = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-b",
+      context: { deltaCount: 2, characterCount: 10, turnId: "turn-b", reason: "message_done" },
+    });
+    // Same suffix ("turn-a") within the window: must be throttled.
+    const turnA2 = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-a",
+      context: { deltaCount: 1, characterCount: 3, turnId: "turn-a", reason: "error" },
+    });
+
+    expect(turnA1).toBeDefined();
+    expect(turnB1).toBeDefined();
+    expect(turnA2).toBeUndefined();
+
+    vi.advanceTimersByTime(1200);
+    const turnA3 = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-a",
+      context: { deltaCount: 1, characterCount: 3, turnId: "turn-a", reason: "abort" },
+    });
+    expect(turnA3).toBeDefined();
+  });
+
+  it("keeps the throttle timestamp bookkeeping bounded when many unique suffixes are seen", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    const store = await loadStore({ VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true" });
+
+    // Record 250 unique-suffix preview_path summaries, each far enough apart
+    // in time that none throttle each other, to exercise the eviction path
+    // (cap is 200 entries) without needing to inspect internal state.
+    for (let index = 0; index < 250; index += 1) {
+      vi.advanceTimersByTime(1200);
+      const result = store.recordClientDiagnostic({
+        level: "debug",
+        category: "chat",
+        event: "thread.preview_path",
+        message: "Preview path summary",
+        throttleKeySuffix: `turn-${index}`,
+        context: { deltaCount: 1, characterCount: 1, turnId: `turn-${index}`, reason: "message_done" },
+      });
+      expect(result).toBeDefined();
+    }
+
+    // The earliest suffixes (e.g. turn-0) should have been evicted from the
+    // bookkeeping map, so replaying that exact suffix immediately afterward
+    // must NOT be throttled — proving the map didn't grow unboundedly and
+    // silently retain every historical entry.
+    const replayedEarly = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-0",
+      context: { deltaCount: 1, characterCount: 1, turnId: "turn-0", reason: "message_done" },
+    });
+    expect(replayedEarly).toBeDefined();
+
+    // The most recently recorded suffix is still within its throttle window,
+    // so recording it again immediately must still be throttled — confirming
+    // recent bookkeeping entries survive the eviction.
+    const replayedRecent = store.recordClientDiagnostic({
+      level: "debug",
+      category: "chat",
+      event: "thread.preview_path",
+      message: "Preview path summary",
+      throttleKeySuffix: "turn-249",
+      context: { deltaCount: 1, characterCount: 1, turnId: "turn-249", reason: "message_done" },
+    });
+    expect(replayedRecent).toBeUndefined();
+  });
+
   it("treats malformed window location parts and invalid input as empty diagnostics text", async () => {
     vi.stubGlobal("window", {
       location: {

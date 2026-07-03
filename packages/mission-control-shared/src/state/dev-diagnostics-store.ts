@@ -68,6 +68,7 @@ export interface DevDiagnosticsFilter {
 
 const DEFAULT_BUFFER_SIZE = 300;
 const MAX_COPY_ITEMS = 100;
+const MAX_THROTTLE_TIMESTAMP_ENTRIES = 200;
 const HIGH_FREQUENCY_EVENT_THROTTLES = new Map<string, number>([
   ["sse:freshness", 5000],
   ["refresh:event", 1500],
@@ -81,6 +82,23 @@ type Listener = () => void;
 
 const listeners = new Set<Listener>();
 const eventTimestamps = new Map<string, number>();
+
+/**
+ * Records a throttle bookkeeping timestamp, evicting the oldest entry first
+ * when the map would otherwise grow past MAX_THROTTLE_TIMESTAMP_ENTRIES.
+ * Per-discriminator keys (e.g. one per turnId) mean the map can otherwise
+ * grow unboundedly over a long-lived session; Map iteration order is
+ * insertion order, so the first key is always the oldest.
+ */
+function setThrottleTimestamp(key: string, now: number): void {
+  if (!eventTimestamps.has(key) && eventTimestamps.size >= MAX_THROTTLE_TIMESTAMP_ENTRIES) {
+    const oldestKey = eventTimestamps.keys().next().value;
+    if (oldestKey !== undefined) {
+      eventTimestamps.delete(oldestKey);
+    }
+  }
+  eventTimestamps.set(key, now);
+}
 
 const diagnosticsEnabled = resolveDevDiagnosticsEnabled();
 const verboseDiagnostics = resolveDevDiagnosticsVerbose();
@@ -235,19 +253,30 @@ export function recordClientDiagnostic(input: {
   runtimeKind?: string;
   runtimeStatus?: RuntimeDiagnosticStatus;
   runtimeError?: DevDiagnosticsEvent["runtimeError"];
+  /**
+   * Optional discriminator appended to the throttle bookkeeping key so that
+   * concurrent events sharing a category/event pair (e.g. two messages'
+   * preview-path summaries firing within the same window) throttle
+   * independently per discriminator instead of sharing one app-wide window.
+   * The throttle WINDOW (ms) lookup is unaffected — it stays keyed by
+   * `${category}:${event}` — only the last-seen-timestamp bookkeeping key
+   * incorporates this suffix.
+   */
+  throttleKeySuffix?: string;
 }): DevDiagnosticsEvent | undefined {
   if (!state.enabled) {
     return undefined;
   }
-  const throttleKey = `${input.category}:${input.event}`;
-  const throttleMs = HIGH_FREQUENCY_EVENT_THROTTLES.get(throttleKey);
+  const throttleWindowKey = `${input.category}:${input.event}`;
+  const throttleMs = HIGH_FREQUENCY_EVENT_THROTTLES.get(throttleWindowKey);
   if (typeof throttleMs === "number") {
+    const throttleTimestampKey = `${throttleWindowKey}:${input.throttleKeySuffix ?? ""}`;
     const now = Date.now();
-    const last = eventTimestamps.get(throttleKey) ?? 0;
+    const last = eventTimestamps.get(throttleTimestampKey) ?? 0;
     if (now - last < throttleMs) {
       return undefined;
     }
-    eventTimestamps.set(throttleKey, now);
+    setThrottleTimestamp(throttleTimestampKey, now);
   }
   const event: DevDiagnosticsEvent = {
     id: createCorrelationId(),
