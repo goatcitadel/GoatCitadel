@@ -74,21 +74,21 @@ Prep/planner overlap (the old "run planner concurrently with prep I/O" claim) is
 
 An idle timer around provider chunk iteration: re-armed on every chunk, default 120 s (config `assistant.streamIdleTimeoutMs`), on trip abort the provider request and surface a structured `stream_stalled` failure into the **existing** answer-recovery ladder (salvaging already-streamed text — the show-raw-then-recover posture both competitors deliberately chose). Emit a `trace_update` stall marker so mc-next's stall indicator gets a real gateway signal instead of a client-side guess. Placement is the shared streaming iteration in `llm-completion-service.ts` so all providers inherit it.
 
-### R3-4 · Auto-parallel workstreams (G4)
+### R3-4 · Auto-parallel workstreams (G4) — **struck: already shipped**
 
-`resolveWorkflowStages`: under `orchestrationParallelism:"auto"`, treat `cowork.workstreams.synthesize` like the research template — production workers share stage 1 (engine already caps concurrency at 4), reviewer/synthesizer keep their dependency stages. Explicit `"sequential"` still forces the chain. No new flag: the parallelism preference is already the user-facing control; this fixes `auto` to mean what it says for a template whose workers are independent by construction.
+Implementation-time correction (2026-07-03): `buildWorkstreamStepPlans` already parallelizes production workstreams under `auto` (`router.ts:203` — `parallelProduction = parallelism === "parallel" || parallelism === "auto"`), and the research template parallelizes under `auto` at `router.ts:287-291`. The investigation agent's claim that workstreams required explicit `"parallel"` was a misread. The residual G4 gap is solely the default template's inability to fan out at all — addressed by R3-7.
 
 ### R3-5 · Compaction re-pin (G5)
 
 `buildConversationCompactionSummary` becomes ask-anchored: pin (a) an excerpt of the **original** user ask and (b) the **latest** user ask ahead of the decision/failure digest, so long cowork sessions stop drifting off-objective after trims. Pure-function change, deterministic, test-pinned; no flag (content-only, no control-flow change).
 
-### R3-6 · Receipt memoization (safe slice of G7)
+### R3-6 · Receipt memoization (G7) — **struck: deferred**
 
-Cache per-message token estimates (keyed by message identity) inside the budget-receipt build so each iteration re-estimates only new messages instead of the whole history. No behavior change, no flag — the receipt's consumers see identical values. The unconditional-receipt question (whether it can be gated entirely) needs a consumer audit and stays a follow-up.
+Implementation-time correction (2026-07-03): keeping receipt values byte-identical under memoization is not cheap (`estimateTokensFromText` runs over role-prefixed concatenations, so per-message sums differ from whole-text estimates), and the loop runs at most `maxToolLoops` (4–12) times per turn — this is not the hot tax the June S5 finding identified (the audit-append tax has since healed). Dropped per YAGNI; deferred with the G7 evidence.
 
-### R3-7 · Fan-out primitive, part A — planner-declared parallel groups (G6, staged)
+### R3-7 · Planner-declared fan-out (G4/G6) — flag `plannerFanoutV1Disabled`
 
-Let the planner draft declare independent subtasks; the router maps them onto the workstreams template with same-stage workers (R3-4's machinery), so "research A and B, then synthesize" fans out without the user hand-picking a template. Scope-bounded: if the draft→router seam demands schema surgery beyond additive optional fields, this stages down to R3-4 alone this round.
+Implementation-time sharpening (2026-07-03): the planner prompt already requests `parallelizable` + `dependsOnStepIds` per step and `coercePlannerExecutionPlanDraft` already preserves them (`chat-turn-planning-helpers.ts:497-516`) — but the draft maps 1:1 onto template steps (extra planner steps are silently dropped) and stages are never recomputed, so on the default `cowork.plan.work.synthesize` template (one worker) the planner structurally cannot fan out. The change: for cowork, allow the draft to **expand production (worker-role) steps** beyond the template count — capped at 4 production steps, control steps (reviewer/synthesizer) keep their protected template role and pick up dependencies on all production steps — then derive stages by topological leveling of the dependency graph so independent workers share a stage and the engine's existing `mapWithConcurrency` (cap 4) runs them concurrently. Planner output remains untrusted input: role/count/dependency caps are enforced server-side; a cycle or malformed graph falls back to the template's linear chain.
 
 ### R3-8 · Fan-out primitive, part B — model-callable spawn tool (G6, stretch)
 
@@ -111,6 +111,6 @@ Per item, TDD (failing test first): overlap/ordering/mixed-batch/flag tests for 
 1. A turn issuing 3 read-only tool calls completes the tool phase in ≈ the slowest call, not the sum (test-asserted).
 2. A trivial cowork ask pays zero planner latency; a non-trivial one plans on a speed-selected model.
 3. A provider stream that hangs mid-turn aborts at the idle timeout with salvage + a visible stall marker — no infinite spinner.
-4. `orchestrationParallelism:"auto"` workstreams run production workers concurrently.
+4. A cowork ask the planner decomposes into independent subtasks executes those workers concurrently on the default template (test-asserted stage sharing), with server-side caps holding against a hostile draft.
 5. Compaction output pins original + latest ask (test-pinned).
 6. All existing gateway tests green; each kill switch restores prior behavior byte-identically on its path.
