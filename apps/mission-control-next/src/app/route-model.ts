@@ -1333,7 +1333,10 @@ export function buildAppHref(route: AppRoute): string {
   }
   writeParam(params, "view", next.view);
   // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
-  if (next.area === "chat" && next.mode && next.mode !== "chat") {
+  // An explicitly-set mode="chat" is an operator override (QA finding N3) and must round-trip
+  // through the URL just like cowork/code; an absent mode (undefined) still omits the param so
+  // today's session-mode-wins behavior is unaffected.
+  if (next.area === "chat" && next.mode) {
     writeParam(params, "mode", next.mode);
   }
 

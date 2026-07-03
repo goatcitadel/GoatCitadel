@@ -40,9 +40,13 @@ describe("unified surface mode field", () => {
   it("round-trips a code thread href", () => {
     expect(buildAppHref({ area: "chat", mode: "code", sessionId: "s9" })).toBe("/chat?sessionId=s9&mode=code");
   });
-  it("emits bare /chat for chat mode", () => {
-    expect(buildAppHref({ area: "chat", mode: "chat" })).toBe("/chat");
+  it("emits bare /chat when no mode is set, but round-trips an explicit chat mode override", () => {
+    // Absent mode: today's session-mode-wins behavior (no mode param to round-trip).
     expect(buildAppHref({ area: "chat" })).toBe("/chat");
+    // Explicit mode="chat" is an operator override (QA finding N3) and must
+    // round-trip through the URL just like cowork/code, or the override is
+    // lost on any internal navigation that rebuilds the href from the route.
+    expect(buildAppHref({ area: "chat", mode: "chat" })).toBe("/chat?mode=chat");
   });
   it("normalizes a stray area:code into chat+mode", () => {
     const n = normalizeAppRoute({ area: "code", sessionId: "s2" } as never);

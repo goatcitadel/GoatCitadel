@@ -16,6 +16,7 @@ export function ThreadedSurfaceRoute({
   approvalsCount,
   lockSurface,
   hidePageHeader,
+  initialModeOverride,
   onOpenCowork,
   onOpenCode,
   onOpenTasks,
@@ -32,6 +33,7 @@ export function ThreadedSurfaceRoute({
   approvalsCount: number;
   lockSurface?: boolean;
   hidePageHeader?: boolean;
+  initialModeOverride?: ChatMode;
   onOpenCowork?: () => void;
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
@@ -42,7 +44,7 @@ export function ThreadedSurfaceRoute({
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
   ) => void;
-  onResolvedModeChange?: (mode: ChatMode) => void;
+  onResolvedModeChange?: (mode: ChatMode, origin?: "session-sync" | "manual-override") => void;
 }) {
   return (
     <MissionThreadedControllerHost
@@ -53,6 +55,7 @@ export function ThreadedSurfaceRoute({
       surface={surface}
       lockSurface={lockSurface}
       hidePageHeader={hidePageHeader}
+      initialModeOverride={initialModeOverride}
       onOpenCowork={onOpenCowork}
       onOpenCode={onOpenCode}
       onOpenTasks={onOpenTasks}

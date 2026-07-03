@@ -1211,6 +1211,7 @@ export function renderRouteContent(input: {
         surface="chat"
         lockSurface={false}
         hidePageHeader
+        initialModeOverride={route.mode === "chat" ? "chat" : undefined}
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
@@ -1230,7 +1231,24 @@ export function renderRouteContent(input: {
             artifactId: options?.artifactId ?? undefined,
           })
         }
-        onResolvedModeChange={(mode) => input.navigate({ ...route, area: "chat", mode }, { replace: true })}
+        onResolvedModeChange={(mode, origin) => {
+          // An explicit ?mode=chat is a one-time seed of operator intent (QA finding
+          // N3), not a standing force. Suppress the URL rewrite (agree-suppression)
+          // while ?mode=chat is present and EITHER:
+          //   - the resolved mode still agrees with the URL (mode === "chat"), so
+          //     there is nothing untruthful to correct; or
+          //   - this is a passive session-mode sync (arrival, session switch) that
+          //     carries no operator intent — it merely echoes the selected
+          //     session's own stored mode and must never clobber the seed.
+          // Once the operator manually changes the mode away from chat (origin:
+          // "manual-override" with a disagreeing mode), the URL must follow
+          // truthfully so it never lies about the resolved surface.
+          const isSessionSync = (origin ?? "session-sync") === "session-sync";
+          if (route.mode === "chat" && (mode === "chat" || isSessionSync)) {
+            return;
+          }
+          input.navigate({ ...route, area: "chat", mode }, { replace: true });
+        }}
       />
     );
   }
