@@ -1993,6 +1993,9 @@ export async function* streamPreparedAgentChatTurn(
         assistantUsage = chunk.usage;
         yield chunk;
       }
+      if (chunk.type === "thinking_delta") {
+        yield chunk;
+      }
       if (chunk.type === "message_done") {
         if (chunk.content.trim() && !hasStreamedDelta) {
           finalText = chunk.content;

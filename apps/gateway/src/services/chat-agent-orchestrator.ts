@@ -6225,7 +6225,14 @@ function extractReasoningText(message: Record<string, unknown> | undefined): str
   const parts: string[] = [];
   for (const item of extractProviderNativeContent(message)) {
     const type = typeof item.type === "string" ? item.type : "";
-    const reasoningLike = type === "thinking" || type === "redacted_thinking" || type === "reasoning";
+    // redacted_thinking blocks carry only an encrypted `data` blob — never treat
+    // that as readable text. Skip them entirely rather than falling through the
+    // `?? item.data` chain below, which would otherwise leak the ciphertext into
+    // visible reasoning output.
+    if (type === "redacted_thinking") {
+      continue;
+    }
+    const reasoningLike = type === "thinking" || type === "reasoning";
     if (!reasoningLike) {
       continue;
     }

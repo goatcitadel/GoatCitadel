@@ -180,4 +180,53 @@ describe("ChatAgentOrchestrator thinking-display skeleton (chatThinkingStreamV1E
     }
     expect(secondChunks.some((chunk) => chunk.type === "thinking_delta")).toBe(true);
   });
+
+  it("never emits a redacted_thinking block's encrypted data as visible reasoning text", async () => {
+    // IMPORTANT-2 regression coverage: a redacted_thinking block's `data` field
+    // is an opaque encrypted blob, not readable text. extractReasoningText must
+    // skip it entirely rather than falling through the `?? item.data` chain.
+    const createChatCompletion = async (): Promise<ChatCompletionResponse> => ({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Sure, here you go.",
+            provider_native_content: [
+              {
+                type: "thinking",
+                thinking: "visible reasoning",
+                signature: "sig-1",
+              },
+              {
+                type: "redacted_thinking",
+                data: "ENCRYPTED",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: async () => {
+        throw new Error("not expected");
+      },
+      chatThinkingStreamV1Enabled: () => true,
+    });
+
+    const input = baseTurn("sess-thinking-redacted", "What is 2 plus 2?");
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of orchestrator.runStream(input)) {
+      chunks.push(chunk as Record<string, unknown>);
+    }
+
+    const thinkingChunk = chunks.find((chunk) => chunk.type === "thinking_delta");
+    expect(thinkingChunk).toBeDefined();
+    expect(String(thinkingChunk?.delta)).toContain("visible reasoning");
+    expect(String(thinkingChunk?.delta)).not.toContain("ENCRYPTED");
+  });
 });

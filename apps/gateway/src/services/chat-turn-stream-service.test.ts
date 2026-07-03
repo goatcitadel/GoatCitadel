@@ -36,6 +36,12 @@ const {
   streamPreparedAgentChatTurn,
 } = await import("./chat-turn-stream-service.js");
 
+// Unmocked on purpose: IMPORTANT-1 coverage below drives the real
+// `executePreparedAgentChatTurnBackground` re-emit loop (not a stubbed
+// `streamPreparedAgentChatTurn`) so a regression that drops a chunk type from
+// that loop's manual `if (chunk.type === ...)` guards is actually caught.
+const { executePreparedAgentChatTurnBackground } = await import("./chat-turn-dispatch-service.js");
+
 describe("streamPreparedAgentChatTurn", () => {
   it("collects child turn tool runs in delegation step order", () => {
     const host = createHost();
@@ -408,6 +414,117 @@ describe("streamPreparedAgentChatTurn", () => {
         type: "done",
       }),
     );
+  });
+
+  it("forwards a thinking_delta chunk from the turn runtime through to the persisted-chunk sink exactly once, without leaking it into the persisted assistant message", async () => {
+    // IMPORTANT-1 regression coverage: streamPreparedAgentChatTurn's manual
+    // re-emit loop must forward "thinking_delta" the same way it forwards the
+    // adjacent "usage"/"citation" chunk types. Stubbing turnRuntime.runStream
+    // stands in for the orchestrator with chatThinkingStreamV1Enabled ON (that
+    // flag gate is covered separately in chat-agent-orchestrator.thinking-stream
+    // .test.ts; here we only need to prove the stream/dispatch layers don't
+    // silently drop the chunk once the orchestrator has emitted it).
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "thinking_delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        delta: "Reasoning about the answer.",
+      };
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Here is the answer.",
+      };
+    }) as never;
+
+    const persistChatStreamChunk = vi.fn();
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk,
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "hello", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    );
+
+    const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
+    expect(thinkingCalls).toHaveLength(1);
+    expect(thinkingCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        type: "thinking_delta",
+        turnId: "turn-1",
+        delta: "Reasoning about the answer.",
+      }),
+    );
+
+    // MINOR / storage-layer safety assertion: forwarding the thinking_delta
+    // chunk to the stream sink (above) must not also leak the reasoning text
+    // into the PERSISTED assistant message. `host.ingestEvent` is the real
+    // write path (see gateway-service.ts ingestEvent -> EventIngestService ->
+    // storage.chatMessages.upsert) that streamPreparedAgentChatTurn calls with
+    // the final assistant content once the turn completes; asserting on its
+    // captured payload here is the storage-layer analog of the existing
+    // stream-layer safety invariant in
+    // chat-agent-orchestrator.thinking-stream.test.ts.
+    const assistantIngestCall = (host.ingestEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([, payload]) => (payload as { message?: { role?: string } })?.message?.role === "assistant",
+    );
+    expect(assistantIngestCall).toBeDefined();
+    const persistedContent = (assistantIngestCall?.[1] as { message: { content: string } }).message.content;
+    expect(persistedContent).toBe("Here is the answer.");
+    expect(persistedContent).not.toContain("Reasoning about the answer.");
+  });
+
+  it("persists zero thinking_delta chunks when the turn runtime never emits one (flag off)", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Here is the answer.",
+      };
+    }) as never;
+
+    const persistChatStreamChunk = vi.fn();
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk,
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "hello", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    );
+
+    const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
+    expect(thinkingCalls).toHaveLength(0);
   });
 
   it("streams orchestration progress and final synthesized deltas before message_done", async () => {
