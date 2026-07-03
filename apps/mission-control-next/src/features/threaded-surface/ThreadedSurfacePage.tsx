@@ -61,6 +61,7 @@ import "./styles/timeline-frame.css";
 import "./styles/visual-regression.css";
 import "./styles/side-panels.css";
 import "./styles/timeline.css";
+import "./styles/code-highlight.css";
 import "./styles/composer.css";
 import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";

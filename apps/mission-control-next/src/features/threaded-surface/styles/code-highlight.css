@@ -1,0 +1,56 @@
+/* Syntax highlight classes for settled assistant code blocks (lazy-loaded via
+   HighlightedCode.tsx in packages/mission-control-shared). Highlight.js emits
+   `hljs-*` class names (via lowlight); every color here derives from an already
+   resolvable theme token with color-mix(in oklab, ...) so both themes stay in
+   sync automatically. NOTE: `--mc-accent` is not declared anywhere in this repo
+   (it is only ever referenced with a literal CSS fallback elsewhere) — the
+   canonical, actually-declared accent token is `--accent`, so that is used here
+   instead. */
+
+.mc-assistant-code-block .hljs-comment,
+.mc-assistant-code-block .hljs-quote {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.mc-assistant-code-block .hljs-keyword,
+.mc-assistant-code-block .hljs-selector-tag {
+  color: color-mix(in oklab, var(--accent) 78%, var(--foreground));
+  font-weight: 650;
+}
+
+.mc-assistant-code-block .hljs-string,
+.mc-assistant-code-block .hljs-regexp {
+  color: color-mix(in oklab, var(--risk-safe) 62%, var(--foreground));
+}
+
+.mc-assistant-code-block .hljs-number,
+.mc-assistant-code-block .hljs-literal {
+  color: color-mix(in oklab, var(--risk-caution) 55%, var(--foreground));
+}
+
+.mc-assistant-code-block .hljs-title,
+.mc-assistant-code-block .hljs-function .hljs-title {
+  color: color-mix(in oklab, var(--accent) 70%, var(--foreground));
+}
+
+.mc-assistant-code-block .hljs-type,
+.mc-assistant-code-block .hljs-built_in {
+  color: color-mix(in oklab, var(--accent) 55%, var(--foreground));
+  font-weight: normal;
+}
+
+.mc-assistant-code-block .hljs-attr,
+.mc-assistant-code-block .hljs-attribute {
+  color: color-mix(in oklab, var(--accent) 45%, var(--foreground));
+}
+
+.mc-assistant-code-block .hljs-addition {
+  color: var(--risk-safe);
+  background: color-mix(in oklab, var(--risk-safe) 10%, transparent);
+}
+
+.mc-assistant-code-block .hljs-deletion {
+  color: var(--risk-danger);
+  background: color-mix(in oklab, var(--risk-danger) 10%, transparent);
+}

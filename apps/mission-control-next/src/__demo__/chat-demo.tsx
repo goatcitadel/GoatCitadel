@@ -8,6 +8,7 @@ import "@next/styles/mission-control-next-foundation.css";
 import "@next/styles/mission-control-next.css";
 import "@next/features/native-routes/primitives/primitives.css";
 import "@next/features/threaded-surface/styles/timeline.css";
+import "@next/features/threaded-surface/styles/code-highlight.css";
 import "@next/features/threaded-surface/styles/composer.css";
 import "./chat-demo.css";
 import sampleImageUrl from "./assets/sample-image.png";

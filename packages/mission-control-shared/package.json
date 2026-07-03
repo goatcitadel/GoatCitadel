@@ -101,6 +101,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@types/hast": "3.0.4",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@types/react-test-renderer": "19.1.0",

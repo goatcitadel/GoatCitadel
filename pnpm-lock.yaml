@@ -513,6 +513,9 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
+      '@types/hast':
+        specifier: 3.0.4
+        version: 3.0.4
       '@types/react':
         specifier: 19.2.14
         version: 19.2.14

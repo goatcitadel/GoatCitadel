@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantMessageRenderer, copyTextToClipboard, splitStreamingMarkdown } from "./AssistantMessageRenderer";
 import { normalizeAssistantDisplayText, normalizeCitationDisplayText } from "./assistant-display-text";
+import { resetAssistantCodeHighlighterForTests } from "./assistant-code-highlight";
 import {
   ChatAttachmentActions,
   downloadChatAttachmentToDevice,
@@ -25,6 +26,16 @@ const mermaidMocks = vi.hoisted(() => ({
   render: vi.fn(),
 }));
 
+const highlightLanguagesMocks = vi.hoisted(() => ({
+  createAssistantHighlighter: vi.fn(() => ({
+    highlight: (_language: string, code: string) => ({
+      type: "root" as const,
+      children: [{ type: "text" as const, value: code }],
+    }),
+    listLanguages: () => ["typescript", "javascript", "python"],
+  })),
+}));
+
 vi.mock("../../api/client", () => ({
   downloadChatAttachment: apiMocks.downloadChatAttachment,
   fetchChatAttachmentPreview: apiMocks.fetchChatAttachmentPreview,
@@ -36,6 +47,10 @@ vi.mock("mermaid", () => ({
     initialize: mermaidMocks.initialize,
     render: mermaidMocks.render,
   },
+}));
+
+vi.mock("./assistant-code-highlight-languages", () => ({
+  createAssistantHighlighter: highlightLanguagesMocks.createAssistantHighlighter,
 }));
 
 function textOf(node: unknown): string {
@@ -178,6 +193,7 @@ describe("chat rendering tail coverage", () => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     resetAttachmentPreviewStateForTests();
+    resetAssistantCodeHighlighterForTests();
     apiMocks.downloadChatAttachment.mockResolvedValue({
       blob: new Blob(["hello"], { type: "text/plain" }),
       fileName: "result.txt",
@@ -198,6 +214,7 @@ describe("chat rendering tail coverage", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    resetAssistantCodeHighlighterForTests();
   });
 
   it("strips raw html comments even when one pass reveals another comment marker", () => {
@@ -571,5 +588,26 @@ describe("chat rendering tail coverage", () => {
 
     renderer.update(<ChatAttachmentPreviewStack attachments={[]} />);
     expect(renderer.toJSON()).toBeNull();
+  });
+
+  it("never loads the highlighter for an open fence in the streaming tail, only after the message settles", async () => {
+    const streamingContent = "Here is code:\n\n```typescript\nconst x: number = 1;\n";
+
+    renderer = create(
+      <AssistantMessageRenderer role="assistant" content={streamingContent} running streamTurnId="turn-highlight" />,
+    );
+    await flush();
+    expect(highlightLanguagesMocks.createAssistantHighlighter).not.toHaveBeenCalled();
+
+    renderer.update(
+      <AssistantMessageRenderer
+        role="assistant"
+        content={`${streamingContent}\`\`\`\n\nDone.`}
+        running={false}
+        streamTurnId="turn-highlight"
+      />,
+    );
+    await flush();
+    expect(highlightLanguagesMocks.createAssistantHighlighter).toHaveBeenCalledTimes(1);
   });
 });
