@@ -238,6 +238,7 @@ const updateSettingsSchema = z.object({
       coworkRuntimeQualityV1Disabled: z.boolean().optional(),
       orchestrationFinalStreamingV1Disabled: z.boolean().optional(),
       autonomyV1Disabled: z.boolean().optional(),
+      chatThinkingStreamV1Enabled: z.boolean().optional(),
     })
     .optional(),
 });

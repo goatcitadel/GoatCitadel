@@ -693,6 +693,9 @@ export const AssistantConfigInputSchema = z
         // Absent/false ⇒ autonomy ON; `true` halts ALL proactive, scheduled,
         // heartbeat, and self-improvement loops immediately. Single global switch.
         autonomyV1Disabled: z.boolean().optional(),
+        // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
+        // stream chunks. Absent/false (default) ⇒ byte-identical to today.
+        chatThinkingStreamV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

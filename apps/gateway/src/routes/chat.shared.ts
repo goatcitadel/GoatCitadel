@@ -169,7 +169,16 @@ interface CoalesceOptions {
   coalescableTypes?: ReadonlySet<string>;
 }
 
-const DEFAULT_COALESCABLE_TYPES: ReadonlySet<string> = new Set(["delta", "assistant.delta", "thinking.delta"]);
+// same-type-only: the coalescer flushes the pending buffer whenever the incoming
+// type differs from the one currently accumulating (see the `pendingType !== type`
+// check below), so entries here never merge across types even within one window —
+// a "thinking_delta" chunk can never absorb an adjacent "delta"/"assistant.delta".
+const DEFAULT_COALESCABLE_TYPES: ReadonlySet<string> = new Set([
+  "delta",
+  "assistant.delta",
+  "thinking.delta",
+  "thinking_delta",
+]);
 
 export async function* coalesceStreamingDeltas(
   source: AsyncIterable<unknown>,

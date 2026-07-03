@@ -75,6 +75,14 @@ export interface FeatureFlagsConfig {
   coworkRuntimeQualityV1Disabled?: boolean;
   orchestrationFinalStreamingV1Disabled?: boolean;
   autonomyV1Disabled?: boolean;
+  /**
+   * Thinking-display skeleton: gates the gateway emitting `thinking_delta` stream
+   * chunks carrying the model's reasoning/thinking text. Absent/false (default) ⇒
+   * byte-identical behavior to today (no chunk is even constructed). `true` turns
+   * on the terminal-block emission (see chat-agent-orchestrator's P0-B reasoning
+   * detection site) so the client's collapsible ChatThinkingSection can render.
+   */
+  chatThinkingStreamV1Enabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -672,6 +680,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       process.env.GOATCITADEL_FEATURE_ORCHESTRATION_FINAL_STREAMING_V1_DISABLED,
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
+    ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1202,6 +1211,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // `*Disabled` master kill switch — `?? false` means "not disabled" unless
       // an operator explicitly sets it. Do NOT flip this default.
       autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
+      // Thinking-display skeleton: default OFF. `?? false` means the gateway never
+      // constructs/emits a thinking_delta chunk unless an operator opts in — with
+      // this flag left at its default, runtime behavior is byte-identical to today.
+      chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

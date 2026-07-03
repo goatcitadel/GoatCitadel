@@ -1763,6 +1763,13 @@ export interface ChatThreadTurnRecord {
   citations: ChatCitationRecord[];
   generatedArtifacts?: ChatGeneratedArtifactReference[];
   branch: ChatThreadTurnBranchRecord;
+  /**
+   * Accumulated streamed reasoning/"thinking" text for this turn, populated only
+   * when the gateway's `chatThinkingStreamV1Enabled` flag is on (default off).
+   * Capped at 16k chars by the reducer (tail kept, head-truncation marker
+   * prefixed) so unbounded reasoning cannot grow the thread state without limit.
+   */
+  thinking?: string;
 }
 
 export interface ChatThreadResponse {
@@ -1944,6 +1951,19 @@ export interface ChatStreamDoneChunk extends ChatStreamChunkBase {
   messageId: string;
 }
 
+/**
+ * Streamed reasoning/"thinking" text, gated end-to-end behind the default-off
+ * `chatThinkingStreamV1Enabled` config flag. Thread-mutating (see
+ * `isThreadMutatingStreamChunk`) so it accumulates on `ChatThreadTurnRecord.thinking`
+ * via the reducer rather than the ephemeral preview buffer. Never persisted into
+ * assistant message content — see the safety invariant at the gateway emission site.
+ */
+export interface ChatStreamThinkingDeltaChunk extends ChatStreamChunkBase {
+  type: "thinking_delta";
+  turnId: string;
+  delta: string;
+}
+
 export type ChatStreamChunk =
   | ChatStreamMessageStartChunk
   | ChatStreamDeltaChunk
@@ -1957,7 +1977,8 @@ export type ChatStreamChunk =
   | ChatStreamCitationChunk
   | ChatStreamCapabilitySuggestionChunk
   | ChatStreamErrorChunk
-  | ChatStreamDoneChunk;
+  | ChatStreamDoneChunk
+  | ChatStreamThinkingDeltaChunk;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 

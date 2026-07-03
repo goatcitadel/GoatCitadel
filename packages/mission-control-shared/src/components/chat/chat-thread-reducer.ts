@@ -25,11 +25,19 @@ export function isThreadMutatingStreamChunk(chunk: ChatStreamChunk): boolean {
     case "trace_update":
     case "capability_upgrade_suggestion":
     case "citation":
+    case "thinking_delta":
       return true;
     default:
       return false;
   }
 }
+
+/** Reducer keeps at most this many trailing characters of accumulated thinking
+ * text per turn (see the `thinking_delta` case below). Bounds unbounded reasoning
+ * streams from growing thread state without limit while keeping the freshest
+ * (most relevant) reasoning visible. */
+const MAX_THINKING_CHARS = 16_000;
+const THINKING_TRUNCATION_MARKER = "… ";
 
 export function updateThreadFromStreamChunk(
   current: ChatThreadResponse | null,
@@ -288,9 +296,33 @@ function updateTurnFromStreamChunk(
       };
     case "trace_update":
       return applyTraceUpdate(turn, chunk.trace);
+    case "thinking_delta": {
+      const nextThinking = capThinkingText(`${turn.thinking ?? ""}${chunk.delta}`);
+      if (turn.thinking === nextThinking) {
+        return turn;
+      }
+      return {
+        ...turn,
+        thinking: nextThinking,
+      };
+    }
     default:
       return turn;
   }
+}
+
+/**
+ * Caps accumulated thinking text at {@link MAX_THINKING_CHARS}. When over the
+ * cap, keeps the TAIL (freshest reasoning) and prefixes the head-truncation
+ * marker so it stays clear that earlier text was dropped, not that reasoning
+ * stopped.
+ */
+function capThinkingText(text: string): string {
+  if (text.length <= MAX_THINKING_CHARS) {
+    return text;
+  }
+  const keepChars = MAX_THINKING_CHARS - THINKING_TRUNCATION_MARKER.length;
+  return `${THINKING_TRUNCATION_MARKER}${text.slice(text.length - keepChars)}`;
 }
 
 function applyTraceUpdate(turn: ChatThreadTurnRecord, trace: ChatThreadTurnRecord["trace"]): ChatThreadTurnRecord {
