@@ -547,9 +547,7 @@ export function coercePlannerExecutionPlanDraft(
           .flatMap((step) => [step.label?.toLowerCase(), step.delegatedRole?.toLowerCase()])
           .filter((label): label is string => Boolean(label)),
       );
-      const templateProductionCount = templatePlan.steps.filter(
-        (step, index) => !shouldProtectPlannerTemplateStep(templatePlan, step, index),
-      ).length;
+      const templateProductionCount = countPlannerProductionSteps(templatePlan);
       let extrasBudget = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - templateProductionCount);
       let extraOrdinal = 0;
       // Bound the scan itself, not just the materializations: a garbage payload
@@ -631,6 +629,16 @@ export function coercePlannerExecutionPlanDraft(
     summary,
     steps,
   };
+}
+
+/**
+ * Single source of truth for "how many production (non-control) steps does
+ * this template have" — the fan-out extras budget and the planner prompt's
+ * advertised allowance must agree, whatever roles a template uses.
+ */
+export function countPlannerProductionSteps(templatePlan: ModeOrchestrationPlan): number {
+  return templatePlan.steps.filter((step, index) => !shouldProtectPlannerTemplateStep(templatePlan, step, index))
+    .length;
 }
 
 function findProductionTemplateStep(

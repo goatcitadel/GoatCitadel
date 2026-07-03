@@ -72,7 +72,7 @@ Prep/planner overlap (the old "run planner concurrently with prep I/O" claim) is
 
 ### R3-3 · Stream idle watchdog (G3) — flag `streamIdleWatchdogV1Disabled`
 
-An idle timer around provider chunk iteration: re-armed on every chunk, default 120 s (config `assistant.streamIdleTimeoutMs`), on trip abort the provider request and surface a structured `stream_stalled` failure into the **existing** answer-recovery ladder (salvaging already-streamed text — the show-raw-then-recover posture both competitors deliberately chose). Emit a `trace_update` stall marker so mc-next's stall indicator gets a real gateway signal instead of a client-side guess. Placement is the shared streaming iteration in `llm-completion-service.ts` so all providers inherit it.
+An idle timer around provider chunk iteration: re-armed on every chunk, default 120 s (config `assistant.streamIdleTimeoutMs`), on trip abort the provider request and surface a machine-readable `stream_idle_timeout` error through the **existing** failed-after-emit salvage plumbing (already-streamed text is kept — the show-raw-then-recover posture both competitors deliberately chose). Placement is the shared streaming iteration in `llm-completion-service.ts` so all providers (including the cross-provider fallback loop) inherit it.
 
 ### R3-4 · Auto-parallel workstreams (G4) — **struck: already shipped**
 

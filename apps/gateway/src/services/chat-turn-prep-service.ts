@@ -56,6 +56,7 @@ import {
   CHAT_PLANNER_MIN_STEPS,
   MAX_PLANNER_PRODUCTION_STEPS,
   coercePlannerExecutionPlanDraft,
+  countPlannerProductionSteps,
   extractCompletionText,
   extractSpecialistObjectiveKeywords,
   inferSpecialistBaseRole,
@@ -772,13 +773,7 @@ export async function generatePreparedExecutionPlanDraft(
     : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
   const allowProductionExpansion =
     routerInput.task.mode === "cowork" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
-  const maxExtraWorkerSteps = Math.max(
-    0,
-    MAX_PLANNER_PRODUCTION_STEPS -
-      templatePlan.steps.filter(
-        (step) => step.role === "planner" || step.role === "worker" || step.role === "researcher",
-      ).length,
-  );
+  const maxExtraWorkerSteps = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - countPlannerProductionSteps(templatePlan));
   // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
   // a provider that ignores its deadline cannot pin the hot turn-prep path. On
   // timeout we abort the in-flight call (no leaked request) and fall back to the

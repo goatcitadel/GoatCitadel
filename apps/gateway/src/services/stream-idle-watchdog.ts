@@ -47,9 +47,17 @@ export async function* withStreamIdleWatchdog<T>(
       let timer: NodeJS.Timeout | undefined;
       const idleGuard = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          options.abort?.();
-          options.onTrip?.(options.idleTimeoutMs);
-          reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
+          try {
+            options.abort?.();
+            options.onTrip?.(options.idleTimeoutMs);
+          } catch {
+            // Intentionally ignore host-callback errors (non-fatal): this runs
+            // inside a Node timer, so a throwing abort/onTrip would otherwise
+            // become an uncaught exception; the idle timeout still surfaces
+            // through the finally below.
+          } finally {
+            reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
+          }
         }, options.idleTimeoutMs);
         timer.unref?.();
       });
