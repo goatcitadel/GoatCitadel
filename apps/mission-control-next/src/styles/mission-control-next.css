@@ -2191,6 +2191,8 @@
     bottom: 0.9rem;
     width: auto;
     max-height: min(74dvh, 42rem);
+    /* Keep in sync with SIDE_INSPECTOR_DOCKED_MAX_WIDTH (SideInspectorDrawer.tsx):
+       drag affordance is disabled at or below this width. */
     transform: none;
   }
 

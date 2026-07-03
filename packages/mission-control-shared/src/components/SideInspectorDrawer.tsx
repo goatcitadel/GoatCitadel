@@ -1,4 +1,75 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+
+/**
+ * Below this viewport width the drawer docks as a bottom sheet (see
+ * `.mc-next-shell-inspector.side-inspector-drawer` in mission-control-next.css)
+ * and drag is fully disabled. Keep this in sync with the `@media (max-width: ...)`
+ * rule that sets `transform: none` on the docked drawer.
+ */
+export const SIDE_INSPECTOR_DOCKED_MAX_WIDTH = 1180;
+
+function readMediaQueryMatch(query: string): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return window.matchMedia(query).matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Subscribes to a media query via `useSyncExternalStore`. The latest match
+ * state is tracked in a ref that the subscription's change handler updates
+ * from the event payload (matching real `MediaQueryListEvent` behavior, where
+ * `.matches` always mirrors the list's own current state) — `getSnapshot`
+ * only reads that ref, it never mutates it, so repeated/concurrent snapshot
+ * reads stay pure. Falls back to `false` (not docked) when `matchMedia` is
+ * unavailable, e.g. in the package's node-environment vitest tests.
+ */
+function useMediaQuery(query: string): boolean {
+  const matchesRef = useRef(readMediaQueryMatch(query));
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+        return () => undefined;
+      }
+      let mql: MediaQueryList;
+      try {
+        mql = window.matchMedia(query);
+      } catch {
+        return () => undefined;
+      }
+      const handleChange = (event: MediaQueryListEvent) => {
+        matchesRef.current = event.matches;
+        onStoreChange();
+      };
+      if (typeof mql.addEventListener === "function") {
+        mql.addEventListener("change", handleChange);
+        return () => mql.removeEventListener("change", handleChange);
+      }
+      mql.addListener(handleChange);
+      return () => mql.removeListener(handleChange);
+    },
+    [query],
+  );
+
+  const getSnapshot = useCallback(() => matchesRef.current, []);
+  const getServerSnapshot = useCallback(() => false, []);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
 
 interface SideInspectorDrawerProps {
   title: string;
@@ -41,7 +112,8 @@ export function SideInspectorDrawer({
   } | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
-  const dragEnabled = draggable && open;
+  const isDocked = useMediaQuery(`(max-width: ${SIDE_INSPECTOR_DOCKED_MAX_WIDTH}px)`);
+  const dragEnabled = draggable && open && !isDocked;
   const style = useMemo<CSSProperties | undefined>(
     () =>
       dragEnabled
@@ -53,13 +125,26 @@ export function SideInspectorDrawer({
     [dragEnabled, dragOffset.x, dragOffset.y],
   );
 
+  const resetDragState = useCallback(() => {
+    dragStateRef.current = null;
+    setDragging(false);
+    setDragOffset({ x: 0, y: 0 });
+  }, []);
+
   useEffect(() => {
     if (!open) {
-      setDragOffset({ x: 0, y: 0 });
-      setDragging(false);
-      dragStateRef.current = null;
+      resetDragState();
     }
-  }, [open]);
+  }, [open, resetDragState]);
+
+  useEffect(() => {
+    // Crossing into the docked range (e.g. resizing the window mid-drag) must
+    // clear any accumulated offset so resizing back above the breakpoint
+    // doesn't restore a surprising off-screen position.
+    if (isDocked) {
+      resetDragState();
+    }
+  }, [isDocked, resetDragState]);
 
   useEffect(() => {
     if (!dragEnabled || !dragging) {
@@ -106,7 +191,7 @@ export function SideInspectorDrawer({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragEnabled || window.innerWidth < 1024 || event.button !== 0) {
+      if (!dragEnabled || event.button !== 0) {
         return;
       }
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -135,13 +220,11 @@ export function SideInspectorDrawer({
   );
 
   const handleDoubleClick = useCallback(() => {
-    if (!dragEnabled || window.innerWidth < 1024) {
+    if (!dragEnabled) {
       return;
     }
-    dragStateRef.current = null;
-    setDragging(false);
-    setDragOffset({ x: 0, y: 0 });
-  }, [dragEnabled]);
+    resetDragState();
+  }, [dragEnabled, resetDragState]);
 
   return (
     <aside
