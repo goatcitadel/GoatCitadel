@@ -2357,6 +2357,19 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(text).toContain("No device grants found.");
   });
 
+  it("renders the access section when the settings payload is empty", async () => {
+    settingsMocks.fetchSettings.mockResolvedValue({});
+
+    const access = await mount("access");
+
+    const text = collectText(access.root);
+    expect(text).toContain("Gateway access");
+    expect(text).toContain("Current posture");
+    expect(text).toContain("Desktop/mobile continuity");
+    expect(text).toContain("unknown");
+    expect(text).toContain("Missing");
+  });
+
   it("renders the runtime posture when llama.cpp and NPU model payloads are empty", async () => {
     settingsMocks.fetchLlamaCppModels.mockResolvedValue({});
     settingsMocks.fetchNpuModels.mockResolvedValue({});
@@ -2364,6 +2377,32 @@ describe("SettingsNativePage partial gateway responses", () => {
     const runtime = await mount("runtime");
 
     expect(collectText(runtime.root)).toContain("0 models discovered");
+  });
+
+  it("renders the runtime section when the settings payload is empty", async () => {
+    settingsMocks.fetchSettings.mockResolvedValue({});
+
+    const runtime = await mount("runtime");
+
+    const text = collectText(runtime.root);
+    expect(text).toContain("Runtime posture");
+    expect(text).toContain("llama.cpp runtime");
+    expect(text).toContain("Local acceleration");
+    expect(text).toContain("unknown");
+    expect(settingsMocks.fetchNpuModels).not.toHaveBeenCalled();
+  });
+
+  it("skips NPU model discovery without error-bannering when npu settings omit status", async () => {
+    settingsMocks.fetchSettings.mockResolvedValue({
+      npu: { enabled: true, autoStart: false, sidecarUrl: "http://127.0.0.1:39110" },
+    });
+
+    const runtime = await mount("runtime");
+
+    const text = collectText(runtime.root);
+    expect(text).toContain("Runtime posture");
+    expect(text).toContain("Local acceleration");
+    expect(settingsMocks.fetchNpuModels).not.toHaveBeenCalled();
   });
 
   it("renders the integrations section with inert fallbacks when every integration payload is empty", async () => {

@@ -457,6 +457,18 @@ describe("SettingsNativePage helpers", () => {
     expect(items.find((item) => item.id === "install-token")?.actionLabel).toBe("Pairable");
   });
 
+  it("keeps continuity items inert when the settings payload omits auth", () => {
+    const items = deriveDesktopMobileContinuityItems({
+      settings: {} as any,
+      grants: [],
+      daemon: null,
+    });
+
+    const installToken = items.find((item) => item.id === "install-token");
+    expect(installToken?.actionLabel).toBe("Open local");
+    expect(installToken?.meta).toBe("unknown");
+  });
+
   it("handles JSON, list, channel, tool, and integration helper edges", () => {
     expect(parseJsonObject("")).toEqual({});
     expect(parseJsonObject("", { fallback: true })).toEqual({ fallback: true });

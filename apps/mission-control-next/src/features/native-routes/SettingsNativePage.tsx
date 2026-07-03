@@ -3630,8 +3630,8 @@ export function deriveDesktopMobileContinuityItems(input: {
   const mobileGrants = activeGrants.filter((grant) => ["mobile", "tablet"].includes(grant.deviceType));
   const desktopGrants = activeGrants.filter((grant) => grant.deviceType === "desktop");
   const authConfigured =
-    (input.settings.auth.mode === "token" && input.settings.auth.tokenConfigured) ||
-    (input.settings.auth.mode === "basic" && input.settings.auth.basicConfigured);
+    (input.settings.auth?.mode === "token" && input.settings.auth?.tokenConfigured) ||
+    (input.settings.auth?.mode === "basic" && input.settings.auth?.basicConfigured);
   return [
     {
       id: "desktop-runtime",
@@ -3666,7 +3666,7 @@ export function deriveDesktopMobileContinuityItems(input: {
       description: authConfigured
         ? "Auth posture is configured enough to pair companion clients through the install-token/device-request flow."
         : "Auth is open; generate and protect an install token before exposing companion access.",
-      meta: input.settings.auth.mode,
+      meta: input.settings.auth?.mode ?? "unknown",
       actionLabel: authConfigured ? "Pairable" : "Open local",
     },
     {
@@ -3723,8 +3723,8 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       return;
     }
     setForm({
-      mode: data.settings.auth.mode,
-      allowLoopbackBypass: data.settings.auth.allowLoopbackBypass,
+      mode: data.settings.auth?.mode ?? "none",
+      allowLoopbackBypass: data.settings.auth?.allowLoopbackBypass ?? false,
       token: "",
       basicUsername: "",
       basicPassword: "",
@@ -3794,13 +3794,13 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
               title="Gateway access"
               subtitle="Change auth mode, loopback behavior, and optional credentials."
               stats={[
-                { label: "Current mode", value: data.settings.auth.mode },
+                { label: "Current mode", value: data.settings.auth?.mode ?? "unknown" },
                 { label: "Workspace", value: activeWorkspaceName },
               ]}
             >
-              {data.settings.auth.plan?.warnings?.length ? (
+              {data.settings.auth?.plan?.warnings?.length ? (
                 <SettingsActionList
-                  items={data.settings.auth.plan.warnings.map((warning) => ({
+                  items={(data.settings.auth?.plan?.warnings ?? []).map((warning) => ({
                     label: "Auth warning",
                     description: warning,
                     tone: "warning",
@@ -3889,20 +3889,20 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 items={[
                   {
                     label: "Loopback bypass",
-                    value: data.settings.auth.allowLoopbackBypass ? "Enabled" : "Disabled",
+                    value: data.settings.auth?.allowLoopbackBypass ? "Enabled" : "Disabled",
                     meta:
-                      data.settings.auth.tokenConfigured || data.settings.auth.basicConfigured
+                      data.settings.auth?.tokenConfigured || data.settings.auth?.basicConfigured
                         ? "Protected mode configured"
                         : "No persisted credentials",
                   },
                   {
                     label: "Token auth",
-                    value: data.settings.auth.tokenConfigured ? "Configured" : "Missing",
+                    value: data.settings.auth?.tokenConfigured ? "Configured" : "Missing",
                     meta: "Operator token presence",
                   },
                   {
                     label: "Basic auth",
-                    value: data.settings.auth.basicConfigured ? "Configured" : "Missing",
+                    value: data.settings.auth?.basicConfigured ? "Configured" : "Missing",
                     meta: "Username/password presence",
                   },
                 ]}
@@ -3980,7 +3980,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const settings = await fetchSettings();
     const shouldLoadNpuModels =
-      settings.npu.enabled && (settings.npu.status.healthy || settings.npu.status.processState === "running");
+      (settings.npu?.enabled ?? false) &&
+      ((settings.npu?.status?.healthy ?? false) || settings.npu?.status?.processState === "running");
     const [daemon, voiceRuntime, llamaModels, npuModels] = await Promise.all([
       nativeLoad("Daemon status", fetchDaemonStatus(), null),
       nativeLoad("Voice runtime", fetchVoiceRuntimeStatus(), null),
@@ -4000,7 +4001,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
             modelsRootPath: "",
             modelPath: "",
             status: {
-              ...settings.llamaCpp.status,
+              ...settings.llamaCpp?.status,
               desiredState: "stopped" as const,
               processState: "stopped" as const,
               healthy: false,
@@ -4013,7 +4014,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
           npu: {
             ...settings.npu,
             status: {
-              ...settings.npu.status,
+              ...settings.npu?.status,
               desiredState: "stopped" as const,
               processState: "stopped" as const,
               healthy: false,
@@ -4127,18 +4128,18 @@ function RuntimeSection(_props: SettingsSectionProps) {
       return;
     }
     setLlamaForm({
-      enabled: data.settings.llamaCpp.enabled,
-      autoStart: data.settings.llamaCpp.autoStart,
-      baseUrl: data.settings.llamaCpp.baseUrl,
-      command: data.settings.llamaCpp.command,
-      modelsRootPath: data.settings.llamaCpp.modelsRootPath ?? "",
-      modelPath: data.settings.llamaCpp.modelPath ?? "",
-      alias: data.settings.llamaCpp.alias,
+      enabled: data.settings.llamaCpp?.enabled ?? false,
+      autoStart: data.settings.llamaCpp?.autoStart ?? false,
+      baseUrl: data.settings.llamaCpp?.baseUrl ?? "",
+      command: data.settings.llamaCpp?.command ?? "",
+      modelsRootPath: data.settings.llamaCpp?.modelsRootPath ?? "",
+      modelPath: data.settings.llamaCpp?.modelPath ?? "",
+      alias: data.settings.llamaCpp?.alias ?? "",
     });
     setNpuForm({
       enabled: false,
       autoStart: false,
-      sidecarUrl: data.settings.npu.sidecarUrl,
+      sidecarUrl: data.settings.npu?.sidecarUrl ?? "",
     });
   }, [data]);
 
@@ -4176,12 +4177,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 },
                 {
                   label: "llama.cpp",
-                  value: data.settings.llamaCpp.status.processState,
+                  value: data.settings.llamaCpp?.status?.processState ?? "unknown",
                   meta: `${data.llamaModels?.length ?? 0} models discovered`,
                 },
                 {
                   label: "NPU",
-                  value: data.settings.npu.status.processState,
+                  value: data.settings.npu?.status?.processState ?? "unknown",
                   meta: `${data.npuModels?.length ?? 0} models discovered`,
                 },
                 {
@@ -4373,13 +4374,13 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 items={[
                   {
                     label: "Process",
-                    value: data.settings.llamaCpp.status.processState,
-                    meta: data.settings.llamaCpp.status.healthy ? "Healthy" : "Needs attention",
+                    value: data.settings.llamaCpp?.status?.processState ?? "unknown",
+                    meta: data.settings.llamaCpp?.status?.healthy ? "Healthy" : "Needs attention",
                   },
                   {
                     label: "Active model",
-                    value: data.settings.llamaCpp.status.activeModelId ?? "n/a",
-                    meta: data.settings.llamaCpp.status.commandSource ?? "source unknown",
+                    value: data.settings.llamaCpp?.status?.activeModelId ?? "n/a",
+                    meta: data.settings.llamaCpp?.status?.commandSource ?? "source unknown",
                   },
                 ]}
               />
@@ -4422,13 +4423,13 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 items={[
                   {
                     label: "Process",
-                    value: data.settings.npu.status.processState,
-                    meta: data.settings.npu.status.healthy ? "Healthy" : "Needs attention",
+                    value: data.settings.npu?.status?.processState ?? "unknown",
+                    meta: data.settings.npu?.status?.healthy ? "Healthy" : "Needs attention",
                   },
                   {
                     label: "Backend",
-                    value: data.settings.npu.status.backend,
-                    meta: data.settings.npu.status.lastError ?? data.settings.npu.sidecarUrl,
+                    value: data.settings.npu?.status?.backend ?? "unknown",
+                    meta: data.settings.npu?.status?.lastError ?? data.settings.npu?.sidecarUrl,
                   },
                 ]}
               />
