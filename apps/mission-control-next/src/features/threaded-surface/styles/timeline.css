@@ -1361,7 +1361,7 @@
 }
 
 .mc-next-live-activity-row:hover {
-  background: color-mix(in oklab, var(--mc-accent) 8%, transparent);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
 }
 
 .mc-next-live-activity-glyph {
@@ -1373,7 +1373,7 @@
 }
 
 .mc-next-live-activity-glyph.tone-active {
-  color: var(--mc-accent);
+  color: var(--accent);
 }
 
 .mc-next-live-activity-glyph.tone-success {
@@ -1431,8 +1431,8 @@
   width: 0.7rem;
   height: 0.7rem;
   border-radius: var(--r-pill);
-  border: 2px solid color-mix(in oklab, var(--mc-accent) 30%, transparent);
-  border-top-color: var(--mc-accent);
+  border: 2px solid color-mix(in oklab, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
   animation: mcLiveActivitySpin 0.8s linear infinite;
 }
 
