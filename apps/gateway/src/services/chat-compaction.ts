@@ -15,6 +15,10 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
     return undefined;
   }
 
+  const userAsks = normalized.filter((message) => message.role === "user");
+  const originalAsk = userAsks[0];
+  const latestAsk = userAsks.length > 1 ? userAsks[userAsks.length - 1] : undefined;
+
   const decisionLines = normalized
     .filter((message) =>
       /(decid|choose|selected|plan|fix|implement|resolved|prefer|must|avoid|do not|don't|should)/i.test(
@@ -38,6 +42,10 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
 
   const sections = [
     "Compacted conversation context.",
+    // The asks anchor the digest: after aggressive trims the model must still
+    // know what it was originally asked and what the user most recently asked.
+    originalAsk ? `Original ask: ${truncateSummaryLine(originalAsk.content, 320)}` : undefined,
+    latestAsk ? `Latest ask: ${truncateSummaryLine(latestAsk.content, 320)}` : undefined,
     decisionLines.length > 0 ? ["Decisions and constraints:", ...decisionLines].join("\n") : undefined,
     failureLines.length > 0 ? ["Failed attempts and issues:", ...failureLines].join("\n") : undefined,
     artifacts.length > 0

@@ -47,6 +47,47 @@ describe("buildConversationCompactionSummary", () => {
     expect(summary).toContain("Recent context:");
   });
 
+  it("pins the original and latest user ask ahead of the digest", () => {
+    const summary = buildConversationCompactionSummary([
+      createMessage({ messageId: "m1", role: "user", content: "Build me a churn dashboard for Q3 with cohort splits" }),
+      createMessage({
+        messageId: "m2",
+        role: "assistant",
+        content: "Working on it. I decided to use the metrics API.",
+      }),
+      createMessage({ messageId: "m3", role: "user", content: "Actually also add a retention heatmap" }),
+      createMessage({ messageId: "m4", role: "assistant", content: "There was an error calling the metrics API." }),
+    ]);
+
+    expect(summary).toBeDefined();
+    const originalIdx = summary!.indexOf("Original ask:");
+    const latestIdx = summary!.indexOf("Latest ask:");
+    expect(originalIdx).toBeGreaterThanOrEqual(0);
+    expect(latestIdx).toBeGreaterThan(originalIdx);
+    expect(summary).toContain("churn dashboard");
+    expect(summary).toContain("retention heatmap");
+    expect(latestIdx).toBeLessThan(summary!.indexOf("Decisions and constraints:"));
+  });
+
+  it("emits a single ask section when there is only one user message", () => {
+    const summary = buildConversationCompactionSummary([
+      createMessage({ messageId: "m1", role: "user", content: "Summarize the repo" }),
+      createMessage({ messageId: "m2", role: "assistant", content: "ok" }),
+    ]);
+
+    expect(summary).toContain("Original ask:");
+    expect(summary).not.toContain("Latest ask:");
+  });
+
+  it("omits ask sections when no user messages exist", () => {
+    const summary = buildConversationCompactionSummary([
+      createMessage({ messageId: "m1", role: "assistant", content: "standalone note" }),
+    ]);
+
+    expect(summary).toBeDefined();
+    expect(summary).not.toContain("Original ask:");
+  });
+
   it("returns undefined for empty or whitespace-only messages", () => {
     const summary = buildConversationCompactionSummary([
       createMessage({ messageId: "m1", role: "user", content: "   " }),
