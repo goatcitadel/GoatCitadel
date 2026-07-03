@@ -17,6 +17,7 @@ import { GeneratedArtifactViewer } from "./GeneratedArtifactViewer";
 const apiMocks = vi.hoisted(() => ({
   downloadChatAttachment: vi.fn(),
   fetchChatAttachmentPreview: vi.fn(),
+  getGatewayApiBaseUrl: vi.fn(() => "https://gateway-a.example"),
 }));
 
 const mermaidMocks = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const mermaidMocks = vi.hoisted(() => ({
 vi.mock("../../api/client", () => ({
   downloadChatAttachment: apiMocks.downloadChatAttachment,
   fetchChatAttachmentPreview: apiMocks.fetchChatAttachmentPreview,
+  getGatewayApiBaseUrl: apiMocks.getGatewayApiBaseUrl,
 }));
 
 vi.mock("mermaid", () => ({

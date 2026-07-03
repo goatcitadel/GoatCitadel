@@ -7,11 +7,13 @@ import { ChatAttachmentPreviewStack, resetAttachmentPreviewStateForTests } from 
 const apiMocks = vi.hoisted(() => ({
   fetchChatAttachmentPreview: vi.fn(),
   downloadChatAttachment: vi.fn(),
+  getGatewayApiBaseUrl: vi.fn(() => "https://gateway-a.example"),
 }));
 
 vi.mock("../../api/client", () => ({
   fetchChatAttachmentPreview: apiMocks.fetchChatAttachmentPreview,
   downloadChatAttachment: apiMocks.downloadChatAttachment,
+  getGatewayApiBaseUrl: apiMocks.getGatewayApiBaseUrl,
 }));
 
 function attachment(patch: Partial<NonNullable<ChatMessageRecord["attachments"]>[number]> = {}) {
@@ -55,10 +57,13 @@ describe("ChatAttachmentPreviewStack", () => {
     resetAttachmentPreviewStateForTests();
     apiMocks.fetchChatAttachmentPreview.mockReset();
     apiMocks.downloadChatAttachment.mockReset();
+    apiMocks.getGatewayApiBaseUrl.mockReset();
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-a.example");
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("does not render an empty attachment preview stack", async () => {
@@ -97,6 +102,118 @@ describe("ChatAttachmentPreviewStack", () => {
 
     expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
     expect(hasText(second, "OCR text from cached report")).toBe(true);
+  });
+
+  it("refetches after the gateway changes even though the cache window has not elapsed", async () => {
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-a.example");
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        ocrText: "OCR text from gateway A",
+      }),
+    );
+
+    const first = await renderStack([attachment()]);
+    expect(hasText(first, "OCR text from gateway A")).toBe(true);
+    first.unmount();
+
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-b.example");
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        ocrText: "OCR text from gateway B",
+      }),
+    );
+
+    const second = await renderStack([attachment()]);
+
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(2);
+    expect(hasText(second, "OCR text from gateway B")).toBe(true);
+  });
+
+  it("does not serve a stale gateway-A cache entry after switching back from gateway B", async () => {
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-a.example");
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        ocrText: "OCR text unique to gateway A",
+      }),
+    );
+    const onGatewayA = await renderStack([attachment()]);
+    expect(hasText(onGatewayA, "OCR text unique to gateway A")).toBe(true);
+    onGatewayA.unmount();
+
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-a.example");
+    const stillOnGatewayA = await renderStack([attachment()]);
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
+    expect(hasText(stillOnGatewayA, "OCR text unique to gateway A")).toBe(true);
+  });
+
+  it("treats a failed preview as expired after 5 seconds instead of the normal 30 second window", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(preview({ analysisStatus: "failed" }));
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatAttachmentPreviewStack attachments={[attachment()]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
+    expect(hasText(renderer, "failed")).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+    });
+
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(preview({ analysisStatus: "failed" }));
+    await act(async () => {
+      renderer = create(<ChatAttachmentPreviewStack attachments={[attachment()]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps serving a healthy cached preview after 6 seconds, under the normal 30 second window", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        analysisStatus: "completed",
+        ocrText: "Healthy cached OCR text",
+      }),
+    );
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatAttachmentPreviewStack attachments={[attachment()]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer = create(<ChatAttachmentPreviewStack attachments={[attachment()]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
+    expect(hasText(renderer, "Healthy cached OCR text")).toBe(true);
   });
 
   it("shares an in-flight preview request across concurrent preview cards", async () => {

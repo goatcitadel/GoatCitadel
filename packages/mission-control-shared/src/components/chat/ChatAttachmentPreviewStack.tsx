@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
-import { fetchChatAttachmentPreview } from "../../api/client";
+import { fetchChatAttachmentPreview, getGatewayApiBaseUrl } from "../../api/client";
 import { ChatAttachmentActions, loadAttachmentBlob } from "./ChatAttachmentActions";
 
 const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
+const FAILED_PREVIEW_TTL_MS = 5_000;
 const ATTACHMENT_PREVIEW_CACHE_MAX_ENTRIES = 80;
 const ATTACHMENT_PREVIEW_RETRY_DELAY_MS = 5_000;
 const INLINE_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 
-// TODO(cache): namespace by sessionId to avoid cross-session staleness. sessionId
-// is not currently threaded through ChatAttachmentPreviewStack/Card props, so wiring
-// it here would require a non-trivial prop refactor; deferred deliberately.
+// Cache keys are NOT namespaced by sessionId: attachment ids are globally-unique
+// randomUUID()s (gateway chat-attachment-service.ts) and the preview endpoint
+// (/api/v1/chat/attachments/{id}/preview) is session-agnostic, so per-session
+// namespacing would only reduce the cache hit rate. Keys ARE namespaced by
+// gateway identity instead, so switching between citadel/gateway backends never
+// serves a preview entry that was fetched from the previous gateway.
 const attachmentPreviewCache = new Map<
   string,
   {
@@ -20,27 +24,42 @@ const attachmentPreviewCache = new Map<
 >();
 const attachmentPreviewInFlight = new Map<string, Promise<ChatAttachmentPreviewResponse>>();
 
+function gatewayCacheScope(): string {
+  return getGatewayApiBaseUrl() ?? "";
+}
+
+function getAttachmentPreviewCacheKey(attachmentId: string): string {
+  return `${gatewayCacheScope()}:${attachmentId}`;
+}
+
 function getInFlightCacheKey(attachmentId: string, forceRefresh: boolean): string {
   return `${attachmentId}:${forceRefresh ? "refresh" : "cached"}`;
 }
 
+function isCachedPreviewExpired(response: ChatAttachmentPreviewResponse, cachedAt: number, now: number): boolean {
+  const ttlMs = response.analysisStatus === "failed" ? FAILED_PREVIEW_TTL_MS : ATTACHMENT_PREVIEW_CACHE_TTL_MS;
+  return now - cachedAt >= ttlMs;
+}
+
 function getCachedAttachmentPreview(attachmentId: string, now = Date.now()): ChatAttachmentPreviewResponse | null {
-  const cached = attachmentPreviewCache.get(attachmentId);
+  const cacheKey = getAttachmentPreviewCacheKey(attachmentId);
+  const cached = attachmentPreviewCache.get(cacheKey);
   if (!cached) {
     return null;
   }
-  if (now - cached.cachedAt >= ATTACHMENT_PREVIEW_CACHE_TTL_MS) {
-    attachmentPreviewCache.delete(attachmentId);
+  if (isCachedPreviewExpired(cached.response, cached.cachedAt, now)) {
+    attachmentPreviewCache.delete(cacheKey);
     return null;
   }
-  attachmentPreviewCache.delete(attachmentId);
-  attachmentPreviewCache.set(attachmentId, cached);
+  attachmentPreviewCache.delete(cacheKey);
+  attachmentPreviewCache.set(cacheKey, cached);
   return cached.response;
 }
 
 function rememberAttachmentPreview(attachmentId: string, response: ChatAttachmentPreviewResponse): void {
-  attachmentPreviewCache.delete(attachmentId);
-  attachmentPreviewCache.set(attachmentId, {
+  const cacheKey = getAttachmentPreviewCacheKey(attachmentId);
+  attachmentPreviewCache.delete(cacheKey);
+  attachmentPreviewCache.set(cacheKey, {
     response,
     cachedAt: Date.now(),
   });
