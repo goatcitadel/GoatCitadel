@@ -2331,4 +2331,79 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(text).toContain("Provider advice");
     expect(text).toContain("Provider advice is advisory only.");
   });
+
+  it("renders the general posture counts when workspace, integration, MCP, tool, and add-on payloads are empty", async () => {
+    settingsMocks.fetchWorkspaces.mockResolvedValue({});
+    settingsMocks.fetchIntegrationConnections.mockResolvedValue({});
+    settingsMocks.fetchMcpServers.mockResolvedValue({});
+    settingsMocks.fetchToolCatalog.mockResolvedValue({});
+    settingsMocks.fetchInstalledAddons.mockResolvedValue({});
+
+    const general = await mount("general");
+
+    const text = collectText(general.root);
+    expect(text).toContain("Mission Control posture");
+    expect(text).toContain("Contexts available to switch or edit");
+    expect(text).toContain("0 configured");
+  });
+
+  it("renders the access section when the device grant payload is empty", async () => {
+    settingsMocks.fetchDeviceAccessGrants.mockResolvedValue({});
+
+    const access = await mount("access");
+
+    const text = collectText(access.root);
+    expect(text).toContain("Approved devices");
+    expect(text).toContain("No device grants found.");
+  });
+
+  it("renders the runtime posture when llama.cpp and NPU model payloads are empty", async () => {
+    settingsMocks.fetchLlamaCppModels.mockResolvedValue({});
+    settingsMocks.fetchNpuModels.mockResolvedValue({});
+
+    const runtime = await mount("runtime");
+
+    expect(collectText(runtime.root)).toContain("0 models discovered");
+  });
+
+  it("renders the integrations section with inert fallbacks when every integration payload is empty", async () => {
+    settingsMocks.fetchIntegrationCatalog.mockResolvedValue({});
+    settingsMocks.fetchIntegrationConnections.mockResolvedValue({});
+    settingsMocks.fetchIntegrationPlugins.mockResolvedValue({});
+    settingsMocks.fetchGoogleMeetPrerequisiteStatus.mockResolvedValue({});
+    settingsMocks.fetchGoogleMeetSessions.mockResolvedValue({});
+    settingsMocks.fetchExternalSideEffectRuns.mockResolvedValue({});
+    settingsMocks.fetchExternalConnectorServices.mockResolvedValue({});
+
+    const integrations = await mount("integrations");
+
+    const text = collectText(integrations.root);
+    expect(text).toContain("Connected integrations");
+    expect(text).toContain("No integration connections yet.");
+    expect(text).toContain("No integration plugins installed.");
+    expect(text).toContain("Google Meet voice");
+    expect(text).toContain("No Google Meet sessions recorded.");
+  });
+
+  it("renders the permissions grant panels when override and autonomy grant payloads are empty", async () => {
+    settingsMocks.fetchActiveLocalOperatorOverrides.mockResolvedValue({});
+    settingsMocks.fetchAutonomousActivationGrants.mockResolvedValue({});
+
+    const permissions = await mount("permissions");
+
+    const text = collectText(permissions.root);
+    expect(text).toContain("Autonomous activation grants");
+    expect(text).toContain("No autonomous activation grants recorded.");
+  });
+
+  it("renders the tools section when tool catalog and grant payloads are empty", async () => {
+    settingsMocks.fetchToolCatalog.mockResolvedValue({});
+    settingsMocks.fetchToolGrants.mockResolvedValue({});
+
+    const tools = await mount("tools");
+
+    const text = collectText(tools.root);
+    expect(text).toContain("Tool catalog");
+    expect(text).toContain("No tool grants created yet.");
+  });
 });

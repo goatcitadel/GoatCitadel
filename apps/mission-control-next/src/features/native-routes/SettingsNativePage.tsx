@@ -623,15 +623,15 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
               items={[
                 {
                   label: "Workspaces",
-                  value: String(data.workspaces.length),
+                  value: String(data.workspaces?.length ?? 0),
                   meta: "Contexts available to switch or edit",
                 },
                 {
                   label: "Integrations",
-                  value: String(data.integrations.length),
+                  value: String(data.integrations?.length ?? 0),
                   meta: "Configured external connections",
                 },
-                { label: "MCP", value: String(data.mcpServers.length), meta: "External tool servers" },
+                { label: "MCP", value: String(data.mcpServers?.length ?? 0), meta: "External tool servers" },
                 {
                   label: "Mesh readiness",
                   value: data.meshReadiness?.status ?? "unknown",
@@ -639,8 +639,8 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
                     ? `${data.meshReadiness.blockers.length} blocker${data.meshReadiness.blockers.length === 1 ? "" : "s"}`
                     : "diagnostics unavailable",
                 },
-                { label: "Tools", value: String(data.tools.length), meta: "Catalog entries with policy posture" },
-                { label: "Add-ons", value: String(data.addons.length), meta: "Installed extensions" },
+                { label: "Tools", value: String(data.tools?.length ?? 0), meta: "Catalog entries with policy posture" },
+                { label: "Add-ons", value: String(data.addons?.length ?? 0), meta: "Installed extensions" },
                 {
                   label: "Active model",
                   value: data.settings?.llm?.activeModel ?? "n/a",
@@ -651,9 +651,9 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
           </NativeCard>
           <SettingsPosturePanel
             settings={data.settings}
-            mcpServers={data.mcpServers}
-            integrations={data.integrations}
-            workspaces={data.workspaces}
+            mcpServers={data.mcpServers ?? []}
+            integrations={data.integrations ?? []}
+            workspaces={data.workspaces ?? []}
             onNavigate={(section) => navigate({ area: "settings", section, theme: route.theme })}
           />
           <NativeCard
@@ -3711,7 +3711,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       data
         ? deriveDesktopMobileContinuityItems({
             settings: data.settings,
-            grants: data.grants,
+            grants: data.grants ?? [],
             daemon: data.daemon,
           })
         : [],
@@ -3917,7 +3917,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 { label: "Desktop", value: data.daemon?.state ?? "unknown" },
                 {
                   label: "Active devices",
-                  value: String(data.grants.filter((grant) => !grant.revokedAt).length),
+                  value: String((data.grants ?? []).filter((grant) => !grant.revokedAt).length),
                 },
               ]}
             >
@@ -3938,10 +3938,10 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title="Approved devices"
             subtitle="View and revoke device grants that can access the gateway."
-            stats={[{ label: "Grants", value: String(data.grants.length) }]}
+            stats={[{ label: "Grants", value: String(data.grants?.length ?? 0) }]}
           >
             <SettingsActionList
-              items={data.grants.map((grant) => ({
+              items={(data.grants ?? []).map((grant) => ({
                 id: grant.grantId,
                 label: grant.deviceLabel || grant.grantId,
                 description: `${grant.deviceType || "device"} · ${grant.revokedAt ? "revoked" : "active"} · ${formatDateTime(grant.createdAt)}`,
@@ -4177,12 +4177,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 {
                   label: "llama.cpp",
                   value: data.settings.llamaCpp.status.processState,
-                  meta: `${data.llamaModels.length} models discovered`,
+                  meta: `${data.llamaModels?.length ?? 0} models discovered`,
                 },
                 {
                   label: "NPU",
                   value: data.settings.npu.status.processState,
-                  meta: `${data.npuModels.length} models discovered`,
+                  meta: `${data.npuModels?.length ?? 0} models discovered`,
                 },
                 {
                   label: "Voice",
@@ -5109,11 +5109,11 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
         sideEffectRuns,
         externalConnectors,
       ]),
-      catalog: catalog.data.items.filter((item) => item.kind !== "channel"),
-      connections: connections.data.items.filter((item) => item.kind !== "channel"),
+      catalog: (catalog.data.items ?? []).filter((item) => item.kind !== "channel"),
+      connections: (connections.data.items ?? []).filter((item) => item.kind !== "channel"),
       plugins: plugins.data.items,
       meetStatus: meetStatus.data,
-      meetSessions: meetSessions.data,
+      meetSessions: Array.isArray(meetSessions.data) ? meetSessions.data : [],
       sideEffectRuns: sideEffectRuns.data.items,
       sideEffectSummary: sideEffectRuns.data.summary,
       externalConnectorServices: externalConnectors.data.items,
@@ -5517,7 +5517,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
               stats={[
                 { label: "Connections", value: String(data.connections.length) },
                 { label: "Catalog", value: String(data.catalog.length) },
-                { label: "Plugins", value: String(data.plugins.length) },
+                { label: "Plugins", value: String(data.plugins?.length ?? 0) },
               ]}
             >
               <NativeSelectableList
@@ -5539,16 +5539,16 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
             </NativeCard>
           </SettingsStack>
           <SettingsStack>
-            <PluginTrustPanel plugins={data.plugins} />
+            <PluginTrustPanel plugins={data.plugins ?? []} />
             <DormantExternalConnectorsPanel
-              services={data.externalConnectorServices}
+              services={data.externalConnectorServices ?? []}
               busyId={externalConnectorBusyId}
               onReviewService={(service, status) => void handleReviewExternalConnectorService(service, status)}
               onReviewAction={(action, status) => void handleReviewExternalConnectorAction(action, status)}
               onStageAction={(action) => void handleStageExternalConnectorAction(action)}
             />
             <ExternalSideEffectLedgerPanel
-              runs={data.sideEffectRuns}
+              runs={data.sideEffectRuns ?? []}
               summary={data.sideEffectSummary}
               selectedConnectionId={selectedConnection?.connectionId}
               busy={replayAuditBusy}
@@ -6313,18 +6313,18 @@ function GoogleMeetStatusPanel({
             items={[
               {
                 label: "Provider",
-                value: status.provider,
+                value: status.provider ?? "unknown",
                 meta: status.failureReason ?? `Checked ${formatDateTime(status.checkedAt)}`,
               },
               {
                 label: "Auth profile",
-                value: status.authProfile.available ? "available" : "missing",
-                meta: status.authProfile.accountRef ?? "OAuth handoff has not provided an account reference",
+                value: status.authProfile?.available ? "available" : "missing",
+                meta: status.authProfile?.accountRef ?? "OAuth handoff has not provided an account reference",
               },
             ]}
           />
           <SettingsActionList
-            items={status.prerequisites.map((item) => ({
+            items={(status.prerequisites ?? []).map((item) => ({
               id: item.id,
               label: labelForMeetPrerequisite(item.id),
               description: item.message,
@@ -8132,11 +8132,11 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
             subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
             stats={[
               { label: "Active", value: String(activeAutonomyGrants.length) },
-              { label: "Total", value: String(data.autonomyGrants.length) },
+              { label: "Total", value: String(data.autonomyGrants?.length ?? 0) },
             ]}
           >
             <SettingsActionList
-              items={data.autonomyGrants.map((grant) => ({
+              items={(data.autonomyGrants ?? []).map((grant) => ({
                 label: grant.grantId,
                 description: `${grant.workspaceId} · ${grant.surfaces.join(", ")} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
                 meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}`,
@@ -8491,8 +8491,8 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               scrollBody
               bodyMaxHeight="min(64vh, 38rem)"
               stats={[
-                { label: "Tools", value: String(data.tools.length) },
-                { label: "Grants", value: String(data.grants.length) },
+                { label: "Tools", value: String(data.tools?.length ?? 0) },
+                { label: "Grants", value: String(data.grants?.length ?? 0) },
               ]}
             >
               <SettingsField label="Search">
@@ -8626,7 +8626,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     {
                       label: "Available grants",
                       value: String(
-                        data.grants.filter(
+                        (data.grants ?? []).filter(
                           (item) => matchesToolGrant(item, selectedTool.toolName) && isToolGrantAvailable(item),
                         ).length,
                       ),
@@ -8642,7 +8642,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
             )}
             <SettingsActionList
-              items={data.grants
+              items={(data.grants ?? [])
                 .filter((item) => (selectedTool ? matchesToolGrant(item, selectedTool.toolName) : true))
                 .map((item) => ({
                   id: item.grantId,
