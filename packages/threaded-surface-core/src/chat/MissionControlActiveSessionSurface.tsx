@@ -64,6 +64,12 @@ export interface MissionControlActiveSessionSurfaceProps {
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
   visualStreamMode: ChatVisualStreamMode;
+  /**
+   * @deprecated Host passthrough only updates on stream start/stop, not per
+   * flush (see useChatStreamingPreviewState.ts). Consumers that need the
+   * live, per-flush preview should subscribe to the chat-streaming-preview-store
+   * (useChatStreamingPreviewSnapshot) instead of reading this prop.
+   */
   streamingPreview: ChatStreamingPreview | null;
   activeStreamingTurnId: string | null;
   queuedCount: number;
