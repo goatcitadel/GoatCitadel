@@ -65,11 +65,13 @@ describe("selectPlannerDraftModel", () => {
     expect(selectPlannerDraftModel({ capabilities: [], prefs })).toBeUndefined();
   });
 
-  it("respects an explicit provider pin", () => {
+  it("returns undefined for an explicit provider pin so callers stay on prefs verbatim", () => {
     const pinnedPrefs = { ...prefs, providerId: "anthropic", model: "claude-opus-4-8" } as ChatSessionPrefsRecord;
     const fast = capability({ providerId: "openai", model: "gpt-5-mini", speedScore: 0.95 });
-    const pinned = capability({ providerId: "anthropic", model: "claude-opus-4-8" });
-    const selection = selectPlannerDraftModel({ capabilities: [fast, pinned], prefs: pinnedPrefs });
-    expect(selection?.providerId).toBe("anthropic");
+    // The provider's capability record deliberately carries a DIFFERENT model
+    // than the pin: selection must not substitute the provider default.
+    const pinnedProviderDefault = capability({ providerId: "anthropic", model: "claude-fable-5" });
+    const selection = selectPlannerDraftModel({ capabilities: [fast, pinnedProviderDefault], prefs: pinnedPrefs });
+    expect(selection).toBeUndefined();
   });
 });

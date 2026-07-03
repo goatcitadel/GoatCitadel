@@ -2692,6 +2692,7 @@ export class ChatAgentOrchestrator {
           let coworkToolRunBudgetCheckpoint = false;
           const parallelBatchDecision = decideToolBatchParallelism({
             toolNames: toolCalls.map((call) => call.toolName),
+            toolCallIds: toolCalls.map((call) => call.id),
             readOnlyNames: listReadOnlyBuiltinToolNames(),
             disabledByFlag: this.deps.parallelToolExecutionV1Disabled?.() === true,
             remainingToolBudget: executionBudget.maxToolRunsPerTurn - toolRunCount,
@@ -2713,6 +2714,13 @@ export class ChatAgentOrchestrator {
             this.deps.storage.chatTurnTraces.patch(input.turnId, {
               status: "waiting_for_tool",
             });
+            // Accepted divergence (review I3): when consumption later parks on
+            // approval/user-input, siblings in this batch have already run —
+            // their records persist and flushSkippedToolCallResults surfaces
+            // their REAL results, but under a profile that approval-gates
+            // read-only tools each sibling may have minted its own pending
+            // approval that nobody surfaces. Bounded to the safe read-only
+            // set; revisit if that set ever widens.
             // Frozen snapshot: parallel siblings deliberately do not see each
             // other's results (pinned by the serial-parity tests).
             const priorToolRunsSnapshot = [...toolRuns];

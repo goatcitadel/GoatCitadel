@@ -532,6 +532,15 @@ export function coercePlannerExecutionPlanDraft(
     const productionTemplateStep = findProductionTemplateStep(templatePlan);
     if (productionTemplateStep) {
       const knownStepIds = new Set(templatePlan.steps.map((step) => step.stepId));
+      // Extras may only depend on PRODUCTION steps: a dependency on a control
+      // step (reviewer/synthesizer) would form a cycle once control steps are
+      // widened to depend on all production steps, silently dropping the whole
+      // expansion at leveling time.
+      const productionStepIds = templatePlan.steps
+        .filter((step, index) => !shouldProtectPlannerTemplateStep(templatePlan, step, index))
+        .map((step) => step.stepId);
+      const dependableStepIds = new Set(productionStepIds);
+      const defaultDependency = productionStepIds[0];
       const controlLabels = new Set(
         templatePlan.steps
           .filter((step) => CONTROL_ORCHESTRATION_ROLES.has(step.role))
@@ -560,19 +569,24 @@ export function coercePlannerExecutionPlanDraft(
           continue;
         }
         extraOrdinal += 1;
-        const stepId = buildFollowOnStepId(templatePlan.steps, steps.length + 1);
+        const stepId = buildFollowOnStepId(templatePlan.steps, steps.length + 1, knownStepIds);
         const rawLabel = typeof raw.delegatedRole === "string" ? raw.delegatedRole.trim() : "";
         // A planner cannot smuggle a fake control step in via the label: any
         // collision with a control label is renamed and the role stays worker.
         const label = rawLabel && !controlLabels.has(rawLabel.toLowerCase()) ? rawLabel : `Worker ${extraOrdinal + 1}`;
-        const dependsOnStepIds = Array.isArray(raw.dependsOnStepIds)
+        const requestedDependencies = Array.isArray(raw.dependsOnStepIds)
           ? dedupeStrings(
               raw.dependsOnStepIds
                 .filter((value): value is string => typeof value === "string")
                 .map((value) => value.trim())
-                .filter((dependencyId) => knownStepIds.has(dependencyId)),
+                .filter((dependencyId) => dependableStepIds.has(dependencyId)),
             )
           : [];
+        // An extra with no valid production dependency anchors on the first
+        // production step (the planning step in the default template) so it
+        // still sees the plan output instead of racing it at stage 1.
+        const dependsOnStepIds =
+          requestedDependencies.length > 0 ? requestedDependencies : defaultDependency ? [defaultDependency] : [];
         steps.push({
           stepId,
           index: steps.length,
@@ -600,6 +614,7 @@ export function coercePlannerExecutionPlanDraft(
           status: "pending" as const,
         });
         knownStepIds.add(stepId);
+        dependableStepIds.add(stepId);
         extrasBudget -= 1;
       }
     }
@@ -630,13 +645,21 @@ function findProductionTemplateStep(
   );
 }
 
-function buildFollowOnStepId(templateSteps: ModeOrchestrationPlan["steps"], ordinal: number): string {
+function buildFollowOnStepId(
+  templateSteps: ModeOrchestrationPlan["steps"],
+  ordinal: number,
+  knownStepIds: ReadonlySet<string>,
+): string {
   const lastStepId = templateSteps[templateSteps.length - 1]?.stepId ?? "orch-step-0";
   const match = lastStepId.match(/^(.*?)(\d+)$/);
-  if (match) {
-    return `${match[1]}${ordinal}`;
+  const build = (n: number) => (match ? `${match[1]}${n}` : `${lastStepId}-extra-${n}`);
+  // Template ids are contiguous today, but bump past any collision so a
+  // non-contiguous template can never mint a duplicate id.
+  let candidateOrdinal = ordinal;
+  while (knownStepIds.has(build(candidateOrdinal))) {
+    candidateOrdinal += 1;
   }
-  return `${lastStepId}-extra-${ordinal}`;
+  return build(candidateOrdinal);
 }
 
 /**

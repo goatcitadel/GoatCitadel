@@ -838,6 +838,21 @@ export async function* createChatCompletionStream(
             : withStreamIdleWatchdog(fallbackProviderStream, {
                 idleTimeoutMs,
                 abort: () => idleAbort.abort(new StreamIdleTimeoutError(idleTimeoutMs)),
+                onTrip: (elapsedMs) => {
+                  host.recordDevDiagnostic({
+                    level: "warn",
+                    category: "chat",
+                    event: "chat.completion_stream.idle_watchdog_tripped",
+                    message: "Fallback provider stream idle watchdog tripped; aborting the attempt",
+                    sessionId: memoryInput?.sessionId,
+                    taskId: memoryInput?.taskId,
+                    providerId: fallback.providerId,
+                    modelId: fallback.model,
+                    runtimeKind: "model.call",
+                    runtimeStatus: "degraded",
+                    context: { idleTimeoutMs: elapsedMs, emittedOutput: attemptStreamed, fallback: true },
+                  });
+                },
               });
           for await (const chunk of fallbackStream) {
             attemptStreamed = true;

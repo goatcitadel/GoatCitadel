@@ -61,10 +61,15 @@ export function selectPlannerDraftModel(input: {
   capabilities: ProviderCapabilityRecord[] | undefined;
   prefs: ChatSessionPrefsRecord;
 }): PlannerDraftModelSelection | undefined {
-  // An explicit provider pin is honored inside selectOrchestrationModel, so
-  // pinned sessions keep drafting on the pinned model. Missing capabilities
-  // (partial router inputs) simply yield no selection — callers fall back to
-  // the session prefs, never throw on the prep hot path.
+  if (input.prefs.providerId) {
+    // Explicit pin: never re-route the planner. The capability registry keys
+    // one record per provider carrying the provider's DEFAULT model, so even
+    // the selector's pin branch could silently swap a pinned model for the
+    // default one. Returning undefined keeps the caller on prefs verbatim.
+    return undefined;
+  }
+  // Missing capabilities (partial router inputs) simply yield no selection —
+  // callers fall back to the session prefs, never throw on the prep hot path.
   const selection = selectOrchestrationModel({
     role: "planner",
     capabilities: input.capabilities ?? [],

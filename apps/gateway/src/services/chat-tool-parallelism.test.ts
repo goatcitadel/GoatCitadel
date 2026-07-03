@@ -50,3 +50,18 @@ describe("decideToolBatchParallelism", () => {
     expect(decision.reason).toBe("exceeds_parallel_cap");
   });
 });
+
+describe("decideToolBatchParallelism duplicate ids", () => {
+  it("stays serial when the model emits duplicate tool_call ids", () => {
+    const decision = decideToolBatchParallelism({
+      toolNames: ["session.search", "memory.read"],
+      toolCallIds: ["call-1", "call-1"],
+      readOnlyNames: READ_ONLY,
+      disabledByFlag: false,
+      remainingToolBudget: 5,
+      maxParallel: 4,
+    });
+    expect(decision.parallel).toBe(false);
+    expect(decision.reason).toBe("duplicate_tool_call_id");
+  });
+});

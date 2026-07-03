@@ -706,3 +706,34 @@ describe("planner fan-out scan bound", () => {
     expect(draft?.steps).toHaveLength(4);
   });
 });
+
+describe("planner fan-out dependency hygiene", () => {
+  it("re-anchors an extra that depends on a control step onto the first production step", () => {
+    const templatePlan = createCoworkPlan();
+    const draft = coercePlannerExecutionPlanDraft(
+      {
+        summary: "s",
+        steps: [
+          ...templatePlan.steps.map((step) => ({ objective: step.objective })),
+          {
+            objective: "Extra that tries to depend on synthesis",
+            parallelizable: true,
+            dependsOnStepIds: ["step-4"],
+            delegatedRole: "Late Worker",
+          },
+        ],
+      },
+      templatePlan,
+      { advisoryOnly: false, mode: "cowork", objective: "obj", allowProductionExpansion: true },
+    );
+    expect(draft?.steps).toHaveLength(5);
+    // step-4 is the synthesizer (control); the dep is filtered and re-anchored
+    // so control-step widening cannot form a cycle that drops the expansion.
+    expect(draft?.steps[4]?.dependsOnStepIds).toEqual(["step-1"]);
+
+    const applied = applyExecutionPlanDraftToOrchestrationPlan(templatePlan, draft!);
+    expect(applied.steps).toHaveLength(5);
+    const extra = applied.steps.find((step) => step.delegatedRole === "Late Worker");
+    expect(extra?.stage).toBe(2);
+  });
+});

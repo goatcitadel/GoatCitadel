@@ -21,11 +21,13 @@ export interface ParallelToolBatchDecision {
     | "disabled_by_flag"
     | "non_read_only_tool"
     | "exceeds_tool_budget"
-    | "exceeds_parallel_cap";
+    | "exceeds_parallel_cap"
+    | "duplicate_tool_call_id";
 }
 
 export function decideToolBatchParallelism(input: {
   toolNames: string[];
+  toolCallIds?: string[];
   readOnlyNames: ReadonlySet<string>;
   disabledByFlag: boolean;
   remainingToolBudget: number;
@@ -42,6 +44,12 @@ export function decideToolBatchParallelism(input: {
   }
   if (input.toolNames.length > input.remainingToolBudget) {
     return { parallel: false, reason: "exceeds_tool_budget" };
+  }
+  if (input.toolCallIds && new Set(input.toolCallIds).size !== input.toolCallIds.length) {
+    // Model-supplied call ids key the pre-execution map; a duplicate would
+    // silently overwrite a sibling's outcome. Providers shouldn't emit
+    // duplicates, but the serial path handles them — so route them there.
+    return { parallel: false, reason: "duplicate_tool_call_id" };
   }
   if (!input.toolNames.every((toolName) => input.readOnlyNames.has(toolName))) {
     return { parallel: false, reason: "non_read_only_tool" };
