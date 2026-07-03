@@ -679,3 +679,30 @@ describe("deriveStagesFromDependencies", () => {
     expect(deriveStagesFromDependencies([{ stepId: "a", dependsOnStepIds: ["ghost"] }])).toBeUndefined();
   });
 });
+
+describe("planner fan-out scan bound", () => {
+  it("stops scanning garbage extras after the bounded window even when valid entries follow", () => {
+    const templatePlan = createCoworkPlan();
+    const garbage = Array.from({ length: 30 }, () => ({ objective: "   " }));
+    const draft = coercePlannerExecutionPlanDraft(
+      {
+        summary: "s",
+        steps: [
+          ...templatePlan.steps.map((step) => ({ objective: step.objective })),
+          ...garbage,
+          {
+            objective: "Valid but beyond the scan window",
+            parallelizable: true,
+            dependsOnStepIds: ["step-1"],
+            delegatedRole: "Late",
+          },
+        ],
+      },
+      templatePlan,
+      { advisoryOnly: false, mode: "cowork", objective: "obj", allowProductionExpansion: true },
+    );
+    // 30 empty entries exceed the scan bound (MAX_PLANNER_PRODUCTION_STEPS * 4
+    // = 16), so the late valid entry is never reached.
+    expect(draft?.steps).toHaveLength(4);
+  });
+});

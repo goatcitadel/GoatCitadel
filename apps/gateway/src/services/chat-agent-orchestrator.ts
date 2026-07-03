@@ -2639,23 +2639,6 @@ export class ChatAgentOrchestrator {
               content: entry.content,
             } as ChatCompletionMessage);
           }
-          const flushSkippedToolCallResults = (reason: string) => {
-            for (const pendingToolCall of toolCalls) {
-              if (answeredToolCallIds.has(pendingToolCall.id)) {
-                continue;
-              }
-              answeredToolCallIds.add(pendingToolCall.id);
-              conversationMessages.push({
-                role: "tool",
-                tool_call_id: pendingToolCall.id,
-                content: JSON.stringify({ skipped: true, reason }),
-              } as ChatCompletionMessage);
-            }
-          };
-
-          let shortCircuitedOnBudget = false;
-          let retryPromptLabSynthesisOnly = false;
-          let coworkToolRunBudgetCheckpoint = false;
           // Round-3 R3-1: when every call in this batch is a registry-declared
           // read-only builtin, pre-execute the batch concurrently and let the
           // unchanged serial loop below consume results in emission order.
@@ -2671,6 +2654,42 @@ export class ChatAgentOrchestrator {
             thrown?: unknown;
           };
           const preExecutedToolCalls = new Map<string, PreExecutedToolCallOutcome>();
+          const flushSkippedToolCallResults = (reason: string) => {
+            for (const pendingToolCall of toolCalls) {
+              if (answeredToolCallIds.has(pendingToolCall.id)) {
+                continue;
+              }
+              answeredToolCallIds.add(pendingToolCall.id);
+              const preExecuted = preExecutedToolCalls.get(pendingToolCall.id);
+              if (preExecuted?.executed) {
+                // The call already ran (read-only parallel batch) — surface its
+                // real result instead of a skip marker so a resumed turn does
+                // not redo the work.
+                toolRuns.push(preExecuted.executed.record);
+                conversationMessages.push({
+                  role: "tool",
+                  tool_call_id: pendingToolCall.id,
+                  content: JSON.stringify({
+                    ...(preExecuted.executed.record.result ?? {
+                      error: preExecuted.executed.record.error ?? "Tool failed.",
+                    }),
+                    executedBeforePause: true,
+                    pauseReason: reason,
+                  }),
+                } as ChatCompletionMessage);
+                continue;
+              }
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: pendingToolCall.id,
+                content: JSON.stringify({ skipped: true, reason }),
+              } as ChatCompletionMessage);
+            }
+          };
+
+          let shortCircuitedOnBudget = false;
+          let retryPromptLabSynthesisOnly = false;
+          let coworkToolRunBudgetCheckpoint = false;
           const parallelBatchDecision = decideToolBatchParallelism({
             toolNames: toolCalls.map((call) => call.toolName),
             readOnlyNames: listReadOnlyBuiltinToolNames(),
@@ -2683,7 +2702,12 @@ export class ChatAgentOrchestrator {
             !circuitBreakerReason &&
             // Any loop-guard hit falls back to the serial path so trip
             // handling stays in exactly one place (the loop below).
-            toolCalls.every((call) => !detectToolLoopRisk(loopGuardState, call.toolName, call.args))
+            toolCalls.every((call) => !detectToolLoopRisk(loopGuardState, call.toolName, call.args)) &&
+            // Mirror the serial path's wall-clock gate before starting ANY
+            // work: with the turn budget effectively spent, fall back to the
+            // serial loop so its budget-exceeded handling runs unchanged.
+            ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs) >
+              Math.max(...toolCalls.map((call) => minimumRemainingBudgetForToolStart(call.toolName, executionBudget)))
           ) {
             throwIfChatTurnCancelled(input);
             this.deps.storage.chatTurnTraces.patch(input.turnId, {

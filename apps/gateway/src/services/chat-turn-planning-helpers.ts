@@ -543,8 +543,16 @@ export function coercePlannerExecutionPlanDraft(
       ).length;
       let extrasBudget = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - templateProductionCount);
       let extraOrdinal = 0;
+      // Bound the scan itself, not just the materializations: a garbage payload
+      // of thousands of objective-less entries must not buy an O(payload) walk.
+      let scannedExtras = 0;
+      const maxScannedExtras = MAX_PLANNER_PRODUCTION_STEPS * 4;
       for (const raw of rawSteps.slice(templatePlan.steps.length)) {
         if (extrasBudget <= 0) {
+          break;
+        }
+        scannedExtras += 1;
+        if (scannedExtras > maxScannedExtras) {
           break;
         }
         const objective = typeof raw.objective === "string" ? raw.objective.trim() : "";

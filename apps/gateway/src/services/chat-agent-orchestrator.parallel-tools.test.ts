@@ -207,3 +207,56 @@ describe("ChatAgentOrchestrator parallel read-only tool batches", () => {
     expect(parallel.records).toHaveLength(3);
   });
 });
+
+describe("ChatAgentOrchestrator parallel batch approval pause", () => {
+  it("surfaces already-executed sibling results instead of skip markers when one call needs approval", async () => {
+    const timings: ToolTiming[] = [];
+    const completionRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      completionRequests.push(request);
+      return toolCallsResponse(READ_ONLY_BATCH);
+    });
+    const invokeTool = vi.fn(
+      async (request: { toolName: string; args?: Record<string, unknown> }): Promise<ToolInvokeResult> => {
+        const probe = Number(request.args?.probe ?? 0);
+        const startedAt = Date.now();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        timings.push({ toolName: request.toolName, probe, startedAt, finishedAt: Date.now() });
+        if (probe === 2) {
+          return {
+            outcome: "approval_required",
+            policyReason: "grant requires approval",
+            auditEventId: "audit-parallel-approval",
+            approvalId: "approval-parallel-2",
+            expiresAt: "2026-12-31T00:00:00.000Z",
+          } as ToolInvokeResult;
+        }
+        return { outcome: "executed", result: { ok: true, probe } } as ToolInvokeResult;
+      },
+    );
+    const storage = createMockStorage();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["memory.read"]),
+      createChatCompletion: createChatCompletion as never,
+      invokeTool: invokeTool as never,
+      parallelToolExecutionV1Disabled: () => false,
+    } as never);
+
+    const result = await orchestrator.run(turnInput("approval-pause"));
+
+    // All three ran (parallel batch), the second parked the turn on approval,
+    // and every call's REAL record is persisted — a resumed turn rebuilds from
+    // these records instead of redoing the read-only work.
+    expect(timings).toHaveLength(3);
+    expect(result.turnTrace.status).toBe("waiting_for_approval");
+    const runs = (
+      storage as unknown as {
+        chatToolRuns: { listByTurn(turnId: string): Array<{ status: string }> };
+      }
+    ).chatToolRuns.listByTurn("turn-parallel-approval-pause");
+    expect(runs).toHaveLength(3);
+    expect(runs.filter((run) => run.status === "approval_required")).toHaveLength(1);
+    expect(runs.filter((run) => run.status === "executed")).toHaveLength(2);
+  });
+});
