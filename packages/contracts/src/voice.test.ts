@@ -137,6 +137,26 @@ describe("voice operator helpers", () => {
     ).toEqual(["stop-talk-session", "stop-wake-listener"]);
   });
 
+  it("treats a partial voice status as inactive instead of crashing", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the voice status endpoint, so the talk/wake/stt blocks may be absent
+    // at runtime even though the VoiceStatus contract declares them required.
+    expect(buildVoiceRecoveryActions({} as VoiceStatus, createVoiceRuntime())).toEqual([]);
+
+    expect(
+      buildVoiceRecoveryActions(
+        {
+          talk: {
+            activeSessionId: "talk-123",
+            state: "running",
+            updatedAt: "2026-03-31T00:00:00.000Z",
+          },
+        } as Partial<VoiceStatus> as VoiceStatus,
+        createVoiceRuntime(),
+      ).map((action) => action.id),
+    ).toEqual(["stop-talk-session"]);
+  });
+
   it("builds a recovery posture summary and deduped recommendations", () => {
     const guidance = buildVoiceOperatorGuidance(
       createVoiceStatus({

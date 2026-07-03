@@ -260,7 +260,10 @@ export function buildVoiceRecoveryActions(
     }
   }
 
-  if (voiceStatus?.talk.state === "running" && voiceStatus.talk.activeSessionId) {
+  // `talk`/`wake`/`stt` are required by the VoiceStatus contract, but partial
+  // gateway responses (e.g. a stub returning {}) can omit them at runtime —
+  // treat a missing block as inactive instead of crashing recovery guidance.
+  if (voiceStatus?.talk?.state === "running" && voiceStatus.talk.activeSessionId) {
     actions.push({
       id: "stop-talk-session",
       title: "Stop the current talk session",
@@ -269,7 +272,7 @@ export function buildVoiceRecoveryActions(
     });
   }
 
-  if (voiceStatus?.wake.enabled) {
+  if (voiceStatus?.wake?.enabled) {
     actions.push({
       id: "stop-wake-listener",
       title: "Disable the wake listener",
@@ -279,7 +282,7 @@ export function buildVoiceRecoveryActions(
     });
   }
 
-  if (actions.length === 0 && (voiceStatus?.stt.lastError || voiceRuntime?.lastError)) {
+  if (actions.length === 0 && (voiceStatus?.stt?.lastError || voiceRuntime?.lastError)) {
     actions.push({
       id: "refresh-runtime-state",
       title: "Refresh runtime state after the last error",

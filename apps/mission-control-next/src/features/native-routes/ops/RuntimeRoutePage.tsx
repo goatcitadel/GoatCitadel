@@ -384,7 +384,7 @@ export function RuntimeRoutePage({
               scrollBody
               bodyMaxHeight="min(66vh, 38rem)"
               stats={[
-                { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions.length || 0) },
+                { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions?.length || 0) },
                 { label: "Workspace", value: activeWorkspaceName },
               ]}
             >
@@ -435,7 +435,7 @@ export function RuntimeRoutePage({
                   },
                   {
                     label: "Recent events",
-                    value: String(data.dashboard?.recentEvents.length ?? 0),
+                    value: String(data.dashboard?.recentEvents?.length ?? 0),
                     meta: "Signals attached to current posture",
                   },
                 ]}
@@ -2179,7 +2179,10 @@ export function buildOpsHeadMetrics(
   switch (section) {
     case "sessions":
       return [
-        { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions.length || 0) },
+        // `sessions` (like `recentEvents` in the section JSX) is required by
+        // DashboardStateResponse, but a partial gateway response (e.g. a stub
+        // returning {}) can omit it at runtime — count a missing list as 0.
+        { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions?.length || 0) },
         { label: "Active subagents", value: subagentsValue },
         { label: "Pending approvals", value: pendingValue },
       ];

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildNeedsAttentionItems,
+  buildOpsHeadMetrics,
   buildSectionDegradedSources,
   capitalize,
   createScheduleJobId,
@@ -444,6 +445,67 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("LLM runtime efficiency");
     expect(markup).toContain("Local engine fit");
     expect(markup).toContain("Eval evidence");
+  });
+
+  it("keeps ops head metrics defensive when a partial gateway response omits dashboard lists", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the dashboard endpoint, so `sessions` may be absent at runtime even
+    // though the response type declares it required.
+    const partialData = { sessions: [], dashboard: {}, sourceStatus: {} } as any;
+    expect(buildOpsHeadMetrics("sessions" as any, partialData, 2)).toContainEqual({
+      label: "Visible",
+      value: "0",
+    });
+
+    const dashboardOnlySessions = { sessions: [], dashboard: { sessions: [{}, {}] }, sourceStatus: {} } as any;
+    expect(buildOpsHeadMetrics("sessions" as any, dashboardOnlySessions, 2)).toContainEqual({
+      label: "Visible",
+      value: "2",
+    });
+  });
+
+  it("renders the sessions section when a partial gateway response omits dashboard lists", async () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the dashboard endpoint, so `sessions`/`recentEvents` may be absent
+    // at runtime even though the response type declares them required.
+    runtimeSnapshotOverrides.data = {
+      dashboard: {},
+      timeline: null,
+      health: null,
+      cost: null,
+      daemon: null,
+      backups: [],
+      sessions: [],
+      mcpServers: [],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+      },
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "sessions", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={3}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("No recent sessions.");
+    expect(text).toContain("Recent events");
   });
 
   it("covers runtime route formatting and schedule helper edges", () => {
