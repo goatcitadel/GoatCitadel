@@ -62,6 +62,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "session",
     riskLevel: "safe",
     requiresApproval: false,
+    readOnly: true,
     description: "Return basic status for the active session.",
     pack: "core",
   },
@@ -103,6 +104,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "memory",
     riskLevel: "safe",
     requiresApproval: false,
+    readOnly: true,
     description: "Read memory context from local memory sources.",
     argSchema: {
       type: "object",
@@ -128,6 +130,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "session",
     riskLevel: "safe",
     requiresApproval: false,
+    readOnly: true,
     description: "Return current local time and UTC time on this host.",
     pack: "core",
   },
@@ -1402,4 +1405,23 @@ export class ToolRegistry {
 
 export function createDefaultToolRegistry(): ToolRegistry {
   return new ToolRegistry(BUILTIN_TOOLS);
+}
+
+let readOnlyBuiltinToolNames: ReadonlySet<string> | undefined;
+
+/**
+ * Builtin tools that are safe to execute concurrently within one model turn:
+ * declared read-only, never approval-gated at the definition level, and
+ * risk-classified safe. Callers still run full per-call policy evaluation —
+ * this set only decides whether calls may OVERLAP, never whether they run.
+ */
+export function listReadOnlyBuiltinToolNames(): ReadonlySet<string> {
+  if (!readOnlyBuiltinToolNames) {
+    readOnlyBuiltinToolNames = new Set(
+      BUILTIN_TOOLS.filter(
+        (tool) => tool.readOnly === true && tool.requiresApproval === false && tool.riskLevel === "safe",
+      ).map((tool) => tool.name),
+    );
+  }
+  return readOnlyBuiltinToolNames;
 }

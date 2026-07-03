@@ -91,6 +91,8 @@ import {
   normalizeFailureSignature,
   rememberToolLoopHistory,
 } from "./chat-tool-loop.js";
+import { listReadOnlyBuiltinToolNames } from "@goatcitadel/policy-engine";
+import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
   compactToolResultForExecutionProfile,
   compactToolResultForTurn,
@@ -497,6 +499,13 @@ export interface ChatAgentOrchestratorDeps {
    * byte-identical behavior to today.
    */
   chatThinkingStreamV1Enabled?: () => boolean;
+  /**
+   * Round-3 parallel tool-batch kill switch (`parallelToolExecutionV1Disabled`).
+   * Read live like the thinking gate above. Absent or returning false (default)
+   * ⇒ all-read-only multi-call batches may pre-execute concurrently; returning
+   * true forces the historical strictly-serial path.
+   */
+  parallelToolExecutionV1Disabled?: () => boolean;
 }
 
 function buildTurnToolPolicyContext(
@@ -2647,6 +2656,62 @@ export class ChatAgentOrchestrator {
           let shortCircuitedOnBudget = false;
           let retryPromptLabSynthesisOnly = false;
           let coworkToolRunBudgetCheckpoint = false;
+          // Round-3 R3-1: when every call in this batch is a registry-declared
+          // read-only builtin, pre-execute the batch concurrently and let the
+          // unchanged serial loop below consume results in emission order.
+          // Per-call policy evaluation, audit, and ALL post-processing still
+          // run inside the one loop — only the execution waits overlap.
+          type PreExecutedToolCallOutcome = {
+            executed?: {
+              record: ChatToolRunRecord;
+              approvalExpiresAt?: string;
+              chunk?: ChatStreamChunkDraft;
+              userInputPrompt?: ChatUserInputPromptRecord;
+            };
+            thrown?: unknown;
+          };
+          const preExecutedToolCalls = new Map<string, PreExecutedToolCallOutcome>();
+          const parallelBatchDecision = decideToolBatchParallelism({
+            toolNames: toolCalls.map((call) => call.toolName),
+            readOnlyNames: listReadOnlyBuiltinToolNames(),
+            disabledByFlag: this.deps.parallelToolExecutionV1Disabled?.() === true,
+            remainingToolBudget: executionBudget.maxToolRunsPerTurn - toolRunCount,
+            maxParallel: MAX_PARALLEL_TOOL_CALLS,
+          });
+          if (
+            parallelBatchDecision.parallel &&
+            !circuitBreakerReason &&
+            // Any loop-guard hit falls back to the serial path so trip
+            // handling stays in exactly one place (the loop below).
+            toolCalls.every((call) => !detectToolLoopRisk(loopGuardState, call.toolName, call.args))
+          ) {
+            throwIfChatTurnCancelled(input);
+            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              status: "waiting_for_tool",
+            });
+            // Frozen snapshot: parallel siblings deliberately do not see each
+            // other's results (pinned by the serial-parity tests).
+            const priorToolRunsSnapshot = [...toolRuns];
+            await Promise.all(
+              toolCalls.map(async (parallelToolCall) => {
+                try {
+                  const executed = await this.executeToolCall({
+                    input,
+                    turnId: input.turnId,
+                    toolName: parallelToolCall.toolName,
+                    rawArgs: parallelToolCall.args,
+                    toolCallId: parallelToolCall.id,
+                    localFileIntent,
+                    priorToolRuns: priorToolRunsSnapshot,
+                    turnBudgetDeadline,
+                  });
+                  preExecutedToolCalls.set(parallelToolCall.id, { executed });
+                } catch (error) {
+                  preExecutedToolCalls.set(parallelToolCall.id, { thrown: error });
+                }
+              }),
+            );
+          }
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
             if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
@@ -2727,47 +2792,57 @@ export class ChatAgentOrchestrator {
                 break;
               }
             }
-            const remainingBeforeTool = ensureChatTurnBudgetRemaining(
-              turnBudgetDeadline,
-              input.webMode,
-              effectiveTurnBudgetMs,
-            );
-            const minimumRemainingBeforeTool = minimumRemainingBudgetForToolStart(toolCall.toolName, executionBudget);
-            if (remainingBeforeTool <= minimumRemainingBeforeTool) {
-              assistantContent = buildTurnBudgetExceededFallbackMessage({
-                turnInput: input,
-                toolRuns,
-                turnBudgetMs: effectiveTurnBudgetMs,
-                fallbackBuilders: {
-                  buildFetchedContentBudgetFallback,
-                  buildSearchResultBudgetFallback,
-                  buildDeterministicToolSynthesisFallback,
-                },
-              });
-              finalStatus = "completed";
-              finalFailure = buildChatTurnFailureRecord(
-                "turn_budget_exceeded",
-                buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
-                input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
+            const preExecuted = preExecutedToolCalls.get(toolCall.id);
+            if (!preExecuted) {
+              const remainingBeforeTool = ensureChatTurnBudgetRemaining(
+                turnBudgetDeadline,
+                input.webMode,
+                effectiveTurnBudgetMs,
               );
-              noteDegradedOutcome("turn_budget_exceeded");
-              shortCircuitedOnBudget = true;
-              break;
+              const minimumRemainingBeforeTool = minimumRemainingBudgetForToolStart(toolCall.toolName, executionBudget);
+              if (remainingBeforeTool <= minimumRemainingBeforeTool) {
+                assistantContent = buildTurnBudgetExceededFallbackMessage({
+                  turnInput: input,
+                  toolRuns,
+                  turnBudgetMs: effectiveTurnBudgetMs,
+                  fallbackBuilders: {
+                    buildFetchedContentBudgetFallback,
+                    buildSearchResultBudgetFallback,
+                    buildDeterministicToolSynthesisFallback,
+                  },
+                });
+                finalStatus = "completed";
+                finalFailure = buildChatTurnFailureRecord(
+                  "turn_budget_exceeded",
+                  buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
+                  input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
+                );
+                noteDegradedOutcome("turn_budget_exceeded");
+                shortCircuitedOnBudget = true;
+                break;
+              }
+              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+                status: "waiting_for_tool",
+              });
             }
-            this.deps.storage.chatTurnTraces.patch(input.turnId, {
-              status: "waiting_for_tool",
-            });
             toolRunCount += 1;
-            const executed = await this.executeToolCall({
-              input,
-              turnId: input.turnId,
-              toolName: toolCall.toolName,
-              rawArgs: toolCall.args,
-              toolCallId: toolCall.id,
-              localFileIntent,
-              priorToolRuns: toolRuns,
-              turnBudgetDeadline,
-            });
+            if (preExecuted && !preExecuted.executed) {
+              // A pre-executed call that threw aborts the turn exactly where
+              // the serial call would have thrown.
+              throw preExecuted.thrown;
+            }
+            const executed =
+              preExecuted?.executed ??
+              (await this.executeToolCall({
+                input,
+                turnId: input.turnId,
+                toolName: toolCall.toolName,
+                rawArgs: toolCall.args,
+                toolCallId: toolCall.id,
+                localFileIntent,
+                priorToolRuns: toolRuns,
+                turnBudgetDeadline,
+              }));
             toolRuns.push(executed.record);
             rememberToolLoopHistory(loopGuardState, executed.record);
             ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } =

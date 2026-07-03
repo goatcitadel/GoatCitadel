@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultToolRegistry } from "./tool-registry.js";
+import { createDefaultToolRegistry, listReadOnlyBuiltinToolNames } from "./tool-registry.js";
 
 describe("tool registry", () => {
   it("includes browser session-state tools", () => {
@@ -109,5 +109,29 @@ describe("tool registry", () => {
     expect(opSchema?.enum).toEqual(["create", "list", "cancel"]);
     // Offered to interactive surfaces only (never auto-offered to scheduled turns).
     expect(tool?.recommendedContexts).toEqual(["chat", "cowork"]);
+  });
+});
+
+describe("listReadOnlyBuiltinToolNames", () => {
+  it("contains only safe, approval-free, read-only tools", () => {
+    const names = listReadOnlyBuiltinToolNames();
+    expect(names.has("session.search")).toBe(true);
+    expect(names.has("memory.read")).toBe(true);
+    expect(names.has("time.now")).toBe(true);
+    expect(names.has("fs.write")).toBe(false);
+    expect(names.has("shell.exec")).toBe(false);
+    expect(names.size).toBeGreaterThanOrEqual(5);
+
+    const byName = new Map(
+      createDefaultToolRegistry()
+        .list()
+        .map((tool) => [tool.name, tool]),
+    );
+    for (const name of names) {
+      const definition = byName.get(name);
+      expect(definition?.readOnly).toBe(true);
+      expect(definition?.requiresApproval).toBe(false);
+      expect(definition?.riskLevel).toBe("safe");
+    }
   });
 });
