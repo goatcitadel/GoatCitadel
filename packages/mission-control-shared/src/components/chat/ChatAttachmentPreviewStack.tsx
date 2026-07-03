@@ -32,8 +32,13 @@ function getAttachmentPreviewCacheKey(attachmentId: string): string {
   return `${gatewayCacheScope()}:${attachmentId}`;
 }
 
+// Scoped by gateway (via the shared storage cache key) so a request issued
+// against gateway B never joins a still-pending gateway-A promise for the
+// same attachment id. Without this, a mid-flight gateway switch would let an
+// unrelated mount await a response meant for a different backend.
 function getInFlightCacheKey(attachmentId: string, forceRefresh: boolean): string {
-  return `${attachmentId}:${forceRefresh ? "refresh" : "cached"}`;
+  const cacheKey = getAttachmentPreviewCacheKey(attachmentId);
+  return `${cacheKey}:${forceRefresh ? "refresh" : "cached"}`;
 }
 
 function isCachedPreviewExpired(response: ChatAttachmentPreviewResponse, cachedAt: number, now: number): boolean {
@@ -56,8 +61,12 @@ function getCachedAttachmentPreview(attachmentId: string, now = Date.now()): Cha
   return cached.response;
 }
 
-function rememberAttachmentPreview(attachmentId: string, response: ChatAttachmentPreviewResponse): void {
-  const cacheKey = getAttachmentPreviewCacheKey(attachmentId);
+// `cacheKey` must be the key captured at fetch-start (see loadAttachmentPreview),
+// NOT recomputed here from the current gatewayCacheScope(). Recomputing at
+// completion time would let a late response from a gateway the app has since
+// navigated away from land under the *new* gateway's cache key, poisoning it
+// for unrelated mounts until the entry expires.
+function rememberAttachmentPreview(cacheKey: string, response: ChatAttachmentPreviewResponse): void {
   attachmentPreviewCache.delete(cacheKey);
   attachmentPreviewCache.set(cacheKey, {
     response,
@@ -374,9 +383,16 @@ function loadAttachmentPreview(
   if (existingRequest) {
     return existingRequest;
   }
+  // Capture the storage cache key NOW, at fetch start, rather than reading
+  // gatewayCacheScope() again inside the completion callbacks below. The app
+  // may switch gateways while this request is still in flight; a late
+  // response must land under the gateway-A key it was fetched for (harmless)
+  // rather than whatever gateway is current when the promise settles
+  // (which would poison the current gateway's cache with stale data).
+  const storageCacheKeyAtFetchStart = getAttachmentPreviewCacheKey(attachmentId);
   const request = fetchChatAttachmentPreview(attachmentId)
     .then((response) => {
-      rememberAttachmentPreview(attachmentId, response);
+      rememberAttachmentPreview(storageCacheKeyAtFetchStart, response);
       attachmentPreviewInFlight.delete(requestKey);
       return response;
     })

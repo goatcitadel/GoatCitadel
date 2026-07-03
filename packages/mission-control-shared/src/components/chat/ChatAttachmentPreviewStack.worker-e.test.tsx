@@ -251,6 +251,99 @@ describe("ChatAttachmentPreviewStack", () => {
     expect(hasText(second, "Shared extracted preview")).toBe(true);
   });
 
+  it("does not join a gateway-A in-flight request from a gateway-B mount, and does not let a late gateway-A response poison the gateway-B cache", async () => {
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-a.example");
+
+    const deferredByCall: Array<{
+      promise: Promise<ChatAttachmentPreviewResponse>;
+      resolve: (value: ChatAttachmentPreviewResponse) => void;
+    }> = [];
+    apiMocks.fetchChatAttachmentPreview.mockImplementation(() => {
+      let resolve!: (value: ChatAttachmentPreviewResponse) => void;
+      const promise = new Promise<ChatAttachmentPreviewResponse>((res) => {
+        resolve = res;
+      });
+      deferredByCall.push({ promise, resolve });
+      return promise;
+    });
+
+    // Start a fetch for attachment "X" while the mocked scope is gateway A,
+    // and hold it unresolved (a controllable deferred, per the fetch mock above).
+    let onGatewayA!: ReactTestRenderer;
+    await act(async () => {
+      onGatewayA = create(
+        <ChatAttachmentPreviewStack attachments={[attachment({ attachmentId: "cross-gateway-x" })]} />,
+      );
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(1);
+    expect(hasText(onGatewayA, "Extraction is still preparing.")).toBe(true);
+
+    // Switch the mocked scope to gateway B while A's request is still pending.
+    apiMocks.getGatewayApiBaseUrl.mockReturnValue("https://gateway-b.example");
+
+    // Mount a second consumer for the SAME attachment id under gateway B.
+    // It must NOT join gateway A's still-pending promise: a second fetch fires.
+    let onGatewayB!: ReactTestRenderer;
+    await act(async () => {
+      onGatewayB = create(
+        <ChatAttachmentPreviewStack attachments={[attachment({ attachmentId: "cross-gateway-x" })]} />,
+      );
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(2);
+    expect(hasText(onGatewayB, "Extraction is still preparing.")).toBe(true);
+
+    // Resolve gateway A's deferred (the late response) after the app has
+    // already moved on to gateway B.
+    await act(async () => {
+      deferredByCall[0].resolve(
+        preview({
+          attachmentId: "cross-gateway-x",
+          extractPreview: "Payload fetched from gateway A",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The gateway-A mount correctly renders its own payload.
+    expect(hasText(onGatewayA, "Payload fetched from gateway A")).toBe(true);
+    // Nothing threw and the gateway-B mount was NOT overwritten by A's late
+    // write; it is still waiting on its own (still-unresolved) request.
+    expect(hasText(onGatewayB, "Payload fetched from gateway A")).toBe(false);
+    expect(hasText(onGatewayB, "Extraction is still preparing.")).toBe(true);
+
+    // Resolve gateway B's own deferred and confirm a THIRD mount on gateway B
+    // gets B's data from cache — never A's — proving the B-scoped cache entry
+    // was never poisoned by A's completion write.
+    await act(async () => {
+      deferredByCall[1].resolve(
+        preview({
+          attachmentId: "cross-gateway-x",
+          extractPreview: "Payload fetched from gateway B",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(hasText(onGatewayB, "Payload fetched from gateway B")).toBe(true);
+
+    let thirdOnGatewayB!: ReactTestRenderer;
+    await act(async () => {
+      thirdOnGatewayB = create(
+        <ChatAttachmentPreviewStack attachments={[attachment({ attachmentId: "cross-gateway-x" })]} />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Served from the (correctly B-scoped) cache: no third fetch call, and it
+    // renders B's payload, not A's.
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledTimes(2);
+    expect(hasText(thirdOnGatewayB, "Payload fetched from gateway B")).toBe(true);
+    expect(hasText(thirdOnGatewayB, "Payload fetched from gateway A")).toBe(false);
+  });
+
   it("defers preview loading until the attachment card is visible unless eager loading is requested", async () => {
     let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
     const observe = vi.fn();
