@@ -300,50 +300,56 @@ export function RuntimeRoutePage({
     const daemonSourceUnavailable = sourceFailed(data, "daemon");
     const healthSourceUnavailable = sourceFailed(data, "health");
     const daemonRuntimeUnavailable = daemonSourceUnavailable && healthSourceUnavailable;
-    const daemonControllable = data.daemon?.controllable ?? data.health?.daemonStatus.controllable ?? false;
+    // `daemonStatus`/`systemVitals`/`costs`/`daemonLogs` (health) and
+    // `scheduler`/`improvement`/`events` (timeline) are required by their
+    // response contracts, but a partial gateway response (e.g. a stub
+    // returning {}) can omit them at runtime — and sourceFailed() only trips
+    // on fetch errors, not a 200 with an empty body. Chain through every hop
+    // and fall back to inert defaults, here and in the helpers below.
+    const daemonControllable = data.daemon?.controllable ?? data.health?.daemonStatus?.controllable ?? false;
     const daemonHandoff = readDaemonControlHandoff(data);
     const daemonRunning = daemonRuntimeUnavailable
       ? null
-      : (data.daemon?.running ?? data.health?.daemonStatus.running ?? null);
+      : (data.daemon?.running ?? data.health?.daemonStatus?.running ?? null);
     const daemonHost = daemonRuntimeUnavailable
       ? "unavailable"
-      : (data.daemon?.host ?? data.health?.daemonStatus.host ?? "Unknown");
+      : (data.daemon?.host ?? data.health?.daemonStatus?.host ?? "Unknown");
     const daemonState = daemonRuntimeUnavailable
       ? "unavailable"
-      : (data.daemon?.state ?? data.health?.daemonStatus.state ?? "unknown");
+      : (data.daemon?.state ?? data.health?.daemonStatus?.state ?? "unknown");
     const daemonPid = daemonRuntimeUnavailable
       ? "unavailable"
-      : String(data.daemon?.pid ?? data.health?.daemonStatus.pid ?? 0);
+      : String(data.daemon?.pid ?? data.health?.daemonStatus?.pid ?? 0);
     const daemonUptime = daemonRuntimeUnavailable
       ? "unavailable"
-      : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus.uptimeSeconds ?? 0);
+      : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus?.uptimeSeconds ?? 0);
     const daemonDiagnostics = readDaemonRuntimeDiagnostics(data);
     const daemonRepairActions = readDaemonRepairActions(data);
-    const latestBackup = data.health?.backups.latest;
+    const latestBackup = data.health?.backups?.latest;
     const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
     const memoryUsed = healthSourceUnavailable
       ? "unavailable"
-      : formatBytes(data.health?.systemVitals.memoryUsedBytes ?? 0);
+      : formatBytes(data.health?.systemVitals?.memoryUsedBytes ?? 0);
     const processRss = healthSourceUnavailable
       ? "process unavailable"
-      : `process ${formatBytes(data.health?.systemVitals.processRssBytes ?? 0)}`;
-    const systemHostname = healthSourceUnavailable ? "unavailable" : (data.health?.systemVitals.hostname ?? "Unknown");
+      : `process ${formatBytes(data.health?.systemVitals?.processRssBytes ?? 0)}`;
+    const systemHostname = healthSourceUnavailable ? "unavailable" : (data.health?.systemVitals?.hostname ?? "Unknown");
     const systemPlatform = healthSourceUnavailable
       ? "platform unavailable"
-      : (data.health?.systemVitals.platform ?? "Unknown platform");
+      : (data.health?.systemVitals?.platform ?? "Unknown platform");
     const systemUptime = healthSourceUnavailable
       ? "unavailable"
-      : formatDuration(data.health?.systemVitals.uptimeSeconds ?? 0);
+      : formatDuration(data.health?.systemVitals?.uptimeSeconds ?? 0);
     const systemRelease = healthSourceUnavailable
       ? "release unavailable"
-      : (data.health?.systemVitals.release ?? "Unknown release");
+      : (data.health?.systemVitals?.release ?? "Unknown release");
     const heapUsed = healthSourceUnavailable
       ? "unavailable"
-      : formatBytes(data.health?.systemVitals.processHeapUsedBytes ?? 0);
+      : formatBytes(data.health?.systemVitals?.processHeapUsedBytes ?? 0);
     const memoryFree = healthSourceUnavailable
       ? "Free unavailable"
-      : `Free ${formatBytes(data.health?.systemVitals.memoryFreeBytes ?? 0)}`;
-    const filteredActivityEvents = (data.timeline?.events.items ?? []).filter((item) => {
+      : `Free ${formatBytes(data.health?.systemVitals?.memoryFreeBytes ?? 0)}`;
+    const filteredActivityEvents = (data.timeline?.events?.items ?? []).filter((item) => {
       if (activityFilter === "errors") {
         return /error|failed|failure|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`);
       }
@@ -454,12 +460,12 @@ export function RuntimeRoutePage({
               scrollBody
               bodyMaxHeight="min(58vh, 32rem)"
               stats={[
-                { label: "Jobs", value: String(data.timeline?.scheduler.jobs.length ?? 0) },
-                { label: "Review queue", value: String(data.timeline?.scheduler.reviewQueue.length ?? 0) },
+                { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
+                { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
               ]}
             >
               <NativeList
-                items={(data.timeline?.scheduler.jobs ?? []).map((item) => ({
+                items={(data.timeline?.scheduler?.jobs ?? []).map((item) => ({
                   title: item.name,
                   meta: item.enabled ? "enabled" : "disabled",
                   body: `${item.action} · ${item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run"}`,
@@ -710,7 +716,7 @@ export function RuntimeRoutePage({
               bodyMaxHeight="min(50vh, 28rem)"
             >
               <NativeList
-                items={(data.timeline?.scheduler.reviewQueue ?? []).map(formatSchedulerReviewItem)}
+                items={(data.timeline?.scheduler?.reviewQueue ?? []).map(formatSchedulerReviewItem)}
                 emptyLabel="No scheduler review items."
                 density="compact"
                 maxHeight="min(38vh, 22rem)"
@@ -726,12 +732,12 @@ export function RuntimeRoutePage({
               title="Improvement reports"
               subtitle="Recent improvement outputs and replay-linked evidence."
               stats={[
-                { label: "Reports", value: String(data.timeline?.improvement.reports.length ?? 0) },
-                { label: "Replay runs", value: String(data.timeline?.improvement.replayRuns.length ?? 0) },
+                { label: "Reports", value: String(data.timeline?.improvement?.reports?.length ?? 0) },
+                { label: "Replay runs", value: String(data.timeline?.improvement?.replayRuns?.length ?? 0) },
               ]}
             >
               <NativeList
-                items={(data.timeline?.improvement.reports ?? []).slice(0, 12).map((item) => ({
+                items={(data.timeline?.improvement?.reports ?? []).slice(0, 12).map((item) => ({
                   title: item.title || item.reportId,
                   meta: item.runId ?? "report",
                   body: item.createdAt ? formatDateTime(item.createdAt) : "No timestamp",
@@ -744,7 +750,7 @@ export function RuntimeRoutePage({
               subtitle="Replay-linked runs should stay explicit, not disappear into a generic activity feed."
             >
               <NativeList
-                items={(data.timeline?.improvement.replayRuns ?? []).slice(0, 12).map((item) => ({
+                items={(data.timeline?.improvement?.replayRuns ?? []).slice(0, 12).map((item) => ({
                   title: item.runId,
                   meta: item.status ?? "unknown",
                   body: item.updatedAt ? formatDateTime(item.updatedAt) : formatDateTime(item.createdAt),
@@ -824,17 +830,17 @@ export function RuntimeRoutePage({
                 items={[
                   {
                     label: "QMD posture",
-                    value: describeQmdImpact(data.health?.costs.qmd.efficiencyLabel),
-                    meta: formatTokenDelta(data.health?.costs.qmd.netTokenDelta ?? 0),
+                    value: describeQmdImpact(data.health?.costs?.qmd?.efficiencyLabel),
+                    meta: formatTokenDelta(data.health?.costs?.qmd?.netTokenDelta ?? 0),
                   },
                   {
                     label: "Compression",
-                    value: `${(data.health?.costs.qmd.compressionPercent ?? 0).toFixed(1)}%`,
+                    value: `${(data.health?.costs?.qmd?.compressionPercent ?? 0).toFixed(1)}%`,
                     meta: "Context reduction",
                   },
                   {
                     label: "Expansion",
-                    value: `${(data.health?.costs.qmd.expansionPercent ?? 0).toFixed(1)}%`,
+                    value: `${(data.health?.costs?.qmd?.expansionPercent ?? 0).toFixed(1)}%`,
                     meta: "Context growth",
                   },
                 ]}
@@ -1144,8 +1150,8 @@ export function RuntimeRoutePage({
               title="Diagnostics directory"
               subtitle="System vitals, daemon logs, and MCP runtime posture in one diagnostics view."
               stats={[
-                { label: "CPU", value: String(data.health?.systemVitals.cpuCount ?? 0) },
-                { label: "Load", value: formatLoadAverage(data.health?.systemVitals.loadAverage ?? []) },
+                { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
+                { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
               ]}
             >
               <MetricGrid
@@ -1168,7 +1174,7 @@ export function RuntimeRoutePage({
                 ]}
               />
               <NativeList
-                items={(data.health?.daemonLogs.items ?? []).slice(0, 8).map((item) => ({
+                items={(data.health?.daemonLogs?.items ?? []).slice(0, 8).map((item) => ({
                   title: item.level.toUpperCase(),
                   meta: formatDateTime(item.timestamp),
                   body: item.message,
@@ -1202,16 +1208,16 @@ export function RuntimeRoutePage({
         );
       case "notifications": {
         const notificationSignals = [
-          ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus.running
+          ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus?.running
             ? [
                 {
                   title: "Daemon needs intervention",
-                  meta: data.health?.daemonStatus.state ?? "unknown",
+                  meta: data.health?.daemonStatus?.state ?? "unknown",
                   body: "Self-repair can propose a recovery plan, but service changes remain approval-gated.",
                 },
               ]
             : []),
-          ...(data.timeline?.events.items ?? [])
+          ...(data.timeline?.events?.items ?? [])
             .filter((item) => /error|failed|repair|runtime/i.test(item.eventType) && !/approval/i.test(item.eventType))
             .slice(0, 10)
             .map((item) => ({
@@ -1325,7 +1331,7 @@ export function RuntimeRoutePage({
                   },
                   {
                     label: "Scheduler queue",
-                    value: String(data.timeline?.scheduler.reviewQueue.length ?? 0),
+                    value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0),
                     meta: "Items waiting on schedule/review",
                   },
                   {
@@ -1426,13 +1432,13 @@ function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pen
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const daemonRunning = daemonRuntimeUnavailable
     ? null
-    : (data.daemon?.running ?? data.health?.daemonStatus.running ?? null);
+    : (data.daemon?.running ?? data.health?.daemonStatus?.running ?? null);
   const daemonHost = daemonRuntimeUnavailable
     ? "unavailable"
-    : (data.daemon?.host ?? data.health?.daemonStatus.host ?? "Unknown");
+    : (data.daemon?.host ?? data.health?.daemonStatus?.host ?? "Unknown");
   const daemonState = daemonRuntimeUnavailable
     ? "unavailable"
-    : (data.daemon?.state ?? data.health?.daemonStatus.state ?? "unknown");
+    : (data.daemon?.state ?? data.health?.daemonStatus?.state ?? "unknown");
   const mcpCount = data.mcpServers.length;
   const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
   const daySpend = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
@@ -1906,11 +1912,11 @@ function DaemonRecoveryPanel({
 }
 
 function readDaemonRuntimeDiagnostics(data: OpsRuntimeData): DaemonRuntimeDiagnostic[] {
-  return data.daemon?.diagnostics ?? data.health?.daemonStatus.diagnostics ?? [];
+  return data.daemon?.diagnostics ?? data.health?.daemonStatus?.diagnostics ?? [];
 }
 
 function readDaemonRepairActions(data: OpsRuntimeData): DaemonRepairAction[] {
-  return data.daemon?.repairActions ?? data.health?.daemonStatus.repairActions ?? [];
+  return data.daemon?.repairActions ?? data.health?.daemonStatus?.repairActions ?? [];
 }
 
 function toneForDaemonDiagnostic(severity: DaemonRuntimeDiagnostic["severity"]): StatusChipTone {
@@ -2044,12 +2050,12 @@ export function buildNeedsAttentionItems(
   const items: OpsAttentionItem[] = [];
   const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
-  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus.running);
-  const latestBackup = data.health?.backups.latest;
+  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
+  const latestBackup = data.health?.backups?.latest;
   const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
-  const schedulerReviewCount = data.timeline?.scheduler.reviewQueue.length ?? 0;
+  const schedulerReviewCount = data.timeline?.scheduler?.reviewQueue?.length ?? 0;
   const unknownSpendEvents = data.cost?.usageAvailability?.unknownEvents ?? 0;
-  const failedRuntimeEvents = (data.timeline?.events.items ?? []).filter((item) =>
+  const failedRuntimeEvents = (data.timeline?.events?.items ?? []).filter((item) =>
     /failed|failure|error|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`),
   );
   const sourceFailures = Object.entries(data.sourceStatus).filter(([, status]) => status.status === "error");
@@ -2075,7 +2081,7 @@ export function buildNeedsAttentionItems(
       meta: daemonRuntimeUnavailable ? "unavailable" : "stopped",
       body: daemonRuntimeUnavailable
         ? "Daemon and health sources are unavailable, so runtime control truth needs inspection."
-        : `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus.state ?? "stopped"}.`,
+        : `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus?.state ?? "stopped"}.`,
       primaryLabel: "Open runtime",
       primaryRoute: { area: "ops", section: "runtime", theme },
       inspectLabel: "Diagnostics",
@@ -2170,7 +2176,7 @@ export function buildOpsHeadMetrics(
   pendingApprovals: number,
 ): NativePageMetric[] {
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
-  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus.running);
+  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
   const daemonValue = daemonRunning == null ? "unknown" : daemonRunning ? "running" : "stopped";
   const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
   const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
@@ -2188,14 +2194,14 @@ export function buildOpsHeadMetrics(
       ];
     case "schedules":
       return [
-        { label: "Jobs", value: String(data.timeline?.scheduler.jobs.length ?? 0) },
-        { label: "Review queue", value: String(data.timeline?.scheduler.reviewQueue.length ?? 0) },
+        { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
+        { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
         { label: "Pending approvals", value: pendingValue },
       ];
     case "improvement":
       return [
-        { label: "Reports", value: String(data.timeline?.improvement.reports.length ?? 0) },
-        { label: "Replay runs", value: String(data.timeline?.improvement.replayRuns.length ?? 0) },
+        { label: "Reports", value: String(data.timeline?.improvement?.reports?.length ?? 0) },
+        { label: "Replay runs", value: String(data.timeline?.improvement?.replayRuns?.length ?? 0) },
         { label: "Pending approvals", value: pendingValue },
       ];
     case "notifications":
@@ -2219,9 +2225,9 @@ export function buildOpsHeadMetrics(
       ];
     case "diagnostics":
       return [
-        { label: "Hostname", value: data.health?.systemVitals.hostname ?? "Unknown" },
-        { label: "CPU", value: String(data.health?.systemVitals.cpuCount ?? 0) },
-        { label: "Load", value: formatLoadAverage(data.health?.systemVitals.loadAverage ?? []) },
+        { label: "Hostname", value: data.health?.systemVitals?.hostname ?? "Unknown" },
+        { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
+        { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
       ];
     case "activity":
     default:
@@ -2448,7 +2454,7 @@ function OpsDegradedSourcesStrip({
 }
 
 function readDaemonControlHandoff(data: OpsRuntimeData): DaemonControlHandoff | null {
-  const handoff = data.daemon?.controlHandoff ?? data.health?.daemonStatus.controlHandoff;
+  const handoff = data.daemon?.controlHandoff ?? data.health?.daemonStatus?.controlHandoff;
   if (handoff && Array.isArray(handoff.commands)) {
     return handoff;
   }

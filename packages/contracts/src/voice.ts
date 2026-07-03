@@ -240,7 +240,10 @@ export function buildVoiceRecoveryActions(
   }
 
   if (!runtimeMissing && !runtimeBroken && !voiceRuntime?.selectedModelId) {
-    const firstInstalledModel = voiceRuntime.installedModels[0]?.modelId;
+    // `installedModels` is required by the VoiceRuntimeStatus contract, but a
+    // partial gateway response can omit it even when the ready flags are true —
+    // treat a missing list as "no installed models" (starter-model guidance).
+    const firstInstalledModel = voiceRuntime.installedModels?.[0]?.modelId;
     if (firstInstalledModel) {
       actions.push({
         id: "activate-installed-model",

@@ -157,6 +157,27 @@ describe("voice operator helpers", () => {
     ).toEqual(["stop-talk-session"]);
   });
 
+  it("treats a partial runtime status without installed models as needing a starter model", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can report a
+    // ready runtime (binaryReady/ffmpegReady true) while omitting the
+    // installedModels list even though the VoiceRuntimeStatus contract
+    // declares it required.
+    expect(
+      buildVoiceRecoveryActions(createVoiceStatus(), {
+        provider: "whisper.cpp",
+        source: "managed",
+        readiness: "ready",
+        binaryReady: true,
+        ffmpegReady: true,
+      } as Partial<VoiceRuntimeStatus> as VoiceRuntimeStatus),
+    ).toEqual([
+      expect.objectContaining({
+        id: "install-starter-model",
+        tone: "warning",
+      }),
+    ]);
+  });
+
   it("builds a recovery posture summary and deduped recommendations", () => {
     const guidance = buildVoiceOperatorGuidance(
       createVoiceStatus({

@@ -508,6 +508,113 @@ describe("RuntimeRoutePage", () => {
     expect(text).toContain("Recent events");
   });
 
+  it("keeps head metrics and needs-attention items defensive when a partial gateway response omits health and timeline blocks", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the health and timeline endpoints, so daemonStatus/systemVitals and
+    // scheduler/improvement/events may be absent at runtime even though the
+    // response types declare them required. sourceStatus stays "ok" — this is
+    // not a fetch failure, so sourceFailed() does not protect these reads.
+    const partialData = {
+      sessions: [],
+      backups: [],
+      mcpServers: [],
+      dashboard: {},
+      health: {},
+      timeline: {},
+      cost: null,
+      daemon: null,
+      sourceStatus: {
+        health: { status: "ok" },
+        timeline: { status: "ok" },
+        daemon: { status: "ok" },
+        cost: { status: "ok" },
+      },
+    } as any;
+
+    expect(buildOpsHeadMetrics("schedules" as any, partialData, 0)).toContainEqual({ label: "Jobs", value: "0" });
+    expect(buildOpsHeadMetrics("improvement" as any, partialData, 0)).toContainEqual({
+      label: "Reports",
+      value: "0",
+    });
+    expect(buildOpsHeadMetrics("diagnostics" as any, partialData, 0)).toContainEqual({
+      label: "Hostname",
+      value: "Unknown",
+    });
+    // A missing daemonStatus block means daemon truth is unknown, not stopped.
+    expect(buildOpsHeadMetrics("notifications" as any, partialData, 0)).toContainEqual({
+      label: "Daemon",
+      value: "unknown",
+    });
+
+    const attentionIds = buildNeedsAttentionItems(partialData, 0, "ops" as any).map((item) => item.id);
+    expect(attentionIds).toContain("backup-posture");
+    expect(attentionIds).not.toContain("daemon-runtime");
+    expect(attentionIds).not.toContain("scheduler-review");
+    expect(attentionIds).not.toContain("failed-runtime-event");
+  });
+
+  it("renders ops sections when a partial gateway response omits health and timeline blocks", () => {
+    // Well-formed-but-partial gateway response: a stub gateway can return {}
+    // for the health and timeline endpoints while their sources report "ok",
+    // so daemonStatus/systemVitals/costs/daemonLogs and scheduler/improvement/
+    // events may be absent even though the response types declare them
+    // required.
+    runtimeSnapshotOverrides.data = {
+      dashboard: {
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      },
+      timeline: {},
+      health: {},
+      cost: null,
+      daemon: null,
+      backups: [],
+      sessions: [],
+      mcpServers: [],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+      },
+    } as any;
+
+    const sections = [
+      ["runtime", "Runtime posture"],
+      ["runtime", "No backup"],
+      ["diagnostics", "Diagnostics directory"],
+      ["diagnostics", "No daemon logs available."],
+      ["schedules", "No scheduled jobs."],
+      ["improvement", "No improvement reports yet."],
+      ["costs", "Quality and QMD signal"],
+      ["notifications", "Daemon needs intervention"],
+      ["activity", "Activity feed"],
+    ] as const;
+
+    for (const [section, expected] of sections) {
+      const markup = renderToStaticMarkup(
+        <RuntimeRoutePage
+          route={{ area: "ops", section, theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      expect(markup).toContain(expected);
+    }
+  });
+
   it("covers runtime route formatting and schedule helper edges", () => {
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
 
