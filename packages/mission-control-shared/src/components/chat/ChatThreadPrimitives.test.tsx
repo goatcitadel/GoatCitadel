@@ -866,6 +866,60 @@ describe("ChatThreadPrimitives", () => {
     ).toHaveLength(0);
   });
 
+  it("renders no thinking section when the turn carries no thinking text", () => {
+    const renderer = renderTurn({ turn: createTurn() });
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-thinking" })).toHaveLength(0);
+  });
+
+  it("renders the thinking section above the live activity rail for a streaming turn with thinking text", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+
+    const streamingTurnWithThinking = createTurn({
+      assistantMessage: undefined,
+      toolRuns,
+      thinking: "Weighing a couple of approaches before answering.",
+      trace: { ...createTurn().trace, status: "running", toolRuns },
+    });
+    const renderer = renderTurn({
+      turn: streamingTurnWithThinking,
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    const thinkingSection = renderer.root.findByProps({ className: "mc-next-thread-thinking" });
+    expect(thinkingSection).toBeTruthy();
+    const summary = thinkingSection.findByType("summary");
+    expect(summary.children.join("")).toBe("Thinking…");
+
+    // Mount order: the thinking section must appear before the live activity
+    // rail within the assistant bubble, per the card's DOM/children order.
+    const assistantBubble = renderer.root.findByProps({ className: "mc-next-thread-bubble assistant streaming" });
+    const childTypeNames = assistantBubble.children
+      .filter((child): child is TestRenderer.ReactTestInstance => typeof child !== "string")
+      .map((child) => (typeof child.type === "function" ? child.type.name : child.type));
+    const thinkingIndex = childTypeNames.indexOf("ChatThinkingSection");
+    const railIndex = childTypeNames.indexOf("ChatLiveActivityRail");
+    expect(thinkingIndex).toBeGreaterThanOrEqual(0);
+    expect(railIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingIndex).toBeLessThan(railIndex);
+  });
+
   it("does not re-render the memoized card when re-rendered with identical props", () => {
     const renderSpy = vi.fn();
     const turn = createTurn();

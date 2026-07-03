@@ -69,6 +69,60 @@ describe("coalesceStreamingDeltas", () => {
     expect(out[0]?.eventId).toBe("e3");
     expect(out[0]?.sequence).toBe(3);
   });
+
+  it("coalesces adjacent thinking_delta chunks into one combined chunk", async () => {
+    async function* source() {
+      yield {
+        type: "thinking_delta",
+        delta: "Considering ",
+        sessionId: "s1",
+        turnId: "t1",
+        eventId: "e1",
+        sequence: 1,
+      };
+      yield {
+        type: "thinking_delta",
+        delta: "the options.",
+        sessionId: "s1",
+        turnId: "t1",
+        eventId: "e2",
+        sequence: 2,
+      };
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for await (const chunk of coalesceStreamingDeltas(source(), { windowMs: 1000 })) {
+      out.push(chunk as Record<string, unknown>);
+    }
+    expect(out).toHaveLength(1);
+    expect(out[0]?.type).toBe("thinking_delta");
+    expect(out[0]?.delta).toBe("Considering the options.");
+  });
+
+  it("never merges a thinking_delta with an adjacent assistant delta of a different type", async () => {
+    async function* source() {
+      yield {
+        type: "thinking_delta",
+        delta: "Considering.",
+        sessionId: "s1",
+        turnId: "t1",
+        eventId: "e1",
+        sequence: 1,
+      };
+      yield { type: "delta", delta: "The answer is 4.", sessionId: "s1", turnId: "t1", eventId: "e2", sequence: 2 };
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for await (const chunk of coalesceStreamingDeltas(source(), { windowMs: 1000 })) {
+      out.push(chunk as Record<string, unknown>);
+    }
+    // Same-type-only coalescing: the type switch flushes the pending buffer
+    // before starting the new type's accumulation, so these never merge into
+    // one chunk regardless of the coalescing window.
+    expect(out).toHaveLength(2);
+    expect(out[0]?.type).toBe("thinking_delta");
+    expect(out[0]?.delta).toBe("Considering.");
+    expect(out[1]?.type).toBe("delta");
+    expect(out[1]?.delta).toBe("The answer is 4.");
+  });
 });
 
 describe("streamSseReply", () => {

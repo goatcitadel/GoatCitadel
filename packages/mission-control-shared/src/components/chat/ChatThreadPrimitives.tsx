@@ -16,6 +16,7 @@ import {
 import { Badge } from "../ui";
 import { AssistantMessageRenderer, type AssistantStreamPresentationMode } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
+import { ChatThinkingSection } from "./ChatThinkingSection";
 import { ChatLiveActivityRail, ChatTurnActivityRows, formatToolRunElapsed } from "./ChatToolActivity";
 import {
   getAssistantPendingLabel,
@@ -1062,6 +1063,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
               </>
             ) : null}
           </p>
+          <ChatThinkingSection thinking={turn.thinking} turnStatus={turn.trace.status} />
           {showLiveActivity ? (
             <ChatLiveActivityRail
               turn={turn}

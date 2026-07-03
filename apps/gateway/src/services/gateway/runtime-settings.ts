@@ -107,5 +107,7 @@ export interface RuntimeSettings {
     orchestrationFinalStreamingV1Disabled?: boolean;
     /** Master autonomy kill switch (Phase 1 proactivity / self-improvement). Absent/false ⇒ autonomy ON; `true` halts all autonomous loops. */
     autonomyV1Disabled?: boolean;
+    /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
+    chatThinkingStreamV1Enabled?: boolean;
   };
 }

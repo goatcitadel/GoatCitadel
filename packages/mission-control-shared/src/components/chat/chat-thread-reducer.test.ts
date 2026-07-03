@@ -86,6 +86,7 @@ describe("chat-thread-reducer", () => {
       "trace_update",
       "capability_upgrade_suggestion",
       "citation",
+      "thinking_delta",
     ]) {
       expect(isThreadMutatingStreamChunk({ type } as never)).toBe(true);
     }
@@ -596,5 +597,74 @@ describe("chat-thread-reducer", () => {
     expect(
       updateThreadFromStreamChunk(null, { type: "delta", sessionId, delta: "ignored" } as never, null, sessionId, null),
     ).toBeNull();
+  });
+
+  describe("thinking_delta", () => {
+    it("accumulates thinking text across chunks for the matching turn", () => {
+      const current = baseThread() as never;
+      const first = updateThreadFromStreamChunk(
+        current,
+        { type: "thinking_delta", sessionId, turnId: "turn-2", delta: "Considering the " } as never,
+        null,
+        sessionId,
+        null,
+      )!;
+      expect(first.turns[1]?.thinking).toBe("Considering the ");
+
+      const second = updateThreadFromStreamChunk(
+        first as never,
+        { type: "thinking_delta", sessionId, turnId: "turn-2", delta: "options." } as never,
+        null,
+        sessionId,
+        null,
+      )!;
+      expect(second.turns[1]?.thinking).toBe("Considering the options.");
+      // Other turns and fields are untouched.
+      expect(second.turns[0]?.thinking).toBeUndefined();
+      expect(second.turns[1]?.assistantMessage).toBe(current.turns[1]!.assistantMessage);
+    });
+
+    it("caps accumulated thinking at 16k chars, keeping the tail with a head-truncation marker", () => {
+      const current = baseThread() as never;
+      const firstChunk = "a".repeat(15_990);
+      const withFirstChunk = updateThreadFromStreamChunk(
+        current,
+        { type: "thinking_delta", sessionId, turnId: "turn-2", delta: firstChunk } as never,
+        null,
+        sessionId,
+        null,
+      )!;
+      expect(withFirstChunk.turns[1]?.thinking).toHaveLength(15_990);
+
+      // Push well past the cap: the combined length before capping is
+      // 15_990 + 500 = 16_490, comfortably over 16_000.
+      const overflowChunk = "b".repeat(500);
+      const withOverflow = updateThreadFromStreamChunk(
+        withFirstChunk as never,
+        { type: "thinking_delta", sessionId, turnId: "turn-2", delta: overflowChunk } as never,
+        null,
+        sessionId,
+        null,
+      )!;
+      const capped = withOverflow.turns[1]?.thinking ?? "";
+      expect(capped.length).toBeLessThanOrEqual(16_000);
+      expect(capped.startsWith("… ")).toBe(true);
+      // The freshest reasoning (the tail, ending in the overflow chunk) survives.
+      expect(capped.endsWith("b".repeat(500))).toBe(true);
+      // The oldest "a" characters were dropped to make room.
+      expect(capped.includes("a".repeat(15_990))).toBe(false);
+    });
+
+    it("no-ops for an unknown turnId", () => {
+      const current = baseThread() as never;
+      const result = updateThreadFromStreamChunk(
+        current,
+        { type: "thinking_delta", sessionId, turnId: "missing-turn", delta: "ignored" } as never,
+        null,
+        sessionId,
+        null,
+      );
+      expect(result).toBe(current);
+    });
   });
 });

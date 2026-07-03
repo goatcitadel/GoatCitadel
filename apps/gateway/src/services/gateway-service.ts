@@ -1137,6 +1137,7 @@ export class GatewayService {
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
+      chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -8589,6 +8590,7 @@ export class GatewayService {
       orchestrationFinalStreamingV1Disabled:
         patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
+      chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -8624,6 +8626,7 @@ export class GatewayService {
       orchestrationFinalStreamingV1Disabled:
         stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
+      chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
     };
   }
 

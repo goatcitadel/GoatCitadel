@@ -488,6 +488,15 @@ export interface ChatAgentOrchestratorDeps {
   };
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
+  /**
+   * Thinking-display skeleton gate. Read live (like the `isFeatureEnabled`
+   * closures other services pass in) rather than a plain boolean snapshot, so an
+   * operator toggling the flag at runtime via the dashboard takes effect on the
+   * NEXT turn without requiring a gateway restart. Absent or returning false
+   * (default) ⇒ this orchestrator never constructs a `thinking_delta` chunk —
+   * byte-identical behavior to today.
+   */
+  chatThinkingStreamV1Enabled?: () => boolean;
 }
 
 function buildTurnToolPolicyContext(
@@ -2303,6 +2312,28 @@ export class ChatAgentOrchestrator {
               status: "interrupted",
             };
             break;
+          }
+
+          // Thinking-display skeleton (default-off `chatThinkingStreamV1Enabled`):
+          // terminal-block variant. Streaming reasoning deltas are absorbed into
+          // the completion aggregate per-chunk (see absorbCompletionStreamChunk)
+          // but not surfaced incrementally, so — without deeper provider-plumbing
+          // changes than a skeleton warrants — the earliest tappable point is
+          // right here, once this completion's terminal `message` is available.
+          // Emits AT MOST one thinking_delta per completion pass, always before
+          // this pass's visible output continues below. SAFETY INVARIANT: the
+          // reasoning text below is never written into assistantContent or any
+          // persisted message content — only into this standalone chunk.
+          if (this.deps.chatThinkingStreamV1Enabled?.()) {
+            const reasoningText = extractReasoningText(message);
+            if (reasoningText) {
+              yield {
+                type: "thinking_delta",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                delta: reasoningText,
+              };
+            }
           }
 
           // The model's own tool calls are never silently filtered: on eval
@@ -6172,6 +6203,45 @@ function messageHasReasoningContent(message: Record<string, unknown> | undefined
     }
   }
   return false;
+}
+
+/**
+ * Thinking-display skeleton: concatenates the same readable reasoning text
+ * {@link messageHasReasoningContent} detects, for emission as a `thinking_delta`
+ * chunk. Mirrors that function's traversal (flat field first, then structured
+ * `provider_native_content` blocks) so "has reasoning" and "the reasoning text"
+ * never disagree. Redacted-thinking blocks carry no readable text (by design —
+ * they only prove the model reasoned) and are skipped here, unlike the boolean
+ * detector which still counts them as "has reasoning".
+ */
+function extractReasoningText(message: Record<string, unknown> | undefined): string {
+  if (!message) {
+    return "";
+  }
+  const flatReasoning = message.reasoning ?? message.reasoning_content;
+  if (typeof flatReasoning === "string" && flatReasoning.trim().length > 0) {
+    return flatReasoning;
+  }
+  const parts: string[] = [];
+  for (const item of extractProviderNativeContent(message)) {
+    const type = typeof item.type === "string" ? item.type : "";
+    // redacted_thinking blocks carry only an encrypted `data` blob — never treat
+    // that as readable text. Skip them entirely rather than falling through the
+    // `?? item.data` chain below, which would otherwise leak the ciphertext into
+    // visible reasoning output.
+    if (type === "redacted_thinking") {
+      continue;
+    }
+    const reasoningLike = type === "thinking" || type === "reasoning";
+    if (!reasoningLike) {
+      continue;
+    }
+    const text = item.thinking ?? item.text ?? item.content ?? item.data;
+    if (typeof text === "string" && text.trim().length > 0) {
+      parts.push(text);
+    }
+  }
+  return parts.join("");
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
