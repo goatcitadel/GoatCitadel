@@ -3,6 +3,10 @@ import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import {
+  getChatStreamingPreview,
+  resetChatStreamingPreviewForTests,
+} from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
+import {
   resolveOutboundExecutionPrefs,
   useChatOutboundExecution,
   type ActiveChatStreamState,
@@ -304,6 +308,7 @@ function Harness(props: {
 describe("useChatOutboundExecution", () => {
   beforeEach(() => {
     latest = null;
+    resetChatStreamingPreviewForTests();
     approveChatToolMock.mockReset();
     answerChatUserInputPromptMock.mockReset();
     denyChatToolMock.mockReset();
@@ -839,7 +844,11 @@ describe("useChatOutboundExecution", () => {
 
     // The replay and the stale out-of-order chunk are dropped; the no-sequence
     // chunk and the forward-progress chunk both survive: "Hello" + " world" + "!".
-    expect(latest!.getSnapshot().streamingPreview).toEqual(
+    // The hook's own return value (`streamingPreview`) is now a deprecated
+    // transition-only passthrough that does not update per flush -- the live
+    // flushed text is asserted through the store the buffer publishes to.
+    expect(latest!.getSnapshot().activeStreamingTurnId).toBe("turn-2");
+    expect(getChatStreamingPreview("session-1")).toEqual(
       expect.objectContaining({
         turnId: "turn-2",
         text: "Hello world!",
@@ -1261,7 +1270,10 @@ describe("useChatOutboundExecution", () => {
     const streamedTurn = midStreamSnapshot.thread!.turns.find((turn) => turn.turnId === "turn-2")!;
     expect(streamedTurn.assistantMessage?.content ?? "").toBe("");
     expect(midStreamSnapshot.activeStreamingTurnId).toBe("turn-2");
-    expect(midStreamSnapshot.streamingPreview).toEqual(
+    // The hook's own return value (`streamingPreview`) is now a deprecated
+    // transition-only passthrough that does not update per flush -- the live
+    // flushed text is asserted through the store the buffer publishes to.
+    expect(getChatStreamingPreview("session-1")).toEqual(
       expect.objectContaining({
         turnId: "turn-2",
         text: "Streaming preview text",

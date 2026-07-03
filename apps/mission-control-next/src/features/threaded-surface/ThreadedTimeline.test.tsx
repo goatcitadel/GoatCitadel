@@ -10,6 +10,7 @@ import {
   publishChannelActivityFromRealtimeEvent,
   resetChannelActivitySnapshots,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import { resetChatStreamingPreviewForTests } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 
 function buildProps(overrides: Partial<any> = {}): any {
   return {
@@ -196,6 +197,12 @@ describe("ThreadedTimeline", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+    // The store is a module-level singleton shared across every test in this
+    // file: reset it up front so no test can observe a preview a previous
+    // test published (the timeline now prefers its store subscription over
+    // the deprecated streamingPreview prop, so a leaked publish would shadow
+    // whatever a later test passes via buildProps()).
+    resetChatStreamingPreviewForTests();
   });
 
   afterEach(async () => {
@@ -208,6 +215,7 @@ describe("ThreadedTimeline", () => {
     root = null;
     container = null;
     resetChannelActivitySnapshots();
+    resetChatStreamingPreviewForTests();
   });
 
   it("folds Cowork subagent activity behind an expandable card", () => {

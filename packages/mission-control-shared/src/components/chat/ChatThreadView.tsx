@@ -2,6 +2,7 @@ import type { ChatMode, ChatStreamingPreview, ChatThreadResponse } from "@goatci
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
+import { useChatStreamingPreviewSnapshot } from "../../state/chat-streaming-preview-store";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
 import {
   ChatThreadDelegationSummary,
@@ -21,7 +22,7 @@ export function ChatThreadView({
   notices,
   followOutput,
   streamStatus = "idle",
-  streamingPreview = null,
+  streamingPreview: streamingPreviewProp = null,
   activeStreamingTurnId = null,
   queuedCount = 0,
   streamError = null,
@@ -43,6 +44,13 @@ export function ChatThreadView({
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus?: ChatStreamStatus;
+  /**
+   * @deprecated Only updates on stream start/stop when passed from the
+   * threaded-surface-core host (see useChatStreamingPreviewState.ts); this
+   * component prefers its own chat-streaming-preview-store subscription
+   * (keyed by `thread.sessionId`) and only falls back to this prop when
+   * nothing has been published yet for that session.
+   */
   streamingPreview?: ChatStreamingPreview | null;
   activeStreamingTurnId?: string | null;
   queuedCount?: number;
@@ -61,6 +69,16 @@ export function ChatThreadView({
   const threadTurnCount = thread?.turns.length ?? 0;
   const latestTurnId = thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
+  /*
+   * Subscribes to the live, per-flush preview instead of relying on the
+   * deprecated `streamingPreview` prop (which -- when this component is fed
+   * from the threaded-surface-core host -- only updates on stream
+   * start/stop). Falls back to the prop when nothing has been published yet
+   * for this session, so callers that still pass the prop directly (e.g.
+   * existing tests) keep working.
+   */
+  const subscribedStreamingPreview = useChatStreamingPreviewSnapshot(thread?.sessionId ?? null);
+  const streamingPreview = subscribedStreamingPreview ?? streamingPreviewProp;
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const jumpToLatest = useCallback(() => {
     if (threadTurnCount <= 0) {

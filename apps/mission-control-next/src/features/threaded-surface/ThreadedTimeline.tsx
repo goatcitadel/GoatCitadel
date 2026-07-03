@@ -24,6 +24,7 @@ import {
   useChannelActivitySnapshot,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 
@@ -280,6 +281,18 @@ export function ThreadedTimeline({
   const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
   const sessionId = props.thread?.sessionId ?? null;
+  /*
+   * The host's `props.streamingPreview` only updates on stream start/stop now
+   * (see useChatStreamingPreviewState.ts) -- the live, per-flush value comes
+   * from this subscription instead, so only this component (and the turn
+   * card it feeds) re-renders per flush rather than the whole host+shell.
+   * `props.streamingPreview` is kept as the deprecated fallback for the
+   * moment nothing has been published yet for this session (e.g. the very
+   * first render before message_start, or a test harness that still passes
+   * the prop directly instead of publishing to the store).
+   */
+  const subscribedStreamingPreview = useChatStreamingPreviewSnapshot(sessionId);
+  const streamingPreview = subscribedStreamingPreview ?? props.streamingPreview;
   const selectedContextTurnIdSet = useMemo(
     () => new Set(props.selectedContextTurnIds ?? []),
     [props.selectedContextTurnIds],
@@ -368,14 +381,14 @@ export function ThreadedTimeline({
         windowStart: effectiveWindowStart,
         selectedTurnId: props.selectedTurnId,
         contextTurnIds: props.selectedContextTurnIds ?? [],
-        streamingTurnId: props.activeStreamingTurnId ?? props.streamingPreview?.turnId ?? null,
+        streamingTurnId: props.activeStreamingTurnId ?? streamingPreview?.turnId ?? null,
       }),
     [
       effectiveWindowStart,
       props.activeStreamingTurnId,
       props.selectedContextTurnIds,
       props.selectedTurnId,
-      props.streamingPreview?.turnId,
+      streamingPreview?.turnId,
       props.thread?.turns,
     ],
   );
@@ -388,10 +401,7 @@ export function ThreadedTimeline({
         : props.streamStatus === "connecting"
           ? `${toTitleCase(props.mode)} stream connecting.`
           : "");
-  const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(
-    props.streamingPreview,
-    props.activeStreamingTurnId,
-  );
+  const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(streamingPreview, props.activeStreamingTurnId);
 
   const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
     followOutput: props.followOutput,
@@ -513,9 +523,7 @@ export function ThreadedTimeline({
                     selected={props.selectedTurnId === item.turn.turnId}
                     contextSelected={selectedContextTurnIdSet.has(item.turn.turnId)}
                     groupedWithPrevious={groupedWithPrevious}
-                    streamingPreview={
-                      props.streamingPreview?.turnId === item.turn.turnId ? props.streamingPreview : null
-                    }
+                    streamingPreview={streamingPreview?.turnId === item.turn.turnId ? streamingPreview : null}
                     visualStreamMode={props.visualStreamMode}
                     renderUserMetaAddon={renderUserMetaAddon}
                     renderCitationList={renderCitationList}

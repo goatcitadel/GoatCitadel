@@ -1557,6 +1557,11 @@ export function MissionThreadedControllerHost({
     handleSubmitUserInput,
     handleSelectBranchTurn,
     streamStatus,
+    // Deprecated passthroughs: useChatStreamingPreviewState only updates these
+    // on stream start/stop now (not per RAF flush), which is what stops this
+    // host from re-rendering per flush. The live, per-flush preview lives in
+    // the chat-streaming-preview-store (mission-control-shared); ThreadedTimeline
+    // and ChatThreadView subscribe to it directly instead of reading this prop.
     streamingPreview,
     activeStreamingTurnId,
     prefsRef,
