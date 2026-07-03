@@ -122,3 +122,96 @@ describe("generatePreparedExecutionPlanDraft planner fast path", () => {
     expect(request.model).toBe("claude-opus-4-8");
   });
 });
+
+describe("generatePreparedExecutionPlanDraft planner fan-out", () => {
+  const FANOUT_ASK = "Prepare the quarterly business update and then finalize it for the board";
+
+  function plannerPayloadWithExtras(templatePlan: ReturnType<typeof buildOrchestrationPlan>) {
+    return {
+      summary: "Fan out the independent sections.",
+      steps: [
+        ...templatePlan.steps.map((step) => ({
+          objective: `${step.objective} (refined)`,
+          successCriteria: step.successCriteria,
+          expectedOutput: step.expectedOutput,
+          parallelizable: step.parallelizable,
+          dependsOnStepIds: step.dependsOnStepIds,
+          delegatedRole: step.delegatedRole ?? null,
+        })),
+        {
+          objective: "Draft the pricing section",
+          successCriteria: "Complete pricing section.",
+          expectedOutput: "Pricing handoff.",
+          parallelizable: true,
+          dependsOnStepIds: [templatePlan.steps[0]!.stepId],
+          delegatedRole: "Pricing",
+        },
+        {
+          objective: "Draft the churn section",
+          successCriteria: "Complete churn section.",
+          expectedOutput: "Churn handoff.",
+          parallelizable: true,
+          dependsOnStepIds: [templatePlan.steps[0]!.stepId],
+          delegatedRole: "Churn",
+        },
+      ],
+    };
+  }
+
+  it("expands planner extras into same-stage workers on the default cowork template", async () => {
+    const fixture = buildFixture({ content: FANOUT_ASK });
+    fixture.createChatCompletion.mockImplementation(async () => ({
+      choices: [{ message: { content: JSON.stringify(plannerPayloadWithExtras(fixture.templatePlan)) } }],
+    }));
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      fixture.host,
+      fixture.prepared,
+      fixture.routerInput,
+      fixture.templatePlan,
+      false,
+    );
+    expect(draft.steps).toHaveLength(6);
+
+    const { applyExecutionPlanDraftToOrchestrationPlan } = await import("./chat-turn-planning-helpers.js");
+    const applied = applyExecutionPlanDraftToOrchestrationPlan(fixture.templatePlan, draft);
+    const byLabel = new Map(applied.steps.map((step) => [step.delegatedRole ?? step.label, step]));
+
+    const worker = applied.steps[1]!;
+    const pricing = byLabel.get("Pricing")!;
+    const churn = byLabel.get("Churn")!;
+    expect(pricing.stage).toBe(worker.stage);
+    expect(churn.stage).toBe(worker.stage);
+    const synthesizer = applied.steps.find((step) => step.role === "synthesizer")!;
+    expect(synthesizer.stage).toBeGreaterThan(pricing.stage);
+    expect(synthesizer.dependsOnStepIds).toEqual(expect.arrayContaining([pricing.stepId, churn.stepId]));
+
+    const plannerRequest = fixture.createChatCompletion.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(plannerRequest.messages[0]!.content).toContain("EXTRA worker steps");
+  });
+
+  it("drops extras when the fan-out kill switch is on", async () => {
+    const fixture = buildFixture({ content: FANOUT_ASK });
+    (fixture.host.isFeatureEnabled as ReturnType<typeof vi.fn>).mockImplementation(
+      (flag: string) => flag === "plannerFanoutV1Disabled",
+    );
+    fixture.createChatCompletion.mockImplementation(async () => ({
+      choices: [{ message: { content: JSON.stringify(plannerPayloadWithExtras(fixture.templatePlan)) } }],
+    }));
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      fixture.host,
+      fixture.prepared,
+      fixture.routerInput,
+      fixture.templatePlan,
+      false,
+    );
+    expect(draft.steps).toHaveLength(fixture.templatePlan.steps.length);
+    const plannerRequest = fixture.createChatCompletion.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(plannerRequest.messages[0]!.content).not.toContain("EXTRA worker steps");
+  });
+});

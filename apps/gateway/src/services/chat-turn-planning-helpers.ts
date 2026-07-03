@@ -32,6 +32,8 @@ export interface ResolvedRuntimeGuidance {
 
 export const CHAT_PLANNER_MAX_STEPS = 8;
 export const CHAT_PLANNER_MIN_STEPS = 3;
+/** Round-3 fan-out cap: total production (non-control) steps after planner expansion. */
+export const MAX_PLANNER_PRODUCTION_STEPS = 4;
 const CONTROL_ORCHESTRATION_ROLES = new Set<OrchestrationRole>(["synthesizer", "reviewer", "critic", "qa-validator"]);
 
 export function normalizeChatInputParts(
@@ -458,6 +460,12 @@ export function coercePlannerExecutionPlanDraft(
     advisoryOnly: boolean;
     mode: ChatMode;
     objective: string;
+    /**
+     * Round-3 R3-7 (kill switch `plannerFanoutV1Disabled`): when true, extra
+     * planner steps beyond the template may materialize as additional worker
+     * steps (cowork only, hard-capped) instead of being silently dropped.
+     */
+    allowProductionExpansion?: boolean;
   },
 ): PreparedChatExecutionPlanResolution["executionPlanDraft"] | undefined {
   const rawSteps = Array.isArray(payload.steps)
@@ -519,6 +527,75 @@ export function coercePlannerExecutionPlanDraft(
       status: "pending" as const,
     };
   });
+  const expansionAllowed = input.allowProductionExpansion === true && input.mode === "cowork" && !input.advisoryOnly;
+  if (expansionAllowed && rawSteps.length > templatePlan.steps.length) {
+    const productionTemplateStep = findProductionTemplateStep(templatePlan);
+    if (productionTemplateStep) {
+      const knownStepIds = new Set(templatePlan.steps.map((step) => step.stepId));
+      const controlLabels = new Set(
+        templatePlan.steps
+          .filter((step) => CONTROL_ORCHESTRATION_ROLES.has(step.role))
+          .flatMap((step) => [step.label?.toLowerCase(), step.delegatedRole?.toLowerCase()])
+          .filter((label): label is string => Boolean(label)),
+      );
+      const templateProductionCount = templatePlan.steps.filter(
+        (step, index) => !shouldProtectPlannerTemplateStep(templatePlan, step, index),
+      ).length;
+      let extrasBudget = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - templateProductionCount);
+      let extraOrdinal = 0;
+      for (const raw of rawSteps.slice(templatePlan.steps.length)) {
+        if (extrasBudget <= 0) {
+          break;
+        }
+        const objective = typeof raw.objective === "string" ? raw.objective.trim() : "";
+        if (!objective) {
+          continue;
+        }
+        extraOrdinal += 1;
+        const stepId = buildFollowOnStepId(templatePlan.steps, steps.length + 1);
+        const rawLabel = typeof raw.delegatedRole === "string" ? raw.delegatedRole.trim() : "";
+        // A planner cannot smuggle a fake control step in via the label: any
+        // collision with a control label is renamed and the role stays worker.
+        const label = rawLabel && !controlLabels.has(rawLabel.toLowerCase()) ? rawLabel : `Worker ${extraOrdinal + 1}`;
+        const dependsOnStepIds = Array.isArray(raw.dependsOnStepIds)
+          ? dedupeStrings(
+              raw.dependsOnStepIds
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter((dependencyId) => knownStepIds.has(dependencyId)),
+            )
+          : [];
+        steps.push({
+          stepId,
+          index: steps.length,
+          objective,
+          successCriteria:
+            typeof raw.successCriteria === "string" && raw.successCriteria.trim()
+              ? raw.successCriteria.trim()
+              : productionTemplateStep.successCriteria,
+          suggestedTools:
+            Array.isArray(raw.suggestedTools) && raw.suggestedTools.length > 0
+              ? dedupeStrings(
+                  raw.suggestedTools
+                    .filter((value): value is string => typeof value === "string")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                )
+              : productionTemplateStep.suggestedTools,
+          expectedOutput:
+            typeof raw.expectedOutput === "string" && raw.expectedOutput.trim()
+              ? raw.expectedOutput.trim()
+              : productionTemplateStep.expectedOutput,
+          parallelizable: raw.parallelizable !== false,
+          dependsOnStepIds,
+          delegatedRole: label,
+          status: "pending" as const,
+        });
+        knownStepIds.add(stepId);
+        extrasBudget -= 1;
+      }
+    }
+  }
   const summary =
     typeof payload.summary === "string" && payload.summary.trim() ? payload.summary.trim() : templatePlan.summary;
   if (summary === templatePlan.summary) {
@@ -531,6 +608,67 @@ export function coercePlannerExecutionPlanDraft(
     summary,
     steps,
   };
+}
+
+function findProductionTemplateStep(
+  templatePlan: ModeOrchestrationPlan,
+): ModeOrchestrationPlan["steps"][number] | undefined {
+  return (
+    templatePlan.steps.find(
+      (step, index) =>
+        !shouldProtectPlannerTemplateStep(templatePlan, step, index) &&
+        (step.role === "worker" || step.role === "researcher"),
+    ) ?? templatePlan.steps.find((step, index) => !shouldProtectPlannerTemplateStep(templatePlan, step, index))
+  );
+}
+
+function buildFollowOnStepId(templateSteps: ModeOrchestrationPlan["steps"], ordinal: number): string {
+  const lastStepId = templateSteps[templateSteps.length - 1]?.stepId ?? "orch-step-0";
+  const match = lastStepId.match(/^(.*?)(\d+)$/);
+  if (match) {
+    return `${match[1]}${ordinal}`;
+  }
+  return `${lastStepId}-extra-${ordinal}`;
+}
+
+/**
+ * Topological leveling over `dependsOnStepIds` (Kahn by levels): steps with no
+ * unresolved dependencies share the lowest available stage, so independent
+ * fan-out workers execute concurrently under the engine's stage grouping.
+ * Returns undefined on a cycle or unknown reference — callers fall back to the
+ * template's linear chain.
+ */
+export function deriveStagesFromDependencies(
+  steps: Array<{ stepId: string; dependsOnStepIds?: string[] }>,
+): number[] | undefined {
+  const ids = new Set(steps.map((step) => step.stepId));
+  const levels = new Map<string, number>();
+  let remaining = steps.length;
+  let changed = true;
+  while (remaining > 0 && changed) {
+    changed = false;
+    for (const step of steps) {
+      if (levels.has(step.stepId)) {
+        continue;
+      }
+      const deps = step.dependsOnStepIds ?? [];
+      if (deps.some((dependencyId) => !ids.has(dependencyId))) {
+        return undefined;
+      }
+      if (deps.every((dependencyId) => levels.has(dependencyId))) {
+        levels.set(
+          step.stepId,
+          deps.length === 0 ? 1 : 1 + Math.max(...deps.map((dependencyId) => levels.get(dependencyId)!)),
+        );
+        remaining -= 1;
+        changed = true;
+      }
+    }
+  }
+  if (remaining > 0) {
+    return undefined;
+  }
+  return steps.map((step) => levels.get(step.stepId)!);
 }
 
 function filterPlannerDependencyIds(
@@ -556,7 +694,7 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
   templatePlan: ModeOrchestrationPlan,
   draft: PreparedChatExecutionPlanResolution["executionPlanDraft"],
 ): ModeOrchestrationPlan {
-  const steps = templatePlan.steps.map((step, index) => {
+  let steps = templatePlan.steps.map((step, index) => {
     const planned = draft.steps[index];
     if (!planned) {
       return step;
@@ -581,6 +719,7 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
       label: step.label,
     };
   });
+  steps = materializeDraftExpansionSteps(templatePlan, draft, steps);
   return {
     ...templatePlan,
     summary: draft.summary,
@@ -597,6 +736,68 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
     },
     steps,
   };
+}
+
+/**
+ * Round-3 R3-7: extra draft steps beyond the template count become real
+ * worker steps cloned from the template's production step, control steps gain
+ * dependencies on every production step, and stages are re-derived from the
+ * dependency graph so independent workers share a stage (engine concurrency).
+ * Any leveling failure returns the template-shaped steps unchanged — the
+ * expansion is strictly additive and fail-closed.
+ */
+function materializeDraftExpansionSteps(
+  templatePlan: ModeOrchestrationPlan,
+  draft: PreparedChatExecutionPlanResolution["executionPlanDraft"],
+  templateMappedSteps: ModeOrchestrationPlan["steps"],
+): ModeOrchestrationPlan["steps"] {
+  const extras = draft.steps.slice(templatePlan.steps.length);
+  if (extras.length === 0) {
+    return templateMappedSteps;
+  }
+  const productionTemplateStep = findProductionTemplateStep(templatePlan);
+  if (!productionTemplateStep) {
+    return templateMappedSteps;
+  }
+  const materialized = extras.map((planned, extraIndex) => ({
+    ...productionTemplateStep,
+    stepId: planned.stepId,
+    index: templateMappedSteps.length + extraIndex,
+    label: planned.delegatedRole ?? `${productionTemplateStep.label ?? "Worker"} ${extraIndex + 2}`,
+    objective: planned.objective,
+    successCriteria: planned.successCriteria ?? productionTemplateStep.successCriteria,
+    suggestedTools: planned.suggestedTools ?? productionTemplateStep.suggestedTools,
+    expectedOutput: planned.expectedOutput ?? productionTemplateStep.expectedOutput,
+    parallelizable: planned.parallelizable,
+    dependsOnStepIds: planned.dependsOnStepIds ?? [],
+    delegatedRole: planned.delegatedRole ?? productionTemplateStep.delegatedRole,
+  }));
+  const combined = [...templateMappedSteps, ...materialized];
+  const productionStepIds = combined
+    .filter((step) => !CONTROL_ORCHESTRATION_ROLES.has(step.role))
+    .map((step) => step.stepId);
+  const withControlDependencies = combined.map((step) =>
+    CONTROL_ORCHESTRATION_ROLES.has(step.role)
+      ? {
+          ...step,
+          dependsOnStepIds: dedupeStrings([...(step.dependsOnStepIds ?? []), ...productionStepIds]),
+        }
+      : step,
+  );
+  const stages = deriveStagesFromDependencies(
+    withControlDependencies.map((step) => ({
+      stepId: step.stepId,
+      dependsOnStepIds: step.dependsOnStepIds ?? [],
+    })),
+  );
+  if (!stages) {
+    return templateMappedSteps;
+  }
+  return withControlDependencies.map((step, index) => ({
+    ...step,
+    index,
+    stage: stages[index]!,
+  }));
 }
 
 function shouldProtectPlannerTemplateStep(

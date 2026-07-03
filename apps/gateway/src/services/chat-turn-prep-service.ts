@@ -54,6 +54,7 @@ import {
   buildSpecialistMatchReason,
   CHAT_PLANNER_MAX_STEPS,
   CHAT_PLANNER_MIN_STEPS,
+  MAX_PLANNER_PRODUCTION_STEPS,
   coercePlannerExecutionPlanDraft,
   extractCompletionText,
   extractSpecialistObjectiveKeywords,
@@ -769,6 +770,15 @@ export async function generatePreparedExecutionPlanDraft(
   const plannerDraftModel = plannerFastPathDisabled
     ? undefined
     : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
+  const allowProductionExpansion =
+    routerInput.task.mode === "cowork" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
+  const maxExtraWorkerSteps = Math.max(
+    0,
+    MAX_PLANNER_PRODUCTION_STEPS -
+      templatePlan.steps.filter(
+        (step) => step.role === "planner" || step.role === "worker" || step.role === "researcher",
+      ).length,
+  );
   // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
   // a provider that ignores its deadline cannot pin the hot turn-prep path. On
   // timeout we abort the in-flight call (no leaked request) and fall back to the
@@ -799,6 +809,11 @@ export async function generatePreparedExecutionPlanDraft(
             "If the mode is chat, delegatedRole must be null for all steps.",
             "Keep step objectives specific, practical, and directly tied to the user request.",
             "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
+            ...(allowProductionExpansion && maxExtraWorkerSteps > 0
+              ? [
+                  `When the request contains genuinely independent subtasks, you may append up to ${maxExtraWorkerSteps} EXTRA worker steps after the template steps: mark each parallelizable:true, give each a precise objective, and set dependsOnStepIds to the template steps it truly needs (usually just the planning step).`,
+                ]
+              : []),
           ].join("\n"),
         },
         {
@@ -851,6 +866,7 @@ export async function generatePreparedExecutionPlanDraft(
           advisoryOnly,
           mode: routerInput.task.mode,
           objective: prepared.content,
+          allowProductionExpansion,
         })
       : undefined;
     return planned ?? fallbackDraft;
