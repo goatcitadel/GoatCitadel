@@ -75,6 +75,11 @@ export interface FeatureFlagsConfig {
   coworkRuntimeQualityV1Disabled?: boolean;
   orchestrationFinalStreamingV1Disabled?: boolean;
   autonomyV1Disabled?: boolean;
+  /** Round-3 kill switches (`*Disabled` ⇒ feature ON by default). */
+  plannerFastPathV1Disabled?: boolean;
+  parallelToolExecutionV1Disabled?: boolean;
+  streamIdleWatchdogV1Disabled?: boolean;
+  plannerFanoutV1Disabled?: boolean;
   /**
    * Thinking-display skeleton: gates the gateway emitting `thinking_delta` stream
    * chunks carrying the model's reasoning/thinking text. Absent/false (default) ⇒
@@ -681,6 +686,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
+    ["parallelToolExecutionV1Disabled", process.env.GOATCITADEL_FEATURE_PARALLEL_TOOL_EXECUTION_V1_DISABLED],
+    ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
+    ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1215,6 +1224,13 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      // Round-3 kill switches: planner triviality-skip + speed-model drafting,
+      // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
+      // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.
+      plannerFastPathV1Disabled: featuresInput.plannerFastPathV1Disabled ?? false,
+      parallelToolExecutionV1Disabled: featuresInput.parallelToolExecutionV1Disabled ?? false,
+      streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
+      plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

@@ -63,6 +63,7 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
+import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
 import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
 import { recordPreparedTurnDecisions } from "./chat-turn-runtime-decisions.js";
@@ -759,6 +760,15 @@ export async function generatePreparedExecutionPlanDraft(
   if ((prepared.normalized?.speedMode ?? prepared.prefs.speedMode) === "fast") {
     return fallbackDraft;
   }
+  const plannerFastPathDisabled = host.isFeatureEnabled("plannerFastPathV1Disabled");
+  if (!plannerFastPathDisabled && shouldSkipPlannerDraft(prepared.content)) {
+    // Trivial single-clause ask: the deterministic template draft is the same
+    // floor speedMode:"fast" ships, so skip the planner LLM round-trip.
+    return fallbackDraft;
+  }
+  const plannerDraftModel = plannerFastPathDisabled
+    ? undefined
+    : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
   // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
   // a provider that ignores its deadline cannot pin the hot turn-prep path. On
   // timeout we abort the in-flight call (no leaked request) and fall back to the
@@ -770,8 +780,8 @@ export async function generatePreparedExecutionPlanDraft(
   const abortController = new AbortController();
   const plannerCompletion = Promise.resolve().then(() =>
     host.createChatCompletion({
-      providerId: prepared.prefs.providerId,
-      model: prepared.prefs.model,
+      providerId: plannerDraftModel?.providerId ?? prepared.prefs.providerId,
+      model: plannerDraftModel?.model ?? prepared.prefs.model,
       stream: false,
       timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
       signal: abortController.signal,
