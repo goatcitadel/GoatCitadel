@@ -42,6 +42,7 @@ import {
   recordStreamRuntime,
 } from "./llm-completion-runtime-measurements.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
+import { StreamIdleTimeoutError, resolveStreamIdleTimeoutMs, withStreamIdleWatchdog } from "./stream-idle-watchdog.js";
 
 export type { LlmCompletionHost } from "./llm-completion-host.js";
 
@@ -640,6 +641,8 @@ export async function* createChatCompletionStream(
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
   const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
+  const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
+  const idleTimeoutMs = resolveStreamIdleTimeoutMs(host.config.assistant.streamIdleTimeoutMs);
   let streamed = false;
   let streamFailedAfterEmit = false;
   let lastError: Error | undefined;
@@ -654,11 +657,43 @@ export async function* createChatCompletionStream(
       let attemptStreamed = false;
       try {
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-        for await (const chunk of host.llmService.chatCompletionsStream({
+        // Round-3 idle watchdog: a hung provider read becomes an in-band
+        // stream failure (abort + throw) instead of an indefinite spinner —
+        // the existing attempt/salvage handling below does the rest.
+        const idleAbort = new AbortController();
+        const attemptSignal = idleWatchdogDisabled
+          ? attemptRequest.signal
+          : attemptRequest.signal
+            ? AbortSignal.any([attemptRequest.signal, idleAbort.signal])
+            : idleAbort.signal;
+        const providerStream = host.llmService.chatCompletionsStream({
           ...attemptRequest,
           stream: true,
           timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-        })) {
+          signal: attemptSignal,
+        });
+        const attemptStream = idleWatchdogDisabled
+          ? providerStream
+          : withStreamIdleWatchdog(providerStream, {
+              idleTimeoutMs,
+              abort: () => idleAbort.abort(new StreamIdleTimeoutError(idleTimeoutMs)),
+              onTrip: (elapsedMs) => {
+                host.recordDevDiagnostic({
+                  level: "warn",
+                  category: "chat",
+                  event: "chat.completion_stream.idle_watchdog_tripped",
+                  message: "Provider stream idle watchdog tripped; aborting the attempt",
+                  sessionId: memoryInput?.sessionId,
+                  taskId: memoryInput?.taskId,
+                  providerId: attemptRequest.providerId ?? primaryProviderId,
+                  modelId: attemptRequest.model ?? primaryModel,
+                  runtimeKind: "model.call",
+                  runtimeStatus: "degraded",
+                  context: { idleTimeoutMs: elapsedMs, emittedOutput: attemptStreamed },
+                });
+              },
+            });
+        for await (const chunk of attemptStream) {
           attemptStreamed = true;
           streamed = true;
           appendTelemetryChunk(telemetryChunks, chunk);
@@ -780,13 +815,46 @@ export async function* createChatCompletionStream(
         let attemptStreamed = false;
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-          for await (const chunk of host.llmService.chatCompletionsStream({
-            ...normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
+          const fallbackRetryRequest = normalizeToolProtocolRetryRequest(
+            withContext,
+            TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+          );
+          const idleAbort = new AbortController();
+          const fallbackSignal = idleWatchdogDisabled
+            ? fallbackRetryRequest.signal
+            : fallbackRetryRequest.signal
+              ? AbortSignal.any([fallbackRetryRequest.signal, idleAbort.signal])
+              : idleAbort.signal;
+          const fallbackProviderStream = host.llmService.chatCompletionsStream({
+            ...fallbackRetryRequest,
             providerId: fallback.providerId,
             model: fallback.model,
             stream: true,
             timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
-          })) {
+            signal: fallbackSignal,
+          });
+          const fallbackStream = idleWatchdogDisabled
+            ? fallbackProviderStream
+            : withStreamIdleWatchdog(fallbackProviderStream, {
+                idleTimeoutMs,
+                abort: () => idleAbort.abort(new StreamIdleTimeoutError(idleTimeoutMs)),
+                onTrip: (elapsedMs) => {
+                  host.recordDevDiagnostic({
+                    level: "warn",
+                    category: "chat",
+                    event: "chat.completion_stream.idle_watchdog_tripped",
+                    message: "Fallback provider stream idle watchdog tripped; aborting the attempt",
+                    sessionId: memoryInput?.sessionId,
+                    taskId: memoryInput?.taskId,
+                    providerId: fallback.providerId,
+                    modelId: fallback.model,
+                    runtimeKind: "model.call",
+                    runtimeStatus: "degraded",
+                    context: { idleTimeoutMs: elapsedMs, emittedOutput: attemptStreamed, fallback: true },
+                  });
+                },
+              });
+          for await (const chunk of fallbackStream) {
             attemptStreamed = true;
             streamed = true;
             appendTelemetryChunk(telemetryChunks, chunk);

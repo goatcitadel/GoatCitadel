@@ -1138,6 +1138,7 @@ export class GatewayService {
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
+      parallelToolExecutionV1Disabled: () => this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -8591,6 +8592,10 @@ export class GatewayService {
         patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
+      plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
+      parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
+      streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
+      plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -8627,6 +8632,11 @@ export class GatewayService {
         stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
+      plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
+      parallelToolExecutionV1Disabled:
+        stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
+      streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
+      plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
     };
   }
 

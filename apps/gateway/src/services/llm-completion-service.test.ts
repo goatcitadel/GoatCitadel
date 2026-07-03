@@ -936,3 +936,67 @@ describe("createChatCompletion", () => {
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 });
+
+describe("createChatCompletionStream idle watchdog", () => {
+  it("aborts a stream that hangs after emitting and throws the idle error after salvage diagnostics", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost(async function* () {
+        yield { id: "chunk-1", choices: [{ delta: { content: "partial" } }] };
+        await new Promise(() => {});
+      });
+      (host.config.assistant as { streamIdleTimeoutMs?: number }).streamIdleTimeoutMs = 5_000;
+
+      const consumed: unknown[] = [];
+      let failure: unknown;
+      const run = (async () => {
+        try {
+          for await (const chunk of createChatCompletionStream(host, createRequest())) {
+            consumed.push(chunk);
+          }
+        } catch (error) {
+          failure = error;
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await run;
+
+      expect(consumed).toHaveLength(1);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as { code?: string }).code).toBe("stream_idle_timeout");
+      expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "chat.completion_stream.idle_watchdog_tripped" }),
+      );
+      expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "chat.completion_stream.failed_after_emit" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("arms the provider request with an abort signal only when the watchdog is enabled", async () => {
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    const buildHost = (watchdogDisabled: boolean) => {
+      const host = createHost(async function* (request: ChatCompletionRequest) {
+        seenSignals.push(request.signal as AbortSignal | undefined);
+        yield { id: "chunk-1", choices: [{ delta: { content: "done" } }] };
+      });
+      (host.config.assistant as { features?: Record<string, boolean> }).features = {
+        streamIdleWatchdogV1Disabled: watchdogDisabled,
+      };
+      return host;
+    };
+
+    for await (const chunk of createChatCompletionStream(buildHost(false), createRequest())) {
+      void chunk;
+    }
+    for await (const chunk of createChatCompletionStream(buildHost(true), createRequest())) {
+      void chunk;
+    }
+
+    expect(seenSignals).toHaveLength(2);
+    expect(seenSignals[0]).toBeInstanceOf(AbortSignal);
+    expect(seenSignals[1]).toBeUndefined();
+  });
+});

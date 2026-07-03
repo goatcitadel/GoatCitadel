@@ -54,7 +54,9 @@ import {
   buildSpecialistMatchReason,
   CHAT_PLANNER_MAX_STEPS,
   CHAT_PLANNER_MIN_STEPS,
+  MAX_PLANNER_PRODUCTION_STEPS,
   coercePlannerExecutionPlanDraft,
+  countPlannerProductionSteps,
   extractCompletionText,
   extractSpecialistObjectiveKeywords,
   inferSpecialistBaseRole,
@@ -63,6 +65,7 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
+import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
 import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
 import { recordPreparedTurnDecisions } from "./chat-turn-runtime-decisions.js";
@@ -759,6 +762,18 @@ export async function generatePreparedExecutionPlanDraft(
   if ((prepared.normalized?.speedMode ?? prepared.prefs.speedMode) === "fast") {
     return fallbackDraft;
   }
+  const plannerFastPathDisabled = host.isFeatureEnabled("plannerFastPathV1Disabled");
+  if (!plannerFastPathDisabled && shouldSkipPlannerDraft(prepared.content)) {
+    // Trivial single-clause ask: the deterministic template draft is the same
+    // floor speedMode:"fast" ships, so skip the planner LLM round-trip.
+    return fallbackDraft;
+  }
+  const plannerDraftModel = plannerFastPathDisabled
+    ? undefined
+    : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
+  const allowProductionExpansion =
+    routerInput.task.mode === "cowork" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
+  const maxExtraWorkerSteps = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - countPlannerProductionSteps(templatePlan));
   // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
   // a provider that ignores its deadline cannot pin the hot turn-prep path. On
   // timeout we abort the in-flight call (no leaked request) and fall back to the
@@ -770,8 +785,8 @@ export async function generatePreparedExecutionPlanDraft(
   const abortController = new AbortController();
   const plannerCompletion = Promise.resolve().then(() =>
     host.createChatCompletion({
-      providerId: prepared.prefs.providerId,
-      model: prepared.prefs.model,
+      providerId: plannerDraftModel?.providerId ?? prepared.prefs.providerId,
+      model: plannerDraftModel?.model ?? prepared.prefs.model,
       stream: false,
       timeoutMs: CHAT_PLANNER_COMPLETION_TIMEOUT_MS,
       signal: abortController.signal,
@@ -789,6 +804,11 @@ export async function generatePreparedExecutionPlanDraft(
             "If the mode is chat, delegatedRole must be null for all steps.",
             "Keep step objectives specific, practical, and directly tied to the user request.",
             "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
+            ...(allowProductionExpansion && maxExtraWorkerSteps > 0
+              ? [
+                  `When the request contains genuinely independent subtasks, you may append up to ${maxExtraWorkerSteps} EXTRA worker steps after the template steps: mark each parallelizable:true, give each a precise objective, and set dependsOnStepIds to the template steps it truly needs (usually just the planning step).`,
+                ]
+              : []),
           ].join("\n"),
         },
         {
@@ -841,6 +861,7 @@ export async function generatePreparedExecutionPlanDraft(
           advisoryOnly,
           mode: routerInput.task.mode,
           objective: prepared.content,
+          allowProductionExpansion,
         })
       : undefined;
     return planned ?? fallbackDraft;
