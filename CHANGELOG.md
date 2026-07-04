@@ -4,6 +4,8 @@ All notable changes to GoatCitadel are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-07-04
+
 ### Added
 
 - Release proof bundle tooling for tagged releases:
@@ -22,12 +24,12 @@ All notable changes to GoatCitadel are documented in this file.
 
 - Project version is renumbered from `1.0.0` to `0.1.0-rc.1`: the published line is now the 0.1.0 release candidate, and installer/DMG/tarball artifact names and embedded release manifests carry the RC version.
 - `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
-- Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification, plus a manual unsigned packaging-smoke path used for the `v1.0.0` convenience installers.
+- Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification, plus a manual unsigned packaging-smoke path used for the published convenience installers.
 - Packaging docs now explicitly label macOS/Linux release artifacts as development-only until those workflow matrices produce signed proof.
 - Approval control routes are now explicitly operator-fenced, while remote approval token resolution remains on its separate capability-token path.
 - Mission Control Channel Setup now shows only shipped guided channels instead of mixing visible built-ins with manual/later-state copy.
 - Remote approval delivery now keeps connector delivery auth boundaries explicit instead of implying that approval-control fencing covers the delivery path.
-- Windows x64 and arm64 installer proof was refreshed after the `1.0.0` cut; unsigned artifacts may be attached to `v1.0.0` as clearly labeled convenience installers until public Authenticode signing is configured.
+- Windows x64 and arm64 installer proof was refreshed after the `1.0.0` cut; unsigned artifacts are attached to the published `0.1.0-rc.1` prerelease as clearly labeled convenience installers until public Authenticode signing is configured.
 - README and Mission Control screenshot gallery were refreshed to match the current main-branch UI and docs posture.
 
 ### Fixed
