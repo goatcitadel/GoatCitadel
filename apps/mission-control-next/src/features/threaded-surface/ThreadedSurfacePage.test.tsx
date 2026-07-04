@@ -48,7 +48,7 @@ function buildInput() {
       open: false,
       workspaceId: "default",
       parentSessionId: "parent-1",
-      parentTitle: "Main Cowork run",
+      parentTitle: "Main Plan run",
       childSessionId: null,
       thread: null,
       draft: "",
@@ -101,7 +101,7 @@ function buildInput() {
           scope: "mission",
           mode: "cowork",
           includeInHistory: true,
-          title: "Main Cowork run",
+          title: "Main Plan run",
           pinned: false,
           lifecycleStatus: "active",
           channel: "mission",
@@ -222,6 +222,9 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
     onOpenGeneratedArtifact: noop,
     onCreateGeneratedArtifact: noop,
     onCreateGeneratedArtifactVersion: noop,
+    onOpenPersonalitiesSettings: noop,
+    onOpenLibraryArtifacts: noop,
+    onOpenOpsRuntime: noop,
     onApprovePending: noop,
     onDenyPending: noop,
     onSubmitUserInput: noop,
@@ -386,15 +389,15 @@ describe("ThreadedSurfacePage", () => {
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim" }).props.tabIndex).toBe(-1);
     const group = renderer!.root
       .findAllByProps({ className: "mc-next-threaded-session-group" })
-      .find((node) => node.props["aria-label"] === "Mission");
+      .find((node) => node.props["aria-label"] === "Recent threads");
     expect(group).toBeDefined();
-    expect(group!.props["aria-label"]).toBe("Mission");
+    expect(group!.props["aria-label"]).toBe("Recent threads");
     const groupHead = group!.findByProps({ className: "mc-next-threaded-group-head" });
-    expect(groupHead.findByType("h3").children).toEqual(["Mission"]);
+    expect(groupHead.findByType("h3").children).toEqual(["Recent threads"]);
     expect(groupHead.findByType("span").props["aria-hidden"]).toBe("true");
 
     await act(async () => {
-      findButton(renderer!.root, "New session").props.onClick();
+      findButton(renderer!.root, "New thread").props.onClick();
     });
     expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
   });
@@ -579,7 +582,7 @@ describe("ThreadedSurfacePage", () => {
   it("hides delegated child sessions under a collapsed parent by default", () => {
     const markup = renderToStaticMarkup(<ThreadedSurfacePage surface="cowork" input={buildInput() as any} />);
 
-    expect(markup).toContain("Main Cowork run");
+    expect(markup).toContain("Main Plan run");
     expect(markup).toContain("Expand delegated chats");
     expect(markup).not.toContain("Delegate · Work");
   });
@@ -602,11 +605,11 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain(">Archive<");
   });
 
-  it("marks Chat, Cowork, and Code with distinct stage posture", () => {
+  it("marks Conversation, Plan, and Build with distinct stage posture", () => {
     const expectations = [
-      ["chat", "fast-conversation", "Chat conversation stage"],
-      ["cowork", "orchestration-checkpoints", "Cowork orchestration stage"],
-      ["code", "workbench-proof", "Code workbench stage"],
+      ["chat", "fast-conversation", "Conversation workspace stage"],
+      ["cowork", "orchestration-checkpoints", "Planning workspace stage"],
+      ["code", "workbench-proof", "Build workspace stage"],
     ] as const;
 
     for (const [surface, posture, stageLabel] of expectations) {
@@ -725,7 +728,7 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.onClick();
       findButtonByAriaLabel(renderer!.root, "Close session rail").props.onClick();
-      findButton(renderer!.root, "New session").props.onClick();
+      findButton(renderer!.root, "New thread").props.onClick();
       findButton(renderer!.root, "Hide project").props.onClick();
       findButton(renderer!.root, "Active").props.onClick();
       findButton(renderer!.root, "Archived").props.onClick();
@@ -736,7 +739,7 @@ describe("ThreadedSurfacePage", () => {
       findButton(renderer!.root, "Ops").props.onClick();
       findButton(renderer!.root, "release").props.onClick();
       findButton(renderer!.root, "Create project").props.onClick();
-      findButton(renderer!.root, "Archive workspace chats").props.onClick();
+      findButton(renderer!.root, "Archive workspace threads").props.onClick();
     });
 
     const archiveConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
@@ -749,7 +752,7 @@ describe("ThreadedSurfacePage", () => {
     const inputs = renderer!.root.findAllByType("input");
     await act(async () => {
       inputs
-        .find((inputNode) => inputNode.props.placeholder === "Search sessions")
+        .find((inputNode) => inputNode.props.placeholder === "Search threads")
         ?.props.onChange({
           target: { value: "deploy" },
         });
@@ -800,7 +803,7 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="cowork" input={declined} />);
     });
     await act(async () => {
-      findButton(renderer!.root, "Archive workspace chats").props.onClick();
+      findButton(renderer!.root, "Archive workspace threads").props.onClick();
     });
     const declinedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
     expect(declinedConfirm?.props.title).toBe("Archive workspace chats?");
@@ -924,11 +927,11 @@ describe("ThreadedSurfacePage", () => {
     expect(normalizeText(collectText(renderer!.root))).toContain("0 Projects");
     expect(normalizeText(collectText(renderer!.root))).toContain("0 Approvals");
     await act(async () => {
-      findButton(renderer!.root, "Start chat").props.onClick();
+      findButton(renderer!.root, "Start conversation").props.onClick();
       findButton(renderer!.root, "Open Start Here").props.onClick();
       findButton(renderer!.root, "Attach files").props.onClick();
-      findButton(renderer!.root, "Open Cowork").props.onClick();
-      findButton(renderer!.root, "Open Code").props.onClick();
+      findButton(renderer!.root, "Plan multi-step work").props.onClick();
+      findButton(renderer!.root, "Build with code context").props.onClick();
     });
 
     expect(emptyInput.emptyStateProps.onCreateSession).toHaveBeenCalledTimes(1);
@@ -1010,14 +1013,14 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    expect(collectText(renderer!.root)).toContain("Hide editor");
+    expect(collectText(renderer!.root)).toContain("Hide build editor");
     await act(async () => {
-      findButton(renderer!.root, "Hide editor").props.onClick();
+      findButton(renderer!.root, "Hide build editor").props.onClick();
     });
-    expect(collectText(renderer!.root)).toContain("Code editor");
+    expect(collectText(renderer!.root)).toContain("Build editor");
 
     await act(async () => {
-      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Code editor").find(
+      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Build editor").find(
         (button) => button.props.className === "mc-next-threaded-secondary",
       );
       expect(conversationWorkbenchButton).toBeDefined();
@@ -1119,6 +1122,61 @@ describe("ThreadedSurfacePage", () => {
       findButton(renderer!.root, "Open task board").props.onClick();
     });
     expect(onOpenTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("launches Work Record destinations through host callbacks", async () => {
+    const onOpenLibraryArtifacts = vi.fn();
+    const onOpenOpsRuntime = vi.fn();
+    const activeProps = buildActiveSessionProps({
+      onOpenLibraryArtifacts,
+      onOpenOpsRuntime,
+      selectedTurn: {
+        turnId: "turn-record",
+        userMessage: { role: "user", content: "Find the proof" },
+        assistantMessage: { role: "assistant", content: "Proof is ready." },
+        toolRuns: [],
+        citations: [],
+        generatedArtifacts: [],
+        trace: { status: "completed" },
+      },
+      thread: {
+        sessionId: "session-1",
+        turns: [],
+      },
+    });
+    const input = {
+      ...buildInput(),
+      activeSessionSurfaceProps: activeProps,
+      contextDockProps: {},
+      dockOpen: false,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+      await Promise.resolve();
+    });
+
+    const workRecordButton = renderer!.root.findByProps({
+      className: "mc-next-threaded-secondary mc-next-threaded-work-record",
+    });
+    expect(workRecordButton.props["aria-controls"]).toBe("mc-next-threaded-context-panel");
+    expect(workRecordButton.props["aria-expanded"]).toBe(false);
+
+    await act(async () => {
+      workRecordButton.props.onClick();
+    });
+
+    expect(findButton(renderer!.root, "Work Record").props["aria-expanded"]).toBe(true);
+
+    await act(async () => {
+      findButton(renderer!.root, "Library").props.onClick();
+      findButton(renderer!.root, "Ops").props.onClick();
+    });
+
+    expect(onOpenLibraryArtifacts).toHaveBeenCalledTimes(1);
+    expect(onOpenOpsRuntime).toHaveBeenCalledTimes(1);
+    expect(renderer!.root.findAll((node) => node.type === "a" && String(node.props.href).startsWith("/"))).toEqual([]);
   });
 
   /**
@@ -1293,21 +1351,21 @@ describe("ThreadedSurfacePage", () => {
     });
 
     let root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
-    expect(root.props.style["--mc-session-rail-width"]).toBe("204px");
+    expect(root.props.style["--mc-session-rail-width"]).toBe("216px");
 
     const railHandle = findButtonByAriaLabel(renderer!.root, "Resize session rail");
     await act(async () => {
       railHandle.props.onKeyDown({ key: "ArrowRight", preventDefault: vi.fn() });
     });
     root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
-    expect(root.props.style["--mc-session-rail-width"]).toBe("228px");
+    expect(root.props.style["--mc-session-rail-width"]).toBe("240px");
 
     const drawerHandle = findButtonByAriaLabel(renderer!.root, "Resize right drawer");
     await act(async () => {
       drawerHandle.props.onKeyDown({ key: "End", preventDefault: vi.fn() });
     });
     const stage = renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-context" });
-    expect(stage.props.style["--mc-context-panel-width"]).toBe("520px");
+    expect(stage.props.style["--mc-context-panel-width"]).toBe("420px");
   });
 
   it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {

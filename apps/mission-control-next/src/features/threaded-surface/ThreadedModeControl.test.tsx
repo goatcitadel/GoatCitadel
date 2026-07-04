@@ -58,7 +58,7 @@ describe("ThreadedModeControl", () => {
       renderer = create(<ThreadedModeControl mode="code" onOverride={() => {}} />);
     });
 
-    expect(findButton(renderer!.root, /code/i)).toBeDefined();
+    expect(findButton(renderer!.root, /build/i)).toBeDefined();
   });
 
   it("calls onOverride when a different mode is picked", async () => {
@@ -69,11 +69,11 @@ describe("ThreadedModeControl", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, /chat/i).props.onClick();
+      findButton(renderer!.root, /conversation/i).props.onClick();
     });
 
     await act(async () => {
-      findMenuItem(renderer!.root, /^code/i).props.onClick();
+      findMenuItem(renderer!.root, /^build/i).props.onClick();
     });
 
     expect(onOverride).toHaveBeenCalledWith("code");
@@ -87,11 +87,11 @@ describe("ThreadedModeControl", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, /chat/i).props.onClick();
+      findButton(renderer!.root, /conversation/i).props.onClick();
     });
 
     await act(async () => {
-      findMenuItem(renderer!.root, /^chat/i).props.onClick();
+      findMenuItem(renderer!.root, /^conversation/i).props.onClick();
     });
 
     expect(onOverride).not.toHaveBeenCalled();
@@ -103,15 +103,15 @@ describe("ThreadedModeControl", () => {
       renderer = create(<ThreadedModeControl mode={undefined} preview={PREVIEW} onOverride={() => {}} />);
     });
 
-    expect(findButton(renderer!.root, /auto -> code/i)).toBeDefined();
+    expect(findButton(renderer!.root, /auto: build/i)).toBeDefined();
     expect(findByText(renderer!.root, /82% heuristic/i)).toBeDefined();
 
     await act(async () => {
-      findButton(renderer!.root, /auto -> code/i).props.onClick();
+      findButton(renderer!.root, /auto: build/i).props.onClick();
     });
 
     expect(findByText(renderer!.root, /draft asks for a code change/i)).toBeDefined();
-    expect(findByText(renderer!.root, /also considered cowork, chat/i)).toBeDefined();
+    expect(findByText(renderer!.root, /also considered plan, conversation/i)).toBeDefined();
   });
 
   it("renders a compact non-interactive mirror for the composer", async () => {
@@ -122,7 +122,7 @@ describe("ThreadedModeControl", () => {
       );
     });
 
-    expect(findByText(renderer!.root, /auto -> code/i)).toBeDefined();
+    expect(findByText(renderer!.root, /auto: build/i)).toBeDefined();
     expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
   });
 

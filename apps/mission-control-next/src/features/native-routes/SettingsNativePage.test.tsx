@@ -1611,7 +1611,7 @@ describe("SettingsNativePage personalities", () => {
       let text = collectText(renderer!.root);
       expect(text).toContain("Personality catalog");
       expect(text).toContain("Operator");
-      expect(text).toContain("Chat default");
+      expect(text).toContain("Work default");
       expect(text).toContain("Add custom personality");
 
       await act(async () => {
@@ -1667,7 +1667,7 @@ describe("SettingsNativePage personalities", () => {
       );
 
       await act(async () => {
-        findButton(renderer!.root, "Set as Chat default").props.onClick();
+        findButton(renderer!.root, "Set as Work default").props.onClick();
       });
       expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator");
 
@@ -1746,7 +1746,7 @@ describe("SettingsNativePage personalities", () => {
       );
 
       text = collectText(renderer!.root);
-      expect(text).toContain("Personality overlays affect Chat tone and framing only");
+      expect(text).toContain("Personality overlays affect Work tone and framing only");
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
@@ -1798,10 +1798,10 @@ describe("SettingsNativePage personalities", () => {
       expect(collectText(renderer!.root)).toContain("This personality cannot be edited.");
 
       await act(async () => {
-        findButton(renderer!.root, "Clear Chat default").props.onClick();
+        findButton(renderer!.root, "Clear Work default").props.onClick();
       });
       expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default");
-      expect(collectText(renderer!.root)).toContain("Chat personality cleared.");
+      expect(collectText(renderer!.root)).toContain("Work personality cleared.");
 
       await act(async () => {
         findButton(renderer!.root, "Direct Custom").props.onClick();

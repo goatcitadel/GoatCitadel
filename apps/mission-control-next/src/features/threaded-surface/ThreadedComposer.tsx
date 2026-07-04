@@ -1,5 +1,4 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -9,13 +8,13 @@ import {
   type ChatPendingApprovalState,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { ThreadedModeControl } from "./ThreadedModeControl";
-
-type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
+import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
+import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
 
 /* C7: soft character ceiling for the draft. Not enforced (sending isn't
    blocked); the counter only surfaces once a message gets long. */
@@ -154,16 +153,6 @@ function toContextStripMode(mode: MissionThreadedActiveSessionSurfaceProps["mode
   return mode === "code" || mode === "cowork" ? mode : "chat";
 }
 
-function isImageAttachment(attachment: PendingAttachment): boolean {
-  const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType.trim().toLowerCase() : "";
-  const fileName = attachment.fileName.trim().toLowerCase();
-  return (
-    mimeType.startsWith("image/") ||
-    mimeType.includes("image") ||
-    /\.(png|apng|jpe?g|gif|webp|avif|bmp|svg)$/i.test(fileName)
-  );
-}
-
 function formatHistoricalMemoryLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string | undefined {
   const lastTurn = thread?.turns?.at(-1);
   const memoryMode = lastTurn?.trace?.memoryMode?.trim();
@@ -236,105 +225,6 @@ function getComposerCapabilityUseChips(props: MissionThreadedActiveSessionSurfac
     formatCompactList(connectors, "Connectors"),
     formatCompactList(mcpServers, "MCP"),
   ].filter(Boolean);
-}
-
-function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) {
-  const contentPath = `/api/v1/chat/attachments/${encodeURIComponent(attachment.attachmentId)}/content?disposition=inline`;
-  const directPreviewUrl = buildGatewayUrl(contentPath);
-  const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
-  const [loadWithAuthHeaders, setLoadWithAuthHeaders] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const activeBlobPreviewUrlRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (activeBlobPreviewUrlRef.current) {
-      URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
-      activeBlobPreviewUrlRef.current = null;
-    }
-    setBlobPreviewUrl(null);
-    setLoadWithAuthHeaders(false);
-    setError(null);
-  }, [attachment.attachmentId]);
-
-  useEffect(
-    () => () => {
-      if (activeBlobPreviewUrlRef.current) {
-        URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
-        activeBlobPreviewUrlRef.current = null;
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!loadWithAuthHeaders || activeBlobPreviewUrlRef.current) {
-      return;
-    }
-    let active = true;
-
-    async function loadPreview(): Promise<void> {
-      try {
-        setError(null);
-        const response = await fetch(directPreviewUrl, {
-          headers: readGatewayAuthHeaders(contentPath),
-        });
-        if (!response.ok) {
-          const text = await response.text();
-          throw new Error(`API error ${response.status}: ${text}`);
-        }
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        if (!active) {
-          URL.revokeObjectURL(objectUrl);
-          return;
-        }
-        if (activeBlobPreviewUrlRef.current) {
-          URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
-        }
-        activeBlobPreviewUrlRef.current = objectUrl;
-        setBlobPreviewUrl(objectUrl);
-      } catch (nextError) {
-        if (active) {
-          setError((nextError as Error).message);
-          setBlobPreviewUrl(null);
-        }
-      }
-    }
-
-    void loadPreview();
-    return () => {
-      active = false;
-    };
-  }, [contentPath, directPreviewUrl, loadWithAuthHeaders]);
-
-  const previewUrl = blobPreviewUrl ?? directPreviewUrl;
-  const fallbackLoading = loadWithAuthHeaders && !blobPreviewUrl && !error;
-  const showImage = !error && !fallbackLoading;
-
-  if (showImage) {
-    return (
-      <div className="mc-next-composer-image-shell">
-        <img
-          src={previewUrl}
-          alt={attachment.fileName}
-          className="mc-next-composer-image-preview"
-          onError={() => {
-            if (blobPreviewUrl) {
-              setError("Preview unavailable.");
-              return;
-            }
-            setLoadWithAuthHeaders(true);
-          }}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="mc-next-composer-image-shell loading">
-      <p>{fallbackLoading ? "Loading image preview..." : `Preview unavailable: ${error}`}</p>
-    </div>
-  );
 }
 
 function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
@@ -423,6 +313,20 @@ function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSession
   }
 
   return null;
+}
+
+function ComposerBlockedActionState({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const kind = props.pendingApproval ? "Approval needed" : "Input needed";
+  const detail = props.pendingApproval
+    ? "Resolve the approval before sending another instruction. The Work Record keeps the proof trail available."
+    : "Answer the requested follow-up before this thread can continue.";
+
+  return (
+    <div className="mc-next-composer-blocked-actions" role="status" aria-live="polite">
+      <StatusChip tone="warning">{kind}</StatusChip>
+      <p>{detail}</p>
+    </div>
+  );
 }
 
 const COWORK_STOP_STATE_ONLY_NOTE =
@@ -572,6 +476,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const capabilityUseChips = getComposerCapabilityUseChips(props);
   const runtimeBlockerActive = Boolean(props.pendingApproval || props.pendingUserInput);
   const composerActionDisabled = props.sending || runtimeBlockerActive;
+  const personality = getComposerPersonality(props);
   const plusActions = [
     {
       label: props.planningMode === "advisory" ? "Plan mode on" : "Plan mode",
@@ -802,6 +707,48 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       </div>
 
+      {runtimeBlockerActive ? (
+        <ComposerBlockedActionState props={props} />
+      ) : (
+        <div className="mc-next-composer-suggestion-row" aria-label="Quick composer actions">
+          <button
+            type="button"
+            className="mc-next-composer-suggestion"
+            aria-pressed={props.planningMode === "advisory"}
+            disabled={props.sending}
+            onClick={props.onTogglePlanningMode}
+          >
+            Plan
+          </button>
+          <button
+            type="button"
+            className="mc-next-composer-suggestion"
+            disabled={props.sending}
+            onClick={props.onRunQuickResearch}
+          >
+            Research
+          </button>
+          {props.onReviewRunDetails ? (
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              disabled={props.sending}
+              onClick={props.onReviewRunDetails}
+            >
+              Review
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="mc-next-composer-suggestion"
+            disabled={props.sending}
+            onClick={props.onAttachFiles}
+          >
+            Attach context
+          </button>
+        </div>
+      )}
+
       {props.selectedTurnRecovery ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone={props.selectedTurn?.trace.status === "failed" ? "critical" : "warning"}>
@@ -939,6 +886,9 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-controls">
         <div className="mc-next-composer-controls-start">
+          {personality ? (
+            <PersonalityPresenceChip personality={personality} onOpenSettings={props.onOpenPersonalitiesSettings} />
+          ) : null}
           <ChatComposerPlusMenu
             disabled={composerActionDisabled}
             onAttachFiles={props.onAttachFiles}

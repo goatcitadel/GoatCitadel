@@ -103,7 +103,7 @@ export function CoworkExecutionGlance({
       <LibraryButtonRow>
         <NativeButton variant="default" onClick={onContinue}>
           <Workflow className="h-4 w-4" />
-          Continue Cowork
+          Continue Plan
         </NativeButton>
         <NativeButton variant="secondary" onClick={onOpenApprovals}>
           <CheckCircle2 className="h-4 w-4" />
@@ -284,7 +284,7 @@ export function buildCoworkExecutionSnapshot(input: {
     runtimeLabel,
     runtimeDetail,
     truthNote:
-      "This is a task-board projection for fast orientation. Durable execution, approvals, and audit logs remain the source of truth for resumable Cowork runs.",
+      "This is a task-board projection for fast orientation. Durable execution, approvals, and audit logs remain the source of truth for resumable planning runs.",
   };
 }
 

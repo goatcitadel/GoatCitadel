@@ -555,10 +555,7 @@
 }
 
 .mc-next-threaded-session-row-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.3rem;
+  display: block;
   min-width: 0;
 }
 
@@ -566,6 +563,17 @@
   display: grid;
   gap: 0.18rem;
   min-width: 0;
+}
+
+.mc-next-threaded-session-titleline {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.32rem;
+  min-width: 0;
+}
+
+.mc-next-threaded-session-titleline strong {
+  flex: 1 1 auto;
 }
 
 .mc-next-threaded-session-row strong {
@@ -592,7 +600,7 @@
   color: color-mix(in oklab, var(--mc-mode-chat) 74%, var(--foreground));
   font-size: var(--text-xs);
   font-weight: 800;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -619,10 +627,14 @@
 }
 
 .mc-next-threaded-session-row .mc-next-threaded-mode-label {
-  display: inline-flex;
-  width: fit-content;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: color-mix(in oklab, var(--mc-mode-chat) 74%, var(--foreground));
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: 1.1;
   white-space: nowrap;
 }

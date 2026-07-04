@@ -668,8 +668,7 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
               items={[
                 {
                   label: "Beginner path",
-                  description:
-                    "Provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection.",
+                  description: "Provider/local path, first Work task, retained evidence, and Run Detail inspection.",
                   actionLabel: "Start Here",
                   onClick: () => navigate({ area: "settings", section: "onboarding", theme: route.theme }),
                 },
@@ -707,7 +706,7 @@ function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate 
                 },
                 {
                   label: "Personalities",
-                  description: "Edit Chat tone presets and choose the global Chat default.",
+                  description: "Edit conversation tone presets and choose the global Work default.",
                   onClick: () => navigate({ area: "settings", section: "personalities", theme: route.theme }),
                 },
                 {
@@ -1254,7 +1253,7 @@ function DemoStartPanel({
       density="compact"
       className="mc-next-settings-panel"
       title="Start Here"
-      subtitle="Create a safe local demo workspace with sample Chat, Cowork, Code, and memory data."
+      subtitle="Create a safe local demo workspace with sample Work and memory data."
       stats={[
         { label: "Demo", value: loading ? "Checking" : (data?.status ?? "Unknown") },
         { label: "Workspace", value: workspaceLabel },
@@ -1274,7 +1273,7 @@ function DemoStartPanel({
           },
           {
             label: "Sample mission",
-            description: "Seeds a Cowork run and Code review scenario you can inspect without sending messages.",
+            description: "Seeds a planning run and build review scenario you can inspect without sending messages.",
             state: data?.sessions?.length ? "complete" : "active",
           },
           {
@@ -1331,7 +1330,7 @@ function FirstOutcomePathPanel({
       density="compact"
       className="mc-next-settings-panel"
       title="First trusted outcome"
-      subtitle="Follow one path from provider readiness to a proof-backed Chat, Cowork, or Code result."
+      subtitle="Follow one path from provider readiness to a proof-backed Work result."
       stats={[
         { label: "Path state", value: pathState },
         { label: "Progress", value: `${completeCount}/${items.length}` },
@@ -1634,8 +1633,8 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
         tone: "success",
         message:
           selectedPersonality.id === "default"
-            ? "Chat personality cleared."
-            : `${selectedPersonality.label} is now the global Chat default.`,
+            ? "Work personality cleared."
+            : `${selectedPersonality.label} is now the global Work default.`,
       });
       await reload();
     } catch (defaultError) {
@@ -1676,7 +1675,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
       {/* F-M11: personalities is an experimental surface. Beyond the page-frame
           badge, state it inline since this section's labeling was the weakest. */}
       <p className="mc-next-settings-experimental-note" role="note">
-        <strong>Experimental.</strong> Chat personalities are an experimental surface and may change before 1.0.
+        <strong>Experimental.</strong> Work personalities are an experimental surface and may change before 1.0.
       </p>
       {data ? (
         <SettingsGrid variant="detail-wide">
@@ -1684,7 +1683,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
             density="compact"
             className="mc-next-settings-panel"
             title="Personality catalog"
-            subtitle="Built-in presets, custom overlays, and the global Chat default."
+            subtitle="Built-in presets, custom overlays, and the global Work default."
             scrollBody
             bodyMaxHeight="min(64vh, 38rem)"
             stats={[
@@ -1732,8 +1731,8 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
             }
             subtitle={
               editorMode === "new"
-                ? "Create a persisted custom Chat overlay."
-                : "Edit tone fields, reset built-ins, or set the global Chat default."
+                ? "Create a persisted custom Work overlay."
+                : "Edit tone fields, reset built-ins, or set the global Work default."
             }
             headerAccessory={
               isDirty ? (
@@ -1828,7 +1827,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                   notice={{
                     tone: "info",
                     message:
-                      "Personality overlays affect Chat tone and framing only; safety, privacy, memory, tools, approvals, and policy stay authoritative.",
+                      "Personality overlays affect Work tone and framing only; safety, privacy, memory, tools, approvals, and policy stay authoritative.",
                   }}
                 />
                 <SettingsButtonRow>
@@ -1843,7 +1842,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                       disabled={!selectedPersonality}
                     >
                       <CheckCircle2 size={16} />
-                      {selectedPersonality?.id === "default" ? "Clear Chat default" : "Set as Chat default"}
+                      {selectedPersonality?.id === "default" ? "Clear Work default" : "Set as Work default"}
                     </NativeButton>
                   ) : null}
                   {editorMode === "selected" && selectedPersonality?.id !== "default" ? (
@@ -3676,7 +3675,7 @@ export function deriveDesktopMobileContinuityItems(input: {
       id: "share-session-handoff",
       label: "Share/session handoff",
       description:
-        "Mobile share intake and Code/Cowork result handoff must land through gateway-owned sessions, projects, artifacts, and approvals.",
+        "Mobile share intake and Work result handoff must land through gateway-owned sessions, projects, artifacts, and approvals.",
       meta: "Gateway-owned",
       actionLabel: "Boundary",
     },
@@ -9819,7 +9818,7 @@ export function deriveFirstOutcomePathItems(
     ? "Open Run Detail"
     : firstTaskSession
       ? `Open ${surfaceLabel(firstTaskSession.mode)}`
-      : "Open Cowork";
+      : "Open Plan";
 
   return [
     {
@@ -9855,7 +9854,7 @@ export function deriveFirstOutcomePathItems(
         demoReady || localEndpointReady
           ? "A demo workspace or local endpoint is available for truthful first-run inspection."
           : "Start the safe demo or configure a local OpenAI-compatible endpoint when no provider key is available.",
-      actionDescription: "Open the local-first path for sample Chat, Cowork, Code, memory, and project context.",
+      actionDescription: "Open the local-first path for sample Work, memory, and project context.",
       state: demoReady || localEndpointReady ? "complete" : providerCredentialReady ? "pending" : "active",
       meta: "demo/local",
       actionLabel: demoReady ? "Open demo" : "Start demo",
@@ -9863,19 +9862,19 @@ export function deriveFirstOutcomePathItems(
     },
     {
       id: "first-task-pending",
-      label: "First Chat/Cowork/Code task",
+      label: "First Work task",
       description: firstTaskRun
         ? `A recent durable ${surfaceLabel(firstTaskRun.surface).toLowerCase()} exists; inspect Run Detail before treating proof as complete.`
         : firstTaskSession
           ? `A safe demo ${surfaceLabel(firstTaskSession.mode)} thread exists; open it and run the first supervised task from seeded context.`
           : hasSeededStartContext
-            ? "Starter context exists; run a governed Chat, Cowork, or Code task before treating this step as complete."
-            : "Create the first low-risk Chat, Cowork, or Code task after provider/local readiness is explicit.",
+            ? "Starter context exists; run a governed Work task before treating this step as complete."
+            : "Create the first low-risk Work task after provider/local readiness is explicit.",
       actionDescription: firstTaskRun
         ? "Open the durable run detail projection for timeline, approvals, tools, artifacts, and remaining proof gaps."
         : firstTaskSession
           ? "Open the seeded demo thread; it is local/sample context and does not count as proof until a run records evidence."
-          : "Open Cowork for the first supervised task, or switch to Chat/Code from the same runtime shell.",
+          : "Open Work for the first supervised task, then choose Conversation, Plan, or Build posture.",
       state: firstTaskRun ? "complete" : providerConnected || demoReady || localEndpointReady ? "active" : "pending",
       meta: firstTaskRun ? "recent-run-found" : hasSeededStartContext ? "starter-ready" : "first-task-pending",
       actionLabel: firstTaskActionLabel,
@@ -9891,7 +9890,7 @@ export function deriveFirstOutcomePathItems(
         : "No proof artifact or trace is recorded yet. A first-run task is not complete until evidence exists.",
       actionDescription: latestProof
         ? "Open the linked run surface and use Run details or artifacts to inspect retained evidence."
-        : "Open generated artifacts or the Code/Cowork run panel after a governed task records evidence.",
+        : "Open generated artifacts or the Work proof panel after a governed task records evidence.",
       state: latestProof ? "complete" : firstTaskRun || hasProjectCreation ? "active" : "pending",
       meta: latestProof ? "proof-complete" : "proof-needed",
       actionLabel: latestProof ? "Open Run Detail" : "Inspect proof",
@@ -10011,11 +10010,11 @@ function surfaceLabel(
 ) {
   switch (surface) {
     case "chat":
-      return "Chat";
+      return "Conversation";
     case "code":
-      return "Code";
+      return "Build";
     case "cowork":
-      return "Cowork";
+      return "Plan";
     default:
       return "run";
   }
@@ -10695,7 +10694,7 @@ export function formatPersonalityStatus(personality: PersonalityPreset, defaultP
     tags.push("Modified");
   }
   if (personality.id === defaultPersonalityId) {
-    tags.push("Chat default");
+    tags.push("Work default");
   }
   if (personality.editable === false) {
     tags.push("Locked");

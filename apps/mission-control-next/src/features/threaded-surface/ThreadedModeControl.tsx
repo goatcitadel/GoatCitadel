@@ -21,17 +21,17 @@ const MODE_META: Record<
   }
 > = {
   chat: {
-    label: "Chat",
+    label: "Conversation",
     summary: "Direct conversation with lightweight runtime context.",
     consequence: "Keeps the transcript fast and low-friction.",
   },
   cowork: {
-    label: "Cowork",
+    label: "Plan",
     summary: "Guided agentic work with checkpoints and operator oversight.",
     consequence: "Surfaces decomposition, retries, approvals, and proof.",
   },
   code: {
-    label: "Code",
+    label: "Build",
     summary: "Implementation-focused mode with governed code context.",
     consequence: "Keeps project binding, gates, diffs, and validation visible.",
   },
@@ -58,10 +58,10 @@ function resolvedLabel(mode: ChatMode | undefined, preview?: SurfaceClassifyResp
   }
 
   if (preview?.mode) {
-    return `Auto -> ${modeLabel(preview.mode)}`;
+    return `Auto: ${modeLabel(preview.mode)}`;
   }
 
-  return "Auto-routing";
+  return "Adaptive posture";
 }
 
 function resolvedSummary(mode: ChatMode | undefined, preview?: SurfaceClassifyResponse): string {
@@ -99,7 +99,7 @@ export function ThreadedModeControl(props: ThreadedModeControlProps) {
     return (
       <div className={controlClassName} data-mode={resolvedMode}>
         <span className="mc-next-threaded-mode-control-readout">
-          <span className="mc-next-threaded-mode-control-eyebrow">Mode</span>
+          <span className="mc-next-threaded-mode-control-eyebrow">Posture</span>
           <span className="mc-next-threaded-mode-control-label">{label}</span>
           {props.variant !== "compact" ? <span className="mc-next-threaded-mode-control-detail">{summary}</span> : null}
         </span>
@@ -116,14 +116,14 @@ export function ThreadedModeControl(props: ThreadedModeControlProps) {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="mc-next-threaded-mode-control-eyebrow">{autoRouting ? "Auto route" : "Mode"}</span>
+        <span className="mc-next-threaded-mode-control-eyebrow">{autoRouting ? "Adaptive posture" : "Posture"}</span>
         <span className="mc-next-threaded-mode-control-label">{label}</span>
         <span className="mc-next-threaded-mode-control-detail">{confidence}</span>
       </button>
       {open ? (
-        <div className="mc-next-threaded-mode-menu" role="menu" aria-label="Choose conversation mode">
+        <div className="mc-next-threaded-mode-menu" role="menu" aria-label="Choose work posture">
           <div className="mc-next-threaded-mode-preview">
-            <span>{autoRouting ? "Preview" : "Pinned"}</span>
+            <span>{autoRouting ? "Suggested" : "Pinned posture"}</span>
             <strong>{modeLabel(resolvedMode)}</strong>
             <p>{summary}</p>
             {props.preview && alternatives.length > 0 ? (

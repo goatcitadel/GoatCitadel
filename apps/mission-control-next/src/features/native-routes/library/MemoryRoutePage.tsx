@@ -514,8 +514,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 {memoryAdminState === "disabled" ? (
                   <div className="mc-next-memory-disabled-guide">
                     <p>
-                      Durable item edits stay locked until settings allow them. Chat, Cowork, and Code can continue
-                      without durable memory writes.
+                      Durable item edits stay locked until settings allow them. Conversation, planning, and build work
+                      can continue without durable memory writes.
                     </p>
                     <div className="mc-next-settings-button-row">
                       <NativeButton

@@ -6,8 +6,10 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
   const ids = {
     sessionId: readParam(params, "sessionId"),
     turnId: readParam(params, "turnId"),
+    runId: readParam(params, "runId"),
     artifactId: readParam(params, "artifactId"),
     approvalId: readParam(params, "approvalId"),
+    projectId: readParam(params, "projectId"),
     theme: readParam(params, "theme"),
   };
 

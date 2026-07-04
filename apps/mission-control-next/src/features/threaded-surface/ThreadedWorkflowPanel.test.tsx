@@ -71,7 +71,7 @@ function buildCoworkPanel(onAgenticControl = vi.fn()): Extract<MissionThreadedWo
         activeTurnId: null,
         selectedTurnId: null,
         hasHistoricalSelection: false,
-        headerTitle: "Cowork run",
+        headerTitle: "Plan run",
         headerSummary: "Runtime controls are visible.",
         sourceLabel: "Live",
         freshnessLabel: "Fresh",
@@ -1710,7 +1710,7 @@ describe("ThreadedWorkflowPanel", () => {
       expect(rendered).toContain("Sources");
       expect(rendered).toContain("Code Mode ledger");
       expect(rendered).toContain("Preview artifact");
-      expect(rendered).toContain("Not wired in Code workbench v1");
+      expect(rendered).toContain("Not wired in Build workbench v1");
       expect(rendered).toContain("backend unavailable");
 
       const progressSection = renderer!.root.findAllByType("details")[0];

@@ -122,9 +122,9 @@ describe("legacy route adapter", () => {
   it("preserves route ids while converting legacy search urls", () => {
     expect(
       coerceLegacyHrefToNext(
-        "http://goatcitadel.local/?space=operate&page=surface&surface=chat&sessionId=s-1&turnId=t-2&artifactId=a-3&approvalId=ap-4&theme=light",
+        "http://goatcitadel.local/?space=operate&page=surface&surface=chat&sessionId=s-1&turnId=t-2&runId=r-3&artifactId=a-4&approvalId=ap-5&projectId=p-6&theme=light",
       ),
-    ).toBe("/chat?sessionId=s-1&turnId=t-2&artifactId=a-3&approvalId=ap-4");
+    ).toBe("/chat?sessionId=s-1&turnId=t-2&runId=r-3&artifactId=a-4&approvalId=ap-5&projectId=p-6");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/")).toBeNull();
     expect(adaptLegacyUrl(new URL("http://goatcitadel.local/?surface=unknown"))).toMatchObject({ area: "chat" });
   });
@@ -191,9 +191,9 @@ describe("mission-control-next route model", () => {
   it("covers route labels, descriptions, navigation preservation, and legacy tab aliases", () => {
     expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Task Board");
     expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Agent Board");
-    expect(getRouteLabel({ area: "cowork" })).toBe("Cowork");
+    expect(getRouteLabel({ area: "cowork" })).toBe("Plan");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("board exposes");
-    expect(getRouteDescription({ area: "cowork" })).toContain("Cowork mode");
+    expect(getRouteDescription({ area: "cowork" })).toContain("Plan posture");
     expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
 
     expect(
@@ -362,7 +362,14 @@ describe("mission-control-next route model", () => {
       ]),
     );
     expect(getRouteReleaseScope({ area: "library", section: "curator" }).status).toBe("experimental");
-    expect(getRouteReleaseScope({ area: "code" }).status).toBe("ship");
+    const codeScope = getRouteReleaseScope({ area: "code" });
+    const chatCodeScope = getRouteReleaseScope({ area: "chat", mode: "code" });
+    const chatCoworkScope = getRouteReleaseScope({ area: "chat", mode: "cowork" });
+    expect(codeScope.status).toBe("ship");
+    expect(chatCodeScope.releaseAction).toContain("review build proof");
+    expect(chatCodeScope.verification).toContain("verify:code:workbench-loop");
+    expect(chatCoworkScope.releaseAction).toContain("durable planning run");
+    expect(chatCoworkScope.verification).toContain("verify:durable:recovery");
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );

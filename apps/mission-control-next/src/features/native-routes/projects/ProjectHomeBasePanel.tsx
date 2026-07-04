@@ -81,7 +81,7 @@ export function ProjectHomeBasePanel({
         <ProjectMetric
           label="Active threads"
           value={String(home.activeCount)}
-          detail="Chat, Cowork, and Code work still in motion."
+          detail="Conversation, planning, and build work still in motion."
         />
         <ProjectMetric
           label="Artifacts"
@@ -112,7 +112,7 @@ export function ProjectHomeBasePanel({
       <div className="mc-next-project-lane-resume-shell">
         <div className="mc-next-directory-lane-head">
           <strong>Latest continuation</strong>
-          <span>Chat / Cowork / Code</span>
+          <span>Conversation / Plan / Build</span>
         </div>
         <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
           {SURFACES.map((surface) => {

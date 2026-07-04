@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseAppRoute,
   buildAppHref,
+  buildNavigationTarget,
   normalizeAppRoute,
   buildModeRail,
   getRouteDescription,
@@ -55,10 +56,10 @@ describe("unified surface mode field", () => {
   });
   it("labels the unified root as Work and mode routes by their routed mode", () => {
     expect(getRouteLabel({ area: "chat" })).toBe("Work");
-    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Cowork");
-    expect(getRouteLabel({ area: "code" })).toBe("Code");
-    expect(getRouteDescription({ area: "chat" })).toContain("One conversation/work surface");
-    expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("Code mode");
+    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Plan");
+    expect(getRouteLabel({ area: "code" })).toBe("Build");
+    expect(getRouteDescription({ area: "chat" })).toContain("One conversation workspace");
+    expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("Build posture");
   });
 });
 
@@ -82,6 +83,36 @@ describe("buildModeRail", () => {
     expect(items.some((i) => i.section === "files")).toBe(true);
     expect(items.some((i) => i.section === "runtime")).toBe(true);
     expect(items.some((i) => i.section === "prompt-packs")).toBe(true);
+  });
+  it("preserves Work mode and context ids when returning to the conversation thread", () => {
+    for (const mode of ["cowork", "code"] as const) {
+      const threadItem = buildModeRail(mode).find((item) => item.id === "chat-thread");
+      expect(threadItem).toBeDefined();
+      expect(
+        buildNavigationTarget(
+          {
+            area: "chat",
+            mode,
+            sessionId: "session-1",
+            turnId: "turn-2",
+            runId: "run-3",
+            artifactId: "artifact-4",
+            approvalId: "approval-5",
+            projectId: "project-6",
+          },
+          threadItem!,
+        ),
+      ).toMatchObject({
+        area: "chat",
+        mode,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        runId: "run-3",
+        artifactId: "artifact-4",
+        approvalId: "approval-5",
+        projectId: "project-6",
+      });
+    }
   });
   it("every mode rail ends with Approvals", () => {
     for (const m of ["chat", "cowork", "code"] as const) {

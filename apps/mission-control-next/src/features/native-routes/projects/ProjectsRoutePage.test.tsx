@@ -184,7 +184,7 @@ describe("ProjectsRoutePage", () => {
           sessionId: "cowork-1",
           projectId: "project-alpha",
           mode: "cowork",
-          title: "Cowork run",
+          title: "Plan run",
           tags: ["plan", "qa"],
           lastActivityAt: "2026-05-01T12:10:00.000Z",
         }),
@@ -247,15 +247,15 @@ describe("ProjectsRoutePage", () => {
     expect(text).toContain("Project overview");
     expect(text).toContain("Start from intent");
     expect(text).toContain("Release proof");
-    expect(text).toContain("Continue Chat");
-    expect(text).toContain("Continue Cowork");
-    expect(text).toContain("Continue Code");
+    expect(text).toContain("Continue Conversation");
+    expect(text).toContain("Continue Plan");
+    expect(text).toContain("Continue Build");
     expect(text).toContain("Latest continuation");
     expect(text).toContain("Reopen project artifacts");
     expect(text).toContain("Alpha");
-    expect(text).toContain("Chat 1");
-    expect(text).toContain("Cowork 1");
-    expect(text).toContain("Code 1");
+    expect(text).toContain("Conversation 1");
+    expect(text).toContain("Plan 1");
+    expect(text).toContain("Build 1");
     expect(text).toContain("chat-1");
     expect(text).toContain("No tags yet.");
     expect(text).toContain("Unknown");
@@ -266,7 +266,7 @@ describe("ProjectsRoutePage", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-beta", theme: "ops" });
 
     act(() => {
-      findButton(renderer.root, "Cowork run").props.onClick();
+      findButton(renderer.root, "Plan run").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({
       area: "cowork",
@@ -312,9 +312,9 @@ describe("ProjectsRoutePage", () => {
     const text = pageText(renderer);
     expect(text).toContain("Beta");
     expect(text).toContain("F:\\code\\beta");
-    expect(text).toContain("Chat 1");
-    expect(text).toMatch(/No\s+cowork\s+threads in this project\./);
-    expect(text).toMatch(/No\s+code\s+threads in this project\./);
+    expect(text).toContain("Conversation 1");
+    expect(text).toMatch(/No\s+plan\s+threads in this project\./);
+    expect(text).toMatch(/No\s+build\s+threads in this project\./);
 
     act(() => {
       findButton(renderer.root, "Fallback mode").props.onClick();
@@ -327,7 +327,7 @@ describe("ProjectsRoutePage", () => {
     });
 
     await act(async () => {
-      findButton(renderer.root, "New Code").props.onClick();
+      findButton(renderer.root, "New Build").props.onClick();
       await Promise.resolve();
     });
     expect(mockedCreateChatSession).toHaveBeenCalledWith(
@@ -337,7 +337,7 @@ describe("ProjectsRoutePage", () => {
         projectId: "project-beta",
         mode: "code",
         origin: "operator",
-        title: "Code - Beta",
+        title: "Build - Beta",
       },
       { originSurface: "code" },
     );
@@ -407,7 +407,7 @@ describe("ProjectsRoutePage", () => {
     );
 
     act(() => {
-      findButton(renderer.root, "Continue Cowork").props.onClick();
+      findButton(renderer.root, "Continue Plan").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({
       area: "cowork",
@@ -522,13 +522,13 @@ describe("ProjectsRoutePage", () => {
     expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
     expect(renderedText(renderer)).toContain("Create project setup");
     expect(renderedText(renderer)).toContain("Use Start Here sample mission");
-    expect(findButton(renderer.root, "New Chat").props.disabled).toBe(true);
+    expect(findButton(renderer.root, "New Conversation").props.disabled).toBe(true);
     act(() => {
-      findButton(renderer.root, "New Chat").props.onClick();
+      findButton(renderer.root, "New Conversation").props.onClick();
     });
     expect(mockedCreateChatSession).not.toHaveBeenCalled();
     act(() => {
-      findButton(renderer.root, "Start Chat").props.onClick();
+      findButton(renderer.root, "Start Conversation").props.onClick();
       findButton(renderer.root, "Use Start Here sample mission").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
@@ -546,7 +546,7 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-alpha" } }));
 
     await act(async () => {
-      findButton(renderer.root, "New Chat").props.onClick();
+      findButton(renderer.root, "New Conversation").props.onClick();
       await Promise.resolve();
     });
     expect(renderedText(renderer)).toContain("session route failed");

@@ -157,7 +157,7 @@ describe("SettingsNativePage loop 30 branch matrices", () => {
     ).toMatchObject({ label: "Label", safetyNotes: ["one", "two"] });
     expect(
       formatPersonalityStatus({ builtin: true, modified: true, id: "default", editable: false } as any, "default"),
-    ).toBe("Built-in · Modified · Chat default · Locked");
+    ).toBe("Built-in · Modified · Work default · Locked");
   });
 
   it("removes invalid stored OAuth flows without trusting broken storage APIs", () => {

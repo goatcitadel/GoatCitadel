@@ -11,7 +11,7 @@
 :root {
   /* Per-area accents spread across the hue wheel so adjacent areas are
      distinguishable at a glance (was 4 near-identical blues: chat/projects/
-     library/ops). Dark accents are visual-only (dark --primary = cream brand),
+     library/ops). Dark accents are visual-only (dark --primary = cool brand),
      so they are not contrast-gated; the light block mirrors the hue spread. */
   --area-chat: oklch(0.72 0.14 240);
   --area-cowork: oklch(0.73 0.15 330);
@@ -26,9 +26,9 @@
   --risk-danger: oklch(0.7 0.18 28);
   --risk-nuclear: oklch(0.68 0.22 345);
 
-  --brand: #f4ead6;
-  --brand-deep: #948b78;
-  --brand-ink: #0b0d0f;
+  --brand: #7de7ff;
+  --brand-deep: #0f6070;
+  --brand-ink: #071016;
 
   --font-sans: "Geist Variable", ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -99,47 +99,47 @@
      as distinct panels on the page; surface-2 lifted above surface-1 (was an
      inverted #10141a well); elevated capped where muted text still clears AA.
      Verify with `pnpm contrast:check` after any change here. */
-  --bg-app: #0f1318;
-  --bg-surface-1: #191f29;
-  --bg-surface-2: #212934;
-  --bg-surface-3: #2b323e;
-  --bg-elevated: #353d4a;
-  --bg-inset: #0a0d12;
+  --bg-app: #0b1016;
+  --bg-surface-1: #141c25;
+  --bg-surface-2: #1c2732;
+  --bg-surface-3: #263440;
+  --bg-elevated: #31414f;
+  --bg-inset: #070b10;
 
-  --fg-primary: #f4f1ea;
-  --fg-secondary: #c9cdd4;
-  --fg-muted: #a8aeb7; /* Brightened from #9aa0a9 to keep AA (4.5:1) on the widened, lighter --bg-elevated. */
+  --fg-primary: #f3f9fb;
+  --fg-secondary: #c8d5dc;
+  --fg-muted: #a8b7c0; /* Brightened from #9aa0a9 to keep AA (4.5:1) on the widened, lighter --bg-elevated. */
   --fg-faint: #a8aeb7; /* Merged into the --fg-muted tier to calm the gray spread. */
 
   --border-hairline: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.1);
   --border-default: rgba(255, 255, 255, 0.14);
-  --border-strong: rgba(244, 234, 214, 0.22);
+  --border-strong: rgba(125, 231, 255, 0.24);
 }
 
 .theme-citadel-light {
-  --bg-app: #f5f3ec;
+  --bg-app: #f6fbff;
   --bg-surface-1: #ffffff;
-  --bg-surface-2: #eeeae0;
-  --bg-surface-3: #e3ddd0;
+  --bg-surface-2: #eef6fb;
+  --bg-surface-3: #e0edf4;
   --bg-elevated: #ffffff;
-  --bg-inset: #ece7da;
+  --bg-inset: #e8f2f7;
 
-  --fg-primary: #161a20;
-  --fg-secondary: #3a4049;
-  /* Muted/faint darkened so operator text clears AA (4.5:1) on the warm-cream
+  --fg-primary: #101922;
+  --fg-secondary: #32424d;
+  /* Muted/faint darkened so operator text clears AA (4.5:1) on the bright
      surfaces; was #5e6470 (4.39:1) / #6b7280 (4.35:1) — both just under. */
-  --fg-muted: #4f5562;
-  --fg-faint: #565c69;
+  --fg-muted: #4b5b68;
+  --fg-faint: #536371;
 
-  --border-hairline: rgba(20, 24, 30, 0.08);
-  --border-subtle: rgba(20, 24, 30, 0.14);
-  --border-default: rgba(20, 24, 30, 0.2);
-  --border-strong: rgba(20, 24, 30, 0.32);
+  --border-hairline: rgba(13, 42, 55, 0.08);
+  --border-subtle: rgba(13, 42, 55, 0.14);
+  --border-default: rgba(13, 42, 55, 0.2);
+  --border-strong: rgba(13, 42, 55, 0.32);
 
-  --brand: #4a4232;
-  --brand-deep: #2a2419;
-  --brand-ink: #f5efde;
+  --brand: #0f6070;
+  --brand-deep: #073d48;
+  --brand-ink: #f6fbff;
 
   /* Light mirror of the dark hue spread, kept at low L so white button text
      clears AA after the 85%->black --primary mix. Verify with contrast:check. */

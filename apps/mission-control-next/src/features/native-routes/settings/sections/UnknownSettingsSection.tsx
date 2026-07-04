@@ -19,7 +19,7 @@ export function UnknownSettingsSection({ section, route, navigate }: SettingsSec
             },
             {
               label: "Open Providers",
-              description: "Jump to the provider/model route used by Chat, Cowork, and Code.",
+              description: "Jump to the provider/model route used by Work postures.",
               onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
             },
           ]}

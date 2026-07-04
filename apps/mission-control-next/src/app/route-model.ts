@@ -103,17 +103,17 @@ export const AREA_META: Record<PrimaryArea, AreaMeta> = {
     id: "chat",
     label: "Work",
     kicker: "Conversation",
-    description: "One conversation/work surface for Chat, Cowork, Code, search, attachments, and quick help.",
+    description: "One conversation workspace for planning, building, search, attachments, and quick help.",
   },
   cowork: {
     id: "cowork",
-    label: "Cowork",
+    label: "Plan",
     kicker: "Orchestration",
     description: "Delegation, tasks, checkpoints, and shared execution.",
   },
   code: {
     id: "code",
-    label: "Code",
+    label: "Build",
     kicker: "Implementation",
     description: "Workbench, files, diffs, runs, and code-mode control.",
   },
@@ -121,7 +121,7 @@ export const AREA_META: Record<PrimaryArea, AreaMeta> = {
     id: "projects",
     label: "Projects",
     kicker: "Containers",
-    description: "Project containers with Chat, Cowork, and Code threads grouped together.",
+    description: "Project containers with conversation, planning, and build threads grouped together.",
   },
   library: {
     id: "library",
@@ -231,7 +231,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "code-approvals",
       label: "Approvals",
-      description: "Review Code Mode and tool decisions from the coding lane.",
+      description: "Review Code Mode and tool decisions from the build lane.",
       area: "ops",
       section: "approvals",
       preserveThread: true,
@@ -375,14 +375,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "library-files",
       label: "Files",
-      description: "Browse uploaded and workspace files outside Code.",
+      description: "Browse uploaded and workspace files outside Build.",
       area: "library",
       section: "files",
     },
     {
       id: "library-artifacts",
       label: "Artifacts",
-      description: "Reopen generated outputs from Chat, Cowork, and Code.",
+      description: "Reopen generated outputs from conversation, planning, and build work.",
       area: "library",
       section: "artifacts",
     },
@@ -505,7 +505,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-personalities",
       label: "Personalities",
-      description: "Chat personality presets and the global Chat default.",
+      description: "Conversation personality presets and the global conversation default.",
       area: "settings",
       section: "personalities",
     },
@@ -786,7 +786,7 @@ export function routeKicker(route: AppRoute): string {
   const areaLabel = AREA_META[route.area].label;
   const section = route.section;
   if (route.area === "chat" && route.mode && route.mode !== "chat" && !section) {
-    return `${areaLabel} · ${route.mode === "cowork" ? "Cowork" : "Code"}`;
+    return `${areaLabel} · ${route.mode === "cowork" ? "Plan" : "Build"}`;
   }
   if (!section) {
     return areaLabel;
@@ -810,7 +810,7 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "chat",
     section: "root",
     status: "ship",
-    releaseAction: "Send a normal Chat turn and inspect model/tool/runtime context when present.",
+    releaseAction: "Send a normal Work conversation turn and inspect model/tool/runtime context when present.",
     verification: "verify:surface:regression, verify:runtime:truth",
     note: "Core conversational lane remains release-bearing.",
   },
@@ -818,7 +818,7 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "cowork",
     section: "workspace",
     status: "ship",
-    releaseAction: "Start or resume a durable Cowork run, then inspect blockers, approvals, and evidence.",
+    releaseAction: "Start or resume a durable planning run, then inspect blockers, approvals, and evidence.",
     verification: "verify:surface:regression, verify:durable:recovery, verify:runtime:truth",
     note: "Flagship durable flow is release-bearing with next-action, blocker, approval, and evidence truth visible.",
   },
@@ -826,7 +826,7 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "cowork",
     section: "tasks",
     status: "ship",
-    releaseAction: "Review task state, blocked work, and deliverables from the Cowork lane.",
+    releaseAction: "Review task state, blocked work, and deliverables from the planning lane.",
     verification: "verify:surface:regression",
     note: "Task board is release-bearing for continuation, deliverable, and blocker review.",
   },
@@ -842,15 +842,15 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "code",
     section: "root",
     status: "ship",
-    releaseAction: "Bind a code source, edit files, run validation, inspect diffs, and review Code Mode proof.",
+    releaseAction: "Bind a source, edit files, run validation, inspect diffs, and review build proof.",
     verification: "verify:surface:regression, verify:code:workbench-loop, verify:code-mode:sandbox",
-    note: "Code workbench is release-bearing with source binding, validation/diff review, and governed Code Mode proof truth.",
+    note: "Build workbench is release-bearing with source binding, validation/diff review, and governed Code Mode proof truth.",
   },
   {
     area: "projects",
     section: "root",
     status: "ship",
-    releaseAction: "Select a project and continue related Chat, Cowork, or Code work.",
+    releaseAction: "Select a project and continue related conversation, planning, or build work.",
     verification: "verify:surface:regression",
     note: "Projects is release-bearing as the home base for cross-surface continuation.",
   },
@@ -1103,7 +1103,7 @@ export const ROUTE_RELEASE_SCOPE = [
     status: "experimental",
     releaseAction: "Adjust personality presets without treating them as a release-critical runtime guarantee.",
     verification: "verify:surface:regression label check",
-    note: "Personalities remain experimental polish around Chat defaults.",
+    note: "Personalities remain experimental polish around Work defaults.",
   },
   {
     area: "settings",
@@ -1143,7 +1143,7 @@ export const ROUTE_RELEASE_SCOPE = [
     section: "onboarding",
     status: "ship",
     releaseAction:
-      "Follow Start Here readiness through provider/local path, first Chat/Cowork/Code task, evidence, and Run Detail steps.",
+      "Follow Start Here readiness through provider/local path, first Work task, evidence, and Run Detail steps.",
     verification: "verify:install, verify:surface:regression",
     note: "Start Here is release-bearing as the first-run checklist through setup, first work, proof artifact, and run evidence.",
   },
@@ -1356,13 +1356,13 @@ export function buildAppHref(route: AppRoute): string {
 export function getRouteLabel(route: AppRoute): string {
   const next = normalizeAppRoute(route);
   if (next.area === "chat") {
-    return next.mode === "cowork" ? "Cowork" : next.mode === "code" ? "Code" : AREA_META.chat.label;
+    return next.mode === "cowork" ? "Plan" : next.mode === "code" ? "Build" : AREA_META.chat.label;
   }
   if (next.area === "code" || next.area === "projects") {
     return AREA_META[next.area].label;
   }
   if (next.area === "cowork") {
-    return next.section === "tasks" ? "Task Board" : next.section === "board" ? "Agent Board" : "Cowork";
+    return next.section === "tasks" ? "Task Board" : next.section === "board" ? "Agent Board" : "Plan";
   }
 
   const item = RAIL_ITEMS[next.area].find((entry) => entry.section === next.section);
@@ -1373,10 +1373,10 @@ export function getRouteDescription(route: AppRoute): string {
   const next = normalizeAppRoute(route);
   if (next.area === "chat") {
     if (next.mode === "cowork") {
-      return "Cowork mode keeps decomposition, checkpoints, approvals, and proof inside the unified work surface.";
+      return "Plan posture keeps decomposition, checkpoints, approvals, and proof inside the unified work surface.";
     }
     if (next.mode === "code") {
-      return "Code mode keeps project binding, governed execution, diffs, and validation inside the unified work surface.";
+      return "Build posture keeps project binding, governed execution, diffs, and validation inside the unified work surface.";
     }
     return AREA_META.chat.description;
   }
@@ -1385,7 +1385,7 @@ export function getRouteDescription(route: AppRoute): string {
   }
   if (next.area === "cowork") {
     if (next.section === "tasks") {
-      return "Tasks, activities, deliverables, and blockers stay inside the Cowork lane instead of floating as a separate product.";
+      return "Tasks, activities, deliverables, and blockers stay inside the planning lane instead of floating as a separate product.";
     }
     if (next.section === "board") {
       return "The board exposes live agent posture without forcing agent catalog chrome over active work.";
@@ -1407,10 +1407,17 @@ export function getRouteReleaseKey(route: RouteReleaseKeyInput): string {
 }
 
 export function getRouteReleaseScope(route: AppRoute): RouteReleaseScope {
-  const key = getRouteReleaseKey(normalizeAppRoute(route));
+  const normalized = normalizeAppRoute(route);
+  const releaseRoute =
+    normalized.area === "chat" && normalized.mode === "code"
+      ? ({ ...normalized, area: "code", mode: undefined, section: undefined } as AppRoute)
+      : normalized.area === "chat" && normalized.mode === "cowork"
+        ? ({ ...normalized, area: "cowork", mode: undefined, section: "workspace" } as AppRoute)
+        : normalized;
+  const key = getRouteReleaseKey(releaseRoute);
   return (
     ROUTE_RELEASE_SCOPE_BY_KEY.get(key) ?? {
-      area: route.area,
+      area: releaseRoute.area,
       section: "root",
       status: "hide",
       releaseAction: "Route is not part of the current visible release surface.",
@@ -1463,12 +1470,13 @@ export function buildNavigationTarget(current: AppRoute, item: RailItem): AppRou
   return normalizeAppRoute({
     area: item.area,
     section: item.section,
+    mode: item.area === "chat" ? current.mode : undefined,
     sessionId: preserveThread ? current.sessionId : undefined,
     turnId: preserveThread ? current.turnId : undefined,
     runId: preserveThread ? current.runId : undefined,
     artifactId: preserveThread ? current.artifactId : undefined,
     approvalId: preserveThread ? current.approvalId : undefined,
-    projectId: item.area === "projects" ? current.projectId : undefined,
+    projectId: preserveThread || item.area === "projects" ? current.projectId : undefined,
     theme: current.theme,
     view:
       item.area === "library" && item.section === "agents" && current.area === "library" && current.view === "catalog"

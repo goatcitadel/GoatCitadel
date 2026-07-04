@@ -128,6 +128,7 @@ function buildProps(overrides: Partial<any> = {}) {
     onRemoveThreadKnowledgeAttachment: vi.fn(),
     onAttachFiles: vi.fn(),
     onRunQuickResearch: vi.fn(),
+    onOpenPersonalitiesSettings: vi.fn(),
     onAudioFileSelected: vi.fn(),
     onToggleVoiceTalk: vi.fn(),
     onOpenAudioTranscribe: vi.fn(),
@@ -284,10 +285,12 @@ describe("ThreadedComposer", () => {
       planningMode: "off",
     });
 
-    // The Plan toggle, thinking-level/speed-mode/subagent-policy selectors moved
-    // to the Context Drawer's Assist tab; the composer no longer hosts them.
+    // The dense selectors moved to the Context Drawer's Assist tab; the
+    // composer keeps lightweight quick actions for the common paths.
     expect(markup).not.toContain("Shift+Tab");
-    expect(markup).not.toContain(">Plan<");
+    expect(markup).toContain(">Plan<");
+    expect(markup).toContain(">Research<");
+    expect(markup).toContain(">Attach context<");
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
     expect(markup).toContain("OpenAI / gpt-test");
@@ -298,6 +301,52 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain(">Implement<");
     expect(markup).not.toContain("Start talk");
     expect(markup).not.toContain("Planning mode is on");
+  });
+
+  it("renders the active personality presence when runtime truth is available", () => {
+    const markup = buildMarkup({
+      activePersonality: {
+        name: "Calm Operator",
+        tone: "Concise and warm",
+        scope: "thread_override",
+        avatarLabel: "CO",
+        animation: "ambient",
+      },
+    });
+
+    expect(markup).toContain("mc-next-personality-chip");
+    expect(markup).toContain("Calm Operator");
+    expect(markup).toContain("Thread override");
+    expect(markup).toContain("Concise and warm");
+    expect(markup).toContain('data-animated="true"');
+    expect(markup).not.toContain("/settings/personalities");
+  });
+
+  it("does not invent a personality presence when runtime truth is unavailable", () => {
+    expect(buildMarkup()).not.toContain("mc-next-personality-chip");
+    expect(
+      buildMarkup({
+        presetOptions: [{ value: "review", label: "Review preset" }],
+        selectedPresetId: "review",
+      }),
+    ).not.toContain("mc-next-personality-chip");
+  });
+
+  it("opens personality settings through the host callback instead of a raw link", async () => {
+    const onOpenPersonalitiesSettings = vi.fn();
+    const renderer = await renderComposer({
+      activePersonality: {
+        name: "Calm Operator",
+        scope: "citadel_default",
+      },
+      onOpenPersonalitiesSettings,
+    });
+
+    await act(async () => {
+      renderer.root.findByProps({ className: "mc-next-personality-chip" }).props.onClick();
+    });
+
+    expect(onOpenPersonalitiesSettings).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces memory as historical last-turn state and omits empty or in-progress memory", () => {
@@ -436,6 +485,34 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("Answer required");
     expect(markup).toContain("Submit");
     expect(markup).not.toContain("Dismiss");
+  });
+
+  it("replaces quick action clutter with a compact blocker state while blocked", () => {
+    const approvalMarkup = buildMarkup({
+      pendingApproval: {
+        approvalId: "approval-1",
+        kind: "tool_call",
+        toolName: "browser.search",
+        reason: "Needs approval.",
+      },
+    });
+    expect(approvalMarkup).toContain("mc-next-composer-blocked-actions");
+    expect(approvalMarkup).toContain("Approval needed");
+    expect(approvalMarkup).not.toContain(">Research<");
+    expect(approvalMarkup).not.toContain(">Attach context<");
+
+    const userInputMarkup = buildMarkup({
+      pendingUserInput: {
+        turnId: "turn-1",
+        promptId: "prompt-1",
+        kind: "text",
+        title: "Need input",
+        question: "Continue?",
+      },
+    });
+    expect(userInputMarkup).toContain("Input needed");
+    expect(userInputMarkup).toContain("Answer the requested follow-up");
+    expect(userInputMarkup).not.toContain(">Research<");
   });
 
   it("disables side-effecting composer controls while blockers are active", async () => {
@@ -770,6 +847,7 @@ describe("ThreadedComposer", () => {
       onGenerateImage: vi.fn(),
       onEditImage: vi.fn(),
       onRunQuickResearch: vi.fn(),
+      onReviewRunDetails: vi.fn(),
       onAttachFiles: vi.fn(),
       onAudioFileSelected: vi.fn(),
       onPresetChange: vi.fn(),
@@ -803,6 +881,10 @@ describe("ThreadedComposer", () => {
     expect(collectText(renderer.root)).toContain("New thread");
     expect(collectText(renderer.root)).toContain("Checking the selected provider/model route before send.");
 
+    await click(findButton(renderer.root, "Plan"));
+    await click(findButton(renderer.root, "Research"));
+    await click(findButton(renderer.root, "Review"));
+    await click(findButton(renderer.root, "Attach context"));
     await click(findButton(renderer.root, "Dismiss"));
     await click(findButton(renderer.root, "Acknowledge fallback"));
     await click(renderer.root.findByProps({ "aria-label": "Open chat actions" }));
@@ -834,17 +916,18 @@ describe("ThreadedComposer", () => {
     expect(callbacks.onToggleSpeakResponses).toHaveBeenCalledTimes(1);
     expect(callbacks.onGenerateImage).toHaveBeenCalledTimes(1);
     expect(callbacks.onEditImage).toHaveBeenCalledTimes(1);
-    expect(callbacks.onRunQuickResearch).toHaveBeenCalledTimes(1);
-    expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRunQuickResearch).toHaveBeenCalledTimes(2);
+    expect(callbacks.onReviewRunDetails).toHaveBeenCalledTimes(1);
+    expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(2);
     expect(callbacks.onPresetChange).toHaveBeenCalledWith("daily");
     expect(callbacks.onApplyPreset).toHaveBeenCalledTimes(1);
     expect(callbacks.onKnowledgeUrlDraftChange).toHaveBeenCalledWith("https://example.test/next");
     expect(callbacks.onKnowledgeUrlModeChange).toHaveBeenCalledWith("full_text");
     expect(callbacks.onAttachKnowledgeUrl).toHaveBeenCalledTimes(1);
     expect(callbacks.onAudioFileSelected).toHaveBeenCalledWith(["audio-file"]);
-    // Thinking level, speed mode, subagent policy, and the planning toggle are
-    // exercised in ThreadedContextDrawer.test.tsx now that they live in the
-    // Assist tab.
+    // Thinking level, speed mode, and subagent policy are exercised in
+    // ThreadedContextDrawer.test.tsx now that they live in the Assist tab.
   });
 
   it("uses blocker, sending, and stream-stop labels for primary actions", async () => {
@@ -907,7 +990,7 @@ describe("ThreadedComposer", () => {
         enabled: true,
         status: "available",
         runtimeEffect: "state_only",
-        note: "Cowork run has no attached durable run; cancel records intent only.",
+        note: "Plan run has no attached durable run; cancel records intent only.",
       },
       coworkStopRunPending: false,
       onCoworkStopRun,
@@ -916,7 +999,7 @@ describe("ThreadedComposer", () => {
     const text = collectText(renderer.root);
     expect(text).toContain("Stop run");
     // The disabled-reason from the control's `note` is surfaced as helper text.
-    expect(text).toContain("Cowork run has no attached durable run; cancel records intent only.");
+    expect(text).toContain("Plan run has no attached durable run; cancel records intent only.");
     // State-only runs must be honest that this only records operator stop intent.
     expect(text).toContain("records operator stop intent");
 

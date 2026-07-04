@@ -303,7 +303,7 @@ const mocks = vi.hoisted(() => ({
       {
         label: "Prompt gates",
         command: "pnpm prompt:gates",
-        reason: "Run targeted prompt-pack gates for behavior changes that affect Chat, Cowork, or Code.",
+        reason: "Run targeted prompt-pack gates for behavior changes that affect Work conversations, plans, or builds.",
       },
       {
         label: "Runtime truth",

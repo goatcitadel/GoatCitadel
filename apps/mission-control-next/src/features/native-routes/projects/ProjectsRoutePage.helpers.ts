@@ -36,9 +36,9 @@ const EMPTY_COUNTS: ProjectCounts = {
 };
 
 export const SURFACES: Array<{ mode: ChatMode; label: string; action: string }> = [
-  { mode: "chat", label: "Chat", action: "New Chat" },
-  { mode: "cowork", label: "Cowork", action: "New Cowork" },
-  { mode: "code", label: "Code", action: "New Code" },
+  { mode: "chat", label: "Conversation", action: "New Conversation" },
+  { mode: "cowork", label: "Plan", action: "New Plan" },
+  { mode: "code", label: "Build", action: "New Build" },
 ];
 
 export type ProjectIntakeMode = {
@@ -73,7 +73,7 @@ export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
     mode: "code",
     titlePrefix: "Implement",
     tag: "intent:implement",
-    detail: "Start Code for edits, debugging, and validation evidence.",
+    detail: "Start Build for edits, debugging, and validation evidence.",
   },
   {
     id: "review",
@@ -89,7 +89,7 @@ export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
     mode: "cowork",
     titlePrefix: "Research",
     tag: "intent:research",
-    detail: "Use Cowork for multi-step investigation, source capture, and synthesis.",
+    detail: "Use Plan for multi-step investigation, source capture, and synthesis.",
   },
   {
     id: "summarize",
@@ -143,29 +143,31 @@ export function deriveProjectHome(
       status: hasSourcePath ? "ready" : "attention",
       detail: hasSourcePath
         ? `Bound to ${project.workspacePath}.`
-        : "Add a workspace path before Code can become a practical workbench.",
+        : "Add a workspace path before Build can become a practical workbench.",
     },
     {
       id: "chat",
-      label: "Chat continuity",
+      label: "Conversation continuity",
       status: hasChat ? "ready" : "attention",
-      detail: hasChat ? "A project chat is ready to continue." : "Start a project chat for fast context and drafting.",
+      detail: hasChat
+        ? "A project conversation is ready to continue."
+        : "Start a project conversation for fast context and drafting.",
     },
     {
       id: "cowork",
-      label: "Cowork run",
+      label: "Plan run",
       status: hasCowork ? "ready" : "attention",
       detail: hasCowork
-        ? "A supervised run is available from this project."
-        : "Start Cowork when this project needs a durable plan and approval loop.",
+        ? "A supervised planning run is available from this project."
+        : "Start the plan posture when this project needs a durable plan and approval loop.",
     },
     {
       id: "code",
-      label: "Code workbench",
+      label: "Build workbench",
       status: hasCode ? "ready" : "attention",
       detail: hasCode
-        ? "A Code thread is available for implementation work."
-        : "Open Code when this project needs edits, validation, or patch artifacts.",
+        ? "A build thread is available for implementation work."
+        : "Open the build posture when this project needs edits, validation, or patch artifacts.",
     },
     {
       id: "artifacts",
@@ -260,19 +262,19 @@ function deriveProjectHealth(input: {
   if (!input.hasSourcePath) {
     return {
       healthLabel: "Needs source",
-      healthDetail: "Add a workspace path before this project can anchor Code and evidence.",
+      healthDetail: "Add a workspace path before this project can anchor Build and evidence.",
     };
   }
   if (input.sessionCount === 0) {
     return {
       healthLabel: "Ready for first thread",
-      healthDetail: "The project exists; start Chat, Cowork, or Code to create a continuation point.",
+      healthDetail: "The project exists; start Work to create a continuation point.",
     };
   }
   if (!input.hasCowork || !input.hasCode) {
     return {
-      healthLabel: "Needs work lanes",
-      healthDetail: "Add Cowork or Code when this project needs durable execution or implementation proof.",
+      healthLabel: "Needs Work postures",
+      healthDetail: "Add Plan or Build when this project needs durable execution or implementation proof.",
     };
   }
   if (!input.hasArtifacts) {
@@ -283,18 +285,18 @@ function deriveProjectHealth(input: {
   }
   if (!input.hasChat) {
     return {
-      healthLabel: "Needs chat lane",
-      healthDetail: "Add a lightweight Chat thread for fast project questions and drafting.",
+      healthLabel: "Needs conversation",
+      healthDetail: "Add a lightweight conversation thread for fast project questions and drafting.",
     };
   }
   return {
     healthLabel: "Ready to continue",
-    healthDetail: "Chat, Cowork, Code, and evidence are all represented for this project.",
+    healthDetail: "Conversation, planning, build, and evidence are all represented for this project.",
   };
 }
 
 export function labelForMode(mode: ChatMode): string {
-  return mode === "cowork" ? "Cowork" : mode === "code" ? "Code" : "Chat";
+  return mode === "cowork" ? "Plan" : mode === "code" ? "Build" : "Conversation";
 }
 
 export function dateValue(value?: string): number {

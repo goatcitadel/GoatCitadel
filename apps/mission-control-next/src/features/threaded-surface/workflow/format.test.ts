@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatExecutionBackend } from "./format";
 
-describe("Code workbench formatting", () => {
+describe("Build workbench formatting", () => {
   it("formats Code Mode execution backend posture without implying missing evidence", () => {
     expect(formatExecutionBackend()).toBe("not recorded");
     expect(

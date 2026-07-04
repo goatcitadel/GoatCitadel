@@ -605,7 +605,7 @@ export function ProjectsRoutePage({
       <NativeGrid className="mc-next-native-projects-grid">
         <NativeCard
           title="Projects"
-          subtitle="Containers that bind Chat, Cowork, and Code work together."
+          subtitle="Containers that bind Work threads, files, and proof together."
           density="compact"
           stats={[
             { label: "Projects", value: String(state.projects.length) },
@@ -656,9 +656,9 @@ export function ProjectsRoutePage({
                       <p>{project.description?.trim() || project.workspacePath}</p>
                       <ModeBar chat={counts.chat} cowork={counts.cowork} code={counts.code} />
                       <div className="mc-next-project-counts">
-                        <span>Chat {counts.chat}</span>
-                        <span>Cowork {counts.cowork}</span>
-                        <span>Code {counts.code}</span>
+                        <span>Conversation {counts.chat}</span>
+                        <span>Plan {counts.cowork}</span>
+                        <span>Build {counts.code}</span>
                       </div>
                     </button>
                     <div

@@ -1,27 +1,5 @@
-/* eslint-disable max-lines -- W4.4 (ship punchlist): cohesive state hooks now live in use-gateway-access, use-event-stream, use-shell-status, use-shell-notifications, and use-shell-inspector. Remaining length is shell JSX (topbar, rail, stage, status strip) plus the co-located route-dispatch + UI helpers consumed by helpers tests; further reduction would mean moving helpers across files at the cost of those test imports. */
-import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  Activity,
-  Bell,
-  Bot,
-  BookOpenText,
-  FolderKanban,
-  LibraryBig,
-  Menu,
-  MoonStar,
-  PanelRightClose,
-  PanelRightOpen,
-  Rocket,
-  Search,
-  ShieldCheck,
-  SlidersHorizontal,
-  SunMedium,
-  Volume2,
-  VolumeX,
-  Workflow,
-  Wrench,
-  X,
-} from "lucide-react";
+import { startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ShieldCheck } from "lucide-react";
 import {
   fetchWorkspaces,
   getGatewayApiBaseUrl,
@@ -35,9 +13,7 @@ import {
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NotificationStack } from "@goatcitadel/mission-control-shared/components/NotificationStack";
-import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
 import { CommandPalette, type CommandPaletteItem } from "@goatcitadel/mission-control-shared/components/CommandPalette";
-import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
 import {
   ShellDetailPanelProvider,
   type ShellDetailPanelEntry,
@@ -55,7 +31,15 @@ import {
   preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
-import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
+import {
+  PRIMARY_NAV,
+  ShellInspectorLayer,
+  ShellRail,
+  ShellRouteStage,
+  ShellStatusStrip,
+  ShellTopbar,
+  type RailSection,
+} from "./MissionControlShellChrome";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -67,14 +51,11 @@ import {
   RAIL_ITEMS,
   buildAppHref,
   buildModeRail,
-  buildNavigationTarget,
-  describeReleaseScopeForOperator,
   describeReleaseSurfaceStatus,
   getRouteDescription,
   getRouteLabel,
   getRouteReleaseScope,
   isExperimentalRoute,
-  isRailItemActive,
   normalizeAppRoute,
   type AppRoute,
   RAIL_GROUPS,
@@ -90,20 +71,6 @@ import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
 import { NativeButton } from "@next/features/native-routes/primitives";
-
-type RailSection = {
-  id: string;
-  label?: string;
-  items: RailItem[];
-};
-
-const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
-  { area: "chat", icon: Bot },
-  { area: "projects", icon: FolderKanban },
-  { area: "library", icon: LibraryBig },
-  { area: "ops", icon: Activity },
-  { area: "settings", icon: SlidersHorizontal },
-];
 
 /**
  * F-M11: experimental library/ops surfaces that are filtered out of the rails
@@ -341,11 +308,7 @@ export function MissionControlNextApp() {
   const copyTrustReportForRoute = useCallback(
     async (targetRoute: AppRoute) => {
       if (!targetRoute.sessionId) {
-        pushNotification(
-          "warning",
-          "Open a Chat, Cowork, or Code run before exporting a trust report.",
-          "trust-report",
-        );
+        pushNotification("warning", "Open a Work session before exporting a trust report.", "trust-report");
         return;
       }
       try {
@@ -459,6 +422,9 @@ export function MissionControlNextApp() {
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
+  const taskBacklogCount = (status.dashboard?.taskStatusCounts ?? [])
+    .filter((entry) => entry.status !== "done")
+    .reduce((sum, entry) => sum + entry.count, 0);
   const daemonStatusUnavailable = Boolean(status.healthError);
   // F-H4: the dashboard-derived footer pills (approvals/sessions/spend) must
   // read stale/unavailable on a dashboard refresh failure instead of confidently
@@ -594,37 +560,6 @@ export function MissionControlNextApp() {
   );
   const handleToggleTheme = useCallback(() => setTheme(theme === "dark" ? "light" : "dark"), [setTheme, theme]);
   const soundEnabled = notificationPreferences.soundMode !== "off";
-  // F1: lower-priority controls that fold into the overflow menu at compact
-  // widths. Approvals, notifications, and the Context toggle stay inline at every
-  // width so operator-critical actions are always one click away.
-  const topbarOverflowItems: TopbarOverflowItem[] = [
-    {
-      id: "start-here",
-      label: "Start Here",
-      ariaLabel: "Open Start Here",
-      icon: <Rocket size={15} />,
-      onSelect: handleOpenStartHere,
-    },
-    {
-      id: "mode",
-      label: mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode",
-      icon: <SlidersHorizontal size={15} />,
-      onSelect: handleToggleMode,
-    },
-    {
-      id: "notification-sound",
-      label: soundEnabled ? "Disable notification sounds" : "Enable notification sounds",
-      icon: soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />,
-      active: soundEnabled,
-      onSelect: handleToggleNotificationSound,
-    },
-    {
-      id: "theme",
-      label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
-      icon: theme === "dark" ? <SunMedium size={15} /> : <MoonStar size={15} />,
-      onSelect: handleToggleTheme,
-    },
-  ];
 
   useEffect(() => {
     const nextHref = coerceLegacyHrefToNext(window.location.href);
@@ -741,361 +676,85 @@ export function MissionControlNextApp() {
           Skip to content
         </a>
         <div className="mc-next-app-frame">
-          <header className="mc-next-topbar">
-            <div className="mc-next-topbar-left">
-              <button type="button" className="mc-next-icon-button mc-next-nav-toggle" onClick={() => setNavOpen(true)}>
-                <Menu size={16} />
-                <span>Menu</span>
-              </button>
-              <div className="mc-next-brand">
-                <p>GoatCitadel</p>
-                <h1>Mission Control</h1>
-              </div>
-              <nav className="mc-next-primary-nav" aria-label="Primary mission areas">
-                {PRIMARY_NAV.map(({ area, icon: Icon }) => {
-                  const target = buildPrimaryAreaRoute(area);
-                  return (
-                    <button
-                      key={area}
-                      type="button"
-                      className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
-                      aria-current={route.area === area ? "page" : undefined}
-                      onFocus={() => preloadRouteChunk(target)}
-                      onMouseEnter={() => preloadRouteChunk(target)}
-                      onClick={() => navigate(target)}
-                    >
-                      <Icon size={16} />
-                      <span>{AREA_META[area].label}</span>
-                    </button>
-                  );
-                })}
-              </nav>
-            </div>
-            <div className="mc-next-topbar-right">
-              {/* F10: one name for Cmd/Ctrl+K. The trigger, its accessible name,
-                  and the dialog it opens all read "Command Palette" (the canonical
-                  name in shared copy), so the visible label matches the accessible
-                  name (WCAG 2.5.3) instead of the prior "Search commands" vs
-                  "Open command palette" split. */}
-              <button
-                type="button"
-                className="mc-next-command-search"
-                onClick={() => setPaletteOpen(true)}
-                title="Command Palette"
-                aria-label="Command Palette"
-              >
-                <Search size={15} />
-                <span>Command Palette</span>
-                <kbd>Ctrl K</kbd>
-              </button>
-              {!isCompactTopbar ? (
-                <>
-                  <NativeButton
-                    variant="secondary"
-                    className="mc-next-start-button"
-                    onClick={handleOpenStartHere}
-                    title="Open Start Here"
-                  >
-                    <Rocket size={15} />
-                    Start Here
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    className="mc-next-mode-toggle"
-                    onClick={handleToggleMode}
-                    title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
-                  >
-                    <SlidersHorizontal size={15} />
-                    {mode === "simple" ? "Guided" : "Expert"}
-                  </NativeButton>
-                </>
-              ) : null}
-              <label className="mc-next-select-field">
-                <span>Citadel</span>
-                <select value={activeCitadelId} onChange={(event) => handleSelectCitadel(event.target.value)}>
-                  {[...citadelOptions, { citadelId: activeCitadelId, name: activeCitadelName }]
-                    .filter(
-                      (item, index, items) =>
-                        items.findIndex((candidate) => candidate.citadelId === item.citadelId) === index,
-                    )
-                    .map((item) => (
-                      <option key={item.citadelId} value={item.citadelId}>
-                        {item.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label className="mc-next-select-field">
-                <span>Workspace</span>
-                <select value={activeWorkspaceId} onChange={(event) => handleSelectWorkspace(event.target.value)}>
-                  {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
-                    .filter(
-                      (item, index, items) =>
-                        items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index,
-                    )
-                    .map((item) => (
-                      <option key={item.workspaceId} value={item.workspaceId}>
-                        {item.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <span className="mc-next-topbar-divider" aria-hidden="true" />
-              <div className="mc-next-topbar-status">
-                {/* F2: realtime status lives canonically in the always-visible
-                    footer strip ("Live updates"). Surface the topbar badge only
-                    as the degraded/fallback escalation, so the healthy path shows
-                    the signal once instead of duplicating it in the same viewport. */}
-                {realtimeStatusCopy.degraded ? (
-                  <span className="mc-next-badge mc-next-realtime-badge" data-realtime="degraded">
-                    {realtimeStatusCopy.badge}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  className="mc-next-badge mc-next-badge-button"
-                  onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
-                  aria-label="Open approvals"
-                  title="Open approvals"
-                >
-                  <span className="mc-next-badge-count">{pendingApprovals}</span>
-                  <span className="mc-next-badge-label">approvals</span>
-                </button>
-              </div>
-              <button
-                type="button"
-                className="mc-next-icon-button"
-                onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme })}
-                aria-label="Open notifications"
-                title="Notifications"
-              >
-                <Bell size={16} />
-                <span>{operatorNotificationCount}</span>
-              </button>
-              {!isCompactTopbar ? (
-                <button
-                  type="button"
-                  className={`mc-next-icon-button mc-next-audio-toggle${soundEnabled ? " active" : ""}`}
-                  onClick={handleToggleNotificationSound}
-                  aria-pressed={soundEnabled}
-                  aria-label={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
-                  title={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
-                >
-                  {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-                  <span>{soundEnabled ? "On" : "Off"}</span>
-                </button>
-              ) : null}
-              <NativeButton
-                variant="secondary"
-                className="mc-next-wa-button"
-                onClick={() => setInspectorOpen((current) => !current)}
-                aria-label={inspectorOpen ? "Hide Context" : "Open Context"}
-                title={inspectorOpen ? "Hide Context" : "Open Context"}
-              >
-                {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-                {inspectorOpen ? "Hide Context" : "Open Context"}
-              </NativeButton>
-              {!isCompactTopbar ? (
-                <button
-                  type="button"
-                  className="mc-next-icon-button mc-next-theme-toggle"
-                  onClick={handleToggleTheme}
-                  aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                  title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                >
-                  {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
-                </button>
-              ) : null}
-              {isCompactTopbar ? <TopbarOverflowMenu items={topbarOverflowItems} /> : null}
-            </div>
-          </header>
-
-          <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
-            <aside className={`mc-next-rail${navOpen ? " open" : ""}`}>
-              <div className="mc-next-rail-head">
-                <div>
-                  <p>{currentAreaMeta.kicker}</p>
-                  <h2>{currentAreaMeta.label}</h2>
-                </div>
-                <button type="button" className="mc-next-rail-close" onClick={() => setNavOpen(false)}>
-                  <X size={16} />
-                </button>
-              </div>
-              {isMobileNav ? (
-                <div className="mc-next-rail-areas">
-                  {PRIMARY_NAV.map(({ area, icon: Icon }) => (
-                    <button
-                      key={area}
-                      type="button"
-                      className={`mc-next-rail-area-link${route.area === area ? " active" : ""}`}
-                      aria-current={route.area === area ? "page" : undefined}
-                      onClick={() => {
-                        navigate(buildPrimaryAreaRoute(area));
-                        setNavOpen(false);
-                      }}
-                    >
-                      <Icon size={16} />
-                      <span>{AREA_META[area].label}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="mc-next-rail-menu">
-                {groupedRailItems.map((group) => {
-                  const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
-                  return (
-                    <section key={group.id} className="mc-next-rail-section" aria-labelledby={groupLabelId}>
-                      {group.label ? (
-                        <div className="mc-next-rail-separator" id={groupLabelId}>
-                          <span>{group.label}</span>
-                        </div>
-                      ) : null}
-                      <div className="mc-next-rail-group">
-                        {group.items.map((item) => {
-                          const target = buildNavigationTarget(route, item);
-                          const releaseScope = getRouteReleaseScope(target);
-                          const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
-                          const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
-                          const backlogCount =
-                            item.section === "tasks"
-                              ? (status.dashboard?.taskStatusCounts ?? [])
-                                  .filter((entry) => entry.status !== "done")
-                                  .reduce((sum, entry) => sum + entry.count, 0)
-                              : item.section === "approvals"
-                                ? pendingApprovals
-                                : undefined;
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
-                              aria-label={`${item.label}: ${item.description}`}
-                              onFocus={() => preloadRouteChunk(target)}
-                              onMouseEnter={() => preloadRouteChunk(target)}
-                              onClick={() => navigate(target)}
-                            >
-                              <div>
-                                <strong>
-                                  {item.label}
-                                  {releaseScope.status === "ship" ? null : (
-                                    <span
-                                      className="mc-next-rail-release-badge"
-                                      data-release-status={releaseScope.status}
-                                      title={releaseScopeOperatorSummary}
-                                      aria-label={releaseScopeOperatorSummary}
-                                    >
-                                      {releaseStatusLabel}
-                                    </span>
-                                  )}
-                                </strong>
-                                <span title={item.description}>{item.description}</span>
-                              </div>
-                              {typeof backlogCount === "number" ? (
-                                <span className="mc-next-rail-count">{backlogCount}</span>
-                              ) : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
-              <div className="mc-next-rail-signal-card">
-                <div className="mc-next-rail-signal-head">
-                  <FolderKanban size={18} />
-                  <span>{railSignalTitle}</span>
-                </div>
-                <ul>
-                  {railSignalLines.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              </div>
-            </aside>
-
-            <main
-              id="main-content"
-              tabIndex={-1}
-              className={`mc-next-stage${usesFullStageLayout ? " mc-next-stage-work" : ""}`}
-            >
-              <PageErrorBoundary
-                resetKey={pageErrorResetKey}
-                pageLabel={currentRouteLabel}
-                onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
-              >
-                <Suspense
-                  fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
-                >
-                  <div className="mc-next-stage-scroll">
-                    <section
-                      className={`space-page mc-next-surface-host${usesFullStageLayout ? " space-page-surface mc-next-surface-host-work" : ""}`}
-                    >
-                      {routeContent}
-                    </section>
-                  </div>
-                </Suspense>
-              </PageErrorBoundary>
-            </main>
-          </div>
-
-          <button
-            type="button"
-            className={`mc-next-inspector-scrim${hasVisibleInspector ? " open" : ""}`}
-            aria-hidden={!hasVisibleInspector}
-            onClick={() => setInspectorOpen(false)}
-            tabIndex={hasVisibleInspector ? 0 : -1}
+          <ShellTopbar
+            activeCitadelId={activeCitadelId}
+            activeCitadelName={activeCitadelName}
+            activeWorkspaceId={activeWorkspaceId}
+            activeWorkspaceName={activeWorkspaceName}
+            buildPrimaryAreaRoute={buildPrimaryAreaRoute}
+            citadelOptions={citadelOptions}
+            handleOpenStartHere={handleOpenStartHere}
+            handleSelectCitadel={handleSelectCitadel}
+            handleSelectWorkspace={handleSelectWorkspace}
+            handleToggleMode={handleToggleMode}
+            handleToggleNotificationSound={handleToggleNotificationSound}
+            handleToggleTheme={handleToggleTheme}
+            inspectorOpen={inspectorOpen}
+            isCompactTopbar={isCompactTopbar}
+            mode={mode}
+            navigate={navigate}
+            onOpenPalette={() => setPaletteOpen(true)}
+            onOpenNav={() => setNavOpen(true)}
+            onToggleInspector={() => setInspectorOpen((current) => !current)}
+            operatorNotificationCount={operatorNotificationCount}
+            pendingApprovals={pendingApprovals}
+            preloadRouteChunk={preloadRouteChunk}
+            realtimeBadge={realtimeStatusCopy.badge}
+            realtimeDegraded={realtimeStatusCopy.degraded}
+            route={route}
+            soundEnabled={soundEnabled}
+            theme={theme}
+            workspaceOptions={workspaceOptions}
           />
 
-          {hasVisibleInspector && inspectorEntry ? (
-            <SideInspectorDrawer
-              kicker={inspectorEntry.kicker}
-              title={inspectorEntry.title}
-              subtitle={inspectorEntry.subtitle}
-              open={hasVisibleInspector}
-              pinned={detailPanelPinned}
-              draggable
-              onClose={() => setInspectorOpen(false)}
-              onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
-              actions={inspectorEntry.actions}
-              className="mc-next-shell-inspector"
-            >
-              {inspectorEntry.body}
-            </SideInspectorDrawer>
-          ) : null}
+          <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
+            <ShellRail
+              buildPrimaryAreaRoute={buildPrimaryAreaRoute}
+              currentAreaMeta={currentAreaMeta}
+              groupedRailItems={groupedRailItems}
+              isMobileNav={isMobileNav}
+              navOpen={navOpen}
+              navigate={navigate}
+              onClose={() => setNavOpen(false)}
+              pendingApprovals={pendingApprovals}
+              preloadRouteChunk={preloadRouteChunk}
+              railSignalLines={railSignalLines}
+              railSignalTitle={railSignalTitle}
+              route={route}
+              taskBacklogCount={taskBacklogCount}
+            />
 
-          <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
-            {currentReleaseScope.status === "ship" ? null : (
-              <StatusPill
-                icon={<ShieldCheck size={15} />}
-                label="Release scope"
-                value={currentReleaseStatusLabel}
-                releaseStatus={currentReleaseScope.status}
-              />
-            )}
-            <StatusPill icon={<ShieldCheck size={15} />} label={gatewayAccess.message} value="Gateway ready" />
-            <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeStatusCopy.strip} />
-            <StatusPill
-              icon={<Workflow size={15} />}
-              label="Approvals"
-              value={approvalsPill.value}
-              degraded={approvalsPill.degraded}
-              onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
-            />
-            <StatusPill
-              icon={<BookOpenText size={15} />}
-              label="Sessions"
-              value={sessionsPill.value}
-              degraded={sessionsPill.degraded}
-            />
-            <StatusPill
-              icon={<Wrench size={15} />}
-              label="Spend"
-              value={spendPill.value}
-              degraded={spendPill.degraded}
-            />
-            <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} />
-          </footer>
+            <ShellRouteStage
+              currentRouteDescription={currentRouteDescription}
+              currentRouteLabel={currentRouteLabel}
+              fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
+              onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
+              pageErrorResetKey={pageErrorResetKey}
+              usesFullStageLayout={usesFullStageLayout}
+            >
+              {routeContent}
+            </ShellRouteStage>
+          </div>
+
+          <ShellInspectorLayer
+            detailPanelPinned={detailPanelPinned}
+            hasVisibleInspector={hasVisibleInspector}
+            inspectorEntry={inspectorEntry}
+            onClose={() => setInspectorOpen(false)}
+            onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
+          />
+
+          <ShellStatusStrip
+            approvalsPill={approvalsPill}
+            currentReleaseScope={currentReleaseScope}
+            currentReleaseStatusLabel={currentReleaseStatusLabel}
+            daemonStatusValue={daemonStatusValue}
+            gatewayMessage={gatewayAccess.message}
+            navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+            realtimeValue={realtimeStatusCopy.strip}
+            sessionsPill={sessionsPill}
+            spendPill={spendPill}
+          />
         </div>
 
         <NotificationStack items={notifications} onDismiss={dismissNotification} />
@@ -1139,6 +798,10 @@ export function renderRouteContent(input: {
   setActiveWorkspaceId: (workspaceId: string) => void;
 }): ReactNode {
   const route = normalizeAppRoute(input.route);
+  const openPersonalitiesSettings = () =>
+    input.navigate({ area: "settings", section: "personalities", theme: route.theme });
+  const openLibraryArtifacts = () => input.navigate({ area: "library", section: "artifacts", theme: route.theme });
+  const openOpsRuntime = () => input.navigate({ area: "ops", section: "runtime", theme: route.theme });
   if (route.area === "chat") {
     if (route.mode === "cowork") {
       return (
@@ -1155,6 +818,9 @@ export function renderRouteContent(input: {
             input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
           }
           onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
+          onOpenPersonalitiesSettings={openPersonalitiesSettings}
+          onOpenLibraryArtifacts={openLibraryArtifacts}
+          onOpenOpsRuntime={openOpsRuntime}
           onOpenUniversalRunDetail={(runId) =>
             input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
           }
@@ -1186,6 +852,9 @@ export function renderRouteContent(input: {
             input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
           }
           onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
+          onOpenPersonalitiesSettings={openPersonalitiesSettings}
+          onOpenLibraryArtifacts={openLibraryArtifacts}
+          onOpenOpsRuntime={openOpsRuntime}
           onOpenUniversalRunDetail={(runId) =>
             input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
           }
@@ -1219,6 +888,9 @@ export function renderRouteContent(input: {
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
         onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
+        onOpenPersonalitiesSettings={openPersonalitiesSettings}
+        onOpenLibraryArtifacts={openLibraryArtifacts}
+        onOpenOpsRuntime={openOpsRuntime}
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }
@@ -1318,57 +990,6 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
       items: items.filter((item) => item.section != null && group.sections.includes(item.section)),
     }))
     .filter((group) => group.items.length > 0);
-}
-
-function StatusPill({
-  icon,
-  label,
-  value,
-  onClick,
-  releaseStatus,
-  degraded = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  onClick?: () => void;
-  releaseStatus?: string;
-  /** F-H4: marks dashboard-derived pills as stale/unavailable on refresh failure. */
-  degraded?: boolean;
-}) {
-  const content = (
-    <>
-      <span className="mc-next-status-icon">{icon}</span>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-    </>
-  );
-  const markerProps = {
-    ...(releaseStatus ? { "data-release-status": releaseStatus } : {}),
-    ...(degraded ? { "data-status": "degraded" } : {}),
-  };
-  const accessibleLabel = `${label}: ${value}${degraded ? " (unavailable)" : ""}`;
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className="mc-next-status-pill mc-next-status-pill-action"
-        onClick={onClick}
-        title={degraded ? `${label} (unavailable)` : label}
-        aria-label={accessibleLabel}
-        {...markerProps}
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <div className="mc-next-status-pill" aria-label={accessibleLabel} {...markerProps}>
-      {content}
-    </div>
-  );
 }
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {

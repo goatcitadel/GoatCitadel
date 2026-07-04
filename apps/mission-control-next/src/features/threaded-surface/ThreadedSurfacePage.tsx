@@ -55,6 +55,7 @@ import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { ThreadedTimeline } from "./ThreadedTimeline";
+import { shortId } from "./workflow/format";
 import "./styles/rail.css";
 import "./styles/header.css";
 import "./styles/timeline-frame.css";
@@ -66,6 +67,7 @@ import "./styles/composer.css";
 import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";
 import "./styles/generated-artifact.css";
+import "./styles/conversation-workspace.css";
 
 const LazyThreadedWorkflowPanel = lazy(async () => {
   const module = await import("./ThreadedWorkflowPanel");
@@ -77,25 +79,25 @@ const MODE_META: Record<
   { label: string; icon: typeof MessageSquareText; helper: string; posture: string; stageLabel: string }
 > = {
   chat: {
-    label: "Chat",
+    label: "Conversation",
     icon: MessageSquareText,
     helper: "Fast conversation, attachments, and lightweight help.",
     posture: "fast-conversation",
-    stageLabel: "Chat conversation stage",
+    stageLabel: "Conversation workspace stage",
   },
   cowork: {
-    label: "Cowork",
+    label: "Plan",
     icon: Workflow,
     helper: "Delegation-first work with visible orchestration and checkpoints.",
     posture: "orchestration-checkpoints",
-    stageLabel: "Cowork orchestration stage",
+    stageLabel: "Planning workspace stage",
   },
   code: {
-    label: "Code",
+    label: "Build",
     icon: Code2,
     helper: "Implementation-focused thread with workbench and code-mode tools.",
     posture: "workbench-proof",
-    stageLabel: "Code workbench stage",
+    stageLabel: "Build workspace stage",
   },
 };
 
@@ -111,18 +113,18 @@ const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
   chat: {
     title: "Start with the first useful move",
     body: "Ask directly, attach context, or open Start Here when this workspace still needs its first mission.",
-    startLabel: "Start chat",
+    startLabel: "Start conversation",
     startHereLabel: "Open Start Here",
     cards: [
       { title: "Fast answer", body: "Draft, compare, summarize, or ask a short question." },
       { title: "Guided setup", body: "Use the sample mission when provider, workspace, or memory context is unclear." },
-      { title: "Escalate", body: "Move multi-step work to Cowork or source-bound implementation to Code." },
+      { title: "Escalate", body: "Add planning or source-bound build context when the work needs more structure." },
     ],
   },
   cowork: {
     title: "Set up supervised work",
     body: "Turn a goal into a visible plan with task lanes, approvals, checkpoints, and delegated follow-through.",
-    startLabel: "Start cowork",
+    startLabel: "Start plan",
     startHereLabel: "Use Start Here mission",
     cards: [
       { title: "Plan", body: "Frame the work before durable steps begin." },
@@ -133,7 +135,7 @@ const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
   code: {
     title: "Prepare a governed code pass",
     body: "Bind source context, review diffs, run validation, and keep Code Mode proof visible before handoff.",
-    startLabel: "Start code",
+    startLabel: "Start build",
     startHereLabel: "Use Start Here mission",
     cards: [
       { title: "Source", body: "Attach files or start from a project-bound thread." },
@@ -147,7 +149,7 @@ type ThreadedUtilityPanelId = "preview" | "diff" | "terminal" | "files" | "backg
 type ThreadedUtilityPanelMeta = { id: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
 
 const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
-  { id: "preview", label: "Preview", icon: Play },
+  { id: "preview", label: "Work Record", icon: Play },
   { id: "diff", label: "Diff", icon: FileDiff },
   { id: "terminal", label: "Run log", icon: Terminal },
   { id: "files", label: "Files", icon: Folder },
@@ -156,9 +158,9 @@ const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
 ];
 
 const PANE_WIDTHS = {
-  rail: { initial: 204, min: 164, max: 360 },
+  rail: { initial: 216, min: 184, max: 360 },
   workbench: { initial: 560, min: 320, max: 840 },
-  context: { initial: 320, min: 224, max: 520 },
+  context: { initial: 268, min: 244, max: 420 },
 };
 
 export interface ThreadedPermissionState {
@@ -462,7 +464,7 @@ export function ThreadedSurfacePage({
           <div>
             <p>Sessions</p>
             <h2>{input.sessionRail.summaryTitle}</h2>
-            <span>Chat, Cowork, and Code threads stay connected by project.</span>
+            <span>Conversation, planning, and build threads stay connected by project.</span>
           </div>
           <button
             ref={railCloseButtonRef}
@@ -478,7 +480,7 @@ export function ThreadedSurfacePage({
         <div className="mc-next-threaded-rail-actions">
           <button type="button" className="mc-next-threaded-primary" onClick={input.sessionRail.onCreateSession}>
             <MessageSquareText size={16} />
-            <span>New session</span>
+            <span>New thread</span>
           </button>
           <button
             type="button"
@@ -495,7 +497,7 @@ export function ThreadedSurfacePage({
           <input
             value={input.sessionRail.search}
             onChange={(event) => input.sessionRail.onSearchChange(event.target.value)}
-            placeholder="Search sessions"
+            placeholder="Search threads"
           />
         </label>
 
@@ -583,12 +585,12 @@ export function ThreadedSurfacePage({
             disabled={input.sessionRail.archiveWorkspacePending}
             onClick={handleArchiveWorkspace}
           >
-            {input.sessionRail.archiveWorkspacePending ? "Archiving..." : "Archive workspace chats"}
+            {input.sessionRail.archiveWorkspacePending ? "Archiving..." : "Archive workspace threads"}
           </button>
         ) : null}
 
         <SessionGroup
-          title="Mission"
+          title="Recent threads"
           items={missionSessionGroups.topLevelSessions}
           count={missionSessionGroups.topLevelSessions.length}
           selectedSessionId={input.sessionRail.selectedSessionId}
@@ -598,7 +600,7 @@ export function ThreadedSurfacePage({
           orphanDelegatedItems={missionSessionGroups.orphanDelegatedSessions}
         />
         <SessionGroup
-          title="External"
+          title="External bindings"
           items={externalSessionGroups.topLevelSessions}
           count={externalSessionGroups.topLevelSessions.length}
           selectedSessionId={input.sessionRail.selectedSessionId}
@@ -657,7 +659,7 @@ export function ThreadedSurfacePage({
                 onClick={() => setCodeWorkbenchOpen((current) => !current)}
               >
                 <Code2 size={16} />
-                <span>{codeWorkbenchOpen ? "Hide editor" : "Code editor"}</span>
+                <span>{codeWorkbenchOpen ? "Hide build editor" : "Build editor"}</span>
               </button>
             ) : null}
             {activeProps ? (
@@ -701,7 +703,7 @@ export function ThreadedSurfacePage({
         {workflowPanelOpen && workflowPanel ? (
           <aside className={`mc-next-threaded-side-panel ${workflowPanel.kind}`}>
             <PaneResizeHandle
-              ariaLabel={`Resize ${workflowPanel.kind === "code" ? "code workbench" : "cowork panel"}`}
+              ariaLabel={`Resize ${workflowPanel.kind === "code" ? "build workbench" : "planning panel"}`}
               className="panel"
               dragging={workbenchPane.dragging}
               maxWidth={PANE_WIDTHS.workbench.max}
@@ -719,6 +721,7 @@ export function ThreadedSurfacePage({
 
         {dockOpen && input.contextDockProps ? (
           <aside
+            id="mc-next-threaded-context-panel"
             ref={contextPanelRef}
             className={`mc-next-threaded-context-panel${activeUtilityPanel ? " utility" : ""}`}
             role="complementary"
@@ -906,9 +909,18 @@ function ThreadConversationSurface({
             <ThreadedPanelSwitcher activePanel={activeUtilityPanel} onSelectPanel={onSelectUtilityPanel} />
           </div>
           <div className={`mc-next-threaded-action-row${approvalsAreBlocking ? " has-priority-approval" : ""}`}>
+            <button
+              type="button"
+              className="mc-next-threaded-secondary mc-next-threaded-work-record"
+              aria-controls="mc-next-threaded-context-panel"
+              aria-expanded={Boolean(dockOpen && activeUtilityPanel === "preview")}
+              onClick={() => onSelectUtilityPanel("preview")}
+            >
+              Work Record
+            </button>
             {onToggleCodeWorkbench ? (
               <button type="button" className="mc-next-threaded-secondary" onClick={onToggleCodeWorkbench}>
-                {codeWorkbenchOpen ? "Hide editor" : "Code editor"}
+                {codeWorkbenchOpen ? "Hide build editor" : "Build editor"}
               </button>
             ) : null}
             {props.onExportRunBundle ? (
@@ -1237,7 +1249,7 @@ function ThreadedUtilityPanel({
     <div className="mc-next-utility-panel" data-mode={surface} data-panel={activePanel}>
       <div className="mc-next-utility-panel-head">
         <div>
-          <p className="mc-next-panel-kicker">Right drawer</p>
+          <p className="mc-next-panel-kicker">Work Record</p>
           <h3>{meta.label}</h3>
         </div>
         <button type="button" className="mc-next-panel-button" onClick={onClose}>
@@ -1286,31 +1298,172 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
   const selectedTurn = activeProps.selectedTurn;
   const assistantPreview = formatUtilitySnippet(selectedTurn?.assistantMessage?.content);
   const userPreview = formatUtilitySnippet(selectedTurn?.userMessage?.content);
+  const toolRuns = selectedTurn?.toolRuns ?? [];
+  const citations = selectedTurn?.citations ?? [];
+  const generatedArtifacts = selectedTurn?.generatedArtifacts ?? [];
+  const threadTurnCount = activeProps.thread?.turns.length ?? 0;
+  const sessionLabel = activeProps.selectedSessionId ? shortId(activeProps.selectedSessionId) : "New thread";
 
   if (activeProps.activeGeneratedArtifact) {
     return (
-      <section className="mc-next-utility-card">
+      <section className="mc-next-utility-card mc-next-work-record-card">
+        <div className="mc-next-work-record-section-head">
+          <div>
+            <p className="mc-next-panel-kicker">Artifact preview</p>
+            <h4>{activeProps.activeGeneratedArtifact.title}</h4>
+          </div>
+          {activeProps.onCloseGeneratedArtifact ? (
+            <button type="button" className="mc-next-panel-button" onClick={activeProps.onCloseGeneratedArtifact}>
+              Close
+            </button>
+          ) : null}
+        </div>
         <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} compact />
       </section>
     );
   }
 
   return (
-    <section className="mc-next-utility-card">
-      <div className="mc-next-utility-empty-icon">
-        <FileText size={18} />
+    <section className="mc-next-utility-card mc-next-work-record-card">
+      <div className="mc-next-work-record-hero">
+        <div className="mc-next-utility-empty-icon">
+          <FileText size={18} />
+        </div>
+        <div>
+          <p className="mc-next-panel-kicker">Preview and launch</p>
+          <h4>Work Record</h4>
+          <p>Artifacts, citations, approvals, and recent tool events stay inspectable without crowding the chat.</p>
+        </div>
       </div>
-      <h4>{selectedTurn ? "Selected turn preview" : "No preview selected"}</h4>
+      <div className="mc-next-work-record-metrics" aria-label="Thread record summary">
+        <div>
+          <span>Session</span>
+          <strong>{sessionLabel}</strong>
+        </div>
+        <div>
+          <span>Turns</span>
+          <strong>{threadTurnCount}</strong>
+        </div>
+        <div>
+          <span>Approvals</span>
+          <strong>{activeProps.approvalsCount}</strong>
+        </div>
+      </div>
       {selectedTurn ? (
         <>
-          <p className="mc-next-panel-kicker">User</p>
-          <p>{userPreview}</p>
-          <p className="mc-next-panel-kicker">Assistant</p>
-          <p>{assistantPreview}</p>
+          <div className="mc-next-work-record-section">
+            <div className="mc-next-work-record-section-head">
+              <div>
+                <p className="mc-next-panel-kicker">Selected turn</p>
+                <h5>{shortId(selectedTurn.turnId)}</h5>
+              </div>
+              <StatusChip tone={selectedTurn.trace.status === "completed" ? "success" : "muted"}>
+                {selectedTurn.trace.status}
+              </StatusChip>
+            </div>
+            <p className="mc-next-work-record-snippet">
+              <strong>User:</strong> {userPreview}
+            </p>
+            <p className="mc-next-work-record-snippet">
+              <strong>Assistant:</strong> {assistantPreview}
+            </p>
+          </div>
+          <div className="mc-next-work-record-section">
+            <div className="mc-next-work-record-section-head">
+              <h5>Artifacts and citations</h5>
+              <div className="mc-next-utility-chip-row">
+                <StatusChip tone={generatedArtifacts.length > 0 ? "success" : "muted"}>
+                  {generatedArtifacts.length} artifact{generatedArtifacts.length === 1 ? "" : "s"}
+                </StatusChip>
+                <StatusChip tone={citations.length > 0 ? "success" : "muted"}>
+                  {citations.length} citation{citations.length === 1 ? "" : "s"}
+                </StatusChip>
+              </div>
+            </div>
+            {generatedArtifacts.length > 0 ? (
+              <ul className="mc-next-work-record-list">
+                {generatedArtifacts.slice(0, 4).map((artifact) => (
+                  <li key={artifact.artifactId}>
+                    <span>{artifact.title}</span>
+                    <strong>{artifact.kind}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No generated artifacts are attached to this turn.</p>
+            )}
+            {citations.length > 0 ? (
+              <ul className="mc-next-work-record-list">
+                {citations.slice(0, 3).map((citation) => (
+                  <li key={citation.citationId}>
+                    <span>{citation.title ?? citation.url}</span>
+                    <strong>{citation.sourceType ?? "source"}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+          <div className="mc-next-work-record-section">
+            <div className="mc-next-work-record-section-head">
+              <h5>Recent tool events</h5>
+              <StatusChip tone={toolRuns.length > 0 ? "warning" : "muted"}>
+                {toolRuns.length} event{toolRuns.length === 1 ? "" : "s"}
+              </StatusChip>
+            </div>
+            {toolRuns.length > 0 ? (
+              <ul className="mc-next-work-record-list">
+                {toolRuns.slice(0, 5).map((toolRun) => (
+                  <li key={toolRun.toolRunId}>
+                    <span>{toolRun.toolName}</span>
+                    <strong>{toolRun.status}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No tool events are recorded on the selected turn.</p>
+            )}
+          </div>
         </>
       ) : (
-        <p>Select a turn or open a generated artifact to preview it here.</p>
+        <p>Select a turn or open a generated artifact to preview the thread record here.</p>
       )}
+      <div className="mc-next-work-record-actions">
+        {selectedTurn ? (
+          <>
+            <button
+              type="button"
+              className="mc-next-panel-button"
+              disabled={generatedArtifacts.length === 0}
+              onClick={() => activeProps.onOpenGeneratedArtifact(selectedTurn.turnId)}
+            >
+              Open artifact
+            </button>
+            <button
+              type="button"
+              className="mc-next-panel-button"
+              onClick={() => activeProps.onOpenRunDetails(selectedTurn.turnId)}
+            >
+              Trace turn
+            </button>
+          </>
+        ) : null}
+        {activeProps.approvalsCount > 0 ? (
+          <button type="button" className="mc-next-panel-button" onClick={activeProps.onOpenApprovals}>
+            Review approvals
+          </button>
+        ) : null}
+        {activeProps.onExportRunBundle ? (
+          <button type="button" className="mc-next-panel-button" onClick={activeProps.onExportRunBundle}>
+            Export proof
+          </button>
+        ) : null}
+        <button type="button" className="mc-next-panel-link" onClick={activeProps.onOpenLibraryArtifacts}>
+          Library
+        </button>
+        <button type="button" className="mc-next-panel-link" onClick={activeProps.onOpenOpsRuntime}>
+          Ops
+        </button>
+      </div>
     </section>
   );
 }
@@ -1606,10 +1759,10 @@ function ThreadEmptyState({
         {surface === "chat" ? (
           <>
             <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCowork}>
-              Open Cowork
+              Plan multi-step work
             </button>
             <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCode}>
-              Open Code
+              Build with code context
             </button>
           </>
         ) : null}
@@ -1623,8 +1776,17 @@ type SessionGroupItem = {
   title?: string | null;
   updatedAt?: string;
   projectName?: string | null;
+  folderName?: string | null;
+  tags?: string[];
   channel?: string | null;
+  account?: string | null;
   mode?: ChatMode | null;
+  pinned?: boolean;
+  lifecycleStatus?: ChatSessionRecord["lifecycleStatus"];
+  tokenTotal?: number;
+  costUsdTotal?: number;
+  pinnedGoal?: string;
+  generatedArtifacts?: ChatSessionRecord["generatedArtifacts"];
   delegationParent?: ChatSessionRecord["delegationParent"];
 };
 
@@ -1779,8 +1941,13 @@ function SessionRow({
   const delegatedLabel = item.delegationParent?.label?.trim() || item.delegationParent?.role?.trim();
   const meta = delegatedLabel
     ? `Delegated task · ${delegatedLabel}`
-    : item.projectName?.trim() || item.channel?.trim() || "Workspace session";
+    : item.projectName?.trim() ||
+      item.folderName?.trim() ||
+      item.channel?.trim() ||
+      item.account?.trim() ||
+      "Workspace session";
   const updatedAtLabel = formatRelativeTime(item.updatedAt);
+  const metadataChips = getSessionMetadataChips(item);
 
   return (
     <div className={`mc-next-threaded-session-row-shell${nested ? " nested" : ""}`}>
@@ -1793,12 +1960,21 @@ function SessionRow({
         <div className="mc-next-threaded-session-row-main">
           <div className="mc-next-threaded-session-row-copy">
             <span className={`mc-next-threaded-mode-label mode-${mode}`}>{MODE_META[mode].label}</span>
-            <strong>{label}</strong>
+            <div className="mc-next-threaded-session-titleline">
+              <strong>{label}</strong>
+              <time className="mc-next-threaded-session-time" dateTime={item.updatedAt}>
+                {updatedAtLabel}
+              </time>
+            </div>
             <span title={meta}>{meta}</span>
+            {metadataChips.length > 0 ? (
+              <div className="mc-next-threaded-session-meta-chips" aria-label="Session metadata">
+                {metadataChips.map((chip) => (
+                  <span key={chip}>{chip}</span>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <time className="mc-next-threaded-session-time" dateTime={item.updatedAt}>
-            {updatedAtLabel}
-          </time>
         </div>
       </button>
       {onToggleChildren ? (
@@ -1816,6 +1992,49 @@ function SessionRow({
       ) : null}
     </div>
   );
+}
+
+function getSessionMetadataChips(item: SessionGroupItem): string[] {
+  const chips: string[] = [];
+  if (item.pinned) {
+    chips.push("Pinned");
+  }
+  if (item.lifecycleStatus === "archived") {
+    chips.push("Archived");
+  }
+  if (item.pinnedGoal?.trim()) {
+    chips.push("Goal");
+  }
+  if (item.tags?.length) {
+    chips.push(...item.tags.slice(0, 2));
+  }
+  if ((item.generatedArtifacts?.length ?? 0) > 0) {
+    chips.push(`${item.generatedArtifacts!.length} artifact${item.generatedArtifacts!.length === 1 ? "" : "s"}`);
+  }
+  if ((item.tokenTotal ?? 0) > 0) {
+    chips.push(formatCompactSessionNumber(item.tokenTotal!, "token"));
+  }
+  if ((item.costUsdTotal ?? 0) > 0) {
+    chips.push(formatCompactUsd(item.costUsdTotal!));
+  }
+  return chips.slice(0, 4);
+}
+
+function formatCompactSessionNumber(value: number, unit: string): string {
+  return `${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)} ${unit}${
+    value === 1 ? "" : "s"
+  }`;
+}
+
+function formatCompactUsd(value: number): string {
+  if (value < 0.01) {
+    return "<$0.01";
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: value < 1 ? 3 : 2,
+  }).format(value);
 }
 
 function FilterChip({ active, onClick, children }: { active?: boolean; onClick: () => void; children: ReactNode }) {

@@ -33,6 +33,14 @@ export interface ThreadedContextSelectionState {
   sourceLabel?: string;
 }
 
+export interface ThreadedPersonalityPresence {
+  name: string;
+  tone?: string;
+  scope: "citadel_default" | "thread_override";
+  avatarLabel?: string;
+  animation?: "ambient" | "still" | "none";
+}
+
 export interface MissionControlActiveSessionSurfaceProps {
   mode: ChatMode;
   sessionTitle: string;
@@ -64,6 +72,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
   visualStreamMode: ChatVisualStreamMode;
+  activePersonality?: ThreadedPersonalityPresence | null;
   /**
    * @deprecated Host passthrough only updates on stream start/stop, not per
    * flush (see useChatStreamingPreviewState.ts). Consumers that need the
@@ -95,6 +104,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
+  onOpenPersonalitiesSettings?: () => void;
+  onOpenLibraryArtifacts?: () => void;
+  onOpenOpsRuntime?: () => void;
   onAcceptDelegation: () => Promise<void>;
   onDismissDelegationSuggestion: () => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;

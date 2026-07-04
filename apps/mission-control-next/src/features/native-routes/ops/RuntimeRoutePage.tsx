@@ -1311,7 +1311,10 @@ export function RuntimeRoutePage({
                         mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
                         age={formatDateTime(item.timestamp)}
                       />
-                      {item.source ? <span className="mc-next-activity-feed-source">{item.source}</span> : null}
+                      <span className="mc-next-activity-feed-source">
+                        {item.eventType}
+                        {item.source ? ` / ${item.source}` : ""}
+                      </span>
                     </li>
                   ))}
                 </ul>

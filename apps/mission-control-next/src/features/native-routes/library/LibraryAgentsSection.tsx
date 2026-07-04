@@ -223,7 +223,7 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
             title={createMode ? "Create agent profile" : (selectedAgent?.name ?? "Agent detail")}
             subtitle={
               createMode
-                ? "Create a reusable operator profile for Chat, Cowork, or Code."
+                ? "Create a reusable operator profile for Work conversations, plans, and builds."
                 : selectedAgent
                   ? "Review the selected agent and update editable fields."
                   : "Select an agent profile to inspect or edit it."

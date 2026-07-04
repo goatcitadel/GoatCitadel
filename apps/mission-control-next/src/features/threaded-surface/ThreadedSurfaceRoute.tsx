@@ -22,6 +22,9 @@ export function ThreadedSurfaceRoute({
   onOpenTasks,
   onOpenApprovals,
   onOpenStartHere,
+  onOpenPersonalitiesSettings,
+  onOpenLibraryArtifacts,
+  onOpenOpsRuntime,
   onOpenUniversalRunDetail,
   onNavigateSurface,
   onResolvedModeChange,
@@ -39,6 +42,9 @@ export function ThreadedSurfaceRoute({
   onOpenTasks?: () => void;
   onOpenApprovals?: (approvalId?: string) => void;
   onOpenStartHere?: () => void;
+  onOpenPersonalitiesSettings?: () => void;
+  onOpenLibraryArtifacts?: () => void;
+  onOpenOpsRuntime?: () => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
   onNavigateSurface?: (
     surface: ChatMode,
@@ -61,6 +67,9 @@ export function ThreadedSurfaceRoute({
       onOpenTasks={onOpenTasks}
       onOpenApprovals={onOpenApprovals}
       onOpenStartHere={onOpenStartHere}
+      onOpenPersonalitiesSettings={onOpenPersonalitiesSettings}
+      onOpenLibraryArtifacts={onOpenLibraryArtifacts}
+      onOpenOpsRuntime={onOpenOpsRuntime}
       onNavigateSurface={onNavigateSurface}
       onResolvedModeChange={onResolvedModeChange}
       renderSurface={(input: MissionThreadedRenderSurfaceInput) => (

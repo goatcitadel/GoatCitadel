@@ -743,9 +743,9 @@ describe("NativeRoutePages library coverage", () => {
     const artifacts = await mount("library", "artifacts");
     expect(collectText(artifacts.root)).toContain("Generated artifacts");
     expect(collectText(artifacts.root)).toContain("Release notes");
-    expect(collectText(artifacts.root)).toContain("Use in Chat");
+    expect(collectText(artifacts.root)).toContain("Use in Work");
     expect(collectText(artifacts.root)).toContain("Validation");
-    await click(findButton(artifacts.root, "Cowork"));
+    await click(findButton(artifacts.root, "Plan"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     expect(collectText(artifacts.root)).toContain("# Release");
     await click(findButton(artifacts.root, "Refresh"));

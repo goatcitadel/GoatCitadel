@@ -108,6 +108,37 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("summarizes the selected session project instead of the rail filter project", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="code"
+          props={baseProps({
+            selectedProject: { projectId: "project-rail", name: "Rail Filter Project" },
+            projectOptions: [
+              { value: "project-session", label: "Session Bound Project" },
+              { value: "project-rail", label: "Rail Filter Project" },
+            ],
+            selectedSession: {
+              sessionId: "session-1",
+              title: "Session title",
+              pinned: false,
+              lifecycleStatus: "active",
+              projectId: "project-session",
+              projectName: "Stale Session Project Name",
+            },
+          })}
+        />,
+      );
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Session Bound Project");
+    expect(text).not.toContain("Rail Filter Project");
+  });
+
   it("lets users toggle planning mode from the context panel", async () => {
     const onPrefPatch = vi.fn();
     let renderer: ReactTestRenderer | null = null;

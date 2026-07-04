@@ -72,6 +72,36 @@ function formatTrustRouteSummary(props: MissionThreadedContextDockProps): string
   return `${requested}; ${effective}`;
 }
 
+function formatContextValue(value?: string | null, fallback = "Not set"): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
+
+function getContextBlockerSummary(props: MissionThreadedContextDockProps): string {
+  if (props.routePreflight?.blockedReason) {
+    return props.routePreflight.blockedReason;
+  }
+  if (props.routePreflight?.degradedReason) {
+    return props.routePreflight.degradedReason;
+  }
+  if (props.codeModeNeedsProjectBinding) {
+    return "Build posture needs a project binding.";
+  }
+  if (!props.streamEnabled) {
+    return "Streaming is off.";
+  }
+  return "None";
+}
+
+function getProjectSummary(props: MissionThreadedContextDockProps): string {
+  const projectOptions = props.projectOptions ?? [];
+  const sessionProjectId = props.selectedSession?.projectId?.trim();
+  const matchedProjectOption = sessionProjectId
+    ? projectOptions.find((project) => project.value === sessionProjectId)?.label
+    : undefined;
+  return matchedProjectOption ?? props.selectedSession?.projectName ?? sessionProjectId ?? "No project bound";
+}
+
 export function ThreadedContextDrawer({
   surface,
   props,
@@ -102,6 +132,10 @@ export function ThreadedContextDrawer({
 
   return (
     <div className="mc-next-context-drawer" data-mode={surface}>
+      <div className="mc-next-context-drawer-head">
+        <p className="mc-next-panel-kicker">Working Context</p>
+        <h3>Thread grounding</h3>
+      </div>
       <div className="mc-next-panel-tab-row">
         {(["context", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
           <button
@@ -118,8 +152,39 @@ export function ThreadedContextDrawer({
       {activeTab === "context" ? (
         <div className="mc-next-context-section-stack">
           <section className="mc-next-context-card">
-            <p className="mc-next-panel-kicker">Route</p>
+            <p className="mc-next-panel-kicker">Context</p>
             <h4>{formatRouteSummary(props)}</h4>
+            <dl className="mc-next-context-summary-grid">
+              <div>
+                <dt>Workspace scope</dt>
+                <dd>{formatContextValue(props.selectedSession?.workspaceId, "default")}</dd>
+              </div>
+              <div>
+                <dt>Project</dt>
+                <dd>{getProjectSummary(props)}</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd>
+                  {formatContextValue(
+                    props.selectedModel ?? props.trust?.effectiveProviderModelSummary,
+                    "Route pending",
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Policy</dt>
+                <dd>{permissionSummary ?? "Policy pending"}</dd>
+              </div>
+              <div>
+                <dt>Memory</dt>
+                <dd>{props.selectedTurn?.trace.memoryMode ?? props.prefs?.memoryMode ?? "Session default"}</dd>
+              </div>
+              <div>
+                <dt>Current blocker</dt>
+                <dd>{getContextBlockerSummary(props)}</dd>
+              </div>
+            </dl>
             <div className="mc-next-context-chip-row">
               <StatusChip tone={props.streamEnabled ? "success" : "muted"}>
                 {props.streamEnabled ? "Streaming on" : "Streaming off"}
@@ -186,32 +251,34 @@ export function ThreadedContextDrawer({
             <section className="mc-next-context-card">
               <p className="mc-next-panel-kicker">Policy and security</p>
               <h4>{props.trust.gatewayLabel}</h4>
-              <div className="mc-next-context-truth-copy">
-                <p>
-                  <strong>Gateway:</strong> {props.trust.gatewayDetail ?? props.trust.gatewayLabel}
-                </p>
-                <p>
-                  <strong>Policy:</strong> {permissionSummary ?? "Policy state unavailable."}
-                </p>
-                <p>
-                  <strong>Security:</strong> {formatThreadedSecuritySummary(permissionOverrideActive)}
-                </p>
+              <div className="mc-next-context-truth-compact">
+                <StatusChip tone="muted">{permissionSummary ?? "Policy pending"}</StatusChip>
                 {props.trust.selectionSourceSummary ? (
-                  <p>
-                    <strong>Selection:</strong> {props.trust.selectionSourceSummary}
-                  </p>
+                  <StatusChip tone="muted">{props.trust.selectionSourceSummary}</StatusChip>
                 ) : null}
                 {props.trust.fallbackSummary ? (
-                  <p>
-                    <strong>Fallback:</strong> {props.trust.fallbackSummary}
-                  </p>
-                ) : null}
-                {trustRouteSummary ? (
-                  <p>
-                    <strong>Route:</strong> {trustRouteSummary}
-                  </p>
+                  <StatusChip tone="warning">{props.trust.fallbackSummary}</StatusChip>
                 ) : null}
               </div>
+              <details className="mc-next-context-detail-disclosure">
+                <summary>Inspect policy detail</summary>
+                <div className="mc-next-context-truth-copy">
+                  <p>
+                    <strong>Gateway:</strong> {props.trust.gatewayDetail ?? props.trust.gatewayLabel}
+                  </p>
+                  <p>
+                    <strong>Policy:</strong> {permissionSummary ?? "Policy state unavailable."}
+                  </p>
+                  <p>
+                    <strong>Security:</strong> {formatThreadedSecuritySummary(permissionOverrideActive)}
+                  </p>
+                  {trustRouteSummary ? (
+                    <p>
+                      <strong>Route:</strong> {trustRouteSummary}
+                    </p>
+                  ) : null}
+                </div>
+              </details>
             </section>
           ) : null}
 

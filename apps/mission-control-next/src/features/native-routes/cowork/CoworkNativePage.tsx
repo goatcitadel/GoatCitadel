@@ -928,7 +928,7 @@ export function CoworkNativePage({
         ) : (
           <NativeButton variant="default" onClick={() => navigate({ area: "cowork", theme: route.theme })}>
             <Workflow className="h-4 w-4" />
-            Continue Cowork
+            Continue Plan
           </NativeButton>
         )}
       </article>

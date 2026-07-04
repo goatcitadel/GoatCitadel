@@ -114,9 +114,9 @@ export function LibraryArtifactsSection({
           <LibraryFilterBar
             options={[
               { id: "all", label: "All" },
-              { id: "chat", label: "Chat" },
-              { id: "cowork", label: "Cowork" },
-              { id: "code", label: "Code" },
+              { id: "chat", label: "Conversation" },
+              { id: "cowork", label: "Plan" },
+              { id: "code", label: "Build" },
             ]}
             value={surfaceFilter}
             onChange={(value) => setSurfaceFilter(value as typeof surfaceFilter)}
@@ -221,10 +221,10 @@ export function LibraryArtifactsSection({
                     },
                     {
                       id: "use-chat",
-                      label: "Use in Chat",
+                      label: "Use in Work",
                       value: "Discuss",
-                      description: "Open Chat with the artifact id carried in the route for follow-up context.",
-                      actionLabel: "Chat",
+                      description: "Open Work with the artifact id carried in the route for follow-up context.",
+                      actionLabel: "Work",
                       onClick: () =>
                         navigate({
                           area: "chat",
@@ -236,10 +236,10 @@ export function LibraryArtifactsSection({
                     },
                     {
                       id: "use-code",
-                      label: "Use in Code",
+                      label: "Use in Build",
                       value: "Review",
-                      description: "Open Code with this artifact selected as evidence for implementation or review.",
-                      actionLabel: "Code",
+                      description: "Open Work in the build posture with this artifact selected as evidence.",
+                      actionLabel: "Build",
                       onClick: () =>
                         navigate({
                           area: "code",

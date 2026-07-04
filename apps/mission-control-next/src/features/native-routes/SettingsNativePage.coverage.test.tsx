@@ -1591,7 +1591,7 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(findButton(onboarding.root, "Configure"));
     await click(findButton(onboarding.root, "Start demo/local"));
-    await click(findButton(onboarding.root, "Open Cowork"));
+    await click(findButton(onboarding.root, "Open Plan"));
     await click(findButton(onboarding.root, "Inspect proof"));
     await click(findButton(onboarding.root, "Access"));
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });

@@ -764,6 +764,9 @@ export function MissionThreadedControllerHost({
   onOpenTasks = () => undefined,
   onOpenApprovals = () => undefined,
   onOpenStartHere = () => undefined,
+  onOpenPersonalitiesSettings = () => undefined,
+  onOpenLibraryArtifacts = () => undefined,
+  onOpenOpsRuntime = () => undefined,
   onNavigateSurface,
   onResolvedModeChange,
   renderSurface,
@@ -791,6 +794,9 @@ export function MissionThreadedControllerHost({
   onOpenTasks?: () => void;
   onOpenApprovals?: (approvalId?: string) => void;
   onOpenStartHere?: () => void;
+  onOpenPersonalitiesSettings?: () => void;
+  onOpenLibraryArtifacts?: () => void;
+  onOpenOpsRuntime?: () => void;
   onNavigateSurface?: (
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
@@ -3341,6 +3347,9 @@ export function MissionThreadedControllerHost({
         onCreateGeneratedArtifact: (turnId) => void handleCreateGeneratedArtifactFromTurn(turnId),
         onCreateGeneratedArtifactVersion: (turnId) =>
           void handleCreateGeneratedArtifactFromTurn(turnId, { supersedeLatest: true }),
+        onOpenPersonalitiesSettings,
+        onOpenLibraryArtifacts,
+        onOpenOpsRuntime,
         onAcceptDelegation: handleAcceptDelegation,
         onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
         onApprovePending: (allowScope) => void handleApprovePending(allowScope),

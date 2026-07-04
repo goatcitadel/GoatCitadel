@@ -237,7 +237,7 @@ describe("SettingsNativePage helpers", () => {
       "Provider-ready path",
       "Provider missing fallback",
       "Demo/local path",
-      "First Chat/Cowork/Code task",
+      "First Work task",
       "Proof artifact or trace",
     ]);
     expect(providerItems.map((item) => item.state)).toEqual(["complete", "pending", "pending", "active", "pending"]);
@@ -273,7 +273,7 @@ describe("SettingsNativePage helpers", () => {
     expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "active", "active"]);
     expect(demoItems[3]!.meta).toBe("starter-ready");
     expect(demoItems.at(-1)!.meta).toBe("proof-needed");
-    expect(demoItems[3]!.actionLabel).toBe("Open Cowork");
+    expect(demoItems[3]!.actionLabel).toBe("Open Plan");
     expect(demoItems[3]!.route).toEqual({ area: "cowork", sessionId: "cowork-1", projectId: "project-1" });
 
     const durableTaskItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null, {
@@ -291,7 +291,7 @@ describe("SettingsNativePage helpers", () => {
       ],
       evidenceEnvelopes: [],
     });
-    expect(durableTaskItems[3]!.description).toContain("recent durable code exists");
+    expect(durableTaskItems[3]!.description).toContain("recent durable build exists");
     expect(durableTaskItems[3]!.actionLabel).toBe("Open Run Detail");
     expect(durableTaskItems[3]!.route).toEqual({
       area: "ops",
@@ -316,7 +316,7 @@ describe("SettingsNativePage helpers", () => {
       evidenceEnvelopes: [],
     });
     expect(unknownSurfaceItems[3]!.description).toContain("recent durable run exists");
-    expect(unknownSurfaceItems[3]!.description).not.toContain("Cowork run");
+    expect(unknownSurfaceItems[3]!.description).not.toContain("Plan run");
 
     expect(
       deriveFirstRunGovernedJobState(readyProviderOnboarding, null, {
@@ -680,7 +680,7 @@ describe("SettingsNativePage helpers", () => {
     expect(createPersonalityEditorDraft(null)).toEqual(expect.objectContaining({ id: "", category: "core" }));
     expect(
       formatPersonalityStatus({ id: "critic", builtin: false, modified: true, editable: false } as any, "critic"),
-    ).toBe("Custom · Modified · Chat default · Locked");
+    ).toBe("Custom · Modified · Work default · Locked");
     expect(
       formatPersonalityStatus({ id: "operator", builtin: true, modified: false, editable: true } as any, "critic"),
     ).toBe("Built-in");

@@ -586,7 +586,7 @@ export function descriptionForSettingsSection(section: string) {
     case "local-ai":
       return "Inspect local hardware readiness, model fit, downloads, serve jobs, and endpoint registration.";
     case "personalities":
-      return "Manage Chat tone presets and choose the global Chat default.";
+      return "Manage conversation tone presets and choose the global Work default.";
     case "access":
       return "Manage gateway auth posture, install tokens, and device access.";
     case "permissions":

@@ -1080,8 +1080,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         label: "Revert all",
         ...actionStatus(allRevertBlockedReason, !onRevertAll ? "backend unavailable" : undefined),
       },
-      { label: "Commit", value: "Not wired in Code workbench v1", tone: "muted" },
-      { label: "Pull request", value: "Not wired in Code workbench v1", tone: "muted" },
+      { label: "Commit", value: "Not wired in Build workbench v1", tone: "muted" },
+      { label: "Pull request", value: "Not wired in Build workbench v1", tone: "muted" },
     ];
 
     return [
@@ -1163,7 +1163,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         rows: [
           {
             label: "Preview",
-            value: generatedArtifact ? generatedArtifact.title : "No live preview URL in Code workbench v1",
+            value: generatedArtifact ? generatedArtifact.title : "No live preview URL in Build workbench v1",
           },
           {
             label: "Browser",
