@@ -106,6 +106,7 @@ describe("chat-page-pure-helpers coverage", () => {
 
   it("describes confirmable capability actions and destructive session deletion", () => {
     expect(isConfirmableCapabilityAction("enable_skill")).toBe(true);
+    expect(isConfirmableCapabilityAction("build_code_mode_skill_candidate")).toBe(true);
     expect(isConfirmableCapabilityAction("ignore" as never)).toBe(false);
     expect(
       getCapabilitySuggestionConfirmationCopy({
@@ -137,6 +138,12 @@ describe("chat-page-pure-helpers coverage", () => {
         title: "Docs MCP",
       } as never)?.message,
     ).toContain("Docs MCP");
+    expect(
+      getCapabilitySuggestionConfirmationCopy({
+        recommendedAction: "build_code_mode_skill_candidate",
+        title: "Report helper",
+      } as never),
+    ).toMatchObject({ title: "Build reusable capability", confirmLabel: "Create candidate" });
     expect(getCapabilitySuggestionConfirmationCopy({ recommendedAction: "unsupported_action" } as never)).toBeNull();
     expect(getDeleteSessionConfirmationMessage("Launch chat")).toContain('Delete "Launch chat" permanently?');
   });

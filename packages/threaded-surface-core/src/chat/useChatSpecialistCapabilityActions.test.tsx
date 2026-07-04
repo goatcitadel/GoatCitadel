@@ -15,6 +15,8 @@ import { useChatSpecialistCapabilityActions } from "./useChatSpecialistCapabilit
 
 const activateImportedAgentCatalogEntryMock = vi.fn();
 const createChatSpecialistCandidateMock = vi.fn();
+const createCapabilityProposalMock = vi.fn();
+const createCodeModeRunMock = vi.fn();
 const fetchMcpServersMock = vi.fn();
 const fetchMcpTemplatesMock = vi.fn();
 const fetchSkillsMock = vi.fn();
@@ -25,6 +27,8 @@ const updateSkillStateMock = vi.fn();
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   activateImportedAgentCatalogEntry: (...args: unknown[]) => activateImportedAgentCatalogEntryMock(...args),
   createChatSpecialistCandidate: (...args: unknown[]) => createChatSpecialistCandidateMock(...args),
+  createCapabilityProposal: (...args: unknown[]) => createCapabilityProposalMock(...args),
+  createCodeModeRun: (...args: unknown[]) => createCodeModeRunMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
   fetchMcpTemplates: (...args: unknown[]) => fetchMcpTemplatesMock(...args),
   fetchSkills: (...args: unknown[]) => fetchSkillsMock(...args),
@@ -89,6 +93,21 @@ function setupApiDefaults() {
   activateImportedAgentCatalogEntryMock.mockResolvedValue({
     catalogEntry: { definition: { frontmatter: { name: "Catalog analyst" } } },
     specialist: { candidateId: "candidate-catalog", title: "Catalog analyst" },
+  });
+  createCapabilityProposalMock.mockResolvedValue({
+    proposalId: "proposal-1",
+    proposalKind: "skill",
+    status: "proposed",
+    title: "Build report helper",
+    summary: "No current helper can build the report.",
+    payload: {},
+    candidateId: "candidate-build-1",
+    createdAt: "2026-05-01T00:00:00.000Z",
+    updatedAt: "2026-05-01T00:00:00.000Z",
+  });
+  createCodeModeRunMock.mockResolvedValue({
+    runId: "code-run-1",
+    status: "approval_pending",
   });
   updateSkillStateMock.mockResolvedValue({ skillId: "skill-planning", state: "enabled" });
   installSkillImportMock.mockResolvedValue({ installedSkillId: "skill-installed" });
@@ -373,6 +392,76 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect(latestHarness?.mcpServers[0]?.serverId).toBe("server-1");
     expect(latestHarness?.mcpTemplates[0]?.templateId).toBe("template-1");
     expect((globalThis.window as any).location.hash).toBe("mcp");
+  });
+
+  it("creates a proposal and Code Mode run for reusable capability build suggestions", async () => {
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+
+    const suggestion = makeCapabilitySuggestion({
+      kind: "code_mode_build",
+      recommendedAction: "build_code_mode_skill_candidate",
+      candidateId: "candidate-build-1",
+      title: "Build report helper",
+      summary: "No current helper can build the report.",
+      reason: "No existing capability matched.",
+      sourceProvider: "code_mode",
+      sourceSessionId: "session-1",
+      sourceTurnId: "turn-1",
+      intendedBehavior: "Turn report requests into reusable report helper skills.",
+      candidateType: "self_generated_skill",
+      requiredPermissions: [],
+      validationExpectation: "Code Mode must stage candidate proof.",
+      rollbackPosture: "Candidate remains inactive until approved.",
+    });
+
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    expect(latestHarness?.result.capabilityConfirmationCopy?.title).toBe("Build reusable capability");
+
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(createCapabilityProposalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalKind: "skill",
+        candidateId: "candidate-build-1",
+        payload: expect.objectContaining({
+          proposalSource: "chat_capability_gap",
+          codeMode: expect.objectContaining({
+            sourceSessionId: "session-1",
+            sourceTurnId: "turn-1",
+            candidateType: "self_generated_skill",
+          }),
+        }),
+      }),
+    );
+    expect(createCodeModeRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        language: "javascript",
+        originSurface: "code",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        saveCandidateOnSuccess: true,
+        requestedOutputIntent: "Turn report requests into reusable report helper skills.",
+        input: expect.objectContaining({
+          capabilityProposal: expect.objectContaining({
+            proposalId: "proposal-1",
+            candidateId: "candidate-build-1",
+          }),
+          candidateSkillMarkdown: expect.stringContaining("## When to use"),
+        }),
+      }),
+    );
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
+    expect(latestHarness?.notices.at(-1)?.content).toContain("queued Code Mode run code-run-1");
+    expect((globalThis.window as any).location.hash).toBe("skills");
   });
 
   it("surfaces unsupported and malformed capability actions", async () => {

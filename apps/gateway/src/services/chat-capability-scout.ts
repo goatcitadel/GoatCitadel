@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import type {
   ChatCapabilityUpgradeSuggestion,
@@ -107,6 +108,7 @@ export async function scoutCapabilityUpgradeSuggestions(
   }
 
   const ranked: RankedSuggestion[] = [];
+  let discoveryFailed = false;
   const skills = input.deps.listSkills();
   const suppressed = input.deps.resolveSkillActivation({ text: input.content }).suppressed;
 
@@ -220,6 +222,7 @@ export async function scoutCapabilityUpgradeSuggestions(
         });
       }
     } catch (error) {
+      discoveryFailed = true;
       logScoutFailure("skill source discovery", error);
     }
   }
@@ -257,7 +260,15 @@ export async function scoutCapabilityUpgradeSuggestions(
       });
     }
   } catch (error) {
+    discoveryFailed = true;
     logScoutFailure("mcp template discovery", error);
+  }
+
+  if (!discoveryFailed && ranked.length === 0) {
+    ranked.push({
+      score: 0.32,
+      suggestion: buildCodeModeCapabilityBuildSuggestion(input),
+    });
   }
 
   const deduped = new Map<string, RankedSuggestion>();
@@ -361,6 +372,61 @@ function buildCapabilitySearchQuery(content: string): string | undefined {
     return undefined;
   }
   return tokens.join(" ");
+}
+
+function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): ChatCapabilityUpgradeSuggestion {
+  const sourceTurnId = input.trace?.turnId;
+  const candidateId = `candidate-${sha256Text(
+    ["code-mode-gap", input.sessionId, sourceTurnId ?? "", input.content].join(":"),
+  ).slice(0, 12)}`;
+  const intendedBehavior = summarizeReusableBehavior(input.content);
+  return {
+    kind: "code_mode_build",
+    title: buildCodeModeBuildTitle(input.content),
+    summary:
+      "No callable, disabled, importable, or configurable capability matched this gap. Code Mode can draft a self-authored SKILL.md candidate for review.",
+    reason:
+      "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and tool-profile repairs did not produce a suitable match.",
+    sourceProvider: "code_mode",
+    sourceRef: `code-mode://capability-gap/${encodeURIComponent(sourceTurnId ?? input.sessionId)}`,
+    riskLevel: "medium",
+    recommendedAction: "build_code_mode_skill_candidate",
+    candidateId,
+    sourceSessionId: input.sessionId,
+    sourceTurnId,
+    intendedBehavior,
+    candidateType: "self_generated_skill",
+    requiredPermissions: [],
+    validationExpectation:
+      "Code Mode must stage a validated candidate bundle with artifact hashes before the skill can be reviewed.",
+    rollbackPosture:
+      "The candidate remains non-callable until approved, and rejection, revocation, or rollback keeps previous callable skills intact.",
+    requiresUserApproval: true,
+  };
+}
+
+function buildCodeModeBuildTitle(content: string): string {
+  const tokens = tokenize(content)
+    .filter((token) => !STOP_WORDS.has(token))
+    .slice(0, 5);
+  if (tokens.length === 0) {
+    return "Build reusable Code Mode skill";
+  }
+  const label = tokens.map((token) => token[0]!.toUpperCase() + token.slice(1)).join(" ");
+  return `Build reusable skill: ${label}`;
+}
+
+function summarizeReusableBehavior(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return "Capture the missing workflow as a reusable, reviewable GoatCitadel skill.";
+  }
+  const clipped = normalized.length > 220 ? `${normalized.slice(0, 217).trimEnd()}...` : normalized;
+  return `Capture future requests like this as a reusable, reviewable GoatCitadel skill: ${clipped}`;
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function extractDirectSourceUrl(content: string): string | undefined {

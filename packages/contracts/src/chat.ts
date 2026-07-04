@@ -1064,11 +1064,11 @@ export function isChatTurnTerminalStatus(status: ChatTurnLifecycleStatus): boole
 }
 
 export interface ChatCapabilityUpgradeSuggestion {
-  kind: "existing_but_disabled" | "skill_import" | "mcp_template";
+  kind: "existing_but_disabled" | "skill_import" | "mcp_template" | "code_mode_build";
   title: string;
   summary: string;
   reason: string;
-  sourceProvider?: SkillSourceProvider | "mcp_template";
+  sourceProvider?: SkillSourceProvider | "mcp_template" | "code_mode";
   sourceRef?: string;
   riskLevel?: "low" | "medium" | "high";
   recommendedAction:
@@ -1076,8 +1076,17 @@ export interface ChatCapabilityUpgradeSuggestion {
     | "install_skill_disabled"
     | "install_skill_enable"
     | "add_mcp_template"
-    | "switch_tool_profile";
+    | "switch_tool_profile"
+    | "connect_mcp"
+    | "build_code_mode_skill_candidate";
   candidateId?: string;
+  sourceSessionId?: string;
+  sourceTurnId?: string;
+  intendedBehavior?: string;
+  candidateType?: "self_generated_skill";
+  requiredPermissions?: string[];
+  validationExpectation?: string;
+  rollbackPosture?: string;
   requiresUserApproval: true;
 }
 

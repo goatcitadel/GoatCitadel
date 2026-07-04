@@ -64,7 +64,8 @@ export type ConfirmableCapabilityAction =
   | "enable_skill"
   | "install_skill_disabled"
   | "install_skill_enable"
-  | "add_mcp_template";
+  | "add_mcp_template"
+  | "build_code_mode_skill_candidate";
 
 export interface CapabilitySuggestionConfirmationCopy {
   title: string;
@@ -261,7 +262,8 @@ export function isConfirmableCapabilityAction(
     action === "enable_skill" ||
     action === "install_skill_disabled" ||
     action === "install_skill_enable" ||
-    action === "add_mcp_template"
+    action === "add_mcp_template" ||
+    action === "build_code_mode_skill_candidate"
   );
 }
 
@@ -299,6 +301,13 @@ export function getCapabilitySuggestionConfirmationCopy(
         title: "Add MCP template",
         message: `Add MCP template "${suggestion.title}" now? Review trust and auth details in MCP Servers before first live use.`,
         confirmLabel: "Add template",
+        danger: false,
+      };
+    case "build_code_mode_skill_candidate":
+      return {
+        title: "Build reusable capability",
+        message: `Create a non-callable Code Mode skill candidate for ${suggestion.title}? GoatCitadel will stage proof and require approval before future use.`,
+        confirmLabel: "Create candidate",
         danger: false,
       };
   }

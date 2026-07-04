@@ -241,6 +241,7 @@ export interface CapabilityGapEventRecord {
     | "retry_once"
     | "replay_failed_turn"
     | "patch_config"
+    | "create_capability_proposal"
   >;
   replayRunId?: string;
   replayStatus: "not_run" | "queued" | "running" | "completed" | "failed";

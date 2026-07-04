@@ -208,6 +208,58 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     expect(suggestions.some((item) => item.kind === "mcp_template")).toBe(true);
   });
 
+  it("suggests a Code Mode self-authored candidate only after existing capability lanes have no match", async () => {
+    const suggestions = await scoutCapabilityUpgradeSuggestions({
+      content: "Build a recurring worksheet pack from these lesson notes and save it as reusable workflow",
+      assistantText: "I don't have that capability available yet.",
+      sessionId: "session-1",
+      trace: createTrace("failed"),
+      deps: {
+        listToolCatalog: vi.fn(() => []),
+        evaluateToolAccess: vi.fn(() => ({
+          toolName: "browser.search",
+          allowed: true,
+          matchedGrantId: undefined,
+          reasonCodes: [],
+          requiresApproval: false,
+          riskLevel: "safe" as const,
+        })),
+        listSkills: vi.fn(() => []),
+        resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
+        listSkillSources: vi.fn(
+          async (): Promise<SkillSourceListResponse> => ({
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "worksheet pack lesson notes",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
+        listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
+      },
+    });
+
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({
+      kind: "code_mode_build",
+      sourceProvider: "code_mode",
+      recommendedAction: "build_code_mode_skill_candidate",
+      sourceSessionId: "session-1",
+      sourceTurnId: "turn-1",
+      candidateType: "self_generated_skill",
+      requiresUserApproval: true,
+    });
+    expect(suggestions[0]?.candidateId).toMatch(/^candidate-/);
+    expect(suggestions[0]?.reason).toContain("A new reusable capability is justified");
+  });
+
   it("treats a text-only PowerPoint response as a missing artifact capability", async () => {
     const listSkillSources = vi.fn(
       async (): Promise<SkillSourceListResponse> => ({

@@ -3743,6 +3743,125 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("links Code Mode candidate bundles to capability proposals and validates SKILL.md content", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const skillMarkdown = [
+      "---",
+      'name: "Lesson Worksheet Helper"',
+      'description: "Creates reusable worksheet workflows from lesson notes."',
+      "---",
+      "",
+      "# Lesson Worksheet Helper",
+      "",
+      "## When to use",
+      "Use after approval for worksheet pack requests based on lesson notes.",
+      "",
+      "## Workflow",
+      "- Gather the lesson notes.",
+      "- Produce a concise worksheet plan.",
+      "- Report validation and any missing inputs.",
+    ].join("\n");
+    harness.storage.chatTurnTraces.create({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      durable: { runId: "durable-1" },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { candidateSkillMarkdown: input.candidateSkillMarkdown, ok: true };",
+      requestedOutputIntent: "Turn lesson notes into worksheet pack workflows.",
+      saveCandidateOnSuccess: true,
+      sessionId: "session-1",
+      turnId: "turn-1",
+      input: {
+        capabilityProposal: {
+          proposalId: "proposal-1",
+          candidateId: "candidate-lesson-worksheet",
+          title: "Lesson Worksheet Helper",
+          summary: "Create worksheet pack workflows from lesson notes.",
+          sourceSessionId: "session-1",
+          sourceTurnId: "turn-1",
+        },
+        candidateSkillMarkdown: skillMarkdown,
+        requiredPermissions: [],
+        validationExpectation: "The candidate SKILL.md must pass content validation.",
+        rollbackPosture: "Rollback restores the previous approved skill version.",
+      },
+    });
+
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    const candidates = harness.storage.candidateSkillVersions.list(10);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      candidateId: "candidate-lesson-worksheet",
+      title: "Lesson Worksheet Helper",
+      lifecycleState: "candidate",
+      originatingRunId: run.runId,
+    });
+    const proof = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, candidates[0]!.proofArtifact.relPath), "utf8"),
+    );
+    expect(proof).toMatchObject({
+      proposalId: "proposal-1",
+      candidateId: "candidate-lesson-worksheet",
+      sourceSessionId: "session-1",
+      sourceTurnId: "turn-1",
+      skillContentValidation: {
+        valid: true,
+        inferredSkillName: "Lesson Worksheet Helper",
+      },
+    });
+  });
+
+  it("fails closed when Code Mode candidate SKILL.md validation fails", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { candidateSkillMarkdown: '# Missing frontmatter\\n\\nThis should not stage.' };",
+      requestedOutputIntent: "Generate an invalid reusable helper skill.",
+      saveCandidateOnSuccess: true,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "candidate_stage_failed",
+      }),
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      errorCode: "candidate_stage_failed",
+      error: expect.stringContaining("Generated candidate skill failed validation"),
+    });
+    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "candidate_skill_stage_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        error: expect.stringContaining("Generated candidate skill failed validation"),
+      }),
+    );
+  });
+
   it("persists truncation markers when stdout/stderr exceed the capture budget", async () => {
     const harness = await createHarness({
       sandboxConfig: {

@@ -66,6 +66,7 @@ import {
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import { validateSkillContent } from "./skill-content-validation.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -1573,10 +1574,22 @@ export class CapabilitySystemService {
         try {
           await this.stageCandidateBundle(finalRun, source, wrapperManifest, runInput);
         } catch (candidateError) {
+          const message = candidateError instanceof Error ? candidateError.message : String(candidateError);
+          finalRun = this.options.storage.codeModeRuns.upsert({
+            ...finalRun,
+            status: "failed",
+            error: message,
+            errorCode: "candidate_stage_failed",
+            errorDetails: {
+              phase: "candidate_stage",
+              approvalId,
+            },
+            finishedAt: new Date().toISOString(),
+          });
           this.options.publishRealtime("candidate_skill_stage_failed", "capabilities", {
             runId: finalRun.runId,
             approvalId,
-            error: candidateError instanceof Error ? candidateError.message : String(candidateError),
+            error: message,
           });
         }
       }
@@ -2769,42 +2782,77 @@ export class CapabilitySystemService {
     wrapperManifest: CodeModeWrapperManifest,
     sampleInput: Record<string, unknown>,
   ): Promise<void> {
-    const candidateId = `candidate-${run.codeHash.slice(0, 12)}`;
+    const proposalInput = readRecord(sampleInput.capabilityProposal);
+    const candidateId = normalizeCandidateId(readOptionalString(proposalInput, "candidateId"), run.codeHash);
     const versionId = `version-${randomUUID()}`;
     const now = new Date().toISOString();
     const bundleSegments = [candidateId, versionId];
-    const skillTitle = run.requestedOutputIntent?.trim() || `Generated Candidate ${run.runId.slice(-6)}`;
+    const skillTitle =
+      readOptionalString(proposalInput, "title") ??
+      readOptionalString(sampleInput, "skillName") ??
+      run.requestedOutputIntent?.trim() ??
+      `Generated Candidate ${run.runId.slice(-6)}`;
+    const summary =
+      run.requestedOutputIntent ??
+      readOptionalString(proposalInput, "summary") ??
+      "Generated candidate skill from Code Mode v1.";
+    const requiredPermissions = readStringArray(sampleInput.requiredPermissions);
+    const validationExpectation = readOptionalString(sampleInput, "validationExpectation");
+    const rollbackPosture = readOptionalString(sampleInput, "rollbackPosture");
+    const sourceSessionId = readOptionalString(proposalInput, "sourceSessionId") ?? run.sessionId;
+    const sourceTurnId = readOptionalString(proposalInput, "sourceTurnId") ?? run.turnId;
+    const candidateSkillMarkdown =
+      readOptionalString(run.result, "candidateSkillMarkdown") ??
+      readOptionalString(run.result, "skillMarkdown") ??
+      readOptionalString(sampleInput, "candidateSkillMarkdown") ??
+      buildGeneratedCandidateSkillMarkdown({
+        title: skillTitle,
+        summary,
+        requiredPermissions,
+        validationExpectation,
+        rollbackPosture,
+        sourceSessionId,
+        sourceTurnId,
+      });
+    const validation = validateSkillContent({ skillMarkdown: candidateSkillMarkdown });
+    if (!validation.valid) {
+      throw new ConflictError({
+        message: `Generated candidate skill failed validation: ${validation.errors.join("; ")}`,
+      });
+    }
     const skillManifest = {
       manifestVersion: 1,
       candidateId,
       versionId,
       title: skillTitle,
-      summary: run.requestedOutputIntent ?? "Generated candidate skill from Code Mode v1.",
+      summary,
       sourceKind: "code_mode_generated",
       originatingRunId: run.runId,
+      proposalId: readOptionalString(proposalInput, "proposalId"),
+      candidateType: "self_generated_skill",
+      sourceSessionId,
+      sourceTurnId,
+      requiredPermissions,
+      validationExpectation,
+      rollbackPosture,
       wrapperManifestHash: run.wrapperManifestHash,
       capabilitySnapshotId: run.capabilitySnapshotId,
       createdAt: now,
     };
-    const skillMarkdown = [
-      `# ${skillTitle}`,
-      "> Generated candidate skill from a successful Code Mode v1 run",
-      "",
-      "## Purpose",
-      run.requestedOutputIntent ?? "Review the attached generated program and decide whether to promote it.",
-      "",
-      "## Workflow",
-      "- Inspect the generated program and proof artifacts.",
-      "- Validate the wrapper allowlist and sample output.",
-      "- Promote only through governed approval.",
-      "",
-      "## Output Contract",
-      "- Candidate bundle with manifest, instructions, source program, and proof.json.",
-    ].join("\n");
     const proof = {
       originatingRunId: run.runId,
+      proposalId: readOptionalString(proposalInput, "proposalId"),
+      candidateId,
+      versionId,
+      sourceSessionId,
+      sourceTurnId,
+      candidateType: "self_generated_skill",
       wrapperManifestVersion: wrapperManifest.manifestVersion,
       wrapperManifestHash: run.wrapperManifestHash,
+      requiredPermissions,
+      validationExpectation,
+      rollbackPosture,
+      skillContentValidation: validation,
       sampleInput,
       sampleOutput: run.result ?? {},
       generatedSmokeCase: {
@@ -2828,7 +2876,7 @@ export class CapabilitySystemService {
       this.candidateRoot,
       bundleSegments,
       "SKILL.md",
-      skillMarkdown,
+      candidateSkillMarkdown,
       "text/markdown",
     );
     const proofArtifact = await this.persistManagedJsonArtifact(
@@ -2856,7 +2904,7 @@ export class CapabilitySystemService {
       versionId,
       sourceKind: "code_mode_generated",
       title: skillTitle,
-      summary: run.requestedOutputIntent ?? "Generated candidate skill from Code Mode v1.",
+      summary,
       bundleRoot: normalizeRelPath(
         path.relative(this.options.rootDir, path.join(this.candidateRoot, ...bundleSegments)),
       ),
@@ -3327,6 +3375,131 @@ function attachTrustedCodeWriteVerification(
     ...(isRecord(result) ? result : {}),
     trustedCodeWriteVerification: evidence,
   };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function readOptionalString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
+}
+
+function normalizeCandidateId(candidateId: string | undefined, fallbackHash: string): string {
+  const cleaned = candidateId?.replace(/[^a-zA-Z0-9_.:-]+/gu, "-").replace(/^-+|-+$/gu, "");
+  if (cleaned && cleaned.length <= 80) {
+    return cleaned.startsWith("candidate-") ? cleaned : `candidate-${cleaned}`;
+  }
+  return `candidate-${fallbackHash.slice(0, 12)}`;
+}
+
+function buildGeneratedCandidateSkillMarkdown(input: {
+  title: string;
+  summary: string;
+  requiredPermissions: string[];
+  validationExpectation?: string;
+  rollbackPosture?: string;
+  sourceSessionId?: string;
+  sourceTurnId?: string;
+}): string {
+  const skillName = normalizeGeneratedSkillName(input.title);
+  const description = sanitizeSkillContentText(input.summary);
+  const permissions =
+    input.requiredPermissions.length > 0
+      ? input.requiredPermissions.map((item) => `- ${sanitizeSkillContentText(item)}`).join("\n")
+      : "- No additional permissions requested by the initial candidate.";
+  return [
+    "---",
+    `name: ${quoteYamlScalar(skillName)}`,
+    `description: ${quoteYamlScalar(description)}`,
+    "---",
+    "",
+    `# ${skillName}`,
+    "",
+    "## When to use",
+    sanitizeSkillContentText(input.summary),
+    "",
+    "## When not to use",
+    "- Do not use while this candidate is proposed, validating, rejected, revoked, deprecated, or failed.",
+    "- Do not bypass GoatCitadel policy, approvals, path jails, or capability lifecycle checks.",
+    "",
+    "## Required inputs",
+    "- The user request that triggered the reusable workflow.",
+    "- Any workspace context the approved skill explicitly asks for.",
+    "",
+    "## Required permissions",
+    permissions,
+    "",
+    "## Workflow",
+    "- Confirm the request still matches this approved skill.",
+    "- Gather the minimum context needed for the workflow.",
+    "- Use only callable tools and approved runtime capabilities.",
+    "- Return concise output with evidence, uncertainty, and any required next action.",
+    "",
+    "## Output contract",
+    "- State what was done.",
+    "- Link or name any artifacts produced.",
+    "- State validation performed and anything not validated.",
+    "",
+    "## Validation notes",
+    `- ${sanitizeSkillContentText(
+      input.validationExpectation ??
+        "The Code Mode staging run must validate the skill content and record artifact hashes.",
+    )}`,
+    "",
+    "## Provenance",
+    `- Source session: ${sanitizeSkillContentText(input.sourceSessionId ?? "current session")}`,
+    `- Source turn: ${sanitizeSkillContentText(input.sourceTurnId ?? "current turn")}`,
+    "",
+    "## Rollback",
+    `- ${sanitizeSkillContentText(
+      input.rollbackPosture ??
+        "Rollback restores the previously approved version and records durable lifecycle evidence.",
+    )}`,
+  ].join("\n");
+}
+
+function normalizeGeneratedSkillName(title: string): string {
+  const cleaned = title
+    .replace(/^build reusable skill:\s*/iu, "")
+    .replace(/[^a-z0-9 ]+/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 6)
+    .join(" ");
+  if (!cleaned) {
+    return "Generated Capability Candidate";
+  }
+  return cleaned
+    .split(" ")
+    .map((part) => `${part[0]!.toUpperCase()}${part.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+function sanitizeSkillContentText(value: string): string {
+  const redacted = value
+    .replace(/https?:\/\/\S+/giu, "[external source]")
+    .replace(/\b(api[_-]?key|secret|password|token|credential)\b/giu, "sensitive value")
+    .replace(/\b(sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,})\b/giu, "[redacted]")
+    .replace(/\b(fetch\s*\(|axios\.|curl\s+)\b/giu, "[network step]")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return redacted || "No additional detail provided.";
+}
+
+function quoteYamlScalar(value: string): string {
+  return JSON.stringify(value.replace(/\r?\n/gu, " ").trim());
 }
 
 function assertJsonValueHash(value: unknown, expectedSha256: string, label: string): void {

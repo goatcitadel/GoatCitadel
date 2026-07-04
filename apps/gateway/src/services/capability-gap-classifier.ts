@@ -57,6 +57,16 @@ export function classifyCapabilityGapFromTrace(input: {
     };
   }
 
+  if (suggestions.some((item) => item.recommendedAction === "build_code_mode_skill_candidate")) {
+    return {
+      causeClass: "skill_missing",
+      recoveryOptions: ["create_capability_proposal", "replay_failed_turn"],
+      configArea: "apps/gateway/src/services/capability-system-service.ts",
+      suggestedRepairClass: "code_mode_skill_candidate",
+      confidence: 0.68,
+    };
+  }
+
   if (looksMissingRequiredToolEvidence(normalizedEvidence)) {
     return {
       causeClass: "missing_required_tool_evidence",

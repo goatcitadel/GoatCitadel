@@ -2361,6 +2361,9 @@ async function handleCapabilitySuggestions(
   if (suggestion.recommendedAction === "switch_tool_profile") {
     followUpChoices.push({ name: "Open Tool Access next", value: "tools" });
   }
+  if (suggestion.recommendedAction === "build_code_mode_skill_candidate") {
+    followUpChoices.push({ name: "Create Code Mode skill proposal next", value: "code-mode-skill" });
+  }
 
   const next = await select<string>({
     message: "Choose action",
@@ -2391,7 +2394,9 @@ async function handleCapabilitySuggestions(
     const installed = await client.installSkillImport({
       sourceRef: suggestion.sourceRef,
       sourceProvider:
-        suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
+        suggestion.sourceProvider &&
+        suggestion.sourceProvider !== "mcp_template" &&
+        suggestion.sourceProvider !== "code_mode"
           ? suggestion.sourceProvider
           : undefined,
       confirmHighRisk: suggestion.riskLevel === "high",
@@ -2467,6 +2472,19 @@ async function handleCapabilitySuggestions(
           "Open the Tool Access view next and adjust the profile or grants before retrying.",
         ],
         "warning",
+      ),
+    );
+  }
+
+  if (next === "code-mode-skill") {
+    console.log(
+      renderBox(
+        "Code Mode skill proposal",
+        [
+          "This suggestion should create a non-callable self-authored skill candidate through the Mission Control chat surface.",
+          "Approval and artifact hash checks are still required before activation.",
+        ],
+        "info",
       ),
     );
   }
