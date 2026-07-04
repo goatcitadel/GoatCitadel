@@ -741,7 +741,7 @@ function buildRuntimeCommandResult({
 
 async function issueDesktopEventStreamToken(gatewayUrl) {
   try {
-    const response = await fetch(`${gatewayUrl}/api/v1/auth/sse-token`, {
+    const response = await fetchWithTimeout(`${gatewayUrl}/api/v1/auth/sse-token`, LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1485,18 +1485,23 @@ async function waitForHttp(url, timeoutMs, attempts = 120) {
   return false;
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+async function fetchWithTimeout(url, timeoutMs, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
+// Every launcher-side gateway request must carry a deadline: launch/status run
+// under installer smokes and desktop hosts that block on our exit, and a gateway
+// that accepts the connection but never answers would otherwise hang them forever.
+const LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS = 15000;
+
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url, LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}) for ${url}`);
   }

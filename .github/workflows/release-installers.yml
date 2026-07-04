@@ -180,7 +180,7 @@ jobs:
 
       - name: Smoke install Windows installer
         shell: pwsh
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           $installer = Resolve-Path "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
           $installDir = Join-Path $env:RUNNER_TEMP "GoatCitadel-${{ matrix.target }}"
@@ -228,7 +228,7 @@ jobs:
           # touches the runner's own node/pwsh.
           Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase) } |
-            ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
+            ForEach-Object { Write-Host "Backstop kill after host smoke: PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))"; & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
           Start-Sleep -Seconds 2
           if (-not $windowTitle) {
             throw "Desktop host did not present a top-level window within 40s; it started but never reached its UI."
@@ -270,7 +270,7 @@ jobs:
           $env:GOATCITADEL_APP_DIR = $appHome
           function Show-RuntimeLogs {
             Write-Host "::group::GoatCitadel runtime logs"
-            foreach ($capture in @($launchStderr, $statusStderr)) {
+            foreach ($capture in @($launchStdout, $launchStderr, $statusStdout, $statusStderr)) {
               if (Test-Path $capture) {
                 Write-Host "----- $(Split-Path $capture -Leaf) -----"
                 Get-Content -LiteralPath $capture -ErrorAction SilentlyContinue | Write-Host
@@ -291,7 +291,22 @@ jobs:
             -WorkingDirectory $appHome `
             -RedirectStandardOutput $launchStdout `
             -RedirectStandardError $launchStderr `
-            -NoNewWindow -Wait -PassThru
+            -NoNewWindow -PassThru
+          # Bound the launch wait ourselves. If `launch` hangs, letting the step
+          # timeout kill the runner destroys all evidence (the 0.1.0-rc.1 readiness
+          # hang shipped zero logs this way). Dump launcher output, runtime logs,
+          # and listener/process state, then fail explicitly.
+          if (-not $launch.WaitForExit(600000)) {
+            Show-RuntimeLogs
+            Write-Host "::group::Readiness hang diagnostics"
+            netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+              Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase)) -or ($_.CommandLine -match "goatcitadel") } |
+              ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $($_.CommandLine)" }
+            Write-Host "::endgroup::"
+            & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
+            throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."
+          }
           if ($launch.ExitCode -ne 0) {
             Show-RuntimeLogs
             throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $($launch.ExitCode) before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (e.g. ERR_MODULE_NOT_FOUND from stranded policy-engine deps, or a missing prod dependency such as typescript) surfaces here."
