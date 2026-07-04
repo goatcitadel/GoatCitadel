@@ -20,6 +20,7 @@ All notable changes to GoatCitadel are documented in this file.
 
 ### Changed
 
+- Project version is renumbered from `1.0.0` to `0.1.0-rc.1`: the published line is now the 0.1.0 release candidate, and installer/DMG/tarball artifact names and embedded release manifests carry the RC version.
 - `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
 - Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification, plus a manual unsigned packaging-smoke path used for the `v1.0.0` convenience installers.
 - Packaging docs now explicitly label macOS/Linux release artifacts as development-only until those workflow matrices produce signed proof.

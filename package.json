@@ -1,7 +1,7 @@
 {
   "name": "goatcitadel",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.1.0-rc.1",
   "packageManager": "pnpm@10.31.0",
   "bin": {
     "goatcitadel": "./bin/goatcitadel.mjs",
