@@ -407,6 +407,105 @@ describe("MemoryContextService", () => {
     ]);
   });
 
+  it("refreshes stale cache-hit assembly from the current candidate scan", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const memoryItems: MemoryItemRecord[] = Array.from({ length: 7 }, (_, index): MemoryItemRecord => {
+      const suffix = String(index).padStart(2, "0");
+      return {
+        itemId: `mem-${suffix}`,
+        namespace: "workspace/default",
+        title: `Primary release verification ${suffix}`,
+        content: `Primary release verification ${suffix} ` + "release verification ".repeat(300),
+        metadata: { retrievalHints: ["primary release verification"] },
+        pinned: false,
+        status: "active",
+        lifecycleState: "active",
+        createdAt: "2026-05-30T18:00:00.000Z",
+        updatedAt: "2026-05-30T18:05:00.000Z",
+      };
+    });
+    const storage = createStorage({ memoryItems });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-cache-assembly",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Primary release verification is the relevant memory.",
+                  facts: [{ text: "Primary release verification is relevant.", citationIds: ["m:mem-00"] }],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-00",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-00",
+                      snippet: "Primary release verification",
+                      score: 0.9,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+    const input = {
+      scope: "chat" as const,
+      prompt: "Summarize primary release verification memory.",
+      workspace: "memory",
+      maxContextTokens: 100,
+    };
+
+    const generated = await service.compose(input);
+    const stored = storage.memoryContexts.get(generated.contextId);
+    stored.originalTokenEstimate = 1;
+    stored.quality = {
+      ...stored.quality,
+      assembly: {
+        ...(generated.quality.assembly ?? {
+          availableCandidateCount: 0,
+          selectedCandidateCount: 0,
+          droppedCandidateCount: 0,
+          availableTokenEstimate: 0,
+          selectedTokenEstimate: 0,
+          evidenceTokenBudget: 0,
+        }),
+        availableCandidateCount: 1,
+        droppedCandidateCount: 0,
+        availableTokenEstimate: 1,
+      },
+    };
+    const cached = await service.compose(input);
+
+    expect(llmService.chatCompletions).toHaveBeenCalledTimes(1);
+    expect(cached.contextId).toBe(generated.contextId);
+    expect(generated.quality.assembly?.availableCandidateCount).toBe(7);
+    expect(generated.quality.assembly?.selectedCandidateCount).toBeLessThan(7);
+    expect(generated.quality.assembly?.droppedCandidateCount).toBeGreaterThan(0);
+    expect(cached.quality.assembly?.availableCandidateCount).toBe(7);
+    expect(cached.quality.assembly?.selectedCandidateCount).toBe(generated.quality.assembly?.selectedCandidateCount);
+    expect(cached.quality.assembly?.droppedCandidateCount).toBe(generated.quality.assembly?.droppedCandidateCount);
+    expect(cached.originalTokenEstimate).toBe(cached.quality.assembly?.availableTokenEstimate);
+    expect(storage.memoryQmdRuns.records.map((record) => record.status)).toEqual(["generated", "cache_hit"]);
+  });
+
   it("falls back with ranked candidates when the distiller returns invalid citations", async () => {
     const rootDir = await createWorkspaceRoot();
     await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });

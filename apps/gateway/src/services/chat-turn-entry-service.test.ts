@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 
 const dispatchMocks = vi.hoisted(() => ({
   consumePreparedAgentChatTurn: vi.fn(async (_host, sessionId, _request, prepared, eventType) => ({
@@ -121,8 +121,10 @@ function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createFanoutEligiblePreparedTurn(overrides: { subagentPolicy?: "off" | "ask_when_useful" } = {}) {
-  const subagentPolicy = overrides.subagentPolicy ?? "ask_when_useful";
+function createFanoutEligiblePreparedTurn(
+  overrides: { subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful" } = {},
+) {
+  const subagentPolicy = overrides.subagentPolicy ?? "auto_when_useful";
   return createPreparedTurn({
     normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy },
     prefs: {
@@ -339,11 +341,51 @@ describe("agentSendChatMessage", () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  it("never registers an agent.fanout executor for ask-before-delegating turns", async () => {
+    const host = createHost({
+      assistantContent: "Ask-first answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn({ subagentPolicy: "ask_when_useful" }),
+    );
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "compare vendors",
+      mode: "cowork",
+      subagentPolicy: "ask_when_useful",
+    });
+
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("never registers an agent.fanout executor for restricted autonomous turns", async () => {
+    const host = createHost({
+      assistantContent: "Scheduled answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn(),
+    );
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "scheduled work",
+      mode: "cowork",
+      permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+    });
+
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it("rebinds the agent.fanout executor to the retry turn during a reflection retry", async () => {
     const host = createHost({});
     (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
       createPreparedTurn({
-        normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy: "ask_when_useful" },
+        normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy: "auto_when_useful" },
         prefs: {
           sessionId: "session-1",
           mode: "cowork",
@@ -353,7 +395,7 @@ describe("agentSendChatMessage", () => {
           model: "primary-model",
           planningMode: "off",
           reflectionMode: "on",
-          subagentPolicy: "ask_when_useful",
+          subagentPolicy: "auto_when_useful",
         },
         autonomy: {
           reflectionMode: "on",

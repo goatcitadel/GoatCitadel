@@ -148,8 +148,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     // R3-8 fan-out primitive, part B. Deliberately NOT readOnly: it spawns
     // delegated LLM child turns, so the parallel read-only batch pre-executor
     // must never treat it as side-effect free. Exposure is additionally gated
-    // per turn (cowork/code + subagentPolicy !== "off" + kill switch
-    // `subagentFanoutV1Disabled`) in the chat orchestrator's tool schema.
+    // per turn (cowork/code + subagentPolicy === "auto_when_useful" + kill
+    // switch `subagentFanoutV1Disabled`) in the chat orchestrator's tool schema.
     name: SUBAGENT_FANOUT_TOOL_NAME,
     category: "session",
     riskLevel: "caution",
@@ -206,7 +206,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use only for genuinely independent subtasks; sequential or interdependent work belongs in your own turn.",
       "Each subagent starts fresh: give every objective the full context it needs, then synthesize the aggregated results yourself.",
-      "Subagents cannot spawn further subagents. When the session's subagent policy is ask_when_useful, confirm with the user before fanning out unless they already asked for parallel work.",
+      "Subagents cannot spawn further subagents. The tool is only callable when the session's subagent policy is auto_when_useful; ask_when_useful remains an operator-confirmed suggestion path.",
     ],
   },
   {

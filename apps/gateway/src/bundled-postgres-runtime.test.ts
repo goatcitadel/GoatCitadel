@@ -91,4 +91,37 @@ invalid
       { startPort: 50000, endPort: 50059, administered: true },
     ]);
   });
+
+  it("accepts only loopback-published, non-trust Docker postgres containers", () => {
+    const inspect = (hostIp: string, env: string[] = []) => [
+      {
+        Config: { Env: env },
+        NetworkSettings: {
+          Ports: {
+            "5432/tcp": [{ HostIp: hostIp, HostPort: "45432" }],
+          },
+        },
+      },
+    ];
+
+    expect(__bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(inspect("127.0.0.1"))).toEqual({
+      loopbackOnly: true,
+      trustAuth: false,
+      details: [],
+    });
+    expect(__bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(inspect("0.0.0.0"))).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["non-loopback publish 0.0.0.0:45432"],
+    });
+    expect(
+      __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(
+        inspect("127.0.0.1", ["POSTGRES_HOST_AUTH_METHOD=trust"]),
+      ),
+    ).toEqual({
+      loopbackOnly: true,
+      trustAuth: true,
+      details: ["POSTGRES_HOST_AUTH_METHOD=trust"],
+    });
+  });
 });

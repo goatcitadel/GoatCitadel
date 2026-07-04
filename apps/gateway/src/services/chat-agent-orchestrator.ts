@@ -119,6 +119,7 @@ import {
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   resolveChatExecutionBudget,
   shouldUseConstrainedLocalAgentProfile,
+  toolRunBudgetCostForToolCall,
 } from "./chat-agent-budget.js";
 import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
@@ -509,10 +510,10 @@ export interface ChatAgentOrchestratorDeps {
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
    * like the gates above. Absent or returning false (default) ⇒ the spawn tool
-   * may be exposed in cowork/code when the session's subagentPolicy allows it;
-   * returning true removes it from every turn's tool schema (the policy-engine
-   * runtime hook fails closed as well, so an in-flight call cannot slip
-   * through a mid-turn flag flip).
+   * may be exposed in cowork/code only when the session's subagentPolicy is
+   * `auto_when_useful`; returning true removes it from every turn's tool schema
+   * (the policy-engine runtime hook fails closed as well, so an in-flight call
+   * cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => boolean;
 }
@@ -2788,7 +2789,8 @@ export class ChatAgentOrchestrator {
           }
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
-            if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+            const toolRunBudgetCost = toolRunBudgetCostForToolCall(toolCall.toolName, toolCall.args);
+            if (toolRunCount + toolRunBudgetCost > executionBudget.maxToolRunsPerTurn) {
               if (coworkCheckpointContinuation) {
                 coworkToolRunBudgetCheckpoint = true;
                 flushSkippedToolCallResults(
@@ -2899,7 +2901,7 @@ export class ChatAgentOrchestrator {
                 status: "waiting_for_tool",
               });
             }
-            toolRunCount += 1;
+            toolRunCount += toolRunBudgetCost;
             if (preExecuted && !preExecuted.executed) {
               // A pre-executed call that threw aborts the turn exactly where
               // the serial call would have thrown.
@@ -3770,15 +3772,16 @@ export class ChatAgentOrchestrator {
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
     // R3-8 `agent.fanout` exposure gate: only interactive cowork/code turns
-    // whose session subagentPolicy allows subagents may see the spawn tool
-    // (`ask_when_useful` is the contract default when the pref is absent).
+    // whose session subagentPolicy explicitly allows automatic subagents may
+    // see the spawn tool. `ask_when_useful` remains a suggestion/confirmation
+    // posture owned by the UI delegation path, not a model-callable auto-run.
     // Delegated children are floored to subagentPolicy "off" by
     // executeDelegatedPlanStep, so recursion is structurally impossible; the
     // restricted-profile exclusion mirrors the schedule.manage anti-recursion
     // rule for scheduled/heartbeat turns.
     const subagentFanoutEligible =
       (input.mode === "cowork" || input.mode === "code") &&
-      (input.subagentPolicy ?? "ask_when_useful") !== "off" &&
+      input.subagentPolicy === "auto_when_useful" &&
       !restrictedAutonomousProfile &&
       this.deps.subagentFanoutV1Disabled?.() !== true;
     for (const tool of catalog) {

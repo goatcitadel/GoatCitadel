@@ -7,7 +7,7 @@ import {
   type ChatTurnFailureRecord,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
-import { SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
@@ -331,6 +331,17 @@ export function minimumRemainingBudgetForToolStart(toolName: string, executionBu
     return Math.max(executionBudget.expensiveToolMinimumRemainingMs, executionBudget.minSynthesisReserveMs);
   }
   return executionBudget.minSynthesisReserveMs;
+}
+
+export function toolRunBudgetCostForToolCall(toolName: string, args: Record<string, unknown>): number {
+  if (toolName !== SUBAGENT_FANOUT_TOOL_NAME) {
+    return 1;
+  }
+  const subtasks = args.subtasks;
+  if (!Array.isArray(subtasks)) {
+    return 1;
+  }
+  return Math.max(1, Math.min(SUBAGENT_FANOUT_MAX_SUBTASKS, subtasks.length));
 }
 
 export function isExpensiveChatTool(toolName: string): boolean {

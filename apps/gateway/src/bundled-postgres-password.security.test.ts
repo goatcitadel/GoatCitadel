@@ -94,7 +94,7 @@ describe("bundled Postgres Docker spawn uses password auth (codex #2)", () => {
     expect(source).toMatch(/POSTGRES_HOST_AUTH_METHOD=scram-sha-256/);
     // Permit the comment / migration history to mention "trust", but the
     // ACTUAL `--env "POSTGRES_HOST_AUTH_METHOD=trust"` invocation must be gone.
-    expect(source).not.toMatch(/"POSTGRES_HOST_AUTH_METHOD=trust"/);
+    expect(source).not.toMatch(/"--env"[\s\S]{0,160}"POSTGRES_HOST_AUTH_METHOD=trust"/);
   });
 
   it("passes POSTGRES_PASSWORD through a temporary env file instead of docker argv", () => {

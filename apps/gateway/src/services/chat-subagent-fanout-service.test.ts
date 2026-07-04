@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { NotFoundError, type ToolInvokeRequest } from "@goatcitadel/contracts";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  NotFoundError,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ToolInvokeRequest,
+} from "@goatcitadel/contracts";
 import type { OrchestrationStepExecutionResult } from "../orchestration/types.js";
 import {
   createSubagentFanoutExecutor,
@@ -129,23 +134,38 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
     } as never;
   }
 
-  it("allows registration for cowork/code turns whose subagentPolicy permits subagents", () => {
+  it("allows registration for cowork/code turns whose subagentPolicy auto-delegates subagents", () => {
     expect(
       shouldRegisterSubagentFanoutExecutor(
-        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "ask_when_useful" }),
+        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" }),
       ),
     ).toBe(true);
     expect(
       shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "code", prefsSubagentPolicy: "auto_when_useful" })),
     ).toBe(true);
-    // Contract default when the pref is absent is ask_when_useful.
-    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork" }))).toBe(true);
+  });
+
+  it("refuses registration for ask-before-delegating or missing subagentPolicy", () => {
+    expect(
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "ask_when_useful" }),
+      ),
+    ).toBe(false);
+    // Contract default when the pref is absent is ask_when_useful, which must
+    // remain a suggestion/confirmation posture rather than model-callable.
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork" }))).toBe(false);
   });
 
   it("refuses registration outside cowork/code", () => {
     expect(
       shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "ask_when_useful" })),
     ).toBe(false);
+  });
+
+  it("refuses registration for restricted autonomous permission profiles", () => {
+    const prepared = preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" });
+    expect(shouldRegisterSubagentFanoutExecutor(prepared, SCHEDULED_TURN_PERMISSION_PROFILE_ID)).toBe(false);
+    expect(shouldRegisterSubagentFanoutExecutor(prepared, HEARTBEAT_PERMISSION_PROFILE_ID)).toBe(false);
   });
 
   it("refuses registration when the turn is floored to subagentPolicy off (the delegated-child shape)", () => {

@@ -16,6 +16,7 @@ import {
   resolveChatExecutionBudget,
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   CHAT_TURN_BUDGET_MS_BY_MODE,
+  toolRunBudgetCostForToolCall,
   type ResolveChatExecutionBudgetInput,
   shouldExtendTurnBudgetForBrowserExecution,
   shouldUseConstrainedLocalAgentProfile,
@@ -383,6 +384,22 @@ describe("chat-agent-budget", () => {
     // ...but it must NOT leak into the web-scoped browser budget-extension
     // path, which is keyed on the same expensive-tool classification.
     expect(shouldExtendTurnBudgetForBrowserExecution("agent.fanout")).toBe(false);
+  });
+
+  it("charges agent.fanout tool-run budget by requested subtask count (R3-8)", () => {
+    expect(toolRunBudgetCostForToolCall("memory.read", {})).toBe(1);
+    expect(toolRunBudgetCostForToolCall("agent.fanout", {})).toBe(1);
+    expect(toolRunBudgetCostForToolCall("agent.fanout", { subtasks: [{ objective: "A" }] })).toBe(1);
+    expect(
+      toolRunBudgetCostForToolCall("agent.fanout", {
+        subtasks: [{ objective: "A" }, { objective: "B" }, { objective: "C" }],
+      }),
+    ).toBe(3);
+    expect(
+      toolRunBudgetCostForToolCall("agent.fanout", {
+        subtasks: [{}, {}, {}, {}, {}],
+      }),
+    ).toBe(3);
   });
 
   it("enforces deadlines and produces user-safe budget/failure text", () => {

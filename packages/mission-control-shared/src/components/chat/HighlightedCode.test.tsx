@@ -2,7 +2,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resetAssistantCodeHighlighterForTests } from "./assistant-code-highlight";
+import { HIGHLIGHT_MAX_CODE_CHARS, resetAssistantCodeHighlighterForTests } from "./assistant-code-highlight";
 
 const languagesMocks = vi.hoisted(() => ({
   createAssistantHighlighter: vi.fn(),
@@ -69,6 +69,38 @@ describe("HighlightedCode", () => {
     const codeAfter = renderer.root.findByType("code");
     expect(codeAfter.props.className).toContain("hljs");
     expect(renderer.root.findAllByProps({ className: "hljs-keyword" }).length).toBeGreaterThan(0);
+  });
+
+  it("does not reuse a settled highlight when the same block falls back to plain text", async () => {
+    const { HighlightedCode } = await import("./HighlightedCode");
+    renderer = create(
+      <HighlightedCode code="const oldValue = 1;" language="typescript" codeClassName={undefined} codeProps={{}} />,
+    );
+    await flush();
+    expect(renderer.root.findAllByProps({ className: "hljs-keyword" }).length).toBeGreaterThan(0);
+
+    await act(async () => {
+      renderer?.update(
+        <HighlightedCode code="new plain text" language="unknown-language" codeClassName={undefined} codeProps={{}} />,
+      );
+    });
+
+    const unknownLanguageBlock = renderer.root.findByType("code");
+    expect(unknownLanguageBlock.props.className ?? "").not.toContain("hljs");
+    expect(unknownLanguageBlock.props.children).toBe("new plain text");
+    expect(renderer.root.findAllByProps({ className: "hljs-keyword" })).toHaveLength(0);
+
+    const oversizedCode = "x".repeat(HIGHLIGHT_MAX_CODE_CHARS + 1);
+    await act(async () => {
+      renderer?.update(
+        <HighlightedCode code={oversizedCode} language="typescript" codeClassName={undefined} codeProps={{}} />,
+      );
+    });
+
+    const oversizedBlock = renderer.root.findByType("code");
+    expect(oversizedBlock.props.className ?? "").not.toContain("hljs");
+    expect(oversizedBlock.props.children).toBe(oversizedCode);
+    expect(renderer.root.findAllByProps({ className: "hljs-keyword" })).toHaveLength(0);
   });
 
   it("calls the loader exactly once (singleton) across two settled blocks", async () => {

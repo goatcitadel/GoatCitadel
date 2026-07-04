@@ -10,6 +10,12 @@ import {
   HIGHLIGHT_MAX_CODE_CHARS,
 } from "./assistant-code-highlight";
 
+type HighlightedTreeState = {
+  code: string;
+  language: string;
+  tree: HastRoot;
+};
+
 /**
  * Set to `true` around the streaming tail block only (see StreamingMarkdown in
  * AssistantMessageRenderer.tsx). Highlighting must never run for the streaming tail —
@@ -30,17 +36,19 @@ export function HighlightedCode({
   codeProps: HTMLAttributes<HTMLElement>;
 }): JSX.Element {
   const isStreamingTail = useContext(AssistantStreamingTailContext);
-  const [tree, setTree] = useState<HastRoot | null>(null);
+  const [tree, setTree] = useState<HighlightedTreeState | null>(null);
+  const normalizedLanguage = normalizeHighlightLanguage(language);
+  const shouldAttemptHighlight =
+    !isStreamingTail &&
+    isAssistantCodeHighlightEnabled() &&
+    normalizedLanguage !== null &&
+    code.length <= HIGHLIGHT_MAX_CODE_CHARS;
+  const highlightedTree =
+    shouldAttemptHighlight && tree?.code === code && tree.language === normalizedLanguage ? tree.tree : null;
 
   useEffect(() => {
-    if (isStreamingTail || !isAssistantCodeHighlightEnabled()) {
-      return;
-    }
-    const normalizedLanguage = normalizeHighlightLanguage(language);
-    if (normalizedLanguage === null) {
-      return;
-    }
-    if (code.length > HIGHLIGHT_MAX_CODE_CHARS) {
+    if (!shouldAttemptHighlight || normalizedLanguage === null) {
+      setTree(null);
       return;
     }
     let cancelled = false;
@@ -51,7 +59,7 @@ export function HighlightedCode({
         }
         const nextTree = highlightCodeToHast(highlighter, code, normalizedLanguage);
         if (!cancelled && nextTree !== null) {
-          setTree(nextTree);
+          setTree({ code, language: normalizedLanguage, tree: nextTree });
         }
       })
       .catch(() => {
@@ -63,11 +71,11 @@ export function HighlightedCode({
     return () => {
       cancelled = true;
     };
-  }, [code, isStreamingTail, language]);
+  }, [code, normalizedLanguage, shouldAttemptHighlight]);
 
   return (
-    <code className={cn(codeClassName, tree ? "hljs" : undefined)} {...codeProps}>
-      {tree ? renderHastNodes(tree.children) : code}
+    <code className={cn(codeClassName, highlightedTree ? "hljs" : undefined)} {...codeProps}>
+      {highlightedTree ? renderHastNodes(highlightedTree.children) : code}
     </code>
   );
 }

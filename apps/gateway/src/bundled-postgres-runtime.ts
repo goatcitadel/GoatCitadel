@@ -78,6 +78,12 @@ interface WindowsTcpPortExclusion {
   administered: boolean;
 }
 
+interface DockerPostgresSecurityInspection {
+  loopbackOnly: boolean;
+  trustAuth: boolean;
+  details: string[];
+}
+
 export async function ensureBundledPostgresRuntime(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
@@ -98,6 +104,7 @@ export async function ensureBundledPostgresRuntime(
   }
   setBootCheckpoint("bundled-pg:probe-returned");
   if (probe.matchesExpectedRoot) {
+    assertReachableBundledDockerPostgresIsHardened(config, probe.dataDirectory);
     await ensureDatabaseExists(config);
     return undefined;
   }
@@ -332,6 +339,7 @@ async function tryStartDockerBundledPostgres(
 
   const state = inspectDockerContainerState(containerName);
   if (state === "running") {
+    assertDockerBundledPostgresContainerIsHardened(containerName);
     return {
       strategy: "docker",
       // The container was already running before this process arrived, so
@@ -341,6 +349,7 @@ async function tryStartDockerBundledPostgres(
   }
 
   if (state === "stopped") {
+    assertDockerBundledPostgresContainerIsHardened(containerName);
     execFileSync("docker", ["start", containerName], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -589,10 +598,7 @@ function isExpectedBundledDataDirectory(config: GatewayRuntimeConfig, actualData
   if (!isDockerPostgresDataDirectory(actualDataDirectory)) {
     return false;
   }
-  return (
-    inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) === "running" ||
-    hasRunningBundledDockerContainerForDataDir(config)
-  );
+  return hasRunningBundledDockerContainerForDataDir(config);
 }
 
 function sameFilesystemPath(left: string, right: string): boolean {
@@ -643,7 +649,142 @@ function inspectDockerContainerState(containerName: string): "missing" | "runnin
   }
 }
 
+function assertDockerBundledPostgresContainerIsHardened(containerName: string): void {
+  const inspection = inspectDockerPostgresSecurity(containerName);
+  if (inspection.loopbackOnly && !inspection.trustAuth) {
+    return;
+  }
+  const reason = inspection.details.length > 0 ? inspection.details.join("; ") : "unknown Docker inspect shape";
+  throw new Error(
+    [
+      `Refusing to reuse bundled Postgres Docker container ${containerName}: ${reason}.`,
+      "Legacy containers may expose unauthenticated Postgres beyond loopback.",
+      "Remove the old container and restart so GoatCitadel can recreate it with 127.0.0.1 publishing and password auth.",
+    ].join("\n"),
+  );
+}
+
+function assertReachableBundledDockerPostgresIsHardened(
+  config: GatewayRuntimeConfig,
+  dataDirectory: string | undefined,
+): void {
+  if (!dataDirectory || !isDockerPostgresDataDirectory(dataDirectory)) {
+    return;
+  }
+  const names = findRunningBundledDockerContainerNamesForDataDir(config);
+  if (names.length === 0) {
+    throw new Error(
+      [
+        "Bundled Postgres probe resolved to a Docker data directory, but no running GoatCitadel Docker container is mounted to this runtime data dir.",
+        "Stop the unexpected Postgres runtime or configure a different bundledPostgres.port.",
+      ].join("\n"),
+    );
+  }
+  for (const name of names) {
+    assertDockerBundledPostgresContainerIsHardened(name);
+  }
+}
+
+function inspectDockerPostgresSecurity(containerName: string): DockerPostgresSecurityInspection {
+  let parsed: unknown;
+  try {
+    const output = execFileSync("docker", ["inspect", containerName], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    parsed = JSON.parse(output);
+  } catch {
+    return {
+      loopbackOnly: false,
+      trustAuth: true,
+      details: ["could not inspect Docker container security settings"],
+    };
+  }
+  return parseDockerPostgresSecurityInspection(parsed);
+}
+
+function parseDockerPostgresSecurityInspection(value: unknown): DockerPostgresSecurityInspection {
+  const container = Array.isArray(value) ? value[0] : value;
+  const details: string[] = [];
+  const env = readDockerInspectEnv(container);
+  const trustAuth = env.some((entry) => entry.trim().toUpperCase() === "POSTGRES_HOST_AUTH_METHOD=TRUST");
+  if (trustAuth) {
+    details.push("POSTGRES_HOST_AUTH_METHOD=trust");
+  }
+  const portBindings = readDockerInspectPortBindings(container);
+  if (portBindings.length === 0) {
+    details.push("missing 5432/tcp port binding");
+  }
+  const unsafeBindings = portBindings.filter((binding) => !isLoopbackDockerHostIp(binding.hostIp));
+  if (unsafeBindings.length > 0) {
+    details.push(
+      `non-loopback publish ${unsafeBindings
+        .map((binding) => `${binding.hostIp || "0.0.0.0"}:${binding.hostPort || "*"}`)
+        .join(", ")}`,
+    );
+  }
+  return {
+    loopbackOnly: portBindings.length > 0 && unsafeBindings.length === 0,
+    trustAuth,
+    details,
+  };
+}
+
+function readDockerInspectEnv(container: unknown): string[] {
+  if (!container || typeof container !== "object") {
+    return [];
+  }
+  const config = (container as { Config?: unknown }).Config;
+  if (!config || typeof config !== "object") {
+    return [];
+  }
+  const env = (config as { Env?: unknown }).Env;
+  return Array.isArray(env) ? env.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function readDockerInspectPortBindings(container: unknown): Array<{ hostIp: string; hostPort: string }> {
+  if (!container || typeof container !== "object") {
+    return [];
+  }
+  const networkSettings = (container as { NetworkSettings?: unknown }).NetworkSettings;
+  if (!networkSettings || typeof networkSettings !== "object") {
+    return [];
+  }
+  const ports = (networkSettings as { Ports?: unknown }).Ports;
+  if (!ports || typeof ports !== "object") {
+    return [];
+  }
+  const rawBindings = (ports as Record<string, unknown>)["5432/tcp"];
+  if (!Array.isArray(rawBindings)) {
+    return [];
+  }
+  return rawBindings
+    .map((binding) => {
+      if (!binding || typeof binding !== "object") {
+        return undefined;
+      }
+      return {
+        hostIp:
+          typeof (binding as { HostIp?: unknown }).HostIp === "string" ? (binding as { HostIp: string }).HostIp : "",
+        hostPort:
+          typeof (binding as { HostPort?: unknown }).HostPort === "string"
+            ? (binding as { HostPort: string }).HostPort
+            : "",
+      };
+    })
+    .filter((binding): binding is { hostIp: string; hostPort: string } => Boolean(binding));
+}
+
+function isLoopbackDockerHostIp(hostIp: string): boolean {
+  const normalized = hostIp.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
 function hasRunningBundledDockerContainerForDataDir(config: GatewayRuntimeConfig): boolean {
+  return findRunningBundledDockerContainerNamesForDataDir(config).length > 0;
+}
+
+function findRunningBundledDockerContainerNamesForDataDir(config: GatewayRuntimeConfig): string[] {
   const expectedDataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
   const prefix = buildBundledDockerContainerNamePrefix();
   try {
@@ -654,15 +795,10 @@ function hasRunningBundledDockerContainerForDataDir(config: GatewayRuntimeConfig
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
-    for (const name of names) {
-      if (dockerContainerMountsDataDir(name, expectedDataDir)) {
-        return true;
-      }
-    }
+    return names.filter((name) => dockerContainerMountsDataDir(name, expectedDataDir));
   } catch {
-    return false;
+    return [];
   }
-  return false;
 }
 
 function dockerContainerMountsDataDir(containerName: string, expectedDataDir: string): boolean {
@@ -842,6 +978,7 @@ function wait(ms: number): Promise<void> {
 
 export const __bundledPostgresRuntimeInternals = {
   isDockerPostgresDataDirectory,
+  parseDockerPostgresSecurityInspection,
   parseWindowsTcpPortExclusions,
   quoteIdentifier,
   readLogTail,

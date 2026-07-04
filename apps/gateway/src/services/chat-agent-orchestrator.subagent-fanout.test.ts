@@ -25,6 +25,33 @@ function finalResponse(): ChatCompletionResponse {
   } as ChatCompletionResponse;
 }
 
+function multiFanoutToolCallCompletion(calls: Array<{ id: string; subtasks: Array<{ objective: string }> }>) {
+  return {
+    id: "chatcmpl-fanout-multi",
+    object: "chat.completion",
+    created: 1,
+    model: "glm-5",
+    choices: [
+      {
+        index: 0,
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: calls.map((call) => ({
+            id: call.id,
+            type: "function",
+            function: {
+              name: FANOUT_MODEL_TOOL_NAME,
+              arguments: JSON.stringify({ subtasks: call.subtasks }),
+            },
+          })),
+        },
+      },
+    ],
+  } as ChatCompletionResponse;
+}
+
 function turnInput(overrides: Partial<ChatAgentTurnInput> & { sessionSuffix: string }): ChatAgentTurnInput {
   const { sessionSuffix, ...rest } = overrides;
   return {
@@ -39,7 +66,7 @@ function turnInput(overrides: Partial<ChatAgentTurnInput> & { sessionSuffix: str
     memoryMode: "off",
     thinkingLevel: "minimal",
     speedMode: "standard",
-    subagentPolicy: "ask_when_useful",
+    subagentPolicy: "auto_when_useful",
     normalizationProfile: "live",
     toolAutonomy: "safe_auto",
     historyMessages: [{ role: "user", content: "Compare vendor A, vendor B, and vendor C." }],
@@ -83,10 +110,16 @@ function exposedToolNames(request: ChatCompletionRequest | undefined): string[] 
 }
 
 describe("ChatAgentOrchestrator agent.fanout exposure (R3-8)", () => {
-  it("exposes agent.fanout in cowork when subagentPolicy allows subagents", async () => {
+  it("exposes agent.fanout in cowork when subagentPolicy auto-delegates subagents", async () => {
     const harness = buildHarness({});
-    await harness.orchestrator.run(turnInput({ sessionSuffix: "cowork-on", subagentPolicy: "ask_when_useful" }));
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "cowork-on", subagentPolicy: "auto_when_useful" }));
     expect(exposedToolNames(harness.completionRequests[0])).toContain(FANOUT_MODEL_TOOL_NAME);
+  });
+
+  it("hides agent.fanout when subagentPolicy asks before delegating", async () => {
+    const harness = buildHarness({});
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "cowork-ask", subagentPolicy: "ask_when_useful" }));
+    expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
   });
 
   it("exposes agent.fanout in code mode under auto_when_useful", async () => {
@@ -144,7 +177,7 @@ describe("ChatAgentOrchestrator agent.fanout invocation (R3-8)", () => {
       } as ToolInvokeResult,
     });
 
-    await harness.orchestrator.run(turnInput({ sessionSuffix: "invoke" }));
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "invoke", subagentPolicy: "auto_when_useful" }));
 
     expect(harness.invokeTool).toHaveBeenCalledTimes(1);
     const request = harness.invokeTool.mock.calls[0]![0] as { toolName: string; args: Record<string, unknown> };
@@ -155,5 +188,40 @@ describe("ChatAgentOrchestrator agent.fanout invocation (R3-8)", () => {
     const toolMessages = (followUp?.messages ?? []).filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(1);
     expect(String((toolMessages[0] as { content?: unknown }).content)).toContain("A findings");
+  });
+
+  it("charges parent tool-run budget by fan-out subtask count", async () => {
+    const harness = buildHarness({
+      responses: [
+        multiFanoutToolCallCompletion([
+          {
+            id: "fanout-three",
+            subtasks: [{ objective: "Research A" }, { objective: "Research B" }, { objective: "Research C" }],
+          },
+          {
+            id: "fanout-two",
+            subtasks: [{ objective: "Research D" }, { objective: "Research E" }],
+          },
+        ]),
+        finalResponse(),
+      ],
+      invokeResult: {
+        outcome: "executed",
+        result: {
+          status: "completed",
+          subtaskCount: 3,
+          completedCount: 3,
+          failedCount: 0,
+          results: [],
+        },
+      } as ToolInvokeResult,
+    });
+
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "budget-weighted", subagentPolicy: "auto_when_useful" }));
+
+    expect(harness.invokeTool).toHaveBeenCalledTimes(1);
+    expect((harness.invokeTool.mock.calls[0]![0] as { args: Record<string, unknown> }).args).toMatchObject({
+      subtasks: [{ objective: "Research A" }, { objective: "Research B" }, { objective: "Research C" }],
+    });
   });
 });

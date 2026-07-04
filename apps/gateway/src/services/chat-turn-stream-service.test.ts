@@ -451,7 +451,7 @@ describe("streamPreparedAgentChatTurn", () => {
       dispatchHost,
       "session-1",
       { content: "hello", mode: "cowork" } as never,
-      createPreparedTurn({ mode: "cowork" }),
+      createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
       "chat_thread_turn_appended",
     );
 
@@ -502,6 +502,43 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  it("never registers an agent.fanout executor for restricted autonomous stream turns", async () => {
+    const host = createHost();
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Heartbeat answer.",
+      };
+    }) as never;
+
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk: vi.fn(),
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "heartbeat", mode: "cowork", permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID } as never,
+      createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
+      "chat_thread_turn_appended",
+    );
+
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it("disposes the agent.fanout executor even when the runtime stream throws mid-turn", async () => {
     const host = createHost();
     const dispose = vi.fn();
@@ -534,7 +571,7 @@ describe("streamPreparedAgentChatTurn", () => {
       dispatchHost,
       "session-1",
       { content: "hello", mode: "cowork" } as never,
-      createPreparedTurn({ mode: "cowork" }),
+      createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
       "chat_thread_turn_appended",
     ).catch(() => undefined);
 
@@ -1550,7 +1587,13 @@ function createHost(): ChatTurnStreamHost & {
   };
 }
 
-function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; normalizationProfile?: string } = {}) {
+function createPreparedTurn(
+  overrides: {
+    mode?: "chat" | "cowork" | "code";
+    normalizationProfile?: string;
+    subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
+  } = {},
+) {
   const mode = overrides.mode ?? "chat";
   return {
     session: {
@@ -1573,6 +1616,7 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; norm
       memoryMode: "off",
       thinkingLevel: "standard",
       normalizationProfile: overrides.normalizationProfile,
+      subagentPolicy: overrides.subagentPolicy,
     },
     prefs: {
       mode,
@@ -1581,6 +1625,7 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; norm
       webMode: "off",
       memoryMode: "off",
       thinkingLevel: "standard",
+      subagentPolicy: overrides.subagentPolicy,
     },
     history: [],
     autonomy: {

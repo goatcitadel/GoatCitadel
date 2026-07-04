@@ -268,19 +268,30 @@ jobs:
           $statusStderr = Join-Path $env:RUNNER_TEMP "goatcitadel-status-${{ matrix.target }}.err.txt"
           $env:GOATCITADEL_HOME = $runtimeBase
           $env:GOATCITADEL_APP_DIR = $appHome
+          function Redact-DiagnosticLine([string]$line) {
+            return ($line `
+              -replace '("token"\s*:\s*")[^"]+(")', '$1[REDACTED]$2' `
+              -replace '("authorization"\s*:\s*")[^"]+(")', '$1[REDACTED]$2' `
+              -replace '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}', '$1[REDACTED]')
+          }
+          function Write-RedactedContent([string]$path, [int]$tail = 0) {
+            $contentArgs = @{ LiteralPath = $path; ErrorAction = "SilentlyContinue" }
+            if ($tail -gt 0) { $contentArgs["Tail"] = $tail }
+            Get-Content @contentArgs | ForEach-Object { Write-Host (Redact-DiagnosticLine $_) }
+          }
           function Show-RuntimeLogs {
             Write-Host "::group::GoatCitadel runtime logs"
             foreach ($capture in @($launchStdout, $launchStderr, $statusStdout, $statusStderr)) {
               if (Test-Path $capture) {
                 Write-Host "----- $(Split-Path $capture -Leaf) -----"
-                Get-Content -LiteralPath $capture -ErrorAction SilentlyContinue | Write-Host
+                Write-RedactedContent $capture
               }
             }
             foreach ($name in @("gateway.stderr.log", "gateway.stdout.log", "mission-control.stderr.log", "mission-control.stdout.log")) {
               $logPath = Join-Path $runtimeLogDir $name
               if (Test-Path $logPath) {
                 Write-Host "----- $name (tail) -----"
-                Get-Content -LiteralPath $logPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
+                Write-RedactedContent $logPath 80
               }
             }
             Write-Host "::endgroup::"

@@ -1197,7 +1197,7 @@ async function* runDirectTurnStreamWithSubagentFanout(
   options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
   makeStream: () => ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]>,
 ): ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]> {
-  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared, options.permissionProfileId)
     ? host.subagentFanout?.register(
         prepared.session.sessionId,
         createTurnSubagentFanoutExecutor(host, prepared, options),

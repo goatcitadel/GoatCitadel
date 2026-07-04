@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => {
     clients: [] as FakePostgresDatabaseClient[],
     closedClients: 0,
     dbScripts: [] as Array<{ queryOne?: unknown | Error; query?: unknown | Error }>,
+    dockerRunningNames: [] as string[],
+    dockerMountSources: new Map<string, string>(),
     dockerStates: [] as string[],
     execFileSync: vi.fn(),
     isBundledPostgresMode: vi.fn(),
@@ -64,7 +66,7 @@ vi.mock("./postgres-runtime-config.js", () => ({
   resolveGatewayPostgresConnectionOptions: mocks.resolveGatewayPostgresConnectionOptions,
 }));
 
-import { ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
+import { buildBundledDockerContainerName, ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
 
 const tempDirs: string[] = [];
 
@@ -72,6 +74,8 @@ beforeEach(() => {
   mocks.clients.length = 0;
   mocks.closedClients = 0;
   mocks.dbScripts.length = 0;
+  mocks.dockerRunningNames.length = 0;
+  mocks.dockerMountSources.clear();
   mocks.dockerStates.length = 0;
   mocks.execFileSync.mockReset();
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
@@ -79,7 +83,20 @@ beforeEach(() => {
       return "";
     }
     if (command === "docker" && args[0] === "ps") {
-      return mocks.dockerStates.shift() ?? "";
+      return args.includes("--all") ? (mocks.dockerStates.shift() ?? "") : mocks.dockerRunningNames.join("\n");
+    }
+    if (command === "docker" && args[0] === "inspect" && args.includes("{{json .Mounts}}")) {
+      const containerName = args.at(-1) ?? "";
+      const source = mocks.dockerMountSources.get(containerName);
+      return JSON.stringify(source ? [{ Destination: "/var/lib/postgresql/data", Source: source }] : []);
+    }
+    if (command === "docker" && args[0] === "inspect") {
+      return JSON.stringify([
+        {
+          Config: { Env: ["POSTGRES_HOST_AUTH_METHOD=scram-sha-256"] },
+          NetworkSettings: { Ports: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] } },
+        },
+      ]);
     }
     return "";
   });
@@ -179,6 +196,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
   it("starts and stops a new Docker-backed runtime when native binaries are unavailable", async () => {
     const rootDir = await makeTempDir();
+    mockHardenedRunningDockerContainer(rootDir);
     mocks.dbScripts.push(
       { queryOne: new Error("ECONNREFUSED") },
       { queryOne: { data_directory: "/var/lib/postgresql/data" } },
@@ -201,6 +219,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
   it("starts an existing stopped Docker container and ignores shutdown failures", async () => {
     const rootDir = await makeTempDir();
+    mockHardenedRunningDockerContainer(rootDir);
     mocks.dbScripts.push(
       { queryOne: new Error("ECONNREFUSED") },
       { queryOne: { data_directory: "/var/lib/postgresql/data" } },
@@ -212,7 +231,20 @@ describe("bundled postgres runtime lifecycle", () => {
         return "";
       }
       if (command === "docker" && args[0] === "ps") {
-        return mocks.dockerStates.shift() ?? "";
+        return args.includes("--all") ? (mocks.dockerStates.shift() ?? "") : mocks.dockerRunningNames.join("\n");
+      }
+      if (command === "docker" && args[0] === "inspect" && args.includes("{{json .Mounts}}")) {
+        const containerName = args.at(-1) ?? "";
+        const source = mocks.dockerMountSources.get(containerName);
+        return JSON.stringify(source ? [{ Destination: "/var/lib/postgresql/data", Source: source }] : []);
+      }
+      if (command === "docker" && args[0] === "inspect") {
+        return JSON.stringify([
+          {
+            Config: { Env: ["POSTGRES_HOST_AUTH_METHOD=scram-sha-256"] },
+            NetworkSettings: { Ports: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] } },
+          },
+        ]);
       }
       if (command === "docker" && args[0] === "stop") {
         throw new Error("already stopped");
@@ -287,6 +319,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
   it("treats Docker inspect failures as a missing container", async () => {
     const rootDir = await makeTempDir();
+    mockHardenedRunningDockerContainer(rootDir);
     mocks.dbScripts.push(
       { queryOne: new Error("ECONNREFUSED") },
       { queryOne: { data_directory: "/var/lib/postgresql/data" } },
@@ -299,10 +332,15 @@ describe("bundled postgres runtime lifecycle", () => {
       }
       if (command === "docker" && args[0] === "ps") {
         dockerPsCalls += 1;
-        if (dockerPsCalls === 1) {
+        if (args.includes("--all") && dockerPsCalls === 1) {
           throw new Error("docker ps failed");
         }
-        return "running";
+        return args.includes("--all") ? "" : mocks.dockerRunningNames.join("\n");
+      }
+      if (command === "docker" && args[0] === "inspect" && args.includes("{{json .Mounts}}")) {
+        const containerName = args.at(-1) ?? "";
+        const source = mocks.dockerMountSources.get(containerName);
+        return JSON.stringify(source ? [{ Destination: "/var/lib/postgresql/data", Source: source }] : []);
       }
       return "";
     });
@@ -396,6 +434,12 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-bundled-pg-runtime-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function mockHardenedRunningDockerContainer(rootDir: string): void {
+  const containerName = buildBundledDockerContainerName(rootDir);
+  mocks.dockerRunningNames.push(containerName);
+  mocks.dockerMountSources.set(containerName, path.resolve(rootDir, "data", "postgres"));
 }
 
 function buildConfig(

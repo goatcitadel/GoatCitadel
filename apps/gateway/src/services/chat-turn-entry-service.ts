@@ -293,7 +293,10 @@ async function runAgentSendChatMessageLlmPath(
     localOperatorOverrideId: input.localOperatorOverrideId,
     fullWebAccess: input.fullWebAccess,
   };
-  let disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+  let disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(
+    prepared,
+    subagentFanoutExecutorOptions.permissionProfileId,
+  )
     ? host.subagentFanout?.register(
         sessionId,
         createTurnSubagentFanoutExecutor(host, prepared, subagentFanoutExecutorOptions),
@@ -372,7 +375,7 @@ async function runAgentSendChatMessageLlmPath(
       // agent.fanout work during the retry is attributed to the retry turn's
       // id (child runIds and delegated diagnostics derive from
       // prepared.turnId), not the failed original.
-      if (shouldRegisterSubagentFanoutExecutor(prepared)) {
+      if (shouldRegisterSubagentFanoutExecutor(prepared, subagentFanoutExecutorOptions.permissionProfileId)) {
         disposeSubagentFanout?.();
         disposeSubagentFanout = host.subagentFanout?.register(
           sessionId,

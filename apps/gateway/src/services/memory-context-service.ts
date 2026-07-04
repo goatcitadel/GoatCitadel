@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   ChatCompletionResponse,
+  MemoryContextAssemblyReport,
   MemoryContextComposeRequest,
   MemoryContextPack,
   MemoryQmdStatsResponse,
@@ -176,7 +177,7 @@ export class MemoryContextService {
         phaseId: input.phaseId,
       });
       if (cached) {
-        const enrichedCached = enrichMemoryPack(cached, relationScope, new Map());
+        const enrichedCached = refreshMemoryPackAssembly(enrichMemoryPack(cached, relationScope, new Map()), assembly);
         this.storage.memoryQmdRuns.append({
           scope: input.scope,
           sessionId: input.sessionId,
@@ -776,6 +777,17 @@ function readStringList(value: unknown): string[] {
     return [];
   }
   return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+}
+
+function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryContextAssemblyReport): MemoryContextPack {
+  return {
+    ...pack,
+    originalTokenEstimate: assembly.availableTokenEstimate,
+    quality: {
+      ...pack.quality,
+      assembly,
+    },
+  };
 }
 
 function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {

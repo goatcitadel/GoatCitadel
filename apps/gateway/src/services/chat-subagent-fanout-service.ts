@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { ChatSendMessageRequest, ToolInvokeRequest, ToolPolicyActorContext } from "@goatcitadel/contracts";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatSendMessageRequest,
+  type ToolInvokeRequest,
+  type ToolPolicyActorContext,
+} from "@goatcitadel/contracts";
 import { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 import type {
   OrchestrationPlan,
@@ -139,19 +145,34 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
 
 /**
  * Registration-side eligibility gate: only cowork/code turns whose
- * subagentPolicy permits subagents may hold a live fan-out executor. Delegated
- * child turns are floored to `subagentPolicy:"off"` by
- * `executeDelegatedPlanStep`, so they can never register one — which keeps the
- * no-recursion guarantee independent of the tool-schema gate. Even a child
- * model that hallucinates an `agent.fanout` call (or a provider that ignores
- * the advertised schema) finds no executor and the runtime hook fails closed.
+ * subagentPolicy explicitly permits automatic subagents may hold a live fan-out
+ * executor. `ask_when_useful` is a suggestion/confirmation posture, not a
+ * model-callable auto-run. Delegated child turns are floored to
+ * `subagentPolicy:"off"` by `executeDelegatedPlanStep`, so they can never
+ * register one — which keeps the no-recursion guarantee independent of the
+ * tool-schema gate. Even a child model that hallucinates an `agent.fanout` call
+ * (or a provider that ignores the advertised schema) finds no executor and the
+ * runtime hook fails closed.
  */
-export function shouldRegisterSubagentFanoutExecutor(prepared: PreparedAgentChatTurn): boolean {
+function isRestrictedAutonomousPermissionProfile(permissionProfileId?: string): boolean {
+  return (
+    permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+    permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID
+  );
+}
+
+export function shouldRegisterSubagentFanoutExecutor(
+  prepared: PreparedAgentChatTurn,
+  permissionProfileId?: string,
+): boolean {
+  if (isRestrictedAutonomousPermissionProfile(permissionProfileId)) {
+    return false;
+  }
   const mode = resolvePreparedTurnMode(prepared);
   if (mode !== "cowork" && mode !== "code") {
     return false;
   }
-  return (prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy ?? "ask_when_useful") !== "off";
+  return (prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy) === "auto_when_useful";
 }
 
 /**
