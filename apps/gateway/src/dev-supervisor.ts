@@ -106,6 +106,11 @@ let sourceChangeRestartTimer: NodeJS.Timeout | null = null;
 let circuitOpenUntil = 0;
 const failureTimestamps: number[] = [];
 
+interface ChildExitInfo {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
 async function main(): Promise<void> {
   log.info(`watching gateway on http://${gatewayHealthHost}:${gatewayPort}/health`);
   if (verboseRequested) {
@@ -252,7 +257,9 @@ async function startChild(): Promise<void> {
     startupElapsedMs: Date.now() - startupStartedAt,
   });
 
+  let startupExitInfo: ChildExitInfo | undefined;
   child.on("exit", (code, signal) => {
+    startupExitInfo = { code, signal };
     if (child?.pid === currentPid) {
       child = null;
     }
@@ -271,22 +278,39 @@ async function startChild(): Promise<void> {
   });
 
   const healthStartedAt = Date.now();
-  const healthy = await waitForGatewayHealth(gatewayHealthTimeoutMs, {
+  const healthResult = await waitForGatewayHealth(gatewayHealthTimeoutMs, {
     onLive: (liveElapsedMs) => {
       log.info(`gateway HTTP responding (/livez) after ${liveElapsedMs}ms — waiting for /health`, {
         pid: currentPid,
         liveElapsedMs,
       });
     },
+    shouldStop: () => startupExitInfo !== undefined,
   });
   const healthElapsedMs = Date.now() - healthStartedAt;
-  if (healthy) {
+  if (healthResult === "healthy") {
     resetFailureBudget();
     log.success(`gateway online in ${Date.now() - startupStartedAt}ms`, {
       pid: currentPid,
       healthElapsedMs,
       startupElapsedMs: Date.now() - startupStartedAt,
     });
+    return;
+  }
+
+  if (healthResult === "stopped") {
+    log.warn("gateway exited before becoming healthy", {
+      pid: currentPid,
+      code: startupExitInfo?.code ?? "null",
+      signal: startupExitInfo?.signal ?? "null",
+      healthElapsedMs,
+      startupElapsedMs: Date.now() - startupStartedAt,
+      reason: "process_exit_before_health",
+    });
+    const delay = registerFailureAndGetDelay("process_exit_before_health");
+    if (delay !== null) {
+      scheduleRestartAfter(delay, "process exit before health");
+    }
     return;
   }
 
@@ -412,19 +436,28 @@ async function stopChild(reason: string): Promise<void> {
 
 async function waitForGatewayHealth(
   timeoutMs: number,
-  options: { onLive?: (liveElapsedMs: number) => void } = {},
-): Promise<boolean> {
+  options: { onLive?: (liveElapsedMs: number) => void; shouldStop?: () => boolean } = {},
+): Promise<"healthy" | "timeout" | "stopped"> {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   let nextHeartbeatAt = startedAt + healthHeartbeatMs;
   let liveSeen = false;
   while (Date.now() < deadline) {
+    if (options.shouldStop?.()) {
+      return "stopped";
+    }
     if (!liveSeen && (await isGatewayLive())) {
       liveSeen = true;
       options.onLive?.(Date.now() - startedAt);
     }
+    if (options.shouldStop?.()) {
+      return "stopped";
+    }
     if (await isGatewayHealthy()) {
-      return true;
+      return "healthy";
+    }
+    if (options.shouldStop?.()) {
+      return "stopped";
     }
     const now = Date.now();
     if (now >= nextHeartbeatAt) {
@@ -441,7 +474,7 @@ async function waitForGatewayHealth(
     }
     await sleep(300);
   }
-  return false;
+  return "timeout";
 }
 
 async function waitForPortClosed(timeoutMs: number): Promise<boolean> {

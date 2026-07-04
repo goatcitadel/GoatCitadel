@@ -196,4 +196,51 @@ describe("dev supervisor coverage", () => {
     expect(referenceBuildCalls).toHaveLength(1);
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));
   });
+
+  it("stops waiting for readiness when the gateway exits during startup", async () => {
+    process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS = "5000";
+    process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS = "5000";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        pid: number;
+        kill: () => boolean;
+      };
+      child.pid = 54321;
+      child.kill = () => true;
+      setTimeout(() => {
+        child.emit("exit", 1, null);
+      }, 0);
+      return child;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("not ready");
+      }),
+    );
+
+    const startedAt = Date.now();
+    await import("./dev-supervisor.js");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (
+        warnSpy.mock.calls.some((call) =>
+          call.some((value) => String(value).includes("gateway exited before becoming healthy")),
+        )
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    process.emit("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("gateway exited before becoming healthy"));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("gateway did not become healthy in time"));
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));
+  });
 });

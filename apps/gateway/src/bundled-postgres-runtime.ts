@@ -72,6 +72,12 @@ interface BundledPostgresProbeOptions {
   logFailure?: boolean;
 }
 
+interface WindowsTcpPortExclusion {
+  startPort: number;
+  endPort: number;
+  administered: boolean;
+}
+
 export async function ensureBundledPostgresRuntime(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
@@ -107,6 +113,8 @@ export async function ensureBundledPostgresRuntime(
   if (!config.assistant.database.bundledPostgres.autoStart) {
     throw new Error("Bundled Postgres is configured but not reachable, and autoStart is disabled.");
   }
+
+  assertBundledPostgresPortIsUsable(config);
 
   // SECURITY (codex finding #3): If an operator explicitly configured a
   // native bundled Postgres (via `assistant.database.bundledPostgres.binDir`)
@@ -677,6 +685,80 @@ function dockerContainerMountsDataDir(containerName: string, expectedDataDir: st
   }
 }
 
+function assertBundledPostgresPortIsUsable(config: GatewayRuntimeConfig): void {
+  const port = config.assistant.database.bundledPostgres.port;
+  const exclusion = findWindowsTcpPortExclusion(port);
+  if (!exclusion) {
+    return;
+  }
+  const range =
+    exclusion.startPort === exclusion.endPort
+      ? `${exclusion.startPort}`
+      : `${exclusion.startPort}-${exclusion.endPort}`;
+  throw new Error(
+    [
+      `Bundled Postgres cannot start on 127.0.0.1:${port} because Windows has reserved TCP port range ${range}.`,
+      "A reserved port can fail with Permission denied even when no process is listening on it.",
+      "Set GOATCITADEL_BUNDLED_POSTGRES_PORT to a free port, or update " +
+        "assistant.database.bundledPostgres.port in your local config, then restart.",
+      "To inspect Windows reservations, run: netsh interface ipv4 show excludedportrange protocol=tcp",
+    ].join("\n"),
+  );
+}
+
+function findWindowsTcpPortExclusion(port: number): WindowsTcpPortExclusion | undefined {
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+  for (const protocol of ["ipv4", "ipv6"] as const) {
+    let output: string;
+    try {
+      output = execFileSync("netsh", ["interface", protocol, "show", "excludedportrange", "protocol=tcp"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      continue;
+    }
+    const exclusion = parseWindowsTcpPortExclusions(output).find(
+      (range) => port >= range.startPort && port <= range.endPort,
+    );
+    if (exclusion) {
+      return exclusion;
+    }
+  }
+  return undefined;
+}
+
+function parseWindowsTcpPortExclusions(output: string): WindowsTcpPortExclusion[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line): WindowsTcpPortExclusion | undefined => {
+      const match = /^(\d+)\s+(\d+)(?:\s+(\*))?$/u.exec(line);
+      if (!match) {
+        return undefined;
+      }
+      const startPort = Number.parseInt(match[1] ?? "", 10);
+      const endPort = Number.parseInt(match[2] ?? "", 10);
+      if (
+        !Number.isInteger(startPort) ||
+        !Number.isInteger(endPort) ||
+        startPort < 1 ||
+        endPort > 65_535 ||
+        startPort > endPort
+      ) {
+        return undefined;
+      }
+      return {
+        startPort,
+        endPort,
+        administered: match[3] === "*",
+      };
+    })
+    .filter((range): range is WindowsTcpPortExclusion => Boolean(range));
+}
+
 async function buildNativeStartError(config: GatewayRuntimeConfig, logFile: string, error: unknown): Promise<Error> {
   const port = config.assistant.database.bundledPostgres.port;
   const messageParts = [
@@ -760,6 +842,7 @@ function wait(ms: number): Promise<void> {
 
 export const __bundledPostgresRuntimeInternals = {
   isDockerPostgresDataDirectory,
+  parseWindowsTcpPortExclusions,
   quoteIdentifier,
   readLogTail,
   resolveNativePostgresCommands,

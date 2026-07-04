@@ -74,4 +74,21 @@ describe("bundled postgres runtime helpers", () => {
       "the database system is starting up (code=57P03)",
     );
   });
+
+  it("parses Windows excluded TCP port ranges from netsh output", () => {
+    expect(
+      __bundledPostgresRuntimeInternals.parseWindowsTcpPortExclusions(`
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+     54236       54335
+     50000       50059     *
+invalid
+`),
+    ).toEqual([
+      { startPort: 54236, endPort: 54335, administered: false },
+      { startPort: 50000, endPort: 50059, administered: true },
+    ]);
+  });
 });
