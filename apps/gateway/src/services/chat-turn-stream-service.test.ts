@@ -451,12 +451,55 @@ describe("streamPreparedAgentChatTurn", () => {
       dispatchHost,
       "session-1",
       { content: "hello", mode: "cowork" } as never,
-      createPreparedTurn(),
+      createPreparedTurn({ mode: "cowork" }),
       "chat_thread_turn_appended",
     );
 
     expect(register).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("never registers an agent.fanout executor for a turn floored to subagentPolicy off (delegated-child shape)", async () => {
+    const host = createHost();
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Delegated child answer.",
+      };
+    }) as never;
+
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk: vi.fn(),
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    const flooredPrepared = createPreparedTurn({ mode: "cowork" });
+    (flooredPrepared.prefs as Record<string, unknown>).subagentPolicy = "off";
+    (flooredPrepared.normalized as Record<string, unknown>).subagentPolicy = "off";
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "delegated work", mode: "cowork" } as never,
+      flooredPrepared,
+      "chat_thread_turn_appended",
+    );
+
+    // Even if a child model hallucinated an agent.fanout call past the schema
+    // gate, its session must hold no executor — the runtime hook fails closed.
+    expect(register).not.toHaveBeenCalled();
   });
 
   it("disposes the agent.fanout executor even when the runtime stream throws mid-turn", async () => {
@@ -491,7 +534,7 @@ describe("streamPreparedAgentChatTurn", () => {
       dispatchHost,
       "session-1",
       { content: "hello", mode: "cowork" } as never,
-      createPreparedTurn(),
+      createPreparedTurn({ mode: "cowork" }),
       "chat_thread_turn_appended",
     ).catch(() => undefined);
 

@@ -121,6 +121,24 @@ function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createFanoutEligiblePreparedTurn(overrides: { subagentPolicy?: "off" | "ask_when_useful" } = {}) {
+  const subagentPolicy = overrides.subagentPolicy ?? "ask_when_useful";
+  return createPreparedTurn({
+    normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy },
+    prefs: {
+      sessionId: "session-1",
+      mode: "cowork",
+      webMode: "off",
+      memoryMode: "off",
+      providerId: "primary",
+      model: "primary-model",
+      planningMode: "off",
+      reflectionMode: "off",
+      subagentPolicy,
+    },
+  });
+}
+
 function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
   return {
     turnId: "turn-1",
@@ -280,6 +298,9 @@ describe("agentSendChatMessage", () => {
       assistantContent: "Completed answer.",
       turnTrace: createTrace({ status: "completed" }),
     });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn(),
+    );
     const dispose = vi.fn();
     const register = vi.fn(() => dispose);
     (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
@@ -300,8 +321,29 @@ describe("agentSendChatMessage", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("never registers an agent.fanout executor for a turn floored to subagentPolicy off (delegated-child shape)", async () => {
+    const host = createHost({
+      assistantContent: "Child answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn({ subagentPolicy: "off" }),
+    );
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+
+    await agentSendChatMessage(host, "session-1", { content: "delegated work", mode: "cowork" });
+
+    // Even if a child model hallucinated an agent.fanout call past the schema
+    // gate, its session must hold no executor — the runtime hook fails closed.
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it("disposes the agent.fanout executor even when the turn runtime throws", async () => {
     const host = createHost({});
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn(),
+    );
     const dispose = vi.fn();
     const register = vi.fn(() => dispose);
     (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };

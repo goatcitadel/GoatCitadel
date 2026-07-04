@@ -46,6 +46,7 @@ import {
   type PreparedAgentChatTurn,
 } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import { shouldRegisterSubagentFanoutExecutor } from "./chat-subagent-fanout-service.js";
 import { createTurnSubagentFanoutExecutor } from "./chat-turn-stream-service.js";
 import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
@@ -280,19 +281,23 @@ async function runAgentSendChatMessageLlmPath(
   const mode = resolvePreparedTurnMode(prepared);
   // R3-8: expose the turn-scoped `agent.fanout` executor for the lifetime of
   // this buffered turn (covers the reflection retry too — same session, same
-  // prepared context). Disposed in the finally below.
-  const disposeSubagentFanout = host.subagentFanout?.register(
-    sessionId,
-    createTurnSubagentFanoutExecutor(host, prepared, {
-      signal: controller.signal,
-      operatorId: input.operatorId,
-      authActorId: input.authActorId,
-      authActorSource: input.authActorSource,
-      permissionProfileId: input.permissionProfileId,
-      localOperatorOverrideId: input.localOperatorOverrideId,
-      fullWebAccess: input.fullWebAccess,
-    }),
-  );
+  // prepared context). Gated on the turn's own eligibility so a delegated
+  // child (floored to subagentPolicy "off") never holds a live executor.
+  // Disposed in the finally below.
+  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+    ? host.subagentFanout?.register(
+        sessionId,
+        createTurnSubagentFanoutExecutor(host, prepared, {
+          signal: controller.signal,
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          fullWebAccess: input.fullWebAccess,
+        }),
+      )
+    : undefined;
   try {
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({

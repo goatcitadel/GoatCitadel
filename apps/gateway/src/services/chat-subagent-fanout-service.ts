@@ -138,12 +138,29 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
 }
 
 /**
+ * Registration-side eligibility gate: only cowork/code turns whose
+ * subagentPolicy permits subagents may hold a live fan-out executor. Delegated
+ * child turns are floored to `subagentPolicy:"off"` by
+ * `executeDelegatedPlanStep`, so they can never register one — which keeps the
+ * no-recursion guarantee independent of the tool-schema gate. Even a child
+ * model that hallucinates an `agent.fanout` call (or a provider that ignores
+ * the advertised schema) finds no executor and the runtime hook fails closed.
+ */
+export function shouldRegisterSubagentFanoutExecutor(prepared: PreparedAgentChatTurn): boolean {
+  const mode = resolvePreparedTurnMode(prepared);
+  if (mode !== "cowork" && mode !== "code") {
+    return false;
+  }
+  return (prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy ?? "ask_when_useful") !== "off";
+}
+
+/**
  * Session-scoped registry that connects the policy engine's `subagentFanout`
  * runtime hook (gateway-lifetime) to the turn-scoped fan-out executor. The
  * entry/stream turn services register an executor for the duration of a direct
- * turn and dispose it in their `finally`; delegated child turns never register
- * one, so — beyond the schema gate — an `agent.fanout` call from a child fails
- * closed here too.
+ * turn (gated by {@link shouldRegisterSubagentFanoutExecutor}) and dispose it
+ * in their `finally`; delegated child turns never register one, so — beyond
+ * the schema gate — an `agent.fanout` call from a child fails closed here too.
  */
 export class SubagentFanoutRuntime {
   private readonly executorsBySession = new Map<string, { token: symbol; executor: SubagentFanoutExecutor }>();

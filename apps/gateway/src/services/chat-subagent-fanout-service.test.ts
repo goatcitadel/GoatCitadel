@@ -4,6 +4,7 @@ import type { OrchestrationStepExecutionResult } from "../orchestration/types.js
 import {
   createSubagentFanoutExecutor,
   parseSubagentFanoutSubtasks,
+  shouldRegisterSubagentFanoutExecutor,
   SUBAGENT_FANOUT_MAX_SUBTASKS,
   SUBAGENT_FANOUT_OUTPUT_EXCERPT_LIMIT,
   SUBAGENT_FANOUT_TOOL_NAME,
@@ -112,6 +113,54 @@ describe("parseSubagentFanoutSubtasks", () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.subtasks[0]!.objective.length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe("shouldRegisterSubagentFanoutExecutor", () => {
+  function preparedWith(input: {
+    mode: string;
+    normalizedSubagentPolicy?: string;
+    prefsSubagentPolicy?: string;
+  }): PreparedAgentChatTurn {
+    return {
+      session: { sessionId: "sess-eligibility" },
+      prefs: { mode: input.mode, subagentPolicy: input.prefsSubagentPolicy },
+      normalized: { mode: input.mode, subagentPolicy: input.normalizedSubagentPolicy },
+    } as never;
+  }
+
+  it("allows registration for cowork/code turns whose subagentPolicy permits subagents", () => {
+    expect(
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "ask_when_useful" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "code", prefsSubagentPolicy: "auto_when_useful" })),
+    ).toBe(true);
+    // Contract default when the pref is absent is ask_when_useful.
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork" }))).toBe(true);
+  });
+
+  it("refuses registration outside cowork/code", () => {
+    expect(
+      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "ask_when_useful" })),
+    ).toBe(false);
+  });
+
+  it("refuses registration when the turn is floored to subagentPolicy off (the delegated-child shape)", () => {
+    expect(
+      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork", normalizedSubagentPolicy: "off" })),
+    ).toBe(false);
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork", prefsSubagentPolicy: "off" }))).toBe(
+      false,
+    );
+    // The normalized (request-level) floor wins over a permissive session pref.
+    expect(
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "off", prefsSubagentPolicy: "ask_when_useful" }),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -39,6 +39,7 @@ import type {
 import { executeOrchestrationPlan } from "../orchestration/engine.js";
 import {
   createSubagentFanoutExecutor,
+  shouldRegisterSubagentFanoutExecutor,
   type SubagentFanoutExecutor,
   type SubagentFanoutExecutorOptions,
   type SubagentFanoutRuntime,
@@ -1186,7 +1187,9 @@ export function createTurnSubagentFanoutExecutor(
  * Register the turn's `agent.fanout` executor for exactly the lifetime of the
  * direct turn-runtime stream: registered before the runtime produces its first
  * chunk (so a mid-turn model call routed through the policy engine can find
- * it), disposed when the stream completes, throws, or is abandoned.
+ * it), disposed when the stream completes, throws, or is abandoned. Gated on
+ * the turn's own eligibility so a delegated child (floored to subagentPolicy
+ * "off") never holds a live executor.
  */
 async function* runDirectTurnStreamWithSubagentFanout(
   host: ChatTurnStreamHost,
@@ -1194,10 +1197,12 @@ async function* runDirectTurnStreamWithSubagentFanout(
   options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
   makeStream: () => ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]>,
 ): ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]> {
-  const disposeSubagentFanout = host.subagentFanout?.register(
-    prepared.session.sessionId,
-    createTurnSubagentFanoutExecutor(host, prepared, options),
-  );
+  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+    ? host.subagentFanout?.register(
+        prepared.session.sessionId,
+        createTurnSubagentFanoutExecutor(host, prepared, options),
+      )
+    : undefined;
   try {
     yield* makeStream();
   } finally {
