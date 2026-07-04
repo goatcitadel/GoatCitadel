@@ -65,6 +65,7 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
+import { trimExecutionPlanDraftToPlan } from "./chat-planner-fanout.js";
 import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
 import { readLiveIntentThreshold } from "./improvement-tune-reads.js";
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
@@ -668,7 +669,10 @@ export async function resolvePreparedTurnOrchestration(
   return {
     routerInput,
     orchestrationPlan: plan,
-    executionPlanDraft,
+    // Round-3 review M3: stage-leveling fallback can drop fan-out extras from
+    // the executed plan; trim the draft to match so the persisted
+    // execution-plan record cannot carry forever-pending phantom steps.
+    executionPlanDraft: trimExecutionPlanDraftToPlan(executionPlanDraft, plan),
   };
 }
 
