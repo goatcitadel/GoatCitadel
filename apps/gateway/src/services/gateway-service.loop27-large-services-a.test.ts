@@ -107,12 +107,30 @@ describe("GatewayService loop 27 large service coverage", () => {
       distilledTokenEstimate: 5,
       expiresAt: "2026-05-15T01:00:00.000Z",
       originalTokenEstimate: 10,
-      quality: { reason: "fresh", status: "ready" },
+      quality: {
+        reason: "fresh",
+        status: "ready",
+        assembly: {
+          availableCandidateCount: 4,
+          selectedCandidateCount: 2,
+          droppedCandidateCount: 2,
+          availableTokenEstimate: 100,
+          selectedTokenEstimate: 40,
+          evidenceTokenBudget: 2_000,
+        },
+      },
       scope: "workspace",
     };
 
     GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
       memoryContext,
+      memoryContextPlacement: {
+        position: "before_final_user_message",
+        insertedIndex: 1,
+        finalUserMessageIndex: 1,
+        leadingSystemMessageCount: 1,
+        copyMode: "retrieved_non_authoritative",
+      },
       request: {
         memory: { sessionId: "session-1", taskId: "task-1", turnId: "turn-1" },
         messages: [
@@ -146,6 +164,18 @@ describe("GatewayService loop 27 large service coverage", () => {
           status: "ready",
           citationsCount: 1,
           originalTokenEstimate: 10,
+          assembly: {
+            availableCandidateCount: 4,
+            selectedCandidateCount: 2,
+            droppedCandidateCount: 2,
+            availableTokenEstimate: 100,
+            selectedTokenEstimate: 40,
+            evidenceTokenBudget: 2_000,
+          },
+          placement: expect.objectContaining({
+            position: "before_final_user_message",
+            copyMode: "retrieved_non_authoritative",
+          }),
         }),
       }),
     );

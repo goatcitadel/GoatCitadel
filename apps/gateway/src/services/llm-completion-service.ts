@@ -13,13 +13,13 @@ import {
   applyNonStreamingTransformLlmOutput,
   applyStreamingTransformLlmOutput,
   buildProviderRetryCooldownExhaustedError,
-  buildMemoryContextSystemMessage,
   calculateSavings,
   createChatCompletionDeadline,
   delayChatCompletionRetry,
   getRemainingChatCompletionTimeoutMs,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
+  insertMemoryContextMessage,
   shouldAttemptCrossProviderFallback,
   shouldReportProviderRetryCooldownExhausted,
   shouldRetryToolProtocolError,
@@ -76,19 +76,9 @@ export async function createChatCompletion(
   const useMemoryContext = shouldUseChatCompletionMemoryContext(host, memoryInput);
   let response: ChatCompletionResponse | undefined;
   const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
-
-  const withContext = memoryContext
-    ? {
-        ...request,
-        messages: [
-          {
-            role: "system" as const,
-            content: buildMemoryContextSystemMessage(memoryContext),
-          },
-          ...request.messages,
-        ],
-      }
-    : request;
+  const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
+  const withContext = memoryContextInsertion?.request ?? request;
+  const memoryContextPlacement = memoryContextInsertion?.placement;
 
   const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
@@ -190,6 +180,7 @@ export async function createChatCompletion(
   host.persistContextManifestForCompletionRequest({
     request: hookableRequest,
     memoryContext,
+    memoryContextPlacement,
   });
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
@@ -540,19 +531,9 @@ export async function* createChatCompletionStream(
     },
   });
   const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
-
-  const withContext = memoryContext
-    ? {
-        ...request,
-        messages: [
-          {
-            role: "system" as const,
-            content: buildMemoryContextSystemMessage(memoryContext),
-          },
-          ...request.messages,
-        ],
-      }
-    : request;
+  const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
+  const withContext = memoryContextInsertion?.request ?? request;
+  const memoryContextPlacement = memoryContextInsertion?.placement;
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
     trigger: "before_prompt_build",
@@ -588,6 +569,7 @@ export async function* createChatCompletionStream(
   host.persistContextManifestForCompletionRequest({
     request: withContext,
     memoryContext,
+    memoryContextPlacement,
   });
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,

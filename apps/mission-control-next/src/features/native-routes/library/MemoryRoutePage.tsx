@@ -35,10 +35,14 @@ import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import {
   buildProvenanceCoverage,
+  buildMemoryModelSummary,
   buildMemoryGraphProjection,
+  classifyMemoryItemKind,
+  classifyTraceMemoryCandidateKind,
   formatConfidence,
   formatDecisionProvenanceSummary,
   formatEntityProvenanceSummary,
+  formatMemoryEngineeringKind,
   formatRelationProvenanceSummary,
   readMemoryWriteDecision,
   readMetadataString,
@@ -49,8 +53,12 @@ import "../native-routes.css";
 export {
   asRecord,
   buildMemoryGraphProjection,
+  buildMemoryModelSummary,
   buildProvenanceCoverage,
+  classifyMemoryItemKind,
+  classifyTraceMemoryCandidateKind,
   formatDecisionProvenanceSummary,
+  formatMemoryEngineeringKind,
   formatRelationProvenanceSummary,
   readMemoryWriteDecision,
   readMetadataString,
@@ -161,7 +169,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryItems = useMemo(() => memory.data?.memoryItems ?? [], [memory.data?.memoryItems]);
   const memoryFeedback = memory.data?.memoryFeedback ?? [];
   const memoryQualityIssues = memory.data?.memoryQualityIssues ?? [];
-  const traceMemoryCandidates = memory.data?.traceMemoryCandidates ?? [];
+  const traceMemoryCandidates = useMemo(
+    () => memory.data?.traceMemoryCandidates ?? [],
+    [memory.data?.traceMemoryCandidates],
+  );
 
   const namespacePillOptions = useMemo<FilterPillOption[]>(() => {
     const counts = new Map<string, number>();
@@ -300,6 +311,25 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       }),
     [memory.data?.memoryDecisions, memory.data?.memoryEntities, memory.data?.memoryRelations],
   );
+  const memoryModelRows = useMemo(
+    () =>
+      buildMemoryModelSummary({
+        recentContexts: recentContextPacks,
+        memoryItems,
+        entities: memory.data?.memoryEntities ?? [],
+        relations: memory.data?.memoryRelations ?? [],
+        decisions: memory.data?.memoryDecisions ?? [],
+        traceCandidates: traceMemoryCandidates,
+      }),
+    [
+      memory.data?.memoryDecisions,
+      memory.data?.memoryEntities,
+      memory.data?.memoryRelations,
+      memoryItems,
+      recentContextPacks,
+      traceMemoryCandidates,
+    ],
+  );
   const reviewableDecisions = useMemo(() => {
     const now = Date.now();
     return (memory.data?.memoryDecisions ?? []).filter((decision) => {
@@ -373,6 +403,26 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
       <NativeGrid className="mc-next-memory-shell">
+        <NativeCard
+          title="Memory model"
+          subtitle="Presentation taxonomy for existing lifecycle records; it does not grant new memory authority."
+          stats={[
+            { label: "Kinds", value: String(memoryModelRows.length) },
+            { label: "Records", value: String(memoryModelRows.reduce((sum, item) => sum + item.count, 0)) },
+          ]}
+        >
+          <div className="mc-next-provenance-coverage-grid">
+            {memoryModelRows.map((item) => (
+              <div key={item.kind} className={`mc-next-provenance-coverage-item is-${item.status}`}>
+                <div>
+                  <strong>{item.label}</strong>
+                  <span>{item.count} records</span>
+                </div>
+                <p>{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </NativeCard>
         <NativeCard
           title="Memory items"
           subtitle="Real memory item truth comes first; files and QMD stay secondary."
@@ -504,6 +554,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       <span>{formatShortDateTime(item.updatedAt)}</span>
                     </div>
                     <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="default">
+                        {formatMemoryEngineeringKind(classifyMemoryItemKind(item))}
+                      </StatusChip>
                       <StatusChip
                         tone={
                           item.lifecycleState === "active"
@@ -947,6 +1000,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {item.status}
                   {" · "}
                   {formatConfidence(item.confidence)}
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone="default">
+                      {formatMemoryEngineeringKind(classifyTraceMemoryCandidateKind(item))}
+                    </StatusChip>
+                    <StatusChip tone="muted">{item.candidateType}</StatusChip>
+                  </div>
                   <p>{item.proposedInsight}</p>
                   <span>{formatSourceRefCount(item.sourceRefs.length)}</span>
                 </li>
@@ -1037,6 +1096,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {entity.entityType ?? entity.scope}
                   {" · "}
                   {entity.status}
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                    <StatusChip tone="muted">{entity.authority}</StatusChip>
+                  </div>
                   <p>{formatEntityProvenanceSummary(entity)}</p>
                 </li>
               ))}
@@ -1069,6 +1132,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {relation.relationType}
                   {" · "}
                   {relation.status}
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                    <StatusChip tone="muted">{relation.scope}</StatusChip>
+                  </div>
                   <p>{formatRelationProvenanceSummary(relation)}</p>
                 </li>
               ))}
@@ -1101,6 +1168,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     {" · "}
                     {formatDecisionProvenanceSummary(decision)}
                   </span>
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone="default">{formatMemoryEngineeringKind("semantic")}</StatusChip>
+                    <StatusChip tone="muted">{decision.scope}</StatusChip>
+                  </div>
                   <DecisionJournalFacts decision={decision} />
                   {!decision.retrospective && decision.reviewAt ? (
                     <NativeButton
@@ -1481,6 +1552,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {formatShortDateTime(item.createdAt)}
                   {" · "}
                   {formatKnowledgeCitationSummary(item.citations)}
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone="default">{formatMemoryEngineeringKind("working")}</StatusChip>
+                    <StatusChip tone="muted">
+                      selected {item.quality.assembly?.selectedCandidateCount ?? item.citations.length}
+                    </StatusChip>
+                  </div>
                 </li>
               ))}
             </ul>

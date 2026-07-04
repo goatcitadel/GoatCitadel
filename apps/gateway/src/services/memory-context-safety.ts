@@ -66,6 +66,7 @@ export function sanitizeMemoryContextWrite(input: {
     contextText,
     citations: [],
     quality: {
+      ...input.quality,
       status: "fallback",
       reason: MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
     },

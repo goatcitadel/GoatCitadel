@@ -1,10 +1,14 @@
 import type {
   EvidenceEnvelope,
+  MemoryContextPack,
   MemoryDecisionRecord,
   MemoryEntityRecord,
+  MemoryEngineeringKind,
   MemoryItemRecord,
+  MemoryLearningRecord,
   MemoryRelationRecord,
   StructuredMemorySourceRef,
+  TraceMemoryCandidateRecord,
 } from "@goatcitadel/contracts";
 import { formatMaybeDateTime, shortId } from "@goatcitadel/mission-control-shared/content/memory-helpers";
 
@@ -41,6 +45,14 @@ export type MemoryGraphProjection = {
   summary: string;
 };
 
+export type MemoryModelSummaryRow = {
+  kind: MemoryEngineeringKind;
+  label: string;
+  count: number;
+  status: "covered" | "empty";
+  detail: string;
+};
+
 const PROVENANCE_KINDS = [
   { id: "project", label: "Project" },
   { id: "task", label: "Task" },
@@ -52,6 +64,13 @@ const PROVENANCE_KINDS = [
   { id: "approval", label: "Approval" },
   { id: "source", label: "Source" },
 ] as const;
+
+const MEMORY_MODEL_LABELS: Record<MemoryEngineeringKind, string> = {
+  working: "Working",
+  episodic: "Episodic",
+  semantic: "Semantic",
+  procedural: "Procedural",
+};
 
 export function buildProvenanceCoverage(input: {
   entities: MemoryEntityRecord[];
@@ -123,9 +142,7 @@ export function buildMemoryGraphProjection(input: {
   // (which let degradedRelationCount exceed the total relation count). Use a single union.
   const degradedRelationCount = input.relations.filter(
     (relation) =>
-      relation.status !== "active" ||
-      !entityIds.has(relation.fromEntityId) ||
-      !entityIds.has(relation.toEntityId),
+      relation.status !== "active" || !entityIds.has(relation.fromEntityId) || !entityIds.has(relation.toEntityId),
   ).length;
   const provenanceSourceCount = countUniqueSourceRefs([
     ...input.entities.flatMap((item) => item.sourceRefs),
@@ -161,6 +178,57 @@ export function buildMemoryGraphProjection(input: {
       decisionCount: input.decisions.length,
     }),
   };
+}
+
+export function buildMemoryModelSummary(input: {
+  recentContexts: MemoryContextPack[];
+  memoryItems: MemoryItemRecord[];
+  entities: MemoryEntityRecord[];
+  relations: MemoryRelationRecord[];
+  decisions: MemoryDecisionRecord[];
+  traceCandidates: TraceMemoryCandidateRecord[];
+  learnings?: MemoryLearningRecord[];
+}): MemoryModelSummaryRow[] {
+  const semanticLearningCount = (input.learnings ?? []).filter(
+    (item) => classifyMemoryLearningKind(item) === "semantic",
+  ).length;
+  const proceduralLearningCount = (input.learnings ?? []).filter(
+    (item) => classifyMemoryLearningKind(item) === "procedural",
+  ).length;
+  const counts: Record<MemoryEngineeringKind, number> = {
+    working: input.recentContexts.length,
+    episodic: input.traceCandidates.length,
+    semantic:
+      input.memoryItems.length +
+      input.entities.length +
+      input.relations.length +
+      input.decisions.length +
+      semanticLearningCount,
+    procedural: proceduralLearningCount,
+  };
+  return (["working", "episodic", "semantic", "procedural"] as const).map((kind) => ({
+    kind,
+    label: MEMORY_MODEL_LABELS[kind],
+    count: counts[kind],
+    status: counts[kind] > 0 ? "covered" : "empty",
+    detail: formatMemoryModelDetail(kind, counts[kind]),
+  }));
+}
+
+export function classifyMemoryItemKind(_item: MemoryItemRecord): MemoryEngineeringKind {
+  return "semantic";
+}
+
+export function classifyTraceMemoryCandidateKind(_item: TraceMemoryCandidateRecord): MemoryEngineeringKind {
+  return "episodic";
+}
+
+export function classifyMemoryLearningKind(item: Pick<MemoryLearningRecord, "type">): MemoryEngineeringKind {
+  return item.type === "workflow" || item.type === "bug_pattern" || item.type === "tooling" ? "procedural" : "semantic";
+}
+
+export function formatMemoryEngineeringKind(kind: MemoryEngineeringKind): string {
+  return MEMORY_MODEL_LABELS[kind];
 }
 
 export function formatEntityProvenanceSummary(entity: MemoryEntityRecord): string {
@@ -290,6 +358,19 @@ function formatMemoryGraphProjectionSummary(
     return `${counts.connectedEntityCount}/${counts.entityCount} entities are linked through ${counts.activeRelationCount} active relations and ${counts.decisionCount} decisions.`;
   }
   return `${counts.entityCount} entities are visible, but relation coverage is still partial.`;
+}
+
+function formatMemoryModelDetail(kind: MemoryEngineeringKind, count: number): string {
+  if (kind === "working") {
+    return `${count} context pack${count === 1 ? "" : "s"} available for current-turn recall.`;
+  }
+  if (kind === "episodic") {
+    return `${count} trace-derived record${count === 1 ? "" : "s"} remain evidence-first and proposal-gated.`;
+  }
+  if (kind === "procedural") {
+    return `${count} workflow, tooling, or bug-pattern learning${count === 1 ? "" : "s"} visible.`;
+  }
+  return `${count} durable fact, item, entity, relation, decision, or preference record${count === 1 ? "" : "s"} visible.`;
 }
 
 export function formatConfidence(confidence: number): string {

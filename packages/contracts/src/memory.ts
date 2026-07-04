@@ -2,6 +2,7 @@ export type MemoryContextScope = "chat" | "orchestration";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
+export type MemoryEngineeringKind = "working" | "episodic" | "semantic" | "procedural";
 export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints" | "semantic_vector" | "hybrid_rank";
 export type MemoryRetrievalModeStatus =
   | "disabled"
@@ -72,6 +73,29 @@ export interface MemoryContextComposeRequest {
   queryEmbedding?: number[];
 }
 
+export interface MemoryContextAssemblyReport {
+  availableCandidateCount: number;
+  selectedCandidateCount: number;
+  droppedCandidateCount: number;
+  availableTokenEstimate: number;
+  selectedTokenEstimate: number;
+  evidenceTokenBudget: number;
+}
+
+export interface MemoryContextPlacement {
+  position: "before_final_user_message" | "after_leading_system_messages";
+  insertedIndex: number;
+  finalUserMessageIndex?: number;
+  leadingSystemMessageCount: number;
+  copyMode: "retrieved_non_authoritative";
+}
+
+export interface MemoryContextQuality {
+  status: MemoryQmdStatus;
+  reason?: string;
+  assembly?: MemoryContextAssemblyReport;
+}
+
 export interface MemoryCitationProvenance {
   relationScope: MemoryRelationScope;
   freshness: MemoryFreshness;
@@ -102,10 +126,7 @@ export interface MemoryContextPack {
   sourcesHash: string;
   contextText: string;
   citations: MemoryCitation[];
-  quality: {
-    status: MemoryQmdStatus;
-    reason?: string;
-  };
+  quality: MemoryContextQuality;
   originalTokenEstimate: number;
   distilledTokenEstimate: number;
   createdAt: string;

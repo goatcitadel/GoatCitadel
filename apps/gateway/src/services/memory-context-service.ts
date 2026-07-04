@@ -18,9 +18,9 @@ import {
   collectMemoryCandidates,
   composeDistilledContext,
   composeFallbackContext,
-  estimateTokensFromText,
   parseDistillerJson,
   rankMemoryCandidates,
+  selectMemoryCandidatesForDistillation,
   validateCitations,
   type MemoryFileSource,
   type MemoryItemSource,
@@ -129,7 +129,7 @@ export class MemoryContextService {
 
     const sources = await this.collectSources(input);
     throwIfMemoryContextAborted(input.signal);
-    const candidates = rankMemoryCandidates(
+    const availableCandidates = rankMemoryCandidates(
       prompt,
       collectMemoryCandidates(sources, {
         maxTranscriptEvents: qmd.maxTranscriptEvents,
@@ -145,6 +145,12 @@ export class MemoryContextService {
         embeddingProviderIsReal: resolvedQueryEmbedding.providerIsReal,
       },
     );
+    const selectedCandidates = selectMemoryCandidatesForDistillation({
+      candidates: availableCandidates,
+      maxContextTokens,
+    });
+    const candidates = selectedCandidates.candidates;
+    const assembly = selectedCandidates.assembly;
 
     const sourcesHash = buildSourcesHash(candidates);
     const cacheKey = buildCacheKey({
@@ -179,7 +185,7 @@ export class MemoryContextService {
           phaseId: input.phaseId,
           status: "cache_hit",
           durationMs: Math.max(1, Date.now() - startedAt),
-          candidateCount: candidates.length,
+          candidateCount: assembly.selectedCandidateCount,
           citationsCount: enrichedCached.citations.length,
           originalTokenEstimate: enrichedCached.originalTokenEstimate,
           distilledTokenEstimate: enrichedCached.distilledTokenEstimate,
@@ -196,7 +202,7 @@ export class MemoryContextService {
       }
     }
 
-    const originalTokenEstimate = estimateTokensFromText(candidates.map((candidate) => candidate.text).join("\n"));
+    const originalTokenEstimate = assembly.availableTokenEstimate;
 
     if (candidates.length === 0) {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
@@ -216,6 +222,7 @@ export class MemoryContextService {
         quality: {
           status: "fallback",
           reason: "no_candidates",
+          assembly,
         },
         originalTokenEstimate,
         distilledTokenEstimate: fallback.distilledTokenEstimate,
@@ -230,7 +237,7 @@ export class MemoryContextService {
         phaseId: input.phaseId,
         status: "fallback",
         durationMs: Math.max(1, Date.now() - startedAt),
-        candidateCount: candidates.length,
+        candidateCount: assembly.selectedCandidateCount,
         citationsCount: enrichedFallback.citations.length,
         originalTokenEstimate,
         distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
@@ -311,6 +318,7 @@ export class MemoryContextService {
         citations,
         quality: {
           status: "generated",
+          assembly,
         },
         distilledTokenEstimate: composed.distilledTokenEstimate,
       });
@@ -342,7 +350,7 @@ export class MemoryContextService {
         providerId,
         model,
         durationMs: Math.max(1, Date.now() - startedAt),
-        candidateCount: candidates.length,
+        candidateCount: assembly.selectedCandidateCount,
         citationsCount: enrichedGenerated.citations.length,
         originalTokenEstimate,
         distilledTokenEstimate: enrichedGenerated.distilledTokenEstimate,
@@ -388,6 +396,7 @@ export class MemoryContextService {
         quality: {
           status: "fallback",
           reason: message,
+          assembly,
         },
         distilledTokenEstimate: fallback.distilledTokenEstimate,
       });
@@ -418,7 +427,7 @@ export class MemoryContextService {
         providerId,
         model,
         durationMs: Math.max(1, Date.now() - startedAt),
-        candidateCount: candidates.length,
+        candidateCount: assembly.selectedCandidateCount,
         citationsCount: enrichedFallback.citations.length,
         originalTokenEstimate,
         distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,

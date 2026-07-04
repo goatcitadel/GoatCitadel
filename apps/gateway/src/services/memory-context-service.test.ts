@@ -87,9 +87,14 @@ describe("MemoryContextService", () => {
       sessionId: "session-1",
     });
 
-    expect(pack.quality).toEqual({
+    expect(pack.quality).toMatchObject({
       status: "fallback",
       reason: "prompt_injection_detected_in_memory_context",
+    });
+    expect(pack.quality.assembly).toMatchObject({
+      availableCandidateCount: 1,
+      selectedCandidateCount: 1,
+      droppedCandidateCount: 0,
     });
     expect(pack.contextText).toContain("Fallback Context");
     expect(pack.contextText).not.toContain("disregard all previous instructions");
@@ -256,6 +261,14 @@ describe("MemoryContextService", () => {
       relationScope: "project",
       quality: { status: "generated" },
     });
+    expect(generated.quality.assembly).toMatchObject({
+      availableCandidateCount: expect.any(Number),
+      selectedCandidateCount: expect.any(Number),
+      droppedCandidateCount: expect.any(Number),
+      availableTokenEstimate: generated.originalTokenEstimate,
+      selectedTokenEstimate: expect.any(Number),
+      evidenceTokenBudget: expect.any(Number),
+    });
     expect(generated.contextText).toContain("Alpha diagnostics need release evidence.");
     expect(generated.contextText).toContain("Citations:");
     expect(generated.citations).toEqual([
@@ -279,6 +292,7 @@ describe("MemoryContextService", () => {
       }),
     ]);
     expect(cached.contextId).toBe(generated.contextId);
+    expect(cached.quality.assembly).toEqual(generated.quality.assembly);
     expect(storage.memoryQmdRuns.records.map((record) => record.status)).toEqual(["generated", "cache_hit"]);
     expect(publishRealtime).toHaveBeenCalledWith(
       "memory_qmd_generated",
@@ -295,6 +309,102 @@ describe("MemoryContextService", () => {
         runId: "run-1",
       }),
     );
+  });
+
+  it("budgets ranked candidates before distillation and persists assembly truth through cache hits", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const memoryItems = Array.from({ length: 8 }, (_, index): MemoryItemRecord => {
+      const suffix = String(index).padStart(2, "0");
+      return {
+        itemId: `mem-${suffix}`,
+        namespace: "workspace/default",
+        title: `Budget candidate ${suffix}`,
+        content: `Budget candidate ${suffix} release verification ` + "verification ".repeat(300),
+        metadata: { retrievalHints: ["budgeted release verification"] },
+        pinned: false,
+        status: "active",
+        lifecycleState: "active",
+        createdAt: "2026-05-30T18:00:00.000Z",
+        updatedAt: "2026-05-30T18:05:00.000Z",
+      };
+    });
+    const storage = createStorage({ memoryItems });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-budget",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Budget candidate 00 is relevant to release verification.",
+                  facts: [
+                    { text: "Release verification is attached to budget candidate 00.", citationIds: ["m:mem-00"] },
+                  ],
+                  risks: [],
+                  openQuestions: [],
+                  saferNextSteps: [],
+                  citations: [
+                    {
+                      candidateId: "m:mem-00",
+                      sourceType: "memory_item",
+                      sourceRef: "mem-00",
+                      snippet: "Budget candidate 00 release verification",
+                      score: 0.9,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+    const input = {
+      scope: "chat" as const,
+      prompt: "Summarize budgeted release verification memory candidates.",
+      workspace: "memory",
+      maxContextTokens: 100,
+    };
+
+    const generated = await service.compose(input);
+    const cached = await service.compose(input);
+    const distillerRequest = llmService.chatCompletions.mock.calls[0]?.[0];
+    const distillerPrompt = distillerRequest?.messages.find((message) => message.role === "user")?.content;
+
+    expect(generated.quality.assembly).toMatchObject({
+      availableCandidateCount: 8,
+      selectedCandidateCount: expect.any(Number),
+      droppedCandidateCount: expect.any(Number),
+      evidenceTokenBudget: 2_000,
+    });
+    expect(generated.quality.assembly?.selectedCandidateCount).toBeLessThan(8);
+    expect(generated.quality.assembly?.droppedCandidateCount).toBeGreaterThan(0);
+    expect(generated.quality.assembly?.availableTokenEstimate).toBe(generated.originalTokenEstimate);
+    expect(generated.quality.assembly?.selectedTokenEstimate).toBeLessThanOrEqual(
+      generated.quality.assembly?.evidenceTokenBudget ?? 0,
+    );
+    expect(distillerPrompt).toContain("ID=m:mem-00");
+    expect(distillerPrompt).not.toContain("ID=m:mem-07");
+    expect(cached.contextId).toBe(generated.contextId);
+    expect(cached.quality.assembly).toEqual(generated.quality.assembly);
+    expect(storage.memoryQmdRuns.records.map((record) => record.status)).toEqual(["generated", "cache_hit"]);
+    expect(storage.memoryQmdRuns.records).toEqual([
+      expect.objectContaining({ candidateCount: generated.quality.assembly?.selectedCandidateCount }),
+      expect.objectContaining({ candidateCount: generated.quality.assembly?.selectedCandidateCount }),
+    ]);
   });
 
   it("falls back with ranked candidates when the distiller returns invalid citations", async () => {
@@ -345,9 +455,14 @@ describe("MemoryContextService", () => {
       forceRefresh: true,
     });
 
-    expect(pack.quality).toEqual({
+    expect(pack.quality).toMatchObject({
       status: "fallback",
       reason: "distiller returned invalid citations: missing-candidate",
+    });
+    expect(pack.quality.assembly).toMatchObject({
+      availableCandidateCount: 1,
+      selectedCandidateCount: 1,
+      droppedCandidateCount: 0,
     });
     expect(pack.contextText).toContain("Fallback Context:");
     expect(pack.citations[0]).toMatchObject({
@@ -413,9 +528,14 @@ describe("MemoryContextService", () => {
       forceRefresh: true,
     });
 
-    expect(pack.quality).toEqual({
+    expect(pack.quality).toMatchObject({
       status: "fallback",
       reason: "distiller returned facts with invalid citations: missing-fact-citation",
+    });
+    expect(pack.quality.assembly).toMatchObject({
+      availableCandidateCount: 1,
+      selectedCandidateCount: 1,
+      droppedCandidateCount: 0,
     });
     expect(pack.contextText).toContain("Fallback Context:");
     expect(pack.contextText).not.toContain("missing-fact-citation");
@@ -881,9 +1001,14 @@ describe("MemoryContextService", () => {
       forceRefresh: true,
     });
 
-    expect(pack.quality).toEqual({
+    expect(pack.quality).toMatchObject({
       status: "fallback",
       reason: "memory distiller timed out",
+    });
+    expect(pack.quality.assembly).toMatchObject({
+      availableCandidateCount: 1,
+      selectedCandidateCount: 1,
+      droppedCandidateCount: 0,
     });
     expect(providerSignal?.aborted).toBe(true);
     expect(storage.memoryQmdRuns.records[0]).toEqual(

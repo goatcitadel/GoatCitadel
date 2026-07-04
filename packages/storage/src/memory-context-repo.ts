@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import type { MemoryContextPack, MemoryContextScope, MemoryCitation, MemoryQmdStatus } from "@goatcitadel/contracts";
+import type {
+  MemoryCitation,
+  MemoryContextPack,
+  MemoryContextQuality,
+  MemoryContextScope,
+} from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -34,10 +39,7 @@ export interface MemoryContextInsertInput {
   sourcesHash: string;
   contextText: string;
   citations: MemoryCitation[];
-  quality: {
-    status: MemoryQmdStatus;
-    reason?: string;
-  };
+  quality: MemoryContextQuality;
   originalTokenEstimate: number;
   distilledTokenEstimate: number;
   createdAt?: string;
@@ -162,16 +164,21 @@ export class MemoryContextRepository {
     return mapRow(freshRow);
   }
 
-  public findFreshByCacheKey(input: MemoryContextLookupInput, now = new Date().toISOString()): MemoryContextPack | undefined {
-    const row = toMemoryContextRow(this.getByCacheKeyStmt.get({
-      cacheKey: toScopedCacheKey(input),
-      scope: input.scope,
-      sessionId: input.sessionId ?? null,
-      taskId: input.taskId ?? null,
-      runId: input.runId ?? null,
-      phaseId: input.phaseId ?? null,
-      now,
-    }));
+  public findFreshByCacheKey(
+    input: MemoryContextLookupInput,
+    now = new Date().toISOString(),
+  ): MemoryContextPack | undefined {
+    const row = toMemoryContextRow(
+      this.getByCacheKeyStmt.get({
+        cacheKey: toScopedCacheKey(input),
+        scope: input.scope,
+        sessionId: input.sessionId ?? null,
+        taskId: input.taskId ?? null,
+        runId: input.runId ?? null,
+        phaseId: input.phaseId ?? null,
+        now,
+      }),
+    );
     return row ? mapRow(row) : undefined;
   }
 
@@ -212,22 +219,24 @@ function isMemoryContextRow(value: unknown): value is MemoryContextRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.context_id === "string"
-    && typeof value.cache_key === "string"
-    && typeof value.scope === "string"
-    && (typeof value.session_id === "string" || value.session_id === null)
-    && (typeof value.task_id === "string" || value.task_id === null)
-    && (typeof value.run_id === "string" || value.run_id === null)
-    && (typeof value.phase_id === "string" || value.phase_id === null)
-    && typeof value.query_hash === "string"
-    && typeof value.sources_hash === "string"
-    && typeof value.context_text === "string"
-    && typeof value.citations_json === "string"
-    && typeof value.quality_json === "string"
-    && typeof value.original_token_estimate === "number"
-    && typeof value.distilled_token_estimate === "number"
-    && typeof value.created_at === "string"
-    && typeof value.expires_at === "string";
+  return (
+    typeof value.context_id === "string" &&
+    typeof value.cache_key === "string" &&
+    typeof value.scope === "string" &&
+    (typeof value.session_id === "string" || value.session_id === null) &&
+    (typeof value.task_id === "string" || value.task_id === null) &&
+    (typeof value.run_id === "string" || value.run_id === null) &&
+    (typeof value.phase_id === "string" || value.phase_id === null) &&
+    typeof value.query_hash === "string" &&
+    typeof value.sources_hash === "string" &&
+    typeof value.context_text === "string" &&
+    typeof value.citations_json === "string" &&
+    typeof value.quality_json === "string" &&
+    typeof value.original_token_estimate === "number" &&
+    typeof value.distilled_token_estimate === "number" &&
+    typeof value.created_at === "string" &&
+    typeof value.expires_at === "string"
+  );
 }
 
 function toMemoryContextRow(value: unknown): MemoryContextRow | undefined {
@@ -239,7 +248,7 @@ function toMemoryContextRows(value: unknown): MemoryContextRow[] {
 }
 
 function mapRow(row: MemoryContextRow): MemoryContextPack {
-  const quality = safeJsonParse<{ status?: MemoryQmdStatus; reason?: string }>(row.quality_json, {});
+  const quality = safeJsonParse<Partial<MemoryContextQuality>>(row.quality_json, {});
   return {
     contextId: row.context_id,
     scope: row.scope,
@@ -254,6 +263,7 @@ function mapRow(row: MemoryContextRow): MemoryContextPack {
     quality: {
       status: quality.status ?? "generated",
       reason: quality.reason,
+      assembly: quality.assembly,
     },
     originalTokenEstimate: row.original_token_estimate,
     distilledTokenEstimate: row.distilled_token_estimate,
@@ -273,15 +283,9 @@ function toScopedCacheKey(input: MemoryContextLookupInput): string {
   ].join("|");
 }
 
-function buildNullableMatchSql(
-  dialect: DatabaseClient["dialect"],
-  column: string,
-  param: string,
-): string {
+function buildNullableMatchSql(dialect: DatabaseClient["dialect"], column: string, param: string): string {
   if (dialect === "postgres") {
     return `${column} IS NOT DISTINCT FROM ${param}`;
   }
   return `${column} IS ${param}`;
 }
-
-

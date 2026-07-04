@@ -209,6 +209,7 @@ import type {
   EmbeddingIndexInput,
   EmbeddingQueryInput,
   MemoryContextPack,
+  MemoryContextPlacement,
   MemoryRelationScope,
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
@@ -7638,6 +7639,7 @@ export class GatewayService {
   /** @internal */ public persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
+    memoryContextPlacement?: MemoryContextPlacement;
   }): void {
     const turnId = input.request.memory?.turnId?.trim();
     if (!turnId) {
@@ -7699,6 +7701,8 @@ export class GatewayService {
         citationsCount: input.memoryContext.citations.length,
         originalTokenEstimate: input.memoryContext.originalTokenEstimate,
         distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
+        assembly: input.memoryContext.quality.assembly,
+        placement: input.memoryContextPlacement,
         createdAt: input.memoryContext.createdAt,
         expiresAt: input.memoryContext.expiresAt,
       },

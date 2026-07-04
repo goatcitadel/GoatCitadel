@@ -1,4 +1,9 @@
-import type { ChatCompletionRequest, LlmRuntimeMeasurementRecord, MemoryContextPack } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  LlmRuntimeMeasurementRecord,
+  MemoryContextPack,
+  MemoryContextPlacement,
+} from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { HooksService } from "./hooks-service.js";
 import type { LlmService } from "./llm-service.js";
@@ -17,6 +22,7 @@ export interface LlmCompletionHost {
   persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
+    memoryContextPlacement?: MemoryContextPlacement;
   }): void;
   recordLlmRuntimeMeasurement?(record: LlmRuntimeMeasurementRecord): void;
   resolveFallbackTargets(

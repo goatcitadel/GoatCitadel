@@ -4,8 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   asRecord,
   buildMemoryGraphProjection,
+  buildMemoryModelSummary,
   buildProvenanceCoverage,
+  classifyMemoryItemKind,
+  classifyTraceMemoryCandidateKind,
   formatDecisionProvenanceSummary,
+  formatMemoryEngineeringKind,
   formatRelationProvenanceSummary,
   MemoryRoutePage,
   readMemoryWriteDecision,
@@ -95,7 +99,17 @@ const memorySnapshot = vi.hoisted(() => ({
           contextId: "ctx-1",
           scope: "chat",
           createdAt: "2026-04-22T00:00:00.000Z",
-          quality: { status: "ok" },
+          quality: {
+            status: "ok",
+            assembly: {
+              availableCandidateCount: 3,
+              selectedCandidateCount: 1,
+              droppedCandidateCount: 2,
+              availableTokenEstimate: 300,
+              selectedTokenEstimate: 100,
+              evidenceTokenBudget: 2000,
+            },
+          },
           citations: [
             {
               candidateId: "mem-1",
@@ -511,6 +525,31 @@ describe("MemoryRoutePage", () => {
     expect(projection.summary).toContain("entities are linked");
   });
 
+  it("builds presentation-only memory taxonomy counts", () => {
+    const summary = buildMemoryModelSummary({
+      recentContexts: memorySnapshot.data.qmdStats.recent as any,
+      memoryItems: memorySnapshot.data.memoryItems as any,
+      entities: memorySnapshot.data.memoryEntities as any,
+      relations: memorySnapshot.data.memoryRelations as any,
+      decisions: memorySnapshot.data.memoryDecisions as any,
+      traceCandidates: memorySnapshot.data.traceMemoryCandidates as any,
+      learnings: [{ type: "workflow" }, { type: "operator_preference" }] as any,
+    });
+
+    expect(summary.find((item) => item.kind === "working")).toMatchObject({ count: 1, status: "covered" });
+    expect(summary.find((item) => item.kind === "episodic")).toMatchObject({ count: 1, status: "covered" });
+    expect(summary.find((item) => item.kind === "semantic")).toMatchObject({ count: 5, status: "covered" });
+    expect(summary.find((item) => item.kind === "procedural")).toMatchObject({ count: 1, status: "covered" });
+    expect(formatMemoryEngineeringKind(classifyMemoryItemKind(memorySnapshot.data.memoryItems[0] as any))).toBe(
+      "Semantic",
+    );
+    expect(
+      formatMemoryEngineeringKind(
+        classifyTraceMemoryCandidateKind(memorySnapshot.data.traceMemoryCandidates[0] as any),
+      ),
+    ).toBe("Episodic");
+  });
+
   it("renders lifecycle-aware memory operator truth", () => {
     const markup = renderToStaticMarkup(
       <MemoryRoutePage
@@ -524,6 +563,12 @@ describe("MemoryRoutePage", () => {
     );
 
     expect(markup).toContain("Memory items");
+    expect(markup).toContain("Memory model");
+    expect(markup).toContain("Working");
+    expect(markup).toContain("Episodic");
+    expect(markup).toContain("Semantic");
+    expect(markup).toContain("Procedural");
+    expect(markup).toContain("selected 1");
     expect(markup).toContain("Retrieval hybrid rank");
     expect(markup).toContain("Fallback available");
     expect(markup).toContain("Retrieval hints");

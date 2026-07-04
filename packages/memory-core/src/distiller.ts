@@ -7,12 +7,7 @@ export interface DistillerRequest {
 }
 
 export function buildDistillerPrompt(request: DistillerRequest): string {
-  const evidence = request.candidates
-    .map(
-      (candidate) =>
-        `ID=${candidate.candidateId}\nSOURCE=${candidate.sourceType}:${candidate.sourceRef}\nTEXT=${candidate.text}`,
-    )
-    .join("\n\n---\n\n");
+  const evidence = buildDistillerEvidence(request.candidates);
 
   return [
     "You are a memory distiller for an AI assistant.",
@@ -25,6 +20,14 @@ export function buildDistillerPrompt(request: DistillerRequest): string {
     "",
     `Evidence:\n${evidence}`,
   ].join("\n");
+}
+
+export function buildDistillerEvidence(candidates: RankedMemoryCandidate[]): string {
+  return candidates.map(formatDistillerEvidenceCandidate).join("\n\n---\n\n");
+}
+
+export function formatDistillerEvidenceCandidate(candidate: RankedMemoryCandidate): string {
+  return `ID=${candidate.candidateId}\nSOURCE=${candidate.sourceType}:${candidate.sourceRef}\nTEXT=${candidate.text}`;
 }
 
 export interface ParsedDistillation {

@@ -70,6 +70,7 @@ function createCompletionHost(input: {
 }): LlmCompletionHost {
   const memoryContext = {
     contextId: "ctx-1",
+    contextText: "Use concise answers.",
     originalTokenEstimate: 1000,
     distilledTokenEstimate: 250,
     citations: [{ title: "Memory source" }],
@@ -631,7 +632,20 @@ describe("createChatCompletion", () => {
     expect(host.persistContextManifestForCompletionRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         request: expect.objectContaining({
-          messages: expect.arrayContaining([expect.objectContaining({ role: "system" })]),
+          messages: [
+            expect.objectContaining({
+              role: "system",
+              content: expect.stringContaining("Retrieved non-authoritative GoatCitadel memory context"),
+            }),
+            expect.objectContaining({ role: "user", content: "hello" }),
+          ],
+        }),
+        memoryContextPlacement: expect.objectContaining({
+          position: "before_final_user_message",
+          insertedIndex: 0,
+          finalUserMessageIndex: 0,
+          leadingSystemMessageCount: 0,
+          copyMode: "retrieved_non_authoritative",
         }),
       }),
     );

@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./token-estimator.js";
 export * from "./candidate-collector.js";
 export * from "./candidate-ranker.js";
+export * from "./candidate-selector.js";
 export * from "./citation-validator.js";
 export * from "./context-composer.js";
 export * from "./cache.js";
