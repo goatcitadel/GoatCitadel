@@ -480,6 +480,39 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         preferredForIntents: ["session_status", "planning"],
       };
     }
+    if (toolName === "agent.fanout") {
+      return {
+        toolName: "agent.fanout",
+        category: "session",
+        riskLevel: "caution",
+        requiresApproval: false,
+        description: "Spawn up to 3 delegated subagents for independent subtasks",
+        argSchema: {
+          type: "object",
+          properties: {
+            subtasks: {
+              type: "array",
+              minItems: 1,
+              maxItems: 3,
+              items: {
+                type: "object",
+                properties: {
+                  objective: { type: "string" },
+                  label: { type: "string" },
+                  expectedOutput: { type: "string" },
+                },
+                required: ["objective"],
+              },
+            },
+          },
+          required: ["subtasks"],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["cowork", "code"],
+        preferredForIntents: ["parallel_subtasks", "delegation"],
+      };
+    }
     return {
       toolName: "browser.search",
       category: "research",

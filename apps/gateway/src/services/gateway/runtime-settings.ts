@@ -117,5 +117,7 @@ export interface RuntimeSettings {
     streamIdleWatchdogV1Disabled?: boolean;
     /** Round-3 kill switch: planner-declared fan-out (extra worker steps). Absent/false ⇒ feature ON. */
     plannerFanoutV1Disabled?: boolean;
+    /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
+    subagentFanoutV1Disabled?: boolean;
   };
 }

@@ -7,6 +7,7 @@ import {
   type ChatTurnFailureRecord,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
+import { SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
@@ -323,7 +324,10 @@ export function shouldUseConstrainedLocalAgentProfile(providerId?: string, model
 }
 
 export function minimumRemainingBudgetForToolStart(toolName: string, executionBudget: ChatExecutionBudget): number {
-  if (isExpensiveChatTool(toolName)) {
+  // R3-8: agent.fanout spawns up to 3 delegated child LLM turns — hold it to
+  // the expensive-tool floor WITHOUT adding it to isExpensiveChatTool, which
+  // would also opt it into the web-scoped browser budget-extension path.
+  if (isExpensiveChatTool(toolName) || toolName === SUBAGENT_FANOUT_TOOL_NAME) {
     return Math.max(executionBudget.expensiveToolMinimumRemainingMs, executionBudget.minSynthesisReserveMs);
   }
   return executionBudget.minSynthesisReserveMs;

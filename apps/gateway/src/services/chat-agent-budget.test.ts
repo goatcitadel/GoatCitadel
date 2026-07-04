@@ -365,6 +365,26 @@ describe("chat-agent-budget", () => {
     ).toBe(30000);
   });
 
+  it("requires the expensive-tool remaining budget before starting an agent.fanout spawn (R3-8)", () => {
+    const executionBudget = {
+      turnBudgetMs: 1,
+      completionTimeoutMs: 1,
+      maxToolLoops: 1,
+      loopLimitBehavior: "terminal",
+      maxToolRunsPerTurn: 1,
+      searchMaxResults: 1,
+      minSynthesisReserveMs: 15000,
+      expensiveToolMinimumRemainingMs: 30000,
+    } as const;
+    // agent.fanout spawns up to 3 delegated child LLM turns — the most
+    // expensive single call in the catalog. A turn near its deadline must not
+    // be allowed to kick one off with only the base synthesis reserve left.
+    expect(minimumRemainingBudgetForToolStart("agent.fanout", executionBudget)).toBe(30000);
+    // ...but it must NOT leak into the web-scoped browser budget-extension
+    // path, which is keyed on the same expensive-tool classification.
+    expect(shouldExtendTurnBudgetForBrowserExecution("agent.fanout")).toBe(false);
+  });
+
   it("enforces deadlines and produces user-safe budget/failure text", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T00:00:00.000Z"));

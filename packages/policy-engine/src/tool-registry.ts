@@ -18,6 +18,16 @@ export interface ToolDefinition {
   codeModeAllowed?: boolean;
 }
 
+/**
+ * R3-8 model-callable spawn tool. Single source of truth for the name — the
+ * registry definition, the executor dispatch, and the gateway's exposure gate
+ * and runtime all key on this constant.
+ */
+export const SUBAGENT_FANOUT_TOOL_NAME = "agent.fanout";
+
+/** Hard cap on subtasks per `agent.fanout` call (and thus on child concurrency). */
+export const SUBAGENT_FANOUT_MAX_SUBTASKS = 3;
+
 const ARTIFACT_DESIGN_ARG_SCHEMA = {
   type: "object",
   properties: {
@@ -133,6 +143,71 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     readOnly: true,
     description: "Return current local time and UTC time on this host.",
     pack: "core",
+  },
+  {
+    // R3-8 fan-out primitive, part B. Deliberately NOT readOnly: it spawns
+    // delegated LLM child turns, so the parallel read-only batch pre-executor
+    // must never treat it as side-effect free. Exposure is additionally gated
+    // per turn (cowork/code + subagentPolicy !== "off" + kill switch
+    // `subagentFanoutV1Disabled`) in the chat orchestrator's tool schema.
+    name: SUBAGENT_FANOUT_TOOL_NAME,
+    category: "session",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description:
+      "Spawn up to 3 delegated subagents that each work one independent subtask concurrently and return their buffered results as one aggregated payload.",
+    argSchema: {
+      type: "object",
+      properties: {
+        subtasks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              objective: {
+                type: "string",
+                description: "Self-contained objective for one subagent. It cannot see this conversation.",
+              },
+              label: { type: "string", description: "Short display label for the subtask." },
+              expectedOutput: { type: "string", description: "What the subtask should hand back." },
+            },
+            required: ["objective"],
+          },
+        },
+      },
+      required: ["subtasks"],
+    },
+    examples: [
+      {
+        title: "Fan out three independent research subtasks",
+        args: {
+          subtasks: [
+            {
+              objective: "Research vendor A's pricing tiers; report the cheapest plan that includes SSO.",
+              label: "Vendor A",
+            },
+            {
+              objective: "Research vendor B's pricing tiers; report the cheapest plan that includes SSO.",
+              label: "Vendor B",
+            },
+            {
+              objective: "Research vendor C's pricing tiers; report the cheapest plan that includes SSO.",
+              label: "Vendor C",
+            },
+          ],
+        },
+      },
+    ],
+    pack: "core",
+    recommendedContexts: ["cowork", "code"],
+    preferredForIntents: ["parallel_subtasks", "delegation"],
+    usageHints: [
+      "Use only for genuinely independent subtasks; sequential or interdependent work belongs in your own turn.",
+      "Each subagent starts fresh: give every objective the full context it needs, then synthesize the aggregated results yourself.",
+      "Subagents cannot spawn further subagents. When the session's subagent policy is ask_when_useful, confirm with the user before fanning out unless they already asked for parallel work.",
+    ],
   },
   {
     name: "fs.read",

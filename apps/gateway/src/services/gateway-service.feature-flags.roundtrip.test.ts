@@ -29,6 +29,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   parallelToolExecutionV1Disabled: true,
   streamIdleWatchdogV1Disabled: true,
   plannerFanoutV1Disabled: true,
+  subagentFanoutV1Disabled: true,
 };
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {
@@ -69,12 +70,14 @@ describe("GatewayService feature-flag round-trip", () => {
         parallelToolExecutionV1Disabled: false,
         streamIdleWatchdogV1Disabled: false,
         plannerFanoutV1Disabled: false,
+        subagentFanoutV1Disabled: false,
       },
       stored: {
         plannerFastPathV1Disabled: true,
         parallelToolExecutionV1Disabled: true,
         streamIdleWatchdogV1Disabled: true,
         plannerFanoutV1Disabled: true,
+        subagentFanoutV1Disabled: true,
       },
     });
     const flags = GatewayService.prototype.readFeatureFlags.call(harness as never);
@@ -82,6 +85,7 @@ describe("GatewayService feature-flag round-trip", () => {
     expect(flags.parallelToolExecutionV1Disabled).toBe(true);
     expect(flags.streamIdleWatchdogV1Disabled).toBe(true);
     expect(flags.plannerFanoutV1Disabled).toBe(true);
+    expect(flags.subagentFanoutV1Disabled).toBe(true);
   });
 
   it("persists the round-3 kill switches through updateFeatureFlags without wiping them", () => {

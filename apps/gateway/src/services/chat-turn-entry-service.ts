@@ -46,6 +46,7 @@ import {
   type PreparedAgentChatTurn,
 } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import { createTurnSubagentFanoutExecutor } from "./chat-turn-stream-service.js";
 import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
@@ -277,6 +278,21 @@ async function runAgentSendChatMessageLlmPath(
   const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   const mode = resolvePreparedTurnMode(prepared);
+  // R3-8: expose the turn-scoped `agent.fanout` executor for the lifetime of
+  // this buffered turn (covers the reflection retry too — same session, same
+  // prepared context). Disposed in the finally below.
+  const disposeSubagentFanout = host.subagentFanout?.register(
+    sessionId,
+    createTurnSubagentFanoutExecutor(host, prepared, {
+      signal: controller.signal,
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+      fullWebAccess: input.fullWebAccess,
+    }),
+  );
   try {
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
@@ -629,6 +645,7 @@ async function runAgentSendChatMessageLlmPath(
       routing: hydratedTrace.routing,
     };
   } finally {
+    disposeSubagentFanout?.();
     externalAbortListener?.();
     host.endActiveChatTurnExecution(prepared.turnId, controller);
   }

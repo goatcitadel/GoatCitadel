@@ -243,6 +243,7 @@ function composeEntryExtras(
   | "readChatSessionMode"
   | "persistChatSessionMode"
   | "recordSurfaceRouteOverrideSignal"
+  | "subagentFanout"
 > {
   return {
     agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
@@ -261,6 +262,12 @@ function composeEntryExtras(
     readChatSessionMode: source.readChatSessionMode,
     persistChatSessionMode: source.persistChatSessionMode,
     recordSurfaceRouteOverrideSignal: source.recordSurfaceRouteOverrideSignal,
+    // R3-8: the turn services register turn-scoped agent.fanout executors on
+    // this registry; dropping it here silently kills the tool in production
+    // (the member is optional, so the compiler cannot catch the omission).
+    get subagentFanout() {
+      return source.subagentFanout;
+    },
   };
 }
 

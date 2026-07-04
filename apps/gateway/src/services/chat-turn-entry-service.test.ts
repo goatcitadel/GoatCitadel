@@ -275,6 +275,47 @@ describe("agentSendChatMessage", () => {
     vi.clearAllMocks();
   });
 
+  it("registers a turn-scoped agent.fanout executor before the runtime runs and disposes it afterwards", async () => {
+    const host = createHost({
+      assistantContent: "Completed answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    (host.turnRuntime.run as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // The executor must already be registered while the runtime (and thus a
+      // model agent.fanout call routed through the policy engine) is running.
+      expect(register).toHaveBeenCalledWith("session-1", expect.any(Function));
+      expect(dispose).not.toHaveBeenCalled();
+      return {
+        assistantContent: "Completed answer.",
+        turnTrace: createTrace({ status: "completed" }),
+      };
+    });
+
+    await agentSendChatMessage(host, "session-1", { content: "hello", mode: "cowork" });
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes the agent.fanout executor even when the turn runtime throws", async () => {
+    const host = createHost({});
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    (host.turnRuntime.run as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("synthetic runtime failure"));
+
+    await expect(agentSendChatMessage(host, "session-1", { content: "hello", mode: "cowork" })).rejects.toThrow(
+      /synthetic runtime failure/,
+    );
+
+    // A stale registration would let a LATER turn's agent.fanout call resolve
+    // this dead turn's executor — disposal must be unconditional.
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("runs the synchronous LLM path, persists the assistant turn, and emits trace/realtime evidence", async () => {
     const host = createHost({
       assistantContent: "Completed answer.",

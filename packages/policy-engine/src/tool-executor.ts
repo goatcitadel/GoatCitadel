@@ -122,6 +122,18 @@ export interface ToolExecutorRuntimeHooks {
     args: Record<string, unknown>,
     policyContext: ToolPolicyActorContext | undefined,
   ) => Promise<Record<string, unknown>>;
+  /**
+   * Impure `agent.fanout` fulfillment (R3-8). Spawning delegated child turns
+   * lives in the gateway (it needs the active turn's prepared context), so the
+   * executor delegates the whole invoke request back through this hook —
+   * mirroring {@link scheduleManage}. The gateway implementation resolves the
+   * fan-out executor registered for the request's session, enforces the
+   * ≤3-subtask cap, floors every child to `subagentPolicy:"off"` and
+   * `orchestrationEnabled:false` (no recursion by construction), and returns
+   * the aggregated per-subtask results. When the hook is absent the tool is
+   * unfulfillable and `agent.fanout` raises a clear error.
+   */
+  subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
 }
 
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
@@ -288,6 +300,8 @@ export async function executeTool(
       return finalizeToolResult(citationsBuild(request.args));
     case "schedule.manage":
       return finalizeToolResult(await scheduleManage(request, runtimeHooks));
+    case "agent.fanout":
+      return finalizeToolResult(await subagentFanout(request, runtimeHooks));
     case "docs.ingest":
       return finalizeToolResult(await docsIngest(request, config, storage));
     case "docs.search":
@@ -1244,6 +1258,23 @@ async function scheduleManage(
     throw new Error("schedule.manage is not available in this runtime (no scheduleManage hook configured).");
   }
   return runtimeHooks.scheduleManage(request.args, request.policyContext);
+}
+
+/**
+ * Delegate `agent.fanout` back to the gateway runtime hook (R3-8). Child-turn
+ * spawning is impure (it creates chat sessions and runs delegated LLM turns),
+ * so this pure package never performs it directly — it only routes the call
+ * after the engine has authorized execution. Fails closed when the hook is not
+ * wired so the tool can never silently no-op.
+ */
+async function subagentFanout(
+  request: ToolInvokeRequest,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+): Promise<Record<string, unknown>> {
+  if (!runtimeHooks.subagentFanout) {
+    throw new Error("agent.fanout is not available in this runtime (no subagentFanout hook configured).");
+  }
+  return runtimeHooks.subagentFanout(request);
 }
 
 function citationsBuild(args: Record<string, unknown>) {

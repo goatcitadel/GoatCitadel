@@ -91,7 +91,7 @@ import {
   normalizeFailureSignature,
   rememberToolLoopHistory,
 } from "./chat-tool-loop.js";
-import { listReadOnlyBuiltinToolNames } from "@goatcitadel/policy-engine";
+import { listReadOnlyBuiltinToolNames, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
   compactToolResultForExecutionProfile,
@@ -506,6 +506,15 @@ export interface ChatAgentOrchestratorDeps {
    * true forces the historical strictly-serial path.
    */
   parallelToolExecutionV1Disabled?: () => boolean;
+  /**
+   * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
+   * like the gates above. Absent or returning false (default) ⇒ the spawn tool
+   * may be exposed in cowork/code when the session's subagentPolicy allows it;
+   * returning true removes it from every turn's tool schema (the policy-engine
+   * runtime hook fails closed as well, so an in-flight call cannot slip
+   * through a mid-turn flag flip).
+   */
+  subagentFanoutV1Disabled?: () => boolean;
 }
 
 function buildTurnToolPolicyContext(
@@ -3679,6 +3688,7 @@ export class ChatAgentOrchestrator {
       | "localOperatorOverrideId"
       | "policyRunId"
       | "policyTaskId"
+      | "subagentPolicy"
     >,
     intents: {
       liveData: boolean;
@@ -3759,6 +3769,18 @@ export class ChatAgentOrchestrator {
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
+    // R3-8 `agent.fanout` exposure gate: only interactive cowork/code turns
+    // whose session subagentPolicy allows subagents may see the spawn tool
+    // (`ask_when_useful` is the contract default when the pref is absent).
+    // Delegated children are floored to subagentPolicy "off" by
+    // executeDelegatedPlanStep, so recursion is structurally impossible; the
+    // restricted-profile exclusion mirrors the schedule.manage anti-recursion
+    // rule for scheduled/heartbeat turns.
+    const subagentFanoutEligible =
+      (input.mode === "cowork" || input.mode === "code") &&
+      (input.subagentPolicy ?? "ask_when_useful") !== "off" &&
+      !restrictedAutonomousProfile &&
+      this.deps.subagentFanoutV1Disabled?.() !== true;
     for (const tool of catalog) {
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
         continue;
@@ -3772,6 +3794,9 @@ export class ChatAgentOrchestrator {
       // still get it via its `recommendedContexts`. (Defense in depth: the
       // restricted profile would also force it to require approval.)
       if (tool.toolName === "schedule.manage" && restrictedAutonomousProfile) {
+        continue;
+      }
+      if (tool.toolName === SUBAGENT_FANOUT_TOOL_NAME && !subagentFanoutEligible) {
         continue;
       }
       if (
@@ -3890,6 +3915,7 @@ export class ChatAgentOrchestrator {
       explicitToolMentions,
       projectBound,
       suppressLocalPathTools,
+      subagentFanoutEligible,
     });
     const toolTokenEstimateCache = new Map<string, number>();
     function cachedEstimateToolTokens(toolJson: string, toolName: string): number {
@@ -5832,11 +5858,18 @@ function buildEssentialToolSet(input: {
   explicitToolMentions: Set<string>;
   projectBound: boolean;
   suppressLocalPathTools?: boolean;
+  subagentFanoutEligible?: boolean;
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
   }
   const tools = new Set<string>(["time.now"]);
+  if (input.subagentFanoutEligible) {
+    // R3-8: an eligible turn must reliably see the spawn tool — intent scoring
+    // cannot anticipate when the model will want to fan out, so exposure is
+    // pinned here rather than left to the score/token-budget race.
+    tools.add(SUBAGENT_FANOUT_TOOL_NAME);
+  }
   if (
     input.memoryLookupIntent ||
     (input.mode !== "chat" && !input.localFileIntent && !input.webLookupIntent && !input.liveDataIntent)

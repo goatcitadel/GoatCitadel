@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { createDefaultToolRegistry, listReadOnlyBuiltinToolNames } from "./tool-registry.js";
 
 describe("tool registry", () => {
+  it("registers agent.fanout as a governed, non-read-only spawn tool (R3-8)", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    const tool = catalog.find((item) => item.toolName === "agent.fanout");
+
+    expect(tool).toMatchObject({
+      category: "session",
+      riskLevel: "caution",
+      requiresApproval: false,
+      pack: "core",
+    });
+    // It spawns LLM work: it must never be classified read-only, or the
+    // parallel read-only batch pre-executor would treat it as side-effect free.
+    expect(tool?.readOnly).not.toBe(true);
+    expect(listReadOnlyBuiltinToolNames().has("agent.fanout")).toBe(false);
+    expect(tool?.recommendedContexts).toEqual(["cowork", "code"]);
+    expect(tool?.argSchema).toMatchObject({ required: ["subtasks"] });
+    const subtasksSchema = (tool?.argSchema as { properties?: { subtasks?: Record<string, unknown> } }).properties
+      ?.subtasks;
+    expect(subtasksSchema).toMatchObject({ type: "array", minItems: 1, maxItems: 3 });
+  });
+
   it("includes browser session-state tools", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((tool) => tool.toolName === "browser.cookies.get")).toBe(true);
