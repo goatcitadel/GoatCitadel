@@ -510,6 +510,7 @@ import {
 } from "./chat-delegation-service.js";
 import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
+import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
@@ -824,6 +825,15 @@ export class GatewayService {
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
   public readonly turnRuntime: TurnRuntime;
+  /**
+   * R3-8 `agent.fanout` session registry. The entry/stream turn services
+   * register a turn-scoped executor here; the policy engine's `subagentFanout`
+   * runtime hook resolves invokes through it after authorization. The kill
+   * switch is read live so a dashboard flag flip needs no gateway restart.
+   */
+  public readonly subagentFanout = new SubagentFanoutRuntime({
+    isDisabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
+  });
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
@@ -994,6 +1004,12 @@ export class GatewayService {
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
       // after the engine has authorized execution.
       scheduleManage: (args, policyContext) => this.scheduleManage(args, policyContext),
+      // Model-callable `agent.fanout` (R3-8). Child-turn spawning is impure and
+      // needs the active turn's prepared context, so the executor delegates the
+      // authorized invoke back to the session registry the entry/stream turn
+      // services populate. Same contract as scheduleManage: policy/approval/
+      // audit fire first in `engine.invoke`.
+      subagentFanout: (request) => this.subagentFanout.execute(request),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -1139,6 +1155,7 @@ export class GatewayService {
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       parallelToolExecutionV1Disabled: () => this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
+      subagentFanoutV1Disabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -1917,6 +1934,7 @@ export class GatewayService {
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
       scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
+      subagentFanout: this.subagentFanout,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
@@ -8596,6 +8614,7 @@ export class GatewayService {
       parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
+      subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -8637,6 +8656,7 @@ export class GatewayService {
         stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
       streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
+      subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
     };
   }
 

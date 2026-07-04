@@ -126,6 +126,17 @@ describe("createChatTurnRuntimeHost", () => {
 
     expect(host.listLlmModels).toBeUndefined();
   });
+
+  it("forwards the subagentFanout registry so turn services can register agent.fanout executors (R3-8)", () => {
+    // Regression guard for the whitelist-composer gap: the entry/stream turn
+    // services register turn-scoped agent.fanout executors via
+    // host.subagentFanout — if the composer drops it, the tool is exposed to
+    // the model but every invoke fails with "no active chat turn".
+    const source = createSourceHost();
+    const host = createChatTurnRuntimeHost(source.host);
+
+    expect(host.subagentFanout).toBe(source.values.subagentFanout);
+  });
 });
 
 function createSourceHost(options: { listLlmModels?: boolean } = {}) {
@@ -136,6 +147,7 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     backgroundTasks: new Set(),
     hooksService: { kind: "hooks" },
     llmService: { kind: "llm" },
+    subagentFanout: { register: vi.fn(() => () => {}) },
   };
   const fns = {
     buildDefaultChatPersonalityOverlay: vi.fn(() => "overlay"),
@@ -214,6 +226,9 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     },
     get llmService() {
       return values.llmService;
+    },
+    get subagentFanout() {
+      return values.subagentFanout;
     },
     ...fns,
     ...(options.listLlmModels === false ? { listLlmModels: undefined } : {}),

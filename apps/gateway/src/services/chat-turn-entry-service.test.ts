@@ -121,6 +121,24 @@ function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createFanoutEligiblePreparedTurn(overrides: { subagentPolicy?: "off" | "ask_when_useful" } = {}) {
+  const subagentPolicy = overrides.subagentPolicy ?? "ask_when_useful";
+  return createPreparedTurn({
+    normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy },
+    prefs: {
+      sessionId: "session-1",
+      mode: "cowork",
+      webMode: "off",
+      memoryMode: "off",
+      providerId: "primary",
+      model: "primary-model",
+      planningMode: "off",
+      reflectionMode: "off",
+      subagentPolicy,
+    },
+  });
+}
+
 function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
   return {
     turnId: "turn-1",
@@ -273,6 +291,135 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
 describe("agentSendChatMessage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("registers a turn-scoped agent.fanout executor before the runtime runs and disposes it afterwards", async () => {
+    const host = createHost({
+      assistantContent: "Completed answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn(),
+    );
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    (host.turnRuntime.run as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // The executor must already be registered while the runtime (and thus a
+      // model agent.fanout call routed through the policy engine) is running.
+      expect(register).toHaveBeenCalledWith("session-1", expect.any(Function));
+      expect(dispose).not.toHaveBeenCalled();
+      return {
+        assistantContent: "Completed answer.",
+        turnTrace: createTrace({ status: "completed" }),
+      };
+    });
+
+    await agentSendChatMessage(host, "session-1", { content: "hello", mode: "cowork" });
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("never registers an agent.fanout executor for a turn floored to subagentPolicy off (delegated-child shape)", async () => {
+    const host = createHost({
+      assistantContent: "Child answer.",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn({ subagentPolicy: "off" }),
+    );
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+
+    await agentSendChatMessage(host, "session-1", { content: "delegated work", mode: "cowork" });
+
+    // Even if a child model hallucinated an agent.fanout call past the schema
+    // gate, its session must hold no executor — the runtime hook fails closed.
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("rebinds the agent.fanout executor to the retry turn during a reflection retry", async () => {
+    const host = createHost({});
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createPreparedTurn({
+        normalized: { mode: "cowork", webMode: "off", memoryMode: "off", subagentPolicy: "ask_when_useful" },
+        prefs: {
+          sessionId: "session-1",
+          mode: "cowork",
+          webMode: "off",
+          memoryMode: "off",
+          providerId: "primary",
+          model: "primary-model",
+          planningMode: "off",
+          reflectionMode: "on",
+          subagentPolicy: "ask_when_useful",
+        },
+        autonomy: {
+          reflectionMode: "on",
+          proactiveMode: "off",
+          lastProactiveRunId: undefined,
+        },
+      }),
+    );
+    const disposals: number[] = [];
+    let registrations = 0;
+    const register = vi.fn(() => {
+      registrations += 1;
+      const registrationSeq = registrations;
+      return () => disposals.push(registrationSeq);
+    });
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    let callCount = 0;
+    host.turnRuntime.run = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        expect(register).toHaveBeenCalledTimes(1);
+        return {
+          assistantContent: "The first attempt failed.",
+          assistantModel: "primary-model",
+          turnTrace: createTrace({
+            status: "failed",
+            failure: { failureClass: "tool_failed", message: "tool failed", retryable: true },
+          }),
+        };
+      }
+      // The retry run must see a FRESH registration bound to the retry turn
+      // (the executor derives child runIds/diagnostics from prepared.turnId —
+      // pinned in chat-subagent-fanout-service.test.ts), with the original
+      // turn's registration already disposed.
+      expect(register).toHaveBeenCalledTimes(2);
+      expect(disposals).toEqual([1]);
+      return {
+        assistantContent: "Recovered answer.",
+        assistantModel: "primary-model",
+        turnTrace: createTrace({ status: "completed" }),
+      };
+    }) as never;
+
+    await agentSendChatMessage(host, "session-1", { content: "hello", mode: "cowork" });
+
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(disposals).toEqual([1, 2]);
+  });
+
+  it("disposes the agent.fanout executor even when the turn runtime throws", async () => {
+    const host = createHost({});
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      createFanoutEligiblePreparedTurn(),
+    );
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    (host.turnRuntime.run as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("synthetic runtime failure"));
+
+    await expect(agentSendChatMessage(host, "session-1", { content: "hello", mode: "cowork" })).rejects.toThrow(
+      /synthetic runtime failure/,
+    );
+
+    // A stale registration would let a LATER turn's agent.fanout call resolve
+    // this dead turn's executor — disposal must be unconditional.
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("runs the synchronous LLM path, persists the assistant turn, and emits trace/realtime evidence", async () => {

@@ -416,6 +416,133 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("registers a turn-scoped agent.fanout executor around the direct runtime stream and disposes it afterwards", async () => {
+    const host = createHost();
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      // The executor must be live while the runtime streams, so a mid-turn
+      // model agent.fanout call routed through the policy engine can find it.
+      expect(register).toHaveBeenCalledWith("session-1", expect.any(Function));
+      expect(dispose).not.toHaveBeenCalled();
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Fan-out ready answer.",
+      };
+    }) as never;
+
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk: vi.fn(),
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "hello", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+    );
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("never registers an agent.fanout executor for a turn floored to subagentPolicy off (delegated-child shape)", async () => {
+    const host = createHost();
+    const register = vi.fn(() => vi.fn());
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Delegated child answer.",
+      };
+    }) as never;
+
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk: vi.fn(),
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    const flooredPrepared = createPreparedTurn({ mode: "cowork" });
+    (flooredPrepared.prefs as Record<string, unknown>).subagentPolicy = "off";
+    (flooredPrepared.normalized as Record<string, unknown>).subagentPolicy = "off";
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "delegated work", mode: "cowork" } as never,
+      flooredPrepared,
+      "chat_thread_turn_appended",
+    );
+
+    // Even if a child model hallucinated an agent.fanout call past the schema
+    // gate, its session must hold no executor — the runtime hook fails closed.
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("disposes the agent.fanout executor even when the runtime stream throws mid-turn", async () => {
+    const host = createHost();
+    const dispose = vi.fn();
+    const register = vi.fn(() => dispose);
+    (host as unknown as { subagentFanout: { register: typeof register } }).subagentFanout = { register };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "partial",
+      };
+      throw new Error("synthetic stream failure");
+    }) as never;
+
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk: vi.fn(),
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "hello", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+    ).catch(() => undefined);
+
+    // The registration generator's finally must fire on a throw, or a stale
+    // executor would linger for the session after the turn dies.
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards a thinking_delta chunk from the turn runtime through to the persisted-chunk sink exactly once, without leaking it into the persisted assistant message", async () => {
     // IMPORTANT-1 regression coverage: streamPreparedAgentChatTurn's manual
     // re-emit loop must forward "thinking_delta" the same way it forwards the

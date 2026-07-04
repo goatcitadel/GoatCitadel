@@ -37,6 +37,13 @@ import type {
   OrchestrationStepExecutionResult,
 } from "../orchestration/types.js";
 import { executeOrchestrationPlan } from "../orchestration/engine.js";
+import {
+  createSubagentFanoutExecutor,
+  shouldRegisterSubagentFanoutExecutor,
+  type SubagentFanoutExecutor,
+  type SubagentFanoutExecutorOptions,
+  type SubagentFanoutRuntime,
+} from "./chat-subagent-fanout-service.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import {
   buildDelegationFailureGuidance,
@@ -176,6 +183,12 @@ export interface ChatTurnStreamHost
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[];
+  /**
+   * R3-8 `agent.fanout` session registry. Optional so lightweight test hosts
+   * keep working; when absent, no executor is registered and a model
+   * `agent.fanout` call fails closed inside the policy-engine runtime hook.
+   */
+  readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
 }
 
 /**
@@ -1157,6 +1170,47 @@ export async function executeDelegatedPlanStep(
 }
 
 /**
+ * Bind the real delegated-step machinery into the R3-8 `agent.fanout` executor.
+ * Lives here (not in chat-subagent-fanout-service) so that module never
+ * value-imports this one — the executor factory takes the step runner as an
+ * injected dependency instead of importing it.
+ */
+export function createTurnSubagentFanoutExecutor(
+  host: ChatTurnStreamHost,
+  prepared: PreparedAgentChatTurn,
+  options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
+): SubagentFanoutExecutor {
+  return createSubagentFanoutExecutor(host, prepared, { ...options, runDelegatedStep: executeDelegatedPlanStep });
+}
+
+/**
+ * Register the turn's `agent.fanout` executor for exactly the lifetime of the
+ * direct turn-runtime stream: registered before the runtime produces its first
+ * chunk (so a mid-turn model call routed through the policy engine can find
+ * it), disposed when the stream completes, throws, or is abandoned. Gated on
+ * the turn's own eligibility so a delegated child (floored to subagentPolicy
+ * "off") never holds a live executor.
+ */
+async function* runDirectTurnStreamWithSubagentFanout(
+  host: ChatTurnStreamHost,
+  prepared: PreparedAgentChatTurn,
+  options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
+  makeStream: () => ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]>,
+): ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]> {
+  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+    ? host.subagentFanout?.register(
+        prepared.session.sessionId,
+        createTurnSubagentFanoutExecutor(host, prepared, options),
+      )
+    : undefined;
+  try {
+    yield* makeStream();
+  } finally {
+    disposeSubagentFanout?.();
+  }
+}
+
+/**
  * Drive the terminal synthesizer child's live stream, forwarding each `delta`
  * chunk to the parent SSE immediately (via `finalDeltaSink`) while reassembling
  * the authoritative {@link ChatSendMessageResponse} the buffered child-send would
@@ -1939,38 +1993,53 @@ export async function* streamPreparedAgentChatTurn(
         },
       });
     }
-    for await (const chunk of host.turnRuntime.runStream({
-      sessionId,
-      turnId,
-      userMessageId: prepared.userEventId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-      outputMessageId: assistantMessageId,
-      content: prepared.content,
-      mode: resolvePreparedTurnMode(prepared),
-      providerId: input.providerId ?? prepared.prefs.providerId,
-      model: input.model ?? prepared.prefs.model,
-      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-      speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-      subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-      normalizationProfile: prepared.normalized.normalizationProfile,
-      toolAutonomy: prepared.effectiveToolAutonomy,
-      operatorId: input.operatorId,
-      authActorId: input.authActorId,
-      authActorSource: input.authActorSource,
-      permissionProfileId: effectivePermissionProfileId,
-      policyContext: inputPolicyContext,
-      localOperatorOverrideId: input.localOperatorOverrideId,
-      policyRunId: input.policyRunId,
-      policyTaskId: input.policyTaskId,
-      fullWebAccess: input.fullWebAccess,
-      historyMessages: historyWithSteers,
-      modelRouter: prepared.modelRouterDecision,
-      signal: controller.signal,
-    })) {
+    for await (const chunk of runDirectTurnStreamWithSubagentFanout(
+      host,
+      prepared,
+      {
+        signal: controller.signal,
+        operatorId: input.operatorId,
+        authActorId: input.authActorId,
+        authActorSource: input.authActorSource,
+        permissionProfileId: effectivePermissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+        policyContext: inputPolicyContext,
+        fullWebAccess: input.fullWebAccess,
+      },
+      () =>
+        host.turnRuntime.runStream({
+          sessionId,
+          turnId,
+          userMessageId: prepared.userEventId,
+          parentTurnId: prepared.parentTurnId,
+          branchKind: prepared.branchKind,
+          sourceTurnId: prepared.sourceTurnId,
+          outputMessageId: assistantMessageId,
+          content: prepared.content,
+          mode: resolvePreparedTurnMode(prepared),
+          providerId: input.providerId ?? prepared.prefs.providerId,
+          model: input.model ?? prepared.prefs.model,
+          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+          speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+          subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+          normalizationProfile: prepared.normalized.normalizationProfile,
+          toolAutonomy: prepared.effectiveToolAutonomy,
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          permissionProfileId: effectivePermissionProfileId,
+          policyContext: inputPolicyContext,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          policyRunId: input.policyRunId,
+          policyTaskId: input.policyTaskId,
+          fullWebAccess: input.fullWebAccess,
+          historyMessages: historyWithSteers,
+          modelRouter: prepared.modelRouterDecision,
+          signal: controller.signal,
+        }),
+    )) {
       if (chunk.type === "message_done" && chunk.content) {
         finalText = chunk.content;
       }
