@@ -48,6 +48,12 @@ const publicScreenshotTargets = [
     readyText: "Release readiness",
   },
   {
+    slug: "library-citadel-overview",
+    file: "library-citadel-overview.png",
+    title: "Citadel / Overview",
+    description: "Citadel charter, wards, council, blueprint, and vault posture for the active operating space.",
+  },
+  {
     slug: "library-capabilities",
     file: "library-capabilities.png",
     title: "Library / Capabilities",
